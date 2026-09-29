@@ -10,7 +10,10 @@ import { Schema } from "../src/schema.ts";
 
 const schema = new Schema().table("items", { by_n: ["n"] });
 const dirs: string[] = [];
-afterEach(() => {
+const open: Persistence[] = [];
+afterEach(async () => {
+  // Close every log explicitly: Bun turns a FileHandle closed by the GC into an error between tests.
+  for (const p of open.splice(0)) await p.close();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -34,6 +37,7 @@ async function setup() {
   dirs.push(dir);
   const path = join(dir, "log");
   const inner = await MemoryPersistence.open(path, { durable: true });
+  open.push(inner);
   const { wrapped, f } = faulty(inner);
   const e = await new Engine(schema, wrapped).init();
   const fatal: Error[] = [];
@@ -66,7 +70,10 @@ describe("committer fail-stop on persistence failure (Convex: the committer shut
       ).toEqual([]);
       // Restart: recovery sees only what was durably committed.
       await inner.close();
-      const reopened = await new Engine(schema, await MemoryPersistence.open(path, { durable: true })).init();
+      open.splice(open.indexOf(inner), 1);
+      const again = await MemoryPersistence.open(path, { durable: true });
+      open.push(again);
+      const reopened = await new Engine(schema, again).init();
       expect(await count(reopened)).toBe(1);
       await reopened.mutation((db) => db.insert("items", { n: 4 }));
       expect(await count(reopened)).toBe(2);
