@@ -47,6 +47,7 @@
       "name": "@bunvex/core",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/values": "workspace:*",
         "sorted-btree": "^2.1.0",
       },
     },

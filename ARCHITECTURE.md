@@ -29,7 +29,7 @@ bunvex/
 │   │
 │   ├── values/                      @bunvex/values
 │   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
-│   │   ├── id                       ids that carry their table (Id<"tasks">)                 M
+│   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
 │   │   └── types                    Value, Infer<>, types shared by client and server        N
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
