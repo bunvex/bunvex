@@ -11,25 +11,15 @@
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
-import { ConflictError, compareKeys, encodeKey, type KeyValue, type Persistence } from "@bunvex/core";
-import {
-  allOfTenant,
-  counter,
-  increment,
-  insertItem,
-  listTenant,
-  newEngine,
-  pair,
-  schema,
-  seedCounters,
-} from "./workload.ts";
+import { ConflictError, compareKeys, encodeKey, type KeyValue, type Persistence, type ScanDocs } from "@bunvex/core";
+import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
   open(fresh: boolean): Promise<Persistence>;
   tearTail?(nextTs: number): void | Promise<void>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7"; // K3 also runs K4 and K5
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8"; // K3 also runs K4 and K5
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -125,6 +115,75 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     check(bad === 0, `K2 snapshot reads equal the reference model at 60 random past snapshots (${bad} mismatches)`);
   }
 
+  // K8 — exact limits: a range whose front is full of removed entries and old versions must still yield
+  // exactly `limit` live entries (a driver may not over-fetch a fixed multiple and stop there).
+  async function k8(st: Persistence) {
+    const T0 = 200; // after K2's commits
+    const N = 40;
+    const id = (i: number) => `e${String(i).padStart(2, "0")}`;
+    const keyOf = (i: number) => encodeKey([id(i)]);
+    const model = new Map<number, { ts: number; v: string | null }[]>();
+    let ts = T0;
+    const commit = async (writes: [number, boolean][]) => {
+      ts++;
+      const docs = [];
+      const idx = [];
+      for (const [i, del] of writes) {
+        const v = del ? null : JSON.stringify({ ts, i });
+        docs.push({ table: 903, id: id(i), json: v });
+        idx.push({ index: 903, key: keyOf(i), id: del ? null : id(i) });
+        model.set(i, [...(model.get(i) ?? []), { ts, v }]);
+      }
+      st.apply(ts, docs, idx);
+      await st.flush();
+    };
+    await commit(Array.from({ length: N }, (_, i) => [i, false]));
+    // The first and last 15 keys are deleted (both ends of the range are dead), then the live middle
+    // keys get dozens of versions each, interleaved with random churn.
+    await commit(Array.from({ length: 15 }, (_, i) => [i, true]));
+    await commit(Array.from({ length: 15 }, (_, i) => [N - 1 - i, true]));
+    for (let c = 0; c < 300; c++) {
+      const w: [number, boolean][] = [[15 + rnd(10), false]];
+      if (Math.random() < 0.2) {
+        const j = rnd(N);
+        if (j !== w[0][0]) w.push([j, Math.random() < 0.7]);
+      }
+      await commit(w);
+    }
+    const at = (i: number, T: number) => {
+      const vs = model.get(i)?.filter((x) => x.ts <= T) ?? [];
+      return vs.length ? vs[vs.length - 1].v : null;
+    };
+    const scanDocs = (st as Persistence & Partial<ScanDocs>).scanDocs?.bind(st);
+    let bad = 0;
+    let probes = 0;
+    for (const T of [T0 + 1, T0 + 3, T0 + 50, T0 + 150, ts, ...Array.from({ length: 10 }, () => T0 + 3 + rnd(300))])
+      for (const limit of [0, 1, 2, 3, 5, 12, 100])
+        for (const desc of [false, true]) {
+          const a = rnd(N);
+          const b = a + rnd(N - a + 1);
+          const ranges: [number, number][] = [
+            [0, N],
+            [a, b],
+          ];
+          for (const [lo, hi] of ranges) {
+            probes++;
+            const live = Array.from({ length: hi - lo }, (_, k) => lo + k).filter((i) => at(i, T) !== null);
+            const ordered = desc ? live.reverse() : live;
+            const want = ordered.slice(0, limit);
+            const loKey = lo === 0 ? FULL_LO : keyOf(lo);
+            const hiKey = hi === N ? FULL_HI : keyOf(hi);
+            const got = await st.scan(903, loKey, hiKey, T, limit, desc);
+            if (JSON.stringify(got) !== JSON.stringify(want.map(id))) bad++;
+            if (scanDocs) {
+              const docs = await scanDocs(903, 903, loKey, hiKey, T, limit, desc);
+              if (JSON.stringify(docs) !== JSON.stringify(want.map((i) => at(i, T)))) bad++;
+            }
+          }
+        }
+    check(bad === 0, `K8 exact limits over dead ranges and many versions: ${probes} probes, ${bad} mismatches`);
+  }
+
   // K3–K5 — through the engine.
   async function k3to5(st: Persistence) {
     const e = await newEngine(st, 1000);
@@ -192,8 +251,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
   async function k6() {
     const kills = opts.kills ?? 8;
-    const items = schema.tables.get("items")!;
-    const ixIds = [...items.indexes.values()].map((ix) => ix.id);
     const childPath = new URL("./child.ts", import.meta.url).pathname;
     let bad = 0;
     for (let k = 0; k < kills; k++) {
@@ -220,6 +277,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
       const st = await mod.open(false);
       const M = Number((await st.maxTs?.()) ?? 0);
+      // Opening an engine on an existing store only reads the catalog (no commit), so M is unchanged.
+      const e = await newEngine(st);
+      const items = e.catalog.table("items");
+      const ixIds = [...items.indexes.values()].map((ix) => ix.id);
       if (M < lastAck) {
         log(`  kill ${k}: maxTs ${M} < last acknowledged ${lastAck}`);
         bad++;
@@ -238,7 +299,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         bad++;
       }
       // Writing resumes at M + 1 and the result is readable.
-      const e = await newEngine(st);
       const id = await e.mutation(insertItem("resume"));
       if (e.committer.visibleTs !== M + 1 || (await st.get(items.id, id, M + 1)) === null) {
         log(`  kill ${k}: resume wrote ts ${e.committer.visibleTs}, expected ${M + 1}`);
@@ -269,7 +329,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     await st2.close();
     const st3 = await mod.open(false); // the record written after recovery must survive a reopen
     const M3 = Number(await st3.maxTs!());
-    const torn = await st3.get(schema.tables.get("items")!.id, "torn", M3);
+    const torn = await st3.get((await newEngine(st3)).catalog.table("items").id, "torn", M3);
     await st3.close();
     check(
       M2 === M && M3 === M + 1 && torn === null,
@@ -280,6 +340,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   const st = await mod.open(true);
   if (want("K1")) await k1(st);
   if (want("K2")) await k2(st);
+  if (want("K8")) await k8(st);
   await st.close();
   if (want("K3")) {
     const st2 = await mod.open(true);
