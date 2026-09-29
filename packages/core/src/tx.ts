@@ -7,11 +7,12 @@
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
 import BTree from "sorted-btree";
+import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-import { type Doc, type IndexDef, indexKey, type Schema, type TableDef } from "./schema.ts";
+import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
 
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
@@ -65,18 +66,19 @@ export class Tx {
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
   constructor(
-    private schema: Schema,
+    private catalog: Catalog,
     private persistence: Persistence,
     readonly snapshot: number,
     private readonly writable: boolean,
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
+    /** System transactions (the engine's own) may touch `_`-prefixed system tables; app code may not. */
+    private readonly system = false,
   ) {}
 
   private tableDef(name: string) {
-    const t = this.schema.tables.get(name);
-    if (!t) throw new Error(`unknown table ${name}`);
-    return t;
+    if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
+    return this.catalog.table(name);
   }
 
   async get(table: string, id: string): Promise<Doc | null> {
