@@ -2,6 +2,7 @@
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
 import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
+import { type ExecutionKind, installDeterminism, runDeterministic, wallClock } from "./determinism.ts";
 import type { Persistence } from "./persistence/index.ts";
 import type { Schema } from "./schema.ts";
 import { Tx } from "./tx.ts";
@@ -19,6 +20,7 @@ export class Engine {
     readonly persistence: Persistence,
     private opts: { cacheMax?: number; maxRetries?: number } = {},
   ) {
+    installDeterminism();
     this.committer = new Committer(persistence);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
@@ -40,8 +42,12 @@ export class Engine {
     return this;
   }
 
-  private tx(snapshot: number, writable: boolean) {
-    return new Tx(this.schema, this.persistence, snapshot, writable);
+  /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
+  private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>) {
+    const now = wallClock();
+    const tx = new Tx(this.schema, this.persistence, snapshot, kind === "mutation", now);
+    const value = await runDeterministic(kind, now, () => body(tx));
+    return { tx, value };
   }
 
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
@@ -55,8 +61,7 @@ export class Engine {
       this.stats.cacheMisses++;
     }
     const snapshot = this.committer.visibleTs;
-    const tx = this.tx(snapshot, false);
-    const value = await body(tx);
+    const { tx, value } = await this.execute("query", snapshot, body);
     // Cache only if nothing committed after the snapshot (it would have been invalidated had it been
     // cached already — the same rule, checked at insertion).
     if (cacheKey !== undefined && this.committer.visibleTs === snapshot) {
@@ -70,8 +75,7 @@ export class Engine {
   /** A read-only transaction for a SUBSCRIPTION: returns its read-set too, never touches the cache. */
   async queryTracked<T>(body: TxBody<T>): Promise<{ value: T; reads: Interval[]; ts: number }> {
     const snapshot = this.committer.visibleTs;
-    const tx = this.tx(snapshot, false);
-    const value = await body(tx);
+    const { tx, value } = await this.execute("query", snapshot, body);
     return { value, reads: tx.reads, ts: snapshot };
   }
 
@@ -79,8 +83,7 @@ export class Engine {
   async mutation<T>(body: TxBody<T>): Promise<T> {
     const maxRetries = this.opts.maxRetries ?? 30;
     for (let attempt = 0; ; attempt++) {
-      const tx = this.tx(this.committer.visibleTs, true);
-      const value = await body(tx);
+      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body);
       if (!tx.hasWrites) return value;
       const { docs, idx } = tx.toWrites();
       try {

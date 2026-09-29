@@ -8,6 +8,7 @@
 
 import BTree from "sorted-btree";
 import type { Interval } from "./committer.ts";
+import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, type Schema, type TableDef } from "./schema.ts";
@@ -68,6 +69,8 @@ export class Tx {
     private persistence: Persistence,
     readonly snapshot: number,
     private readonly writable: boolean,
+    /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
+    private nextCreationTime: number = wallClock(),
   ) {}
 
   private tableDef(name: string) {
@@ -82,7 +85,7 @@ export class Tx {
     if (w) return w.next;
     const k = encodeKey([id]);
     this.reads.push({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
-    const json = await this.persistence.get(t.id, id, this.snapshot);
+    const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
     return json ? (JSON.parse(json) as Doc) : null;
   }
 
@@ -95,13 +98,17 @@ export class Tx {
       const p = this.persistence as Persistence & Partial<ScanDocs>;
       if (p.scanDocs) {
         // Remote persistence fuses the index range and the document fetches into one round trip.
-        const rows = await p.scanDocs(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc);
+        const rows = await outsideExecution(() =>
+          p.scanDocs!(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc),
+        );
         return rows.map((j) => JSON.parse(j) as Doc);
       }
-      const ids = await this.persistence.scan(ix.id, range.lo, range.hi, this.snapshot, limit, desc);
+      const ids = await outsideExecution(() =>
+        this.persistence.scan(ix.id, range.lo, range.hi, this.snapshot, limit, desc),
+      );
       const out: Doc[] = [];
       for (const id of ids) {
-        const json = await this.persistence.get(t.id, id, this.snapshot);
+        const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
         if (json) out.push(JSON.parse(json) as Doc);
       }
       return out;
@@ -182,7 +189,10 @@ export class Tx {
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     const t = this.tableDef(table);
     const id = crypto.randomUUID();
-    this.stage(t, id, null, { ...fields, _id: id, _creationTime: Date.now() } as Doc);
+    // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
+    const creationTime = this.nextCreationTime;
+    this.nextCreationTime = nextUp(creationTime);
+    this.stage(t, id, null, { ...fields, _id: id, _creationTime: creationTime } as Doc);
     return id;
   }
 
