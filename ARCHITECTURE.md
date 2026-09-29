@@ -91,6 +91,13 @@ bunvex/
 │   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  M
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D
 │   │
+│   ├── ui/                          @bunvex/ui       design system (UI-01): Tailwind v4 tokens,
+│   │                                light/dark themes, shadcn/ui on Base UI; no bunvex dependency 🟡
+│   ├── dashboard/                   @bunvex/dashboard  the dashboard screens (UI-01), fed by an
+│   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
+│   │   ├── mock                     MockDataSource, and the contract suite any source must pass
+│   │   └── screens                  overview, tables/documents, functions, logs                  🟡
+│   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M
 │   │   ├── codegen                  API types (or inferred types — open decision)             M
@@ -106,7 +113,7 @@ bunvex/
 │                                    bunvex/react · bunvex/nextjs · bin: bunvex
 │
 ├── apps/
-│   ├── dashboard/                   tables, data, logs, functions                              D
+│   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard (mock data for now) 🟡
 │   └── docs/                        documentation site for USERS                               D
 │
 ├── examples/
@@ -118,6 +125,8 @@ bunvex/
 ├── docker/                          server image (bunvex start)                                M
 ├── docs/
 │   ├── specs/                       design records for MAINTAINERS (ENGINE-00, PERSIST-01, ARCH-01…) ✅
+│   ├── study/                       how Convex does X and how bunvex maps it (STUDY-NN), before code ✅
+│   ├── parity/                      everything Convex has, bunvex's status on each, the roadmap     ✅
 │   └── bench/                       benchmark reports                                          ✅
 │
 ├── .github/                         workflows (lint, typecheck, tests, conformance against SQLite,
@@ -163,10 +172,15 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── persistence-conformance            client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
 cli ──► server, core                                      bunvex ──► re-exports only
+
+ui ◄── dashboard ◄── apps/dashboard (──► ui)
 ```
 
 - `core` knows no external database, no HTTP and no WebSocket.
 - The client never pulls the engine: a browser bundle contains only `client`, `protocol` and `values`.
+- `ui` depends on no bunvex package; `dashboard` only on `ui` — never `core` or `server`: its data comes
+  through the injected `DashboardDataSource`, so the same screens serve a self-hosted server and a cloud
+  control plane (UI-01). The rules cover `apps/*` too.
 - A persistence driver depends only on the `Persistence` interface from `core` and on its native driver.
 - No source file starts with `// @bun…` (Bun's "already transpiled" pragma).
 
