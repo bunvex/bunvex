@@ -39,5 +39,6 @@ to a spec.
 | [STUDY-01](STUDY-01-document-ids.md) | Document IDs (`_id`) and table numbers | accepted (C: as Convex) |
 | [STUDY-02](STUDY-02-read-own-writes.md) | Read-your-own-writes inside a transaction | implemented (#3), retroactive |
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
+| [STUDY-04](STUDY-04-table-and-index-metadata.md) | Table and index metadata (`_tables`, `_index`) | implemented (#6) |
 
 Status values: *draft* → *decision pending (owner)* → *accepted* → *implemented (#PR)*.
