@@ -1,0 +1,270 @@
+## Parity inventory: clients, sync protocol and reactivity
+
+Compared against Convex `convex-backend` @ `4577b9031` and bunvex's current tree
+(`packages/protocol/src/index.ts`, `packages/server/src/server.ts`, `packages/server/src/functions.ts`,
+`packages/core/src/subscriptions.ts`, `packages/core/src/engine.ts`, `packages/core/src/committer.ts`;
+`packages/client` and `packages/react` are empty stubs, `packages/auth` is an empty stub).
+
+Paths are shortened: `browser/…`, `react/…`, `nextjs/…`, `react-clerk/…`, `react-auth0/…` are under
+`npm-packages/convex/src/`; `crates/…` are under the repo root.
+
+Status: **done** = behaviour an app can rely on exists · **partial** = something exists but misses part of the
+semantics · **missing** = nothing yet.
+
+What bunvex has today, in one paragraph: a v0 unversioned JSON WebSocket at `/ws` with `sub`/`unsub` keyed by
+`path + NUL + JSON(args)`, `mut` with a numeric id, and `upd`/`err`/`res` replies. Subscriptions are shared across
+all connections per key, invalidated by read-set/write-set overlap, and re-published only when the JSON payload
+changes. Each subscription reruns and publishes by itself, at its own snapshot. The HTTP API is `POST /api/{query,mutation,action}`
+returning `{status, value | errorMessage}`. There is no client library, React binding, auth, timestamps, versions,
+idempotency or reconnect logic.
+
+---
+
+### 1. Wire protocol: transport and framing
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | partial | bunvex listens on unversioned `/ws`; `PROTOCOL_VERSION = 0` exists as a constant but nothing checks it. |
+| Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | missing | No client. |
+| Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | missing | No client-version negotiation. |
+| JSON text frames, one message per frame, discriminated by `type` | `browser/sync/protocol.ts` | partial | bunvex uses JSON frames discriminated by a short `t` field; the shapes differ from Convex. |
+| u64 timestamps encoded as base64 little-endian strings (`EncodedTS`) | `browser/sync/protocol.ts` (`u64ToLong`/`longToU64`) | missing | No timestamps on the wire. |
+| Function args sent as a one-element array of Convex-encoded JSON (`args: [convexToJson(args)]`) | `browser/sync/protocol.ts`, `browser/sync/client.ts` | partial | bunvex sends plain JSON `args`; no `$integer`/`$bytes` value encoding, so bigint and bytes are lost. |
+| Canonical function path (`module:fn`, `.js` stripped, default export → `:default`) | `browser/sync/udf_path_utils.ts` | partial | bunvex registry names are `module:fn`; no canonicalisation of `.js` or a bare module name. |
+| `componentPath` on Add/Mutation/Action (admin-only for non-root components) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | No components. |
+| Large transitions split into `TransitionChunk` (5 MB parts; `partNumber`/`totalParts`/`transitionId`) and put back together in order on the client | `crates/local_backend/src/subs/mod.rs` (`maybe_split_transition`), `browser/sync/web_socket_manager.ts` | missing | bunvex caps frames at `maxPayloadLength: 8 MiB`, so a bigger result fails. |
+| Server application-level `Ping` message (keeps idle sockets alive; client ignores it) | `crates/sync/src/worker.rs` (`HEARTBEAT_INTERVAL` 15 s) | missing | Only Bun's built-in WS-level ping; `idleTimeout: 960`. |
+| WS-level ping every 5 s; client considered dead after 120 s of no pong | `crates/local_backend/src/subs/mod.rs` | partial | Bun sends pings by default; timeouts differ, and none is tuned. |
+| Client inactivity watchdog: reconnect if nothing arrives from the server for 60 s | `browser/sync/web_socket_manager.ts` (`serverInactivityThreshold`) | missing | No client. |
+| Per-message size metrics / large-transition warnings (>20 MB or >20 s transit) | `browser/sync/web_socket_manager.ts` (`reportLargeTransition`) | missing | — |
+| Close frames with codes (Normal / Again / Error) and a ≤123-byte reason used by the client to classify backoff | `crates/errors/src/lib.rs` (`close_frame`), `browser/sync/web_socket_manager.ts` | missing | bunvex never closes a socket with a reason. |
+
+### 2. Client → server message types
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `Connect` {sessionId, connectionCount, lastCloseReason, maxObservedTimestamp?, clientTs} as the first message on every socket | `browser/sync/protocol.ts`, `browser/sync/client.ts` (`onOpen`) | missing | No handshake; the server knows nothing about the session. |
+| `ModifyQuerySet` {baseVersion, newVersion, modifications: Add \| Remove} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | partial | bunvex has separate `sub`/`unsub` messages with no query-set version and no batching. |
+| `Add` {queryId, udfPath, args, journal?, componentPath?}: client-assigned numeric query id | `browser/sync/protocol.ts` | partial | bunvex identifies a subscription by its string key; there are no ids and no journal. |
+| `Remove` {queryId} | `browser/sync/protocol.ts` | partial | `unsub` by path+args. |
+| `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | partial | `mut` {id, path, args}; the id is echoed back but is not a session-scoped idempotency key. |
+| `Action` {requestId, udfPath, args, componentPath?} over the WebSocket | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | Actions only over HTTP. |
+| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | missing | No auth. |
+| `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | missing | — |
+| `Authenticate` {tokenType: "None", baseVersion} (logout) | `browser/sync/protocol.ts` | missing | — |
+| `Event` {eventType, event} for client telemetry (ClientConnect marks, ClientReceivedTransition, NetworkRecoveryReconnect) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | Optional; low priority. |
+
+### 3. Server → client message types
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `Transition` {startVersion, endVersion, modifications[], clientClockSkew?, serverTs?} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` (`finish_update_queries`) | missing | bunvex sends one `upd` per subscription and has no transition envelope. |
+| `StateVersion` {querySet, ts, identity} | `browser/sync/protocol.ts`, `crates/sync/src/state.rs` | missing | — |
+| `QueryUpdated` {queryId, value, logLines, journal} | `browser/sync/protocol.ts` | partial | `upd` {k, v}: value only, no log lines, no journal. |
+| `QueryFailed` {queryId, errorMessage, errorData, logLines, journal} | `browser/sync/protocol.ts` | partial | `err` {k, e}: message only, no structured `errorData` (ConvexError). |
+| `QueryRemoved` {queryId} (acknowledges a Remove inside the transition) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | `unsub` is never acknowledged. |
+| `MutationResponse` success {requestId, result, ts, logLines} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | partial | `res` {id, v}: no commit `ts`, no log lines. |
+| `MutationResponse` failure {requestId, result: message, logLines, errorData?} | `browser/sync/protocol.ts` | partial | `res` {id, e}: message only. |
+| `ActionResponse` success/failure {requestId, success, result, logLines, errorData?} | `browser/sync/protocol.ts` | missing | No actions over WS. |
+| `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | missing | — |
+| `FatalError` {error} sent before closing on a deterministic user error (BadRequest, Unauthenticated, …); the client logs it and terminates | `crates/local_backend/src/subs/mod.rs`, `browser/sync/client.ts` | missing | bunvex silently drops unparseable frames and never reports protocol errors. |
+| `TransitionChunk` (see §1) | `browser/sync/protocol.ts` | missing | — |
+| `Ping` (see §1) | `browser/sync/protocol.ts` | missing | — |
+| `clientClockSkew` computed from `Connect.clientTs`, used for token-expiry estimates | `crates/sync/src/worker.rs`, `browser/sync/authentication_manager.ts` | missing | — |
+
+### 4. Consistency guarantees (the core "N" items)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | missing | Each bunvex Sub reruns with `engine.queryTracked` at whatever `visibleTs` it sees and publishes by itself, so two queries can show different snapshots (tearing). |
+| Transitions are gapless: `startVersion` must equal the client's current version, or the client throws | `browser/sync/remote_query_set.ts` | missing | No versions. |
+| Server version never goes backwards (`advance_version` asserts it) | `crates/sync/src/state.rs` | missing | — |
+| Query-set versioning: server rejects a `ModifyQuerySet` whose `baseVersion` doesn't match (`BaseVersionMismatch`) | `crates/sync/src/state.rs` (`modify_query_set`) | missing | — |
+| A query set change is answered by a Transition whose `endVersion.querySet` covers it (the client can tell when a new subscription is loaded) | `crates/sync/src/worker.rs` | partial | A new `sub` gets an immediate `upd` with the current value, but it is not tied to a consistent version. |
+| Read-your-writes: a mutation's promise resolves only after a Transition with `endVersion.ts >= mutation ts` has been applied, so the UI already shows the write | `browser/sync/request_manager.ts` (`removeCompleted`), `browser/sync/client.ts` | missing | bunvex sends `res` straight after commit; the subscription reruns later and asynchronously, so `res` usually arrives before the new `upd`. The engine gets the commit ts from `committer.commit()` but `engine.mutation()` drops it. |
+| Server schedules a query update after every mutation/action completes so a covering Transition always follows | `crates/sync/src/worker.rs` (`schedule_update` after `mutation_futures`) | partial | Commits trigger reruns by read-set overlap, but nothing ensures the client sees a "past ts" marker when none of its queries changed. |
+| Failed mutations resolve immediately (no side effects to wait for) | `browser/sync/request_manager.ts` | done | The error `res` is sent immediately (trivially true). |
+| Mutations from one connection run serially, in the order they were sent | `crates/sync/src/worker.rs` (`mutation_futures … buffered(1)`) | missing | bunvex's `message` handler is `async` and not serialised: two `mut` frames run concurrently and can commit in either order (or conflict-retry past each other). |
+| Actions run concurrently and are decoupled from the transition ordering | `crates/sync/src/worker.rs` (`action_futures: FuturesUnordered`) | missing | No WS actions. |
+| Result dedupe: re-executed query with an identical result (hash of value + log lines) produces no modification | `crates/sync/src/state.rs` (`complete_fetch`, `hash_result`) | done | `Subscriptions.run` compares the JSON payload and publishes only on change (log lines not included). |
+| Subscription invalidation by read set vs committed writes | `crates/database` subscriptions, `crates/sync/src/state.rs` (`next_invalidated_query`) | done | `onCommit` → `overlaps(writes, reads)`; a running Sub is marked dirty and reruns. |
+| Cheap "refresh": an unchanged subscription just extends its validity to the new ts instead of rerunning | `crates/sync/src/worker.rs` (`extend_validity`) | partial | bunvex skips reruns for non-overlapping commits, but has no per-client ts to extend. |
+| Linearizability across backends: `Connect.maxObservedTimestamp` > server's latest ts → error (client saw a future the server doesn't know) | `crates/sync/src/worker.rs` (`Connect` handler) | missing | — |
+| Client tracks `maxObservedTimestamp` from Transitions and MutationResponses | `browser/sync/client.ts` (`observedTimestamp`) | missing | — |
+| Backpressure / single-flight: at most N (=2) unsent Transitions queued per client; later updates coalesce into the next one | `crates/sync/src/worker.rs` (`SingleFlightSender`, `SYNC_MAX_SEND_TRANSITION_COUNT`) | missing | bunvex publishes every change via Bun pub/sub with no per-client coalescing; a slow client buffers without bound (Bun backpressure only). |
+| Query reruns in parallel with bounded concurrency (20) and retry with backoff on retriable errors | `crates/sync/src/worker.rs` (`UPDATE_QUERY_CONCURRENCY`, `SYNC_WORKER_QUERY_RETRY_*`) | partial | Reruns run in parallel, unbounded, with no retry. |
+| Temporarily-unavailable features (search index bootstrapping) → skip, then retry later | `crates/sync/src/worker.rs` | missing | Not applicable until search exists. |
+| Shared execution across clients for identical queries | `crates/application` query cache | done | One Sub per key, shared across all sockets (goes further than Convex's per-client sync, but see identity note in §7). |
+
+### 5. Mutation idempotency, request ids and resend
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Session id (UUID v4) generated once per client and sent in `Connect` | `browser/sync/session.ts`, `browser/sync/client.ts` | missing | — |
+| Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | partial | bunvex's `mut.id` is supplied by the client and only echoed back. |
+| Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | missing | A resend would run the mutation twice. |
+| Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | missing | Needs a system table plus retention. |
+| Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | missing | — |
+| 60 s timeout per WS mutation | `crates/sync/src/worker.rs` (`SYNC_WORKER_PROCESS_TIMEOUT`) | missing | — |
+| Server request id derived from session + request id (tracing / logs correlation) | `crates/sync/src/worker.rs` (`RequestId::new_for_ws_session`) | missing | — |
+
+### 6. Reconnect, backoff and connection state (client)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Socket state machine: disconnected / connecting / ready / stopped / terminated, with a paused sub-state | `browser/sync/web_socket_manager.ts` | missing | No client. |
+| On reopen: send Connect, drop the remote query set, re-send the full query set as `ModifyQuerySet` base 0 → 1, re-send auth, re-send all in-flight mutations (including completed-but-unreflected ones) | `browser/sync/client.ts` (`onOpen`), `browser/sync/local_state.ts` (`restart`), `browser/sync/request_manager.ts` (`restart`) | missing | Needs server idempotency (§5) to be safe. |
+| In-flight actions fail on reconnect ("Connection lost while action was in flight"), never resent | `browser/sync/request_manager.ts` | missing | — |
+| Messages sent while disconnected are queued (`NotSent`) and flushed on open/resume | `browser/sync/request_manager.ts`, `browser/sync/web_socket_manager.ts` | missing | — |
+| Exponential backoff with jitter: 100 ms initial for client-side causes, 1 s for unknown server close, 1–3 s for classified server errors (Overloaded, TooManyConcurrentRequests, CommitterFullError, …), capped at 16 s | `browser/sync/web_socket_manager.ts` (`nextBackoff`, `serverDisconnectErrors`) | missing | — |
+| Backoff resets only once the client has "synced past the last reconnect" (all re-sent queries answered, auth confirmed, old requests done) | `browser/sync/client.ts` (`hasSyncedPastLastReconnect`), `browser/sync/local_state.ts` | missing | — |
+| Close codes 1000/1001/1005/4040 treated as normal (4040 = not-found during a push, retried) | `browser/sync/web_socket_manager.ts` | missing | — |
+| Browser `online` event → reconnect immediately, cancelling a pending backoff | `browser/sync/web_socket_manager.ts` (`tryReconnectImmediately`) | missing | — |
+| Server-side reconnect rate limiter weighted by query-set size (avoid thundering herd after an outage) | `crates/sync/src/subscription_reconnect.rs` | missing | Useful once there are many clients. |
+| `ConnectionState` {isWebSocketConnected, hasEverConnected, connectionCount, connectionRetries, hasInflightRequests, timeOfOldestInflightRequest, inflightMutations, inflightActions} | `browser/sync/client.ts` | missing | — |
+| `subscribeToConnectionState(cb)` (published once per microtask, only on change) | `browser/sync/client.ts` | missing | — |
+| `onServerDisconnectError` callback for abnormal close reasons | `browser/sync/client.ts` | missing | — |
+| "Unsaved changes" `beforeunload` prompt while mutations are in flight (default on in browsers) | `browser/sync/client.ts` | missing | — |
+| `close()`: terminate the socket, stop auth refresh, never reconnect | `browser/sync/client.ts` | missing | — |
+| Server cleans up a connection's subscriptions on close | `crates/sync/src/worker.rs` | partial | Done on `close`, but duplicate `sub` of the same key from one socket increments `refs` twice while `ws.data.keys` (a Set) removes it once, so refs leak. |
+
+### 7. Auth (client and sync side)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `setAuth(fetchToken, onChange, onRefreshChange?)` with `fetchToken({forceRefreshToken})` → JWT \| null | `browser/sync/client.ts`, `browser/sync/authentication_manager.ts` | missing | No `@bunvex/auth` either. |
+| Pause the socket while fetching the first token, then resume (queries don't run unauthenticated first) | `browser/sync/authentication_manager.ts` (`setConfig`), `browser/sync/local_state.ts` (`pause`/`resume`) | missing | — |
+| Auth state machine: cached token → server confirmation → fresh token refetch → scheduled refetch before `exp` (leeway 10 s, max delay 20 days) | `browser/sync/authentication_manager.ts` | missing | — |
+| Server confirms auth by a Transition whose `identity` version advanced | `browser/sync/authentication_manager.ts` (`onTransition`) | missing | — |
+| On `AuthError`: stop socket, force-refresh token, reconnect; after 2 failed confirmations clear auth and report unauthenticated | `browser/sync/authentication_manager.ts` (`tryToReauthenticate`) | missing | — |
+| Ignore stale AuthErrors for older identity versions, and function-level token-expired errors while confirming | `browser/sync/authentication_manager.ts` | missing | — |
+| Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | missing | — |
+| Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | missing | — |
+| `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | missing | — |
+| Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | missing | — |
+| Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | missing | Note for bunvex: Subs are shared across sockets by path+args, so once `ctx.auth` exists the key must include identity, or per-user queries will leak between users. |
+| Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | missing | — |
+| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | missing | Used by the dashboard and tests. |
+
+### 8. Optimistic updates
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `mutation(name, args, {optimisticUpdate})`: a synchronous `(localStore, args) => void` applied right away | `browser/sync/client.ts` (`enqueueMutation`), `browser/sync/optimistic_updates.ts` | missing | — |
+| `OptimisticLocalStore.getQuery / getAllQueries / setQuery` (setting `undefined` = show loading) | `browser/sync/optimistic_updates.ts`, `browser/sync/optimistic_updates_impl.ts` | missing | — |
+| Every server transition: rebuild results from server data, then replay all still-pending optimistic updates in order | `browser/sync/optimistic_updates_impl.ts` (`ingestQueryResultsFromServer`) | missing | — |
+| Optimistic update dropped exactly when its mutation is reflected (ts reached) or failed, so there is no flicker | `browser/sync/client.ts` (`notifyOnQueryResultChanges`), `browser/sync/request_manager.ts` | missing | Depends on the §4 read-your-writes item. |
+| Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | missing | — |
+| `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | missing | — |
+| React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | missing | — |
+| Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | missing | — |
+
+### 9. Pagination on the client (and its server contract)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Query journals: opaque per-query state (the page end cursor) returned in `QueryUpdated/QueryFailed.journal`, stored by the client, re-sent in `Add.journal` on reconnect so pages keep the same boundaries | `browser/sync/protocol.ts`, `browser/sync/local_state.ts`, `crates/sync/src/state.rs` (`complete_fetch` saves journal) | missing | Server `paginate()` itself is also missing (`tx` "paginate M"). |
+| `paginate({numItems, cursor, endCursor?, maximumRowsRead?, maximumBytesRead?})` → `{page, isDone, continueCursor, splitCursor?, pageStatus?}` | `browser/sync/pagination.ts` (`asPaginationResult`), server `paginationOptsValidator` | missing | Server-side area, but the client relies on this exact shape. |
+| Gapless reactive pagination: each loaded page is its own subscription, pinned by `endCursor`; pages grow or shrink but never leave gaps | `browser/sync/paginated_query_client.ts`, `react/use_paginated_query.ts` | missing | — |
+| Page splitting when a page becomes too large (`SplitRecommended` / `SplitRequired` + `splitCursor`): subscribe to two halves, swap once both are loaded | `browser/sync/paginated_query_client.ts` (`splitPaginatedQueryPage`, `completePaginatedQuerySplit`) | missing | — |
+| `InvalidCursor` error (or `paginationError` in ConvexError data) → reset to the first page | `react/use_paginated_query.ts` | missing | — |
+| Per-hook pagination `id` in the args as a cache-buster (independent journals per hook instance) | `react/use_paginated_query.ts` (`nextPaginationId`), `browser/sync/udf_path_utils.ts` (`serializePaginatedPathAndArgs`) | missing | — |
+| `usePaginatedQuery(query, args \| "skip", {initialNumItems})` → `{results, status: LoadingFirstPage \| CanLoadMore \| LoadingMore \| Exhausted, isLoading, loadMore(n)}` | `react/use_paginated_query.ts` | missing | — |
+| `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | missing | — |
+| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | missing | — |
+
+### 10. Base client API (`BaseConvexClient`, `ConvexClient`)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `subscribe(name, args, {journal?})` → `{queryToken, unsubscribe}`; ref-counted per (path, args) on the client, so N subscribers share one server query | `browser/sync/client.ts`, `browser/sync/local_state.ts` | missing | Server-side sharing exists; the client side doesn't. |
+| Query token = canonical JSON of {udfPath, args} | `browser/sync/udf_path_utils.ts` | partial | `subscriptionKey` exists in `@bunvex/protocol` (path + NUL + `JSON.stringify(args)`); it depends on key order, not canonical. |
+| `addOnTransitionHandler(fn)` with `{queries[{token, modification}], reflectedMutations, timestamp}` | `browser/sync/client.ts` | missing | — |
+| `localQueryResult / localQueryResultByToken / hasLocalQueryResultByToken / localQueryLogs / queryJournal` | `browser/sync/client.ts` | missing | — |
+| `mutation(name, args, opts)` / `action(name, args)` returning values, throwing `ConvexError` with `.data` when `errorData` is present, otherwise `Error` with a "[CONVEX M(name)] … Called by client" message | `browser/sync/client.ts`, `browser/logging.ts` | missing | Server also lacks `errorData`. |
+| `ConvexClient` (framework-free): `onUpdate(query, args, cb, onError)` returning a callable Unsubscribe with `getCurrentValue()` / `getQueryLogs()`; one-shot `query()` via subscribe-then-unsubscribe; `mutation`; `action`; `close`; `disabled` option for SSR | `browser/simple_client.ts` | missing | — |
+| Callbacks for one transition run together after it is applied (no partially applied state visible) | `browser/simple_client.ts`, `react/client.ts` (`transition`) | missing | — |
+| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | missing | Bun and browsers have a global `WebSocket`. |
+
+### 11. React bindings
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | missing | `@bunvex/react` is a stub. |
+| `ConvexProvider` / `useConvex()` context | `react/client.ts` | missing | ARCHITECTURE names it `BunvexProvider`. |
+| `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | missing | — |
+| `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | missing | — |
+| `useQueries(record)`: many queries in one hook, errors returned as `Error` values | `react/use_queries.ts`, `react/queries_observer.ts` | missing | — |
+| Concurrent-mode-safe subscription hook (no tearing between render and subscribe) | `react/use_subscription.ts` | missing | Could use `useSyncExternalStore`. |
+| `useMutation(ref)`: stable function + `.withOptimisticUpdate` | `react/client.ts` | missing | — |
+| `useAction(ref)` | `react/client.ts` | missing | — |
+| `useConvexConnectionState()` | `react/client.ts` | missing | — |
+| Accepting a function reference or a plain string name (`makeFunctionReference`) | `react/client.ts` | missing | Depends on the codegen/inference decision (ARCH open decision 1). |
+| `convexQueryOptions` for TanStack Query-style integration | `browser/query_options.ts` | missing | Low priority. |
+| Guard: helpful errors when used outside a provider / when called with an event object by mistake (`assertNotAccidentalArgument`) | `react/client.ts` | missing | — |
+
+### 12. React auth helpers and providers
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `ConvexProviderWithAuth({client, useAuth})` where `useAuth()` → `{isLoading, isAuthenticated, fetchAccessToken}` | `react/ConvexAuthState.tsx` | missing | — |
+| Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | missing | — |
+| `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | missing | — |
+| `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | missing | — |
+| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | missing | ARCHITECTURE: D. |
+| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | missing | ARCHITECTURE: D. |
+
+### 13. HTTP client and HTTP API
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}`; ignores `format`; no Convex value encoding. |
+| Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; function errors use HTTP 560 (the client accepts 200/560, anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex returns the status/value shape, but uses HTTP 500 for function errors, has no `logLines`/`errorData`, and returns 404 JSON for unknown routes. |
+| `GET /api/query?path=&args=&format=` | `crates/local_backend/src/public_api.rs` | missing | — |
+| `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | — |
+| `consistentQuery`: `GET /api/query_ts` once, then `POST /api/query_at_ts {ts}` so many queries share one snapshot | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | missing | The engine could serve it (MVCC snapshots exist), but snapshots aren't exposed. |
+| `Authorization: Bearer <jwt>` (user) / `Convex <admin key>` (admin) | `browser/http_client.ts` | missing | — |
+| `setAuth(token)`, `setAdminAuth(token, actingAs)`, `clearAuth()`, constructor `{auth, fetch, logger, skipConvexDeploymentUrlCheck}` | `browser/http_client.ts` | missing | No client. |
+| Mutation queue: HTTP mutations from one client run one at a time in call order unless `{skipQueue: true}` | `browser/http_client.ts` (`enqueueMutation`, `processMutationQueue`) | missing | — |
+| `setDebug` (print server log lines), `setFetchOptions({cache})`, custom `fetch` / global `setFetch` | `browser/http_client.ts` | missing | — |
+| `url` getter / deprecated `backendUrl()` | `browser/http_client.ts` | missing | — |
+
+### 14. Next.js / SSR
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| `fetchQuery / fetchMutation / fetchAction(ref, args, {token?, url?, adminToken?, skipConvexDeploymentUrlCheck?})` over the HTTP client with `cache: "no-store"` | `nextjs/index.ts` | missing | ARCHITECTURE: D. |
+| `preloadQuery` → `Preloaded` {_name, _argsJSON, _valueJSON}; `preloadedQueryResult` | `nextjs/index.ts` | missing | — |
+| `usePreloadedQuery(preloaded)`: renders the server value first, then switches to the live subscription | `react/hydration.tsx` | missing | — |
+| Default URL from `NEXT_PUBLIC_CONVEX_URL`, with warnings for an explicitly undefined URL | `nextjs/index.ts` | missing | bunvex would read its own env var name. |
+
+### 15. Logging and errors surfaced to the client
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Server `console.log` lines returned with every query/mutation/action result and printed in the browser as `[CONVEX Q(name)] [LEVEL] …` | `browser/logging.ts`, `browser/sync/remote_query_set.ts`, `browser/sync/request_manager.ts` | missing | Server-side function logs are also missing ("logs M"). |
+| `Logger` interface {log, warn, error, logVerbose}; `logger: false` silences; `verbose` option | `browser/logging.ts`, `browser/sync/client.ts` | missing | — |
+| `ConvexError` data passed to the client as `errorData` and re-thrown with `.data` | `browser/logging.ts` (`forwardData`), `browser/sync/remote_query_set.ts` | missing | Needs `ConvexError` in values/server. |
+| `[CONVEX FATAL ERROR]` on `FatalError` | `browser/logging.ts` | missing | — |
+| Optional debug telemetry (`reportDebugInfoToConvex`: marks, long-disconnect event to `/api/debug_event`) | `browser/sync/client.ts`, `browser/sync/metrics.ts` | missing | Low priority. |
+| Error message redaction for non-dev deployments (`RedactedJsError`, `RedactedLogLines`) | `crates/sync/src/worker.rs` | missing | — |
+
+### 16. Limits and sizes relevant to clients
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Max function args 16 MiB (30 MB JSON at the edge) | `crates/common/src/knobs.rs` (`FUNCTION_MAX_ARGS_SIZE`, `USHER_MAX_JSON_ARGS_SIZE`) | partial | Implicitly limited by `maxPayloadLength` 8 MiB on WS; unlimited on HTTP. |
+| Max function result 16 MiB | `crates/common/src/knobs.rs` (`FUNCTION_MAX_RESULT_SIZE`) | missing | — |
+| Per-transaction read limits (32 000 rows, 16 MiB, 4096 read-set intervals) that drive the pagination `maximumRowsRead/BytesRead` split logic | `crates/common/src/knobs.rs` | missing | Engine area; listed because the client reacts to it. |
+| Pending ops per socket (1000); WS mutation timeout (60 s) | `crates/sync/src/worker.rs` | missing | See §5. |
+| Arg-size metrics per ModifyQuerySet/Mutation/Action | `crates/sync/src/worker.rs` | missing | Observability only. |
+
+### 17. Client configuration (independent of the CLI)
+
+| Feature | Convex source (file) | bunvex status | Notes |
+|---|---|---|---|
+| Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | missing | bunvex never needs the `.convex.cloud` check; a plain absolute-URL check is enough. |
+| Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | missing | Choose `BUNVEX_URL`-style names. |
+| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | missing | — |
+| `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | missing | `baseClient` is also the test seam. |
+| Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex` re-exports `server` and `values` only; `browser`/`react`/`nextjs` re-exports are planned but empty. |
