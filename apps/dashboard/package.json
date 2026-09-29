@@ -1,0 +1,28 @@
+{
+  "name": "@bunvex/dashboard-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A thin Vite host that mounts @bunvex/dashboard (with the MockDataSource for now).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --bun vite",
+    "build": "bun --bun vite build",
+    "preview": "bun --bun vite preview"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.1"
+  },
+  "dependencies": {
+    "@bunvex/dashboard": "workspace:*",
+    "@bunvex/ui": "workspace:*",
+    "@tanstack/react-router": "^1.170.40",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

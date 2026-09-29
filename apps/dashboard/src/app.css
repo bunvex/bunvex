@@ -1,0 +1,4 @@
+/* The design system's tokens and Tailwind entry, plus the dashboard's sources so the utilities its
+   screens use are generated (UI-01 §3.2). */
+@import "@bunvex/ui/styles.css";
+@source "../../../packages/dashboard/src";
