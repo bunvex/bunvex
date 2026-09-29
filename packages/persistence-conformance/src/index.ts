@@ -11,7 +11,7 @@
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
-import { compareKeys, encodeKey, type KeyValue, type Persistence } from "@bunvex/core";
+import { ConflictError, compareKeys, encodeKey, type KeyValue, type Persistence } from "@bunvex/core";
 import {
   allOfTenant,
   counter,
@@ -132,17 +132,29 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     let before = 0;
     for (const keys of [1, 4]) {
       let ok = 0;
+      // Giving up after the retry budget is ALLOWED (a slow store under 64-way contention on one key
+      // exhausts it); losing a committed increment is not. The property: counters grow by exactly the
+      // number of increments that committed.
+      let gaveUp = 0;
       await Promise.all(
         Array.from({ length: 64 }, async (_, w) => {
           for (let i = 0; i < 50; i++) {
-            await e.mutation(increment(`k${(w + i) % keys}`));
-            ok++;
+            try {
+              await e.mutation(increment(`k${(w + i) % keys}`));
+              ok++;
+            } catch (err) {
+              if (!(err instanceof ConflictError)) throw err;
+              gaveUp++;
+            }
           }
         }),
       );
       let total = 0;
       for (let k = 0; k < 4; k++) total += (await e.query(counter(`k${k}`))) ?? 0;
-      check(total - before === ok, `K3 ${keys} key(s): ${ok} increments committed, counters grew ${total - before}`);
+      check(
+        ok > 0 && total - before === ok,
+        `K3 ${keys} key(s): ${ok} increments committed, counters grew ${total - before} (${gaveUp} gave up after retries)`,
+      );
       before = total;
     }
     const first = await e.query(listTenant("t0"), "listCached");
