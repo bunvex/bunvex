@@ -29,12 +29,13 @@ bunvex/
 │   │
 │   ├── values/                      @bunvex/values
 │   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
-│   │   ├── id                       ids that carry their table (Id<"tasks">)                 M
+│   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
 │   │   └── types                    Value, Infer<>, types shared by client and server        N
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
-│   │   ├── schema                   tables, system + declared indexes ✅ · document validation N
+│   │   ├── schema                   declared tables + indexes, Convex name rules ✅ · document validation N
+│   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, backfill ✅
 │   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
@@ -124,6 +125,8 @@ bunvex/
 ├── docker/                          server image (bunvex start)                                M
 ├── docs/
 │   ├── specs/                       design records for MAINTAINERS (ENGINE-00, PERSIST-01, ARCH-01…) ✅
+│   ├── study/                       how Convex does X and how bunvex maps it (STUDY-NN), before code ✅
+│   ├── parity/                      everything Convex has, bunvex's status on each, the roadmap     ✅
 │   └── bench/                       benchmark reports                                          ✅
 │
 ├── .github/                         workflows (lint, typecheck, tests, conformance against SQLite,

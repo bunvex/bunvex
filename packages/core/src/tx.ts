@@ -6,12 +6,14 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { decodeId, encodeId } from "@bunvex/values";
 import BTree from "sorted-btree";
+import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-import { type Doc, type IndexDef, indexKey, type Schema, type TableDef } from "./schema.ts";
+import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
 
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
@@ -65,22 +67,52 @@ export class Tx {
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
   constructor(
-    private schema: Schema,
+    private catalog: Catalog,
     private persistence: Persistence,
     readonly snapshot: number,
     private readonly writable: boolean,
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
-  ) {}
+    /** System transactions (the engine's own) may touch `_`-prefixed system tables; app code may not. */
+    private readonly system = false,
+  ) {
+    this.day = Math.floor(nextCreationTime / 86_400_000);
+  }
+  /** Days since the Unix epoch at the transaction's start: the last two bytes of every id it creates. */
+  private readonly day: number;
 
   private tableDef(name: string) {
-    const t = this.schema.tables.get(name);
-    if (!t) throw new Error(`unknown table ${name}`);
-    return t;
+    if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
+    return this.catalog.table(name);
+  }
+
+  /**
+   * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
+   * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
+   */
+  private checkId(table: string, id: string, method: string): boolean {
+    let n: number;
+    try {
+      n = decodeId(id).tableNumber;
+    } catch (e) {
+      throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
+    }
+    const actual = this.catalog.byNumber(n);
+    if (!actual) return false;
+    if (actual.name !== table)
+      throw new Error(
+        `Invalid argument \`id\` for \`${method}\`: expected to be an Id<"${table}">, got Id<"${actual.name}"> instead.`,
+      );
+    return true;
   }
 
   async get(table: string, id: string): Promise<Doc | null> {
+    return this.read(table, id, "db.get");
+  }
+
+  private async read(table: string, id: string, method: string): Promise<Doc | null> {
     const t = this.tableDef(table);
+    if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
     if (w) return w.next;
     const k = encodeKey([id]);
@@ -188,7 +220,13 @@ export class Tx {
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     const t = this.tableDef(table);
-    const id = crypto.randomUUID();
+    // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
+    // randomness is the real CSPRNG, drawn outside the deterministic execution.
+    const internal = new Uint8Array(16);
+    outsideExecution(() => crypto.getRandomValues(internal.subarray(0, 14)));
+    internal[14] = this.day >> 8;
+    internal[15] = this.day & 0xff;
+    const id = encodeId(t.number, internal);
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
@@ -198,7 +236,7 @@ export class Tx {
 
   async patch(table: string, id: string, fields: Record<string, unknown>) {
     const t = this.tableDef(table);
-    const cur = await this.get(table, id);
+    const cur = await this.read(table, id, "db.patch");
     if (!cur) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
     this.stage(t, id, old, { ...cur, ...fields, _id: id, _creationTime: cur._creationTime });
@@ -206,7 +244,7 @@ export class Tx {
 
   async delete(table: string, id: string) {
     const t = this.tableDef(table);
-    const cur = await this.get(table, id);
+    const cur = await this.read(table, id, "db.delete");
     if (!cur) return;
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
   }

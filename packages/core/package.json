@@ -11,6 +11,7 @@
     "./persistence/sqlite": "./src/persistence/sqlite.ts"
   },
   "dependencies": {
+    "@bunvex/values": "workspace:*",
     "sorted-btree": "^2.1.0"
   },
   "repository": {
