@@ -1,0 +1,423 @@
+- generic [ref=e3]:
+  - button "Skip to content" [ref=e4]
+  - navigation "Dashboard" [ref=e5]:
+    - generic [ref=e6]: bunvex
+    - list [ref=e7]:
+      - listitem [ref=e8]:
+        - link "Health" [ref=e9] [cursor=pointer]:
+          - /url: /?writes=0#/
+      - listitem [ref=e12]:
+        - link "Database" [ref=e13] [cursor=pointer]:
+          - /url: /?writes=0#/database
+      - listitem [ref=e18]:
+        - link "Functions" [ref=e19] [cursor=pointer]:
+          - /url: /?writes=0#/functions
+      - listitem [ref=e23]:
+        - link "Logs" [ref=e24] [cursor=pointer]:
+          - /url: /?writes=0#/logs
+  - generic [ref=e28]:
+    - banner [ref=e29]:
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - term [ref=e33]: Deployment
+          - definition [ref=e34]: …
+        - generic [ref=e35]:
+          - term [ref=e36]: Persistence
+          - definition [ref=e37]: …
+        - generic [ref=e38]:
+          - term [ref=e39]: Version
+          - definition [ref=e40]: …
+      - button "Dark theme (switch to system theme)" [ref=e42]
+    - main [ref=e43]:
+      - generic [ref=e44]:
+        - navigation "Tables" [ref=e45]:
+          - heading "Tables" [level=2] [ref=e46]
+          - generic [ref=e47]:
+            - generic [ref=e48]: Search tables
+            - searchbox "Search tables" [ref=e49]
+          - list [ref=e50]:
+            - listitem [ref=e51]:
+              - link "imports* (not in the schema) 12" [ref=e52] [cursor=pointer]:
+                - /url: /?writes=0#/database/imports
+                - generic [ref=e55]:
+                  - text: imports
+                  - generic "Not in the schema" [ref=e56]:
+                    - text: "*"
+                    - generic [ref=e57]: (not in the schema)
+                - generic [ref=e58]: "12"
+            - listitem [ref=e59]:
+              - link "messages 400" [ref=e60] [cursor=pointer]:
+                - /url: /?writes=0#/database/messages
+                - generic [ref=e63]: messages
+                - generic [ref=e64]: "400"
+            - listitem [ref=e65]:
+              - link "tasks 1,000" [ref=e66] [cursor=pointer]:
+                - /url: /?writes=0#/database/tasks
+                - generic [ref=e69]: tasks
+                - generic [ref=e70]: 1,000
+            - listitem [ref=e71]:
+              - link "users 40" [ref=e72] [cursor=pointer]:
+                - /url: /?writes=0#/database/users
+                - generic [ref=e75]: users
+                - generic [ref=e76]: "40"
+        - generic [ref=e78]:
+          - generic [ref=e79]:
+            - heading "users" [level=1] [ref=e80]
+            - generic [ref=e81]: 40 documents
+            - generic [ref=e82]:
+              - button "Schema" [ref=e83]
+              - button "Indexes" [ref=e84]
+          - region "Filters" [ref=e85]:
+            - generic [ref=e86]:
+              - generic [ref=e87]: Index
+              - combobox "Index" [ref=e88]:
+                - generic [ref=e89]: by_creation_time
+                - img [aria-hidden]: ▼
+              - textbox [aria-hidden] [ref=e90]: by_creation_time
+              - button "_creationTime range" [ref=e91]
+              - generic [ref=e92]:
+                - generic [ref=e93]: Order
+                - combobox "Order" [ref=e94]:
+                  - generic [ref=e95]: Newest first
+                  - img [aria-hidden]: ▼
+                - textbox [aria-hidden] [ref=e96]: desc
+            - button "Add filter" [ref=e98]
+          - region [ref=e99]:
+            - grid [ref=e100]:
+              - caption [ref=e101]: Documents in users
+              - rowgroup [ref=e102]:
+                - row [ref=e103]:
+                  - columnheader "_id" [ref=e104]
+                  - columnheader "name" [ref=e105]
+                  - columnheader "email" [ref=e106]
+                  - columnheader "admin" [ref=e107]
+                  - columnheader "credits" [ref=e108]
+                  - columnheader "_creationTime" [ref=e109]
+              - rowgroup [ref=e110]:
+                - row [ref=e111]:
+                  - gridcell [ref=e112]:
+                    - link "m3xpc4yf0cbc4c6n6ahynerbyshedsma" [ref=e113] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=m3xpc4yf0cbc4c6n6ahynerbyshedsma
+                  - gridcell "Edsger Hamilton" [ref=e114]
+                  - gridcell "edsger.hamilton@example.com" [ref=e115]
+                  - gridcell "false" [ref=e116]
+                  - gridcell "7984250000000000n" [ref=e117]
+                  - gridcell "2026-08-30 13:28:12" [ref=e118]
+                - row [ref=e119]:
+                  - gridcell [ref=e120]:
+                    - link "y9q9pfng42vqwrz3e1xf2yybpgcfhgfq" [ref=e121] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=y9q9pfng42vqwrz3e1xf2yybpgcfhgfq
+                  - gridcell "Grace Hamilton" [ref=e122]
+                  - gridcell "grace.hamilton@example.com" [ref=e123]
+                  - gridcell "false" [ref=e124]
+                  - gridcell "7317180000000000n" [ref=e125]
+                  - gridcell "2026-08-30 13:03:14" [ref=e126]
+                - row [ref=e127]:
+                  - gridcell [ref=e128]:
+                    - link "ecq4cwzjmsd1ysrddtfw930476wedg0c" [ref=e129] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=ecq4cwzjmsd1ysrddtfw930476wedg0c
+                  - gridcell "Edsger Hamilton" [ref=e130]
+                  - gridcell "edsger.hamilton@example.com" [ref=e131]
+                  - gridcell "false" [ref=e132]
+                  - gridcell "7965400000000000n" [ref=e133]
+                  - gridcell "2026-08-29 17:38:18" [ref=e134]
+                - row [ref=e135]:
+                  - gridcell [ref=e136]:
+                    - link "3rr9fe5kfy9pbj2wmdme3m0r4012m3jv" [ref=e137] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=3rr9fe5kfy9pbj2wmdme3m0r4012m3jv
+                  - gridcell "Frances Dijkstra" [ref=e138]
+                  - gridcell "frances.dijkstra@example.com" [ref=e139]
+                  - gridcell "false" [ref=e140]
+                  - gridcell "3018440000000000n" [ref=e141]
+                  - gridcell "2026-08-28 23:23:21" [ref=e142]
+                - row [ref=e143]:
+                  - gridcell [ref=e144]:
+                    - link "d4fb74xxaxefxevjn7ky3k73pe2qb9mw" [ref=e145] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=d4fb74xxaxefxevjn7ky3k73pe2qb9mw
+                  - gridcell "Frances Liskov" [ref=e146]
+                  - gridcell "frances.liskov@example.com" [ref=e147]
+                  - gridcell "false" [ref=e148]
+                  - gridcell "622730000000000n" [ref=e149]
+                  - gridcell "2026-08-18 19:01:49" [ref=e150]
+                - row [ref=e151]:
+                  - gridcell [ref=e152]:
+                    - link "55gk9qka8fe8h18ph484rse5xbmq294b" [ref=e153] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=55gk9qka8fe8h18ph484rse5xbmq294b
+                  - gridcell "Barbara Lamport" [ref=e154]
+                  - gridcell "barbara.lamport@example.com" [ref=e155]
+                  - gridcell "false" [ref=e156]
+                  - gridcell "5070150000000000n" [ref=e157]
+                  - gridcell "2026-08-17 02:19:15" [ref=e158]
+                - row [ref=e159]:
+                  - gridcell [ref=e160]:
+                    - link "kkyx844ztkpjedrcmd9jmymtrm3wbr0s" [ref=e161] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=kkyx844ztkpjedrcmd9jmymtrm3wbr0s
+                  - gridcell "Alan Lamport" [ref=e162]
+                  - gridcell "alan.lamport@example.com" [ref=e163]
+                  - gridcell "false" [ref=e164]
+                  - gridcell "5534750000000000n" [ref=e165]
+                  - gridcell "2026-08-16 21:33:38" [ref=e166]
+                - row [ref=e167]:
+                  - gridcell [ref=e168]:
+                    - link "7601zaa694t8sycr5hjxak4we2zhqmtv" [ref=e169] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=7601zaa694t8sycr5hjxak4we2zhqmtv
+                  - gridcell "Alan Liskov" [ref=e170]
+                  - gridcell "alan.liskov@example.com" [ref=e171]
+                  - gridcell "true" [ref=e172]
+                  - gridcell "6158320000000000n" [ref=e173]
+                  - gridcell "2026-08-16 09:04:58" [ref=e174]
+                - row [ref=e175]:
+                  - gridcell [ref=e176]:
+                    - link "1sczka7mdtwsstp0yvfc0q1prsqd9vzq" [ref=e177] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=1sczka7mdtwsstp0yvfc0q1prsqd9vzq
+                  - gridcell "Leslie Allen" [ref=e178]
+                  - gridcell "leslie.allen@example.com" [ref=e179]
+                  - gridcell "false" [ref=e180]
+                  - gridcell "7484150000000000n" [ref=e181]
+                  - gridcell "2026-08-16 07:00:25" [ref=e182]
+                - row [ref=e183]:
+                  - gridcell [ref=e184]:
+                    - link "75t4rr47x1qar9jdahhe46tjytbn4w13" [ref=e185] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=75t4rr47x1qar9jdahhe46tjytbn4w13
+                  - gridcell "Ken Turing" [ref=e186]
+                  - gridcell "ken.turing@example.com" [ref=e187]
+                  - gridcell "false" [ref=e188]
+                  - gridcell "6679120000000000n" [ref=e189]
+                  - gridcell "2026-08-14 03:05:23" [ref=e190]
+                - row [ref=e191]:
+                  - gridcell [ref=e192]:
+                    - link "5dhg6cexajn2twfx1bzt7rek3n8g97g3" [ref=e193] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=5dhg6cexajn2twfx1bzt7rek3n8g97g3
+                  - gridcell "Grace Thompson" [ref=e194]
+                  - gridcell "grace.thompson@example.com" [ref=e195]
+                  - gridcell "false" [ref=e196]
+                  - gridcell "1292460000000000n" [ref=e197]
+                  - gridcell "2026-08-14 02:47:42" [ref=e198]
+                - row [ref=e199]:
+                  - gridcell [ref=e200]:
+                    - link "hgs6sagccxbdfttqt9tvk30tktqfjwbe" [ref=e201] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=hgs6sagccxbdfttqt9tvk30tktqfjwbe
+                  - gridcell "Frances Lamport" [ref=e202]
+                  - gridcell "frances.lamport@example.com" [ref=e203]
+                  - gridcell "false" [ref=e204]
+                  - gridcell "872210000000000n" [ref=e205]
+                  - gridcell "2026-08-10 08:37:54" [ref=e206]
+                - row [ref=e207]:
+                  - gridcell [ref=e208]:
+                    - link "4vwsnz0q05g7jtby30gmna0jttf352g3" [ref=e209] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=4vwsnz0q05g7jtby30gmna0jttf352g3
+                  - gridcell "Grace Hopper" [ref=e210]
+                  - gridcell "grace.hopper@example.com" [ref=e211]
+                  - gridcell "false" [ref=e212]
+                  - gridcell "8364160000000000n" [ref=e213]
+                  - gridcell "2026-08-08 11:54:41" [ref=e214]
+                - row [ref=e215]:
+                  - gridcell [ref=e216]:
+                    - link "7k65a25j8cnwawefzdxgd0bfagkza0p1" [ref=e217] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=7k65a25j8cnwawefzdxgd0bfagkza0p1
+                  - gridcell "Radia Lamport" [ref=e218]
+                  - gridcell "radia.lamport@example.com" [ref=e219]
+                  - gridcell "false" [ref=e220]
+                  - gridcell "2404620000000000n" [ref=e221]
+                  - gridcell "2026-08-07 15:24:47" [ref=e222]
+                - row [ref=e223]:
+                  - gridcell [ref=e224]:
+                    - link "e66v47j0xrvj9x6n3qp8phw88bqmn0wt" [ref=e225] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=e66v47j0xrvj9x6n3qp8phw88bqmn0wt
+                  - gridcell "Ada Lovelace" [ref=e226]
+                  - gridcell "ada.lovelace@example.com" [ref=e227]
+                  - gridcell "false" [ref=e228]
+                  - gridcell "9790660000000000n" [ref=e229]
+                  - gridcell "2026-08-06 07:04:33" [ref=e230]
+                - row [ref=e231]:
+                  - gridcell [ref=e232]:
+                    - link "ee6p6z5wmsaa4ctm7mkbzeswjpmvwxvn" [ref=e233] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=ee6p6z5wmsaa4ctm7mkbzeswjpmvwxvn
+                  - gridcell "Ada Lamport" [ref=e234]
+                  - gridcell "ada.lamport@example.com" [ref=e235]
+                  - gridcell "false" [ref=e236]
+                  - gridcell "9153090000000000n" [ref=e237]
+                  - gridcell "2026-08-03 15:17:01" [ref=e238]
+                - row [ref=e239]:
+                  - gridcell [ref=e240]:
+                    - link "eqkns8a9qmcsn0nzpc5rat7r5n0b9cp2" [ref=e241] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=eqkns8a9qmcsn0nzpc5rat7r5n0b9cp2
+                  - gridcell "Ken Hopper" [ref=e242]
+                  - gridcell "ken.hopper@example.com" [ref=e243]
+                  - gridcell "false" [ref=e244]
+                  - gridcell "253530000000000n" [ref=e245]
+                  - gridcell "2026-08-02 12:26:55" [ref=e246]
+                - row [ref=e247]:
+                  - gridcell [ref=e248]:
+                    - link "zgdy2csy2m8y42j3n90bbqrhpz8ydm9s" [ref=e249] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=zgdy2csy2m8y42j3n90bbqrhpz8ydm9s
+                  - gridcell "Ken Lamport" [ref=e250]
+                  - gridcell "ken.lamport@example.com" [ref=e251]
+                  - gridcell "false" [ref=e252]
+                  - gridcell "7670210000000000n" [ref=e253]
+                  - gridcell "2026-07-31 05:17:32" [ref=e254]
+                - row [ref=e255]:
+                  - gridcell [ref=e256]:
+                    - link "v54qjq7nbyr78a8n08zd9nq9pzp2n8fc" [ref=e257] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=v54qjq7nbyr78a8n08zd9nq9pzp2n8fc
+                  - gridcell "Leslie Thompson" [ref=e258]
+                  - gridcell "leslie.thompson@example.com" [ref=e259]
+                  - gridcell "false" [ref=e260]
+                  - gridcell "6365640000000000n" [ref=e261]
+                  - gridcell "2026-07-31 04:46:49" [ref=e262]
+                - row [ref=e263]:
+                  - gridcell [ref=e264]:
+                    - link "c31c1m59evhybbg9cjef38j147kb1x12" [ref=e265] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=c31c1m59evhybbg9cjef38j147kb1x12
+                  - gridcell "Edsger Lamport" [ref=e266]
+                  - gridcell "edsger.lamport@example.com" [ref=e267]
+                  - gridcell "false" [ref=e268]
+                  - gridcell "6619950000000000n" [ref=e269]
+                  - gridcell "2026-07-29 04:30:55" [ref=e270]
+                - row [ref=e271]:
+                  - gridcell [ref=e272]:
+                    - link "fc4de7gzh1zhn0rsrxwn1neyhk5q5g86" [ref=e273] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=fc4de7gzh1zhn0rsrxwn1neyhk5q5g86
+                  - gridcell "Edsger Hopper" [ref=e274]
+                  - gridcell "edsger.hopper@example.com" [ref=e275]
+                  - gridcell "false" [ref=e276]
+                  - gridcell "3059840000000000n" [ref=e277]
+                  - gridcell "2026-07-29 02:52:51" [ref=e278]
+                - row [ref=e279]:
+                  - gridcell [ref=e280]:
+                    - link "fzr2y36hjk3bnpbgpymxrqawsfasyx2t" [ref=e281] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=fzr2y36hjk3bnpbgpymxrqawsfasyx2t
+                  - gridcell "Radia Lovelace" [ref=e282]
+                  - gridcell "radia.lovelace@example.com" [ref=e283]
+                  - gridcell "false" [ref=e284]
+                  - gridcell "3914110000000000n" [ref=e285]
+                  - gridcell "2026-07-27 12:21:18" [ref=e286]
+                - row [ref=e287]:
+                  - gridcell [ref=e288]:
+                    - link "pp1eddvp6ypx5z0e4k2k33ae8k248ptf" [ref=e289] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=pp1eddvp6ypx5z0e4k2k33ae8k248ptf
+                  - gridcell "Alan Hopper" [ref=e290]
+                  - gridcell "alan.hopper@example.com" [ref=e291]
+                  - gridcell "false" [ref=e292]
+                  - gridcell "706900000000000n" [ref=e293]
+                  - gridcell "2026-07-27 10:04:21" [ref=e294]
+                - row [ref=e295]:
+                  - gridcell [ref=e296]:
+                    - link "6dh4ya1e6b0myz7sh7w121ctn9becjfq" [ref=e297] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=6dh4ya1e6b0myz7sh7w121ctn9becjfq
+                  - gridcell "Grace Liskov" [ref=e298]
+                  - gridcell "grace.liskov@example.com" [ref=e299]
+                  - gridcell "true" [ref=e300]
+                  - gridcell "748890000000000n" [ref=e301]
+                  - gridcell "2026-07-26 02:19:03" [ref=e302]
+                - row [ref=e303]:
+                  - gridcell [ref=e304]:
+                    - link "1q2w6c1mnvx2xmka1s6nw9cyv4r2hb53" [ref=e305] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=1q2w6c1mnvx2xmka1s6nw9cyv4r2hb53
+                  - gridcell "Ada Dijkstra" [ref=e306]
+                  - gridcell "ada.dijkstra@example.com" [ref=e307]
+                  - gridcell "false" [ref=e308]
+                  - gridcell "6303290000000000n" [ref=e309]
+                  - gridcell "2026-07-25 13:10:36" [ref=e310]
+                - row [ref=e311]:
+                  - gridcell [ref=e312]:
+                    - link "scfjm2mb8rwarwzvted6wq17tmr0mj17" [ref=e313] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=scfjm2mb8rwarwzvted6wq17tmr0mj17
+                  - gridcell "Edsger Hamilton" [ref=e314]
+                  - gridcell "edsger.hamilton@example.com" [ref=e315]
+                  - gridcell "true" [ref=e316]
+                  - gridcell "5651170000000000n" [ref=e317]
+                  - gridcell "2026-07-21 06:31:21" [ref=e318]
+                - row [ref=e319]:
+                  - gridcell [ref=e320]:
+                    - link "appz2z93cncgbpxq3a95h12ad9n71mhz" [ref=e321] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=appz2z93cncgbpxq3a95h12ad9n71mhz
+                  - gridcell "Frances Thompson" [ref=e322]
+                  - gridcell "frances.thompson@example.com" [ref=e323]
+                  - gridcell "false" [ref=e324]
+                  - gridcell "2859590000000000n" [ref=e325]
+                  - gridcell "2026-07-19 13:32:15" [ref=e326]
+                - row [ref=e327]:
+                  - gridcell [ref=e328]:
+                    - link "15mfgeamrt2whbvgbbtjv7wdq49apbgf" [ref=e329] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=15mfgeamrt2whbvgbbtjv7wdq49apbgf
+                  - gridcell "Leslie Hamilton" [ref=e330]
+                  - gridcell "leslie.hamilton@example.com" [ref=e331]
+                  - gridcell "false" [ref=e332]
+                  - gridcell "811580000000000n" [ref=e333]
+                  - gridcell "2026-07-19 00:33:57" [ref=e334]
+                - row [ref=e335]:
+                  - gridcell [ref=e336]:
+                    - link "jzckgcc2kmg1a2mzxfsf08x1btvcrtk5" [ref=e337] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=jzckgcc2kmg1a2mzxfsf08x1btvcrtk5
+                  - gridcell "Alan Liskov" [ref=e338]
+                  - gridcell "alan.liskov@example.com" [ref=e339]
+                  - gridcell "false" [ref=e340]
+                  - gridcell "9022700000000000n" [ref=e341]
+                  - gridcell "2026-07-18 17:42:50" [ref=e342]
+                - row [ref=e343]:
+                  - gridcell [ref=e344]:
+                    - link "hhbymgf1c6h1hah74899mj2c5sh6f04b" [ref=e345] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=hhbymgf1c6h1hah74899mj2c5sh6f04b
+                  - gridcell "Ada Allen" [ref=e346]
+                  - gridcell "ada.allen@example.com" [ref=e347]
+                  - gridcell "false" [ref=e348]
+                  - gridcell "792220000000000n" [ref=e349]
+                  - gridcell "2026-07-16 17:21:34" [ref=e350]
+                - row [ref=e351]:
+                  - gridcell [ref=e352]:
+                    - link "n4msnf3dxexzk6mkkxbx1e70ges9sxd5" [ref=e353] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=n4msnf3dxexzk6mkkxbx1e70ges9sxd5
+                  - gridcell "Barbara Hopper" [ref=e354]
+                  - gridcell "barbara.hopper@example.com" [ref=e355]
+                  - gridcell "false" [ref=e356]
+                  - gridcell "4136030000000000n" [ref=e357]
+                  - gridcell "2026-07-16 05:33:54" [ref=e358]
+                - row [ref=e359]:
+                  - gridcell [ref=e360]:
+                    - link "jsvcrp75wcygmd3rmr30sr7aq1719xad" [ref=e361] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=jsvcrp75wcygmd3rmr30sr7aq1719xad
+                  - gridcell "Barbara Hamilton" [ref=e362]
+                  - gridcell "barbara.hamilton@example.com" [ref=e363]
+                  - gridcell "false" [ref=e364]
+                  - gridcell "2237330000000000n" [ref=e365]
+                  - gridcell "2026-07-14 04:48:05" [ref=e366]
+                - row [ref=e367]:
+                  - gridcell [ref=e368]:
+                    - link "ekd64ym1kj54y80fazmf0m1sz5mwjjck" [ref=e369] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=ekd64ym1kj54y80fazmf0m1sz5mwjjck
+                  - gridcell "Radia Liskov" [ref=e370]
+                  - gridcell "radia.liskov@example.com" [ref=e371]
+                  - gridcell "false" [ref=e372]
+                  - gridcell "3646290000000000n" [ref=e373]
+                  - gridcell "2026-07-13 10:34:38" [ref=e374]
+                - row [ref=e375]:
+                  - gridcell [ref=e376]:
+                    - link "0thjb32nc0ghnvfr2cq6vr35p1syaxvm" [ref=e377] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=0thjb32nc0ghnvfr2cq6vr35p1syaxvm
+                  - gridcell "Edsger Lamport" [ref=e378]
+                  - gridcell "edsger.lamport@example.com" [ref=e379]
+                  - gridcell "false" [ref=e380]
+                  - gridcell "1647150000000000n" [ref=e381]
+                  - gridcell "2026-07-13 07:46:59" [ref=e382]
+                - row [ref=e383]:
+                  - gridcell [ref=e384]:
+                    - link "v3ckgcp49ykh15k74mk020cnmsmny0vx" [ref=e385] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=v3ckgcp49ykh15k74mk020cnmsmny0vx
+                  - gridcell "Ken Dijkstra" [ref=e386]
+                  - gridcell "ken.dijkstra@example.com" [ref=e387]
+                  - gridcell "false" [ref=e388]
+                  - gridcell "8194530000000000n" [ref=e389]
+                  - gridcell "2026-07-11 03:23:42" [ref=e390]
+                - row [ref=e391]:
+                  - gridcell [ref=e392]:
+                    - link "mbbk0xhjm32t4p8m9hx235n1gcr82zz0" [ref=e393] [cursor=pointer]:
+                      - /url: /?writes=0#/database/users?writes=0&doc=mbbk0xhjm32t4p8m9hx235n1gcr82zz0
+                  - gridcell "Margaret Allen" [ref=e394]
+                  - gridcell "margaret.allen@example.com" [ref=e395]
+                  - gridcell "false" [ref=e396]
+                  - gridcell "4920650000000000n" [ref=e397]
+                  - gridcell "2026-07-11 01:38:06" [ref=e398]
+                - row [aria-hidden] [ref=e399]
+            - generic [ref=e400]: 40 of 40 documents loaded
+            - status [ref=e401]

@@ -114,7 +114,8 @@ export class Tx {
     const t = this.tableDef(table);
     if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
-    if (w) return w.next;
+    // A copy: mutating what `get` returned must not change what this transaction wrote.
+    if (w) return w.next && structuredClone(w.next);
     const k = encodeKey([id]);
     this.reads.push({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
@@ -230,7 +231,8 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    this.stage(t, id, null, { ...fields, _id: id, _creationTime: creationTime } as Doc);
+    // Copied at the call: mutating `fields` afterwards must not change what is written (Convex serializes).
+    this.stage(t, id, null, { ...structuredClone(fields), _id: id, _creationTime: creationTime } as Doc);
     return id;
   }
 
@@ -239,7 +241,7 @@ export class Tx {
     const cur = await this.read(table, id, "db.patch");
     if (!cur) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
-    this.stage(t, id, old, { ...cur, ...fields, _id: id, _creationTime: cur._creationTime });
+    this.stage(t, id, old, { ...cur, ...structuredClone(fields), _id: id, _creationTime: cur._creationTime });
   }
 
   async delete(table: string, id: string) {
