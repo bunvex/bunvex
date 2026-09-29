@@ -142,7 +142,7 @@ export class MemoryPersistence implements Persistence {
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
     const t = this.indexes.get(index);
     const out: string[] = [];
-    if (!t) return out;
+    if (!t || limit <= 0) return out;
     if (desc) {
       for (const [k, vs] of t.entriesReversed(hi)) {
         if (compareKeys(k, hi) >= 0) continue; // entriesReversed(hi) starts AT hi (inclusive)
