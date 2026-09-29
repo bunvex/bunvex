@@ -1,0 +1,128 @@
+// Deterministic execution for queries and mutations, as Convex does in its isolate: inside a transaction
+// body, `Date.now()` / `new Date()` are frozen at the transaction's start, `Math.random()` comes from a PRNG
+// seeded per execution, and `fetch` / `crypto.getRandomValues` throw. A result is then a function of what
+// the transaction read, which the query cache and subscriptions rely on. Every execution (every mutation
+// retry included) gets a fresh time and seed, as in Convex. Actions run outside and see the real globals.
+//
+// Convex owns a V8 isolate per function; bunvex shares one process, so the globals are replaced ONCE and
+// each call looks up the current execution in an AsyncLocalStorage. Outside an execution they behave as
+// the originals. The engine's own work — persistence reads issued by the transaction — runs back outside
+// (`outsideExecution`), so drivers keep their real clocks, timers and randomness: the boundary Convex
+// gets from its isolate. This is not a sandbox: code that captured `Date.now` before
+// `installDeterminism()`, or that reaches a non-global API, still escapes.
+import { AsyncLocalStorage } from "node:async_hooks";
+
+export type ExecutionKind = "query" | "mutation";
+type Execution = { kind: ExecutionKind; now: number; random: () => number };
+
+const executions = new AsyncLocalStorage<Execution>();
+
+const RealDate = Date;
+const realNow = Date.now;
+const realRandom = Math.random;
+const realFetch = globalThis.fetch;
+const realGetRandomValues = crypto.getRandomValues.bind(crypto);
+const realSetTimeout = globalThis.setTimeout;
+const realSetInterval = globalThis.setInterval;
+
+/** The wall clock, whether or not an execution is running (for the engine's own bookkeeping). */
+export const wallClock = (): number => realNow();
+
+function notAllowed(what: string, kind: ExecutionKind): Error {
+  return new Error(`Can't use ${what} in ${kind === "query" ? "queries" : "mutations"}. Use an action instead.`);
+}
+
+let installed = false;
+/** Replace the globals (idempotent). The engine calls it; apps never need to. */
+export function installDeterminism() {
+  if (installed) return;
+  installed = true;
+  RealDate.now = () => {
+    const e = executions.getStore();
+    return e ? e.now : realNow();
+  };
+  Math.random = () => {
+    const e = executions.getStore();
+    return e ? e.random() : realRandom();
+  };
+  // `new Date()` with no argument and `Date()` called as a function read the frozen time; everything else
+  // (and `instanceof Date`, `Date.prototype`, `Date.UTC`, …) goes straight to the real Date.
+  globalThis.Date = new Proxy(RealDate, {
+    construct(target, args, newTarget) {
+      const e = args.length === 0 ? executions.getStore() : undefined;
+      return Reflect.construct(target, e ? [e.now] : args, newTarget);
+    },
+    apply(target) {
+      const e = executions.getStore();
+      return e ? new target(e.now).toString() : target();
+    },
+  });
+  globalThis.fetch = Object.assign(
+    (...args: Parameters<typeof fetch>) => {
+      const e = executions.getStore();
+      if (e) return Promise.reject(notAllowed("fetch()", e.kind));
+      return realFetch(...args);
+    },
+    { preconnect: realFetch.preconnect },
+  ) as typeof fetch;
+  // Convex refuses timers in queries and mutations too: a transaction cannot wait on the clock.
+  globalThis.setTimeout = Object.assign((...args: Parameters<typeof setTimeout>) => {
+    const e = executions.getStore();
+    if (e) throw notAllowed("setTimeout()", e.kind);
+    return realSetTimeout(...args);
+  }, realSetTimeout) as typeof setTimeout;
+  globalThis.setInterval = Object.assign((...args: Parameters<typeof setInterval>) => {
+    const e = executions.getStore();
+    if (e) throw notAllowed("setInterval()", e.kind);
+    return realSetInterval(...args);
+  }, realSetInterval) as typeof setInterval;
+  crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
+    const e = executions.getStore();
+    if (e) throw notAllowed("crypto.getRandomValues()", e.kind);
+    return realGetRandomValues(array as never) as T;
+  }) as typeof crypto.getRandomValues;
+}
+
+/** Run `fn` as a deterministic execution frozen at `now` (ms), with a fresh random seed. */
+export function runDeterministic<T>(kind: ExecutionKind, now: number, fn: () => T): T {
+  let rng: (() => number) | undefined;
+  // The seed is drawn on first use: most executions never call Math.random.
+  const random = () => {
+    if (!rng) rng = seededRandom(realGetRandomValues(new Uint32Array(4)));
+    return rng();
+  };
+  return executions.run({ kind, now: Math.floor(now), random }, fn);
+}
+
+/** Run engine work (a persistence call) outside the current execution: real globals, no restrictions. */
+export function outsideExecution<T>(fn: () => T): T {
+  return executions.exit(fn);
+}
+
+/** sfc32: a small, fast, seedable PRNG (not cryptographic — neither is Convex's `Math.random`). */
+export function seededRandom(seed: Uint32Array): () => number {
+  let a = seed[0] | 0;
+  let b = seed[1] | 0;
+  let c = seed[2] | 0;
+  let d = seed[3] | 0;
+  const next = () => {
+    const t = (((a + b) | 0) + d) | 0;
+    d = (d + 1) | 0;
+    a = b ^ (b >>> 9);
+    b = (c + (c << 3)) | 0;
+    c = (c << 21) | (c >>> 11);
+    c = (c + t) | 0;
+    return (t >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < 12; i++) next(); // mix the seed
+  return next;
+}
+
+const f64 = new Float64Array(1);
+const u64 = new BigUint64Array(f64.buffer);
+/** The next representable double above a positive `x` (Rust's `f64::next_up`). */
+export function nextUp(x: number): number {
+  f64[0] = x;
+  u64[0] += 1n;
+  return f64[0];
+}

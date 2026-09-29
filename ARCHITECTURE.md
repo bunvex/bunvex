@@ -40,6 +40,7 @@ bunvex/
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M
 │   │   ├── engine                   snapshots, mutation retries, query cache by read-set      ✅
+│   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── indexing                 backfill a new index over existing data                   M
 │   │   ├── retention                garbage-collect old versions                              M
@@ -59,7 +60,7 @@ bunvex/
 │   │
 │   ├── server/                      @bunvex/server
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·
-│   │   │                            validation N · determinism N · sandbox D
+│   │   │                            validation N · determinism ✅ (in core) · sandbox D
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
