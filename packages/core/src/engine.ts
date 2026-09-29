@@ -133,11 +133,23 @@ export class Engine {
     return value;
   }
 
-  /** A read-only transaction for a SUBSCRIPTION: returns its read-set too, never touches the cache. */
-  async queryTracked<T>(body: TxBody<T>): Promise<{ value: T; reads: Interval[]; ts: number }> {
+  /**
+   * A read-only transaction for a SUBSCRIPTION: never touches the cache, and settles instead of throwing.
+   * A failed run still returns what it read before failing — as in Convex, an error is a result that is
+   * re-evaluated when those reads change (e.g. a query that throws until a document exists).
+   */
+  async queryTracked<T>(
+    body: TxBody<T>,
+  ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
     const snapshot = this.committer.visibleTs;
-    const { tx, value } = await this.execute("query", snapshot, body);
-    return { value, reads: tx.reads, ts: snapshot };
+    const now = wallClock();
+    const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    try {
+      const value = await runDeterministic("query", now, () => body(tx));
+      return { ok: true, value, reads: tx.reads, ts: snapshot };
+    } catch (error) {
+      return { ok: false, error, reads: tx.reads, ts: snapshot };
+    }
   }
 
   /** A read-write transaction, re-run on conflict up to `maxRetries` times. */
