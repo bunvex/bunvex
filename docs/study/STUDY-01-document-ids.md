@@ -1,6 +1,6 @@
 # STUDY-01 — Document IDs (`_id`) and table numbers
 
-- **Status:** decision pending (owner)
+- **Status:** accepted: option C, Convex's format and generator exactly (owner, 2026-09-29)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (2026-09-28)
 - **Related:** [STUDY-03](STUDY-03-deterministic-execution.md) (IDs are generated inside a deterministic
   execution), [PERSIST-01](../specs/PERSIST-01-contract.md) (table and index ids are what persistence stores)
@@ -122,13 +122,31 @@ The same as A, but with 14 random bytes plus 2 day bytes, as Convex does.
 - The most faithful option: 112 random bits.
 - It loses the time ordering (random B-tree inserts), which buys nothing observable.
 
-## 5. Divergences (for option A)
+## 5. Decision
+
+**Option C: follow Convex exactly** (owner, 2026-09-29). The goal is to work the same as Convex, so bunvex
+takes the same string format and the same generator:
+
+- 14 random bytes, then the day number (2 bytes, big-endian);
+- user table numbers start at 10 001.
+
+A and B were weighed and rejected:
+
+- **A** traded 50 random bits and the look of the ids for B-tree locality. Nothing an app observes
+  improves, and ids from one period share long prefixes, which makes them hard to tell apart by eye.
+- **B** loses the table in the id, the checksum and the format.
+
+The random bytes come from the real CSPRNG, outside the deterministic execution (STUDY-03).
+
+Verified against a real Convex id found in the Convex repo, `kg27rxfv99gzp01wmph0gvt92d6hnvy6`:
+
+- it decodes to table 540 (a legacy number) and its footer checks;
+- the last two bytes of its internal id are day 19 738 (2024-01-17);
+- encoding it again gives the same string.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | The internal 16 bytes are a UUIDv7 (time first, 62 random bits), not 14 random bytes + day | Index locality in B-tree stores; `by_id` ≈ creation order. Not observable except via the id's own bytes. | owner |
-| D2 | Ids reveal their creation millisecond (Convex's reveal the day) | Consequence of D1; `_creationTime` is already public | owner |
-| D3 | Table numbers of user tables: follow Convex (start at 10 001) | No divergence proposed; listed so it is a conscious choice | owner |
+| — | none | | |
 
 ## 6. Tests (when implemented)
 
@@ -144,6 +162,6 @@ The same as A, but with 14 random bytes plus 2 day bytes, as Convex does.
 
 ## 7. Open questions
 
-1. Choose A, B or C. The recommendation is A.
+1. ~~Choose A, B or C.~~ Decided: C.
 2. Persisting table and index numbers (§3, finding) is needed in every option. It should be its own
    item, done before or together with the new ids.
