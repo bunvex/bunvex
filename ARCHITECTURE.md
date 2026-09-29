@@ -34,7 +34,8 @@ bunvex/
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
-│   │   ├── schema                   tables, system + declared indexes ✅ · document validation N
+│   │   ├── schema                   declared tables + indexes, Convex name rules ✅ · document validation N
+│   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, backfill ✅
 │   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·

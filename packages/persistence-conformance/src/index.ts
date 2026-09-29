@@ -12,17 +12,7 @@
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
 import { ConflictError, compareKeys, encodeKey, type KeyValue, type Persistence } from "@bunvex/core";
-import {
-  allOfTenant,
-  counter,
-  increment,
-  insertItem,
-  listTenant,
-  newEngine,
-  pair,
-  schema,
-  seedCounters,
-} from "./workload.ts";
+import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
   open(fresh: boolean): Promise<Persistence>;
@@ -192,8 +182,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
   async function k6() {
     const kills = opts.kills ?? 8;
-    const items = schema.tables.get("items")!;
-    const ixIds = [...items.indexes.values()].map((ix) => ix.id);
     const childPath = new URL("./child.ts", import.meta.url).pathname;
     let bad = 0;
     for (let k = 0; k < kills; k++) {
@@ -220,6 +208,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
       const st = await mod.open(false);
       const M = Number((await st.maxTs?.()) ?? 0);
+      // Opening an engine on an existing store only reads the catalog (no commit), so M is unchanged.
+      const e = await newEngine(st);
+      const items = e.catalog.table("items");
+      const ixIds = [...items.indexes.values()].map((ix) => ix.id);
       if (M < lastAck) {
         log(`  kill ${k}: maxTs ${M} < last acknowledged ${lastAck}`);
         bad++;
@@ -238,7 +230,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         bad++;
       }
       // Writing resumes at M + 1 and the result is readable.
-      const e = await newEngine(st);
       const id = await e.mutation(insertItem("resume"));
       if (e.committer.visibleTs !== M + 1 || (await st.get(items.id, id, M + 1)) === null) {
         log(`  kill ${k}: resume wrote ts ${e.committer.visibleTs}, expected ${M + 1}`);
@@ -269,7 +260,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     await st2.close();
     const st3 = await mod.open(false); // the record written after recovery must survive a reopen
     const M3 = Number(await st3.maxTs!());
-    const torn = await st3.get(schema.tables.get("items")!.id, "torn", M3);
+    const torn = await st3.get((await newEngine(st3)).catalog.table("items").id, "torn", M3);
     await st3.close();
     check(
       M2 === M && M3 === M + 1 && torn === null,

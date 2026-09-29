@@ -1,10 +1,22 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
+import {
+  bootstrapCatalog,
+  buildCatalog,
+  type Catalog,
+  hasChanges,
+  INDEX_TABLE,
+  type IndexMeta,
+  planCatalog,
+  TABLES_TABLE,
+  type TableMeta,
+} from "./catalog.ts";
 import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
 import { type ExecutionKind, installDeterminism, runDeterministic, wallClock } from "./determinism.ts";
-import type { Persistence } from "./persistence/index.ts";
-import type { Schema } from "./schema.ts";
+import { encodeKey, prefixEnd } from "./keyenc.ts";
+import type { IndexWrite, Persistence } from "./persistence/index.ts";
+import { type Doc, indexKey, type Schema } from "./schema.ts";
 import { Tx } from "./tx.ts";
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
@@ -12,6 +24,8 @@ type CacheEntry = { value: unknown; reads: Interval[] };
 
 export class Engine {
   readonly committer: Committer;
+  /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
+  catalog: Catalog = bootstrapCatalog();
   private cache = new Map<string, CacheEntry>();
   stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
 
@@ -34,18 +48,65 @@ export class Engine {
     });
   }
 
-  /** Resume after a restart (PERSIST-01 C5): the committer continues from the store's durable maxTs. */
+  /**
+   * Open the engine on its store: resume after the store's durable maxTs (PERSIST-01 C5), then load the
+   * catalog and reconcile it with the declared schema (STUDY-04). Must finish before serving requests.
+   */
   async init() {
     const m = (await this.persistence.maxTs?.()) ?? 0;
     this.committer.appliedTs = m;
     this.committer.visibleTs = m;
+    await this.reconcileCatalog();
     return this;
   }
 
+  /** Create missing tables and indexes, drop undeclared indexes, and backfill new indexes. */
+  private async reconcileCatalog() {
+    const read = async (db: Tx) => ({
+      tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
+      indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
+    });
+    const { tables, indexes } = await this.runMutation(async (db) => {
+      const current = await read(db);
+      const changes = planCatalog(this.schema.tables.values(), current.tables, current.indexes);
+      if (!hasChanges(changes)) return current;
+      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+      for (const id of changes.deleteIndexes) await db.delete(INDEX_TABLE, id);
+      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      return read(db); // read-your-own-writes: the catalog as this commit leaves it
+    }, true);
+    this.catalog = buildCatalog(tables, indexes);
+    for (const ix of indexes) if (ix.state === "backfilling") await this.backfill(ix);
+  }
+
+  /**
+   * Fill a new index from its table's live documents, in batches of commits, then enable it. Idempotent:
+   * after a crash midway the index is still `backfilling` and the next start rewrites the same keys.
+   */
+  private async backfill(meta: IndexMeta, batch = 1000) {
+    const t = [...this.catalog.tables.values()].find((x) => x.id === meta.tablet)!;
+    const ix = t.indexes.get(meta.name)!;
+    let lo: Uint8Array = new Uint8Array(0);
+    const hi = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
+    for (;;) {
+      const snapshot = this.committer.visibleTs;
+      const ids = await this.persistence.scan(t.byId.id, lo, hi, snapshot, batch, false);
+      if (ids.length === 0) break;
+      const idx: IndexWrite[] = [];
+      for (const id of ids) {
+        const json = await this.persistence.get(t.id, id, snapshot);
+        if (json) idx.push({ index: ix.id, key: indexKey(ix, JSON.parse(json) as Doc), id });
+      }
+      if (idx.length) await this.committer.commit({ snapshot, reads: [], docs: [], idx });
+      lo = prefixEnd(encodeKey([ids[ids.length - 1]]));
+    }
+    await this.runMutation((db) => db.patch(INDEX_TABLE, meta._id, { state: "enabled" }), true);
+  }
+
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
-  private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>) {
+  private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = wallClock();
-    const tx = new Tx(this.schema, this.persistence, snapshot, kind === "mutation", now);
+    const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
   }
@@ -80,10 +141,14 @@ export class Engine {
   }
 
   /** A read-write transaction, re-run on conflict up to `maxRetries` times. */
-  async mutation<T>(body: TxBody<T>): Promise<T> {
+  mutation<T>(body: TxBody<T>): Promise<T> {
+    return this.runMutation(body, false);
+  }
+
+  private async runMutation<T>(body: TxBody<T>, system: boolean): Promise<T> {
     const maxRetries = this.opts.maxRetries ?? 30;
     for (let attempt = 0; ; attempt++) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body);
+      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system);
       if (!tx.hasWrites) return value;
       const { docs, idx } = tx.toWrites();
       try {
