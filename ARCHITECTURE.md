@@ -124,6 +124,8 @@ bunvex/
 ├── docker/                          server image (bunvex start)                                M
 ├── docs/
 │   ├── specs/                       design records for MAINTAINERS (ENGINE-00, PERSIST-01, ARCH-01…) ✅
+│   ├── study/                       how Convex does X and how bunvex maps it (STUDY-NN), before code ✅
+│   ├── parity/                      everything Convex has, bunvex's status on each, the roadmap     ✅
 │   └── bench/                       benchmark reports                                          ✅
 │
 ├── .github/                         workflows (lint, typecheck, tests, conformance against SQLite,
