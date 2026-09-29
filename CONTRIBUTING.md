@@ -19,6 +19,8 @@ one fails CI.
 bunvex is a rewrite of Convex: an app should behave the same on both. **Before implementing a feature
 Convex has, study how Convex does it in its source and write it up** in [`docs/study/`](docs/study/)
 (the rule and the template are in its README). Divergences from Convex are decided by the owner.
+The full inventory of Convex's features and bunvex's status is [`docs/parity/`](docs/parity/README.md);
+update its rows in the PR that changes them.
 
 Design decisions are recorded in [`docs/specs/`](docs/specs/). A change to the engine's guarantees, the
 persistence contract or the package layout starts with a spec (or an amendment to one).

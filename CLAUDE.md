@@ -17,6 +17,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   - how bunvex does it;
   - the divergences.
 - Match Convex by default. **Ask the owner about every divergence** instead of deciding it yourself.
+- [docs/parity/](docs/parity/README.md) lists everything Convex has and bunvex's status on each item.
+  Update the matching rows in every PR that adds or changes a Convex feature; the roadmap is there too.
 - Never copy Convex code; write bunvex's version from scratch.
 
 ## Conventions

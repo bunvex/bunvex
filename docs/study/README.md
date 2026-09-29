@@ -40,5 +40,14 @@ to a spec.
 | [STUDY-02](STUDY-02-read-own-writes.md) | Read-your-own-writes inside a transaction | implemented (#3), retroactive |
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
 | [STUDY-04](STUDY-04-table-and-index-metadata.md) | Table and index metadata (`_tables`, `_index`) | implemented (#6) |
+| [STUDY-05](STUDY-05-index-keys-and-ordering.md) | Value order, index keys and system indexes | draft (retroactive): divergences await the owner |
+| [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | draft (retroactive): divergences await the owner |
+| [STUDY-07](STUDY-07-query-semantics.md) | Query semantics (`withIndex`, `take`, `collect`, limits) | draft (retroactive): divergences await the owner |
+| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | draft (retroactive): divergences await the owner |
+| [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | draft (retroactive): divergences await the owner |
+| [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | draft (retroactive): divergences await the owner |
+| [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | draft (retroactive): divergences await the owner |
+
+The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
 Status values: *draft* → *decision pending (owner)* → *accepted* → *implemented (#PR)*.
