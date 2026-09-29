@@ -8,7 +8,7 @@
 //      journal is sequential, so once the marker is journaled every row before it is too. maxTs() is the
 //      marker; on open, rows above it (a flush interrupted by a crash) are deleted before any new commit
 //      could reuse their ts.
-import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "@bunvex/core/persistence";
+import { type DocWrite, type IndexWrite, type Persistence, type ScanDocs, scanLatest } from "@bunvex/core/persistence";
 import type { Collection, Db, MongoClient } from "mongodb";
 import { loadPeer } from "./peer.ts";
 
@@ -72,21 +72,28 @@ export class MongoPersistence implements Persistence, ScanDocs {
     this.marker = top;
   }
 
-  private async latest(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
-    const rows = await this.idx
-      .find({ x: index, k: { $gte: hex(lo), $lt: hex(hi) }, ts: { $lte: ts } }, { projection: { _id: 0, k: 1, d: 1 } })
-      .sort(desc ? { k: -1, ts: -1 } : { k: 1, ts: -1 })
-      .limit(limit * 4)
-      .toArray();
-    const out: string[] = [];
-    let last: string | null = null;
-    for (const r of rows) {
-      if (r.k === last) continue; // an older version of a key already decided
-      last = r.k;
-      if (r.d !== null) out.push(r.d);
-      if (out.length >= limit) break;
-    }
-    return out;
+  private latest(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+    return scanLatest(
+      async (p) => {
+        const rows = await this.idx
+          .find(
+            { x: index, k: { $gte: hex(p.lo), $lt: hex(p.hi) }, ts: { $lte: ts } },
+            { projection: { _id: 0, k: 1, d: 1 } },
+          )
+          .sort(desc ? { k: -1, ts: -1 } : { k: 1, ts: -1 })
+          .limit(p.n)
+          .toArray();
+        return rows.map((r) => ({
+          key: Buffer.from(r.k as string, "hex"),
+          deleted: r.d === null,
+          id: r.d as string | null,
+        }));
+      },
+      lo,
+      hi,
+      limit,
+      desc,
+    );
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
