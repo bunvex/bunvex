@@ -13,7 +13,7 @@ import {
   type TableMeta,
 } from "./catalog.ts";
 import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
-import { type ExecutionKind, installDeterminism, runDeterministic, wallClock } from "./determinism.ts";
+import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
 import { type Doc, indexKey, type Schema } from "./schema.ts";
@@ -105,7 +105,7 @@ export class Engine {
 
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
-    const now = wallClock();
+    const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };

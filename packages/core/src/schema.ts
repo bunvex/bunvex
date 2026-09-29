@@ -37,6 +37,13 @@ export class Schema {
       if (n in SYSTEM_INDEXES || n.startsWith("_"))
         throw new Error(`Invalid index name "${name}.${n}": the name is reserved.`);
       if (fields.length === 0) throw new Error(`Index "${name}.${n}" must have at least one field.`);
+      if (fields.length > 16) throw new Error(`Index "${name}.${n}" has more than 16 fields.`);
+      if (new Set(fields).size !== fields.length) throw new Error(`Index "${name}.${n}" has duplicate fields.`);
+      for (const f of fields)
+        if (f === "_id" || f === "_creationTime" || f.split(".").some((part) => part.startsWith("_")))
+          throw new Error(
+            `Index "${name}.${n}" uses the reserved field "${f}": _id and _creationTime are added to every index automatically, and fields starting with "_" are reserved.`,
+          );
     }
     this.tables.set(name, { name, indexes: { ...indexes } });
     return this;
