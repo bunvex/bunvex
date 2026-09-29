@@ -37,7 +37,7 @@ bunvex/
 │   │   ├── schema                   tables, system + declared indexes ✅ · document validation N
 │   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
-│   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries N ·
+│   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M
 │   │   ├── engine                   snapshots, mutation retries, query cache by read-set      ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
