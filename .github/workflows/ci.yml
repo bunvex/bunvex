@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   check:
-    name: lint · typecheck · dependency rules · tests
+    name: lint · typecheck · dependency rules · tests · dashboard build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +22,10 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run check:deps
-      # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite
+      # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite,
+      # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - run: bun run test
+      - run: bun run build:dashboard
 
   conformance:
     name: PERSIST-01 conformance · Postgres · MySQL · MongoDB

@@ -9,16 +9,18 @@
   },
   "workspaces": [
     "packages/*",
+    "apps/*",
     "bench"
   ],
   "scripts": {
-    "typecheck": "tsc -p .",
+    "typecheck": "tsc -p . && tsc -p packages/ui && tsc -p packages/dashboard && tsc -p apps/dashboard",
     "lint": "biome ci .",
     "format": "biome check --write .",
     "check:deps": "bun scripts/check-deps.ts",
-    "test": "bun test",
+    "test": "bun test && bun run --cwd packages/ui test && bun run --cwd packages/dashboard test",
     "conformance": "bun bench/conformance.ts",
-    "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test"
+    "build:dashboard": "bun run --cwd apps/dashboard build",
+    "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
