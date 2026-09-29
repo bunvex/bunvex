@@ -1,0 +1,13 @@
+name: Bug report
+description: Something does not behave as documented
+labels: [bug]
+body:
+  - type: textarea
+    attributes: { label: What happened, description: What you did, what you expected, what happened instead. }
+    validations: { required: true }
+  - type: textarea
+    attributes: { label: Reproduction, description: The smallest code or steps that show it. }
+    validations: { required: true }
+  - type: input
+    attributes: { label: Versions, description: "bunvex, Bun, OS, persistence driver (memory / sqlite / postgres / mysql / mongodb)" }
+    validations: { required: true }

@@ -1,0 +1,16 @@
+{
+  "name": "@bunvex/client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The bunvex sync client: WebSocket, reconnect, consistent local state, optimistic updates, pagination.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/client"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "bunvex-monorepo",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex"
+  },
+  "workspaces": [
+    "packages/*",
+    "bench"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "check:deps": "bun scripts/check-deps.ts",
+    "test": "bun test",
+    "conformance": "bun bench/conformance.ts",
+    "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0",
+    "@changesets/cli": "^2.29.0",
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.0"
+  }
+}

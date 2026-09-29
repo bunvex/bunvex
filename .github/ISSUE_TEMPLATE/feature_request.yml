@@ -1,0 +1,9 @@
+name: Feature request
+description: Propose something new or a change in design
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes: { label: The problem, description: What are you trying to do that bunvex makes hard? }
+    validations: { required: true }
+  - type: textarea
+    attributes: { label: Proposal, description: "How it could work. Check ARCHITECTURE.md: is it already planned?" }

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint · typecheck · dependency rules · tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run check:deps
+      # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite
+      - run: bun run test
+
+  conformance:
+    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: bunvex
+          POSTGRES_DB: bunvex_k
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: bunvex
+          MYSQL_DATABASE: bunvex_k
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -uroot -pbunvex" --health-interval 5s --health-timeout 5s --health-retries 30
+      mongodb:
+        image: mongo:8
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: conformance on the external drivers
+        env:
+          DRIVERS: postgres,mysql,mongodb
+          KILLS: "4"
+          PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k
+        run: bun run conformance

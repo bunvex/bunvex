@@ -1,0 +1,21 @@
+{
+  "name": "@bunvex/core",
+  "version": "0.0.0",
+  "description": "The bunvex engine: MVCC, the committer, optimistic transactions, the query cache, subscriptions, and the Persistence contract with its zero-dependency drivers (memory, SQLite).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./persistence": "./src/persistence/index.ts",
+    "./persistence/memory": "./src/persistence/memory.ts",
+    "./persistence/sqlite": "./src/persistence/sqlite.ts"
+  },
+  "dependencies": {
+    "sorted-btree": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/core"
+  }
+}

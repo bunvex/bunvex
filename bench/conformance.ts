@@ -1,0 +1,25 @@
+// Runs @bunvex/persistence-conformance (PERSIST-01, K1–K7) against every first-party driver.
+//   bun bench/conformance.ts                    memory + sqlite (+ postgres/mysql/mongodb when their URL is set)
+//   DRIVERS=sqlite,postgres PG_URL=… bun bench/conformance.ts
+//   KILLS=8 (K6 cycles)   CHECKS=K1,K2,K3,K6,K7 (subset; K3 covers K3–K5)
+// Remote drivers need an EMPTY scratch database: the suite drops its tables. Exit code 1 on any violation.
+import { type Check, runConformance } from "@bunvex/persistence-conformance";
+
+const available = ["memory", "sqlite"];
+if (process.env.PG_URL) available.push("postgres");
+if (process.env.MYSQL_URL) available.push("mysql");
+if (process.env.MONGO_URL) available.push("mongodb");
+const drivers = (process.env.DRIVERS?.split(",") ?? available).filter((d) => available.includes(d));
+
+let failures = 0;
+for (const name of drivers) {
+  const r = await runConformance({
+    name,
+    driverModule: `${import.meta.dir}/drivers/${name}.ts`,
+    kills: Number(process.env.KILLS ?? 8),
+    checks: process.env.CHECKS?.split(",") as Check[] | undefined,
+  });
+  failures += r.failures;
+}
+console.log(failures ? `${failures} FAILURE(S)` : "all conformance checks passed");
+process.exit(failures ? 1 : 0);

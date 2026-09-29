@@ -1,0 +1,21 @@
+{
+  "name": "bunvex",
+  "version": "0.0.0",
+  "description": "A Convex-style reactive backend for Bun, with its own database engine on pluggable persistence.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./values": "./src/values.ts"
+  },
+  "dependencies": {
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/bunvex"
+  }
+}
