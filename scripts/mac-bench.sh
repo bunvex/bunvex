@@ -3,7 +3,7 @@
 #   scripts/mac-bench.sh   (needs scripts/mac-stores.sh start)
 set -uo pipefail
 cd "$(dirname "$0")/.."
-# The convex-bench harness checkout (https://github.com/…); defaults to a sibling directory.
+# The convex-bench harness checkout (CONVEX_BENCH); defaults to a sibling directory.
 CB="${CONVEX_BENCH:-$(cd "$(dirname "$0")/../.." && pwd)/convex-bench}"
 PGB=/opt/homebrew/opt/postgresql@17/bin; MYB=/opt/homebrew/opt/mysql@8.4/bin; MOB="$PWD/.data/mongo-bin/bin"
 export PG_URL=postgres://$USER@127.0.0.1:5434/bunvex MYSQL_URL=mysql://root@127.0.0.1:3307/bunvex MONGO_URL=mongodb://127.0.0.1:27018/bunvex
