@@ -122,12 +122,14 @@ export function createServer(opts: ServerOptions) {
         return json({ status: "error", errorMessage: "invalid json" }, 400);
       }
       try {
+        if (route[1] === "query") {
+          const v = await functions.runQueryJson(body.path, body.args);
+          return new Response(`{"status":"success","value":${v}}`, { headers: { "content-type": "application/json" } });
+        }
         const value =
-          route[1] === "query"
-            ? await functions.runQuery(body.path, body.args)
-            : route[1] === "mutation"
-              ? await functions.runMutation(body.path, body.args)
-              : await functions.runAction(body.path, body.args);
+          route[1] === "mutation"
+            ? await functions.runMutation(body.path, body.args)
+            : await functions.runAction(body.path, body.args);
         return json({ status: "success", value: value ?? null });
       } catch (e) {
         return json({ status: "error", errorMessage: String((e as Error).message ?? e) }, 500);
