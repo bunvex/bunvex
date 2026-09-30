@@ -248,8 +248,15 @@ export type LogEntry = {
   level: LogLevel;
   message: string;
   function?: { path: string; kind: FunctionKind };
-  /** Groups the lines of one execution. */
+  /** Groups the lines of one request: a call from a client, and every function it runs. */
   requestId?: string;
+  /**
+   * The execution (one function running once) the line belongs to; a request runs one, or more when an action
+   * calls other functions (STUDY-12 L6, the call tree).
+   */
+  executionId?: string;
+  /** The execution that called this one, in the same request; absent for the request's first. */
+  parentExecutionId?: string;
   /** On the line that ends an execution. */
   execution?: { status: "success" | "failure"; durationMs: number };
 };

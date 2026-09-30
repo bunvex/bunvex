@@ -352,6 +352,22 @@ export function describeDataSourceContract(
       }
     });
 
+    test("log lines name their execution consistently: a caller is another execution of the same request", async () => {
+      const src = await make();
+      const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
+      const requestOf = new Map<string, string | undefined>();
+      for (const e of page) {
+        if (e.executionId === undefined) continue;
+        expect(e.parentExecutionId).not.toBe(e.executionId);
+        const seen = requestOf.get(e.executionId);
+        if (seen !== undefined) expect(e.requestId).toBe(seen);
+        requestOf.set(e.executionId, e.requestId);
+      }
+      for (const e of page)
+        if (e.parentExecutionId && requestOf.has(e.parentExecutionId))
+          expect(requestOf.get(e.parentExecutionId)).toBe(e.requestId);
+    });
+
     test("logs page newest first with increasing ids, and respect the filter", async () => {
       const src = await make();
       const first: LogEntry[] = (await src.listLogs({ numItems: 50, cursor: null })).page;

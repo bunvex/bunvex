@@ -1144,3 +1144,17 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   approximate and where to paste it, Copy; "Add at least one document…" for an empty table. It opens on
   Saved, or on Generated when nothing is saved. Without `inferDocumentType`, no tabs.
 
+### 15.6 The functions a request called (STUDY-12 L6)
+
+- **Contract**: `LogEntry.executionId` and `parentExecutionId` (optional): the execution a line belongs to,
+  and the one that called it in the same request. The contract suite checks they agree (an execution stays
+  in one request; its caller is another execution of the same request).
+- **Mock**: an action may call one or two queries or mutations; their lines sit inside the action's, in
+  its request, with its execution as their caller.
+- **Details**: when the request ran more than one function, **Functions called** — Convex's outline
+  (`FunctionCallTree.tsx`): one row per execution under its caller, in starting order, with its outcome
+  (an icon and, for screen readers, "Succeeded:" / "Failed:" / "Running:") and duration; the line's own
+  execution is marked "this line". `logs/call-tree.ts` builds it from the loaded lines (a caller not
+  loaded: its call stands at the top; no outcome yet: running). The **Outcome** is now the line's own
+  execution's, not another call's in the same request.
+
