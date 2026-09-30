@@ -28,9 +28,9 @@ bunvex/
 ├── packages/
 │   │
 │   ├── values/                      @bunvex/values
-│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
+│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      ✅
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
-│   │   └── types                    Value, Infer<>, types shared by client and server        N
+│   │   └── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
@@ -171,7 +171,7 @@ These are enforced in CI, not only written down.
 ```
 values ◄── core ◄── persistence          protocol ◄── server ──► core, values, auth, file-storage
                                                               (+ persistence: optional, loaded by name)
-                ◄── persistence-conformance            client ──► protocol, values
+                ◄── persistence-conformance (──► values) client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
 cli ──► server, core                                      bunvex ──► re-exports only
 

@@ -20,6 +20,10 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
 - [docs/parity/](docs/parity/README.md) lists everything Convex has and bunvex's status on each item.
   Update the matching rows in every PR that adds or changes a Convex feature; the roadmap is there too.
 - Never copy Convex code; write bunvex's version from scratch.
+- **No "convex" in shipped code** outside comments: not in identifiers, exported names, strings, error
+  messages or URLs. Match Convex's behaviour and message *structure* with bunvex's own words (e.g.
+  `toJsonValue`, not `convexToJson`; "is not a supported value type", with no docs.convex.dev link). Citing
+  Convex in comments and docs is fine. `bun run check:deps` (rule 5) enforces it.
 
 ## Conventions
 

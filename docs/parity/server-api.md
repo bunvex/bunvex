@@ -20,7 +20,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | partial | Exists as `Tx.get(table, id)`. It doesn't check that the id belongs to `table`, and it has no argument validation. |
+| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. |
 | `db.get(id)`, the legacy form where the id carries its table | server/database.ts | missing | Ids now carry their table (#7), so this is unblocked; the one-argument form is not wired up yet. |
 | `db.get` returns `null` for a missing or deleted doc | impl/database_impl.ts | done | |
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
@@ -43,7 +43,7 @@ Key bunvex facts behind the statuses:
 | IndexRangeBuilder `gt`/`gte` then `lt`/`lte` on the next field | index_range_builder.ts | partial | Works for the common case. A mismatched field name, or bounds on different fields, silently produce a wrong range. |
 | Index range on `undefined` (missing field) | crates/common/src/query.rs, value/sorting.rs | missing | bunvex maps missing fields to `null`. Convex keeps `undefined` as its own value that sorts below `null`. |
 | Using `by_id` / `by_creation_time` system indexes in `withIndex` | system_fields.ts (`SystemIndexes`) | done | Both are created for every table. |
-| Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | partial | bunvex appends only `_id` (as UTF-8 bytes). Ties on equal index values sort by UUID, not creation time. |
+| Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | done (#10) | |
 | `.fullTableScan()` | impl/query_impl.ts | missing | Only the implicit default (`by_creation_time`). |
 | `.order("asc" \| "desc")` | impl/query_impl.ts | partial | Works. It doesn't reject a second `.order()` or `.order()` on a search query. |
 | `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | missing | Listed as "M" in ARCHITECTURE.md. |
@@ -84,12 +84,13 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | partial | Returns a Convex-format id (#7), but the value isn't validated at all. Convex checks the schema, value types, field names and size. |
-| `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | missing | |
+| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. |
+| A write to a table that does not exist creates it (in the same transaction); reads of a missing table return nothing | database/src/bootstrap_model/table.rs (`insert_table_metadata`) | done (#33) | Reads depend on `_tables`, so they re-run when the table is created. |
+| `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | done (#6) | "System table … is not accessible here." |
 | `insert` assigns `_id` and `_creationTime` and rejects caller-supplied values that don't match | crates/common/src/document.rs | partial | bunvex overwrites `_id` / `_creationTime` silently instead of rejecting them. |
 | `_creationTime` is strictly increasing within a transaction, so inserts sort in insert order | crates/database/src/transaction.rs (`next_creation_time`) | done | `nextUp()` float increment, on main. |
 | Convex-format document ids (base32; table number plus random bytes plus checksum; ~31–37 chars) | crates/value/src/id_v6.rs | done (#7) | Convex's format and generator exactly (STUDY-01 option C). Legacy v4/v5 formats are not accepted by `normalizeId`, since bunvex has no legacy data. |
-| `db.patch(table, id, partial)`: shallow merge | server/database.ts | partial | Implemented. Missing: validation, rejecting patches of `_id` / `_creationTime` to a different value, and the legacy `patch(id, v)` form. |
+| `db.patch(table, id, partial)`: shallow merge | server/database.ts | done (#21) | Validation, `undefined` removes a field, system fields as Convex. |
 | `patch` with a field set to `undefined` removes that field | values/value.ts (`patchValueToJson`) | partial | It only works by accident: `JSON.stringify` drops the key on persist. Within the transaction, a read returns the key with the value `undefined`. |
 | `patch` / `replace` / `delete` on a nonexistent id throws `NonexistentDocument` | crates/database/src/transaction.rs | partial | `patch` throws. `delete` of a missing doc is a silent no-op. |
 | `db.replace(table, id, value)`: replace all non-system fields, keeping `_id` / `_creationTime` | server/database.ts | missing | |
@@ -99,17 +100,17 @@ Key bunvex facts behind the statuses:
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | missing | New Convex feature. |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
 | Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | partial | Retries up to 30 times with jittered backoff (Convex: 4). The conflict error isn't user-visible in Convex's shape. |
-| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | missing | There are no document validators. |
+| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | |
 
 ### 5. Function builders and registration
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | partial | They exist but take only a bare handler: `query(handler, internal?)`. |
-| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | partial | Done as a boolean flag, not as separate builders. Clients can't call internal functions (done). |
-| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | missing | |
-| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | missing | `Args = any`, and nothing is validated. Listed as "N" in ARCHITECTURE.md. |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | missing | |
+| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
+| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
+| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
+| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | partial | Manual `register(module, fns)` builds `module:fn`. There is no default-export rule and no file-based discovery. |
@@ -162,26 +163,26 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `v.id(table)` | values/validator.ts | missing | `@bunvex/values` is empty. |
-| `v.null()` | values/validator.ts | missing | |
-| `v.number()` / `v.float64()` | values/validator.ts | missing | |
-| `v.bigint()` / `v.int64()` | values/validator.ts | missing | |
-| `v.boolean()` | values/validator.ts | missing | |
-| `v.string()` | values/validator.ts | missing | |
-| `v.bytes()` (ArrayBuffer) | values/validator.ts | missing | |
-| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | missing | |
-| `v.array(el)` | values/validator.ts | missing | |
-| `v.object(fields)`, rejecting unknown fields | values/validator.ts | missing | |
-| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | missing | |
-| `v.union(...members)` | values/validator.ts | missing | |
-| `v.any()` | values/validator.ts | missing | |
-| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | missing | |
-| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | missing | |
+| `v.id(table)` | values/validator.ts | done (#24) | Checks the id names the table (catalog lookup). |
+| `v.null()` | values/validator.ts | done (#24) | |
+| `v.number()` / `v.float64()` | values/validator.ts | done (#24) | |
+| `v.bigint()` / `v.int64()` | values/validator.ts | done (#24) | |
+| `v.boolean()` | values/validator.ts | done (#24) | |
+| `v.string()` | values/validator.ts | done (#24) | |
+| `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | |
+| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | done (#24) | |
+| `v.array(el)` | values/validator.ts | done (#24) | |
+| `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
+| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | |
+| `v.union(...members)` | values/validator.ts | done (#24) | |
+| `v.any()` | values/validator.ts | done (#24) | |
+| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | done (#24) | |
+| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | done (#24) | |
 | `v.commitTs()` | values/validator.ts (`VCommitTs`) | missing | New. |
-| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | missing | |
-| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | missing | |
-| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | missing | |
-| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | missing | |
+| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | done (#24) | |
+| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | done (#24) | bunvex marker is `isValidator` (no "convex" in names). |
+| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | done (#24) | asObjectValidator not yet. |
+| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24) | |
 | Value `null` | values/value.ts | done | JSON. |
 | Value `boolean` | values/value.ts | done | |
 | Value `string` | values/value.ts | done | |
@@ -189,9 +190,9 @@ Key bunvex facts behind the statuses:
 | Value `bigint` (int64, range-checked) | values/value.ts | missing | `JSON.stringify` throws on bigint. |
 | Value `ArrayBuffer` (bytes) | values/value.ts | missing | Serialises to `{}`. |
 | Value arrays and plain objects | values/value.ts | partial | Stored fine. Not index-keyable: keyenc has no array/object tags, and objects fall into the bytes branch. |
-| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | partial | Dropped by JSON with no error. `undefined` in arrays becomes `null` silently. |
+| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | missing | |
-| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | missing | Plain JSON only. |
+| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | missing | Errors reach the client as `String(message)` only. |
@@ -223,14 +224,14 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineSchema({ table: defineTable(...) })` | server/schema.ts | partial | bunvex uses an imperative `new Schema().table(name, indexes)`. There is no `defineSchema` / `defineTable` API. |
-| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | missing | Tables have no document type. |
+| `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#29) | |
+| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29) | |
 | `.index(name, [fields])` | server/schema.ts | partial | Declared as `{ name: fields[] }` in `Schema.table`. |
 | `.index(name, { fields, staged })`: staged indexes that don't block a push | server/schema.ts | missing | |
 | `.searchIndex(name, { searchField, filterFields, staged })` | server/schema.ts | missing | |
 | `.vectorIndex(name, { vectorField, dimensions, filterFields, staged })` | server/schema.ts | missing | |
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
-| `schemaValidation` option (default true) | server/schema.ts | missing | |
+| `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
 | `strictTableNameTypes` option (type-level) | server/schema.ts | missing | |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | missing | |

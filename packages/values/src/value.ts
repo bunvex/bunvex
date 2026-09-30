@@ -54,16 +54,14 @@ export function stringifyValueForError(value: unknown): string {
 
 function unsupported(context: string, typeName: string, value: unknown, original: unknown) {
   return context
-    ? `${typeName}${stringifyValueForError(value)} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(original)}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`
-    : `${typeName}${stringifyValueForError(value)} is not a supported Convex type.`;
+    ? `${typeName}${stringifyValueForError(value)} is not a supported value type (present at path ${context} in original object ${stringifyValueForError(original)}).`
+    : `${typeName}${stringifyValueForError(value)} is not a supported value type.`;
 }
 
 function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (value === undefined) {
     const where = context && ` (present at path ${context} in original object ${stringifyValueForError(original)})`;
-    throw new Error(
-      `undefined is not a valid Convex value${where}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`,
-    );
+    throw new Error(`undefined is not a valid value${where}.`);
   }
   if (value === null) return null;
   if (typeof value === "bigint") {
@@ -98,14 +96,14 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
 }
 
 /** A Convex value as JSON (throws on anything that is not a Convex value). */
-export function convexToJson(value: Value): JSONValue {
+export function toJsonValue(value: Value): JSONValue {
   return toJson(value, value, "");
 }
 
 /** Parse the JSON form back: `$integer` → bigint, `$float` → number, `$bytes` → ArrayBuffer. */
-export function jsonToConvex(value: JSONValue): Value {
+export function fromJsonValue(value: JSONValue): Value {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(jsonToConvex);
+  if (Array.isArray(value)) return value.map(fromJsonValue);
   const keys = Object.keys(value);
   if (keys.length === 1) {
     const k = keys[0];
@@ -130,7 +128,7 @@ export function jsonToConvex(value: JSONValue): Value {
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(value)) {
     validateObjectField(k);
-    out[k] = jsonToConvex(v);
+    out[k] = fromJsonValue(v);
   }
   return out;
 }
@@ -205,4 +203,29 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
       return x.length - y.length;
     }
   }
+}
+
+function copy(value: unknown, original: unknown, context: string): Value {
+  if (value === null || typeof value === "number" || typeof value === "boolean" || typeof value === "string")
+    return value;
+  if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
+  if (value instanceof ArrayBuffer) return value.slice(0);
+  if (Array.isArray(value)) return value.map((v, i) => copy(v, original, `${context}[${i}]`));
+  if (!isSimpleObject(value)) return toJson(value, original, context) as never; // throws Convex's message
+  const out: Record<string, Value> = {};
+  for (const k of Object.keys(value).sort()) {
+    const v = value[k];
+    if (v === undefined) continue;
+    validateObjectField(k);
+    out[k] = copy(v, original, `${context}.${k}`);
+  }
+  return out;
+}
+
+/**
+ * A validated deep copy of a value, as a `fromJsonValue(toJsonValue(v))` round trip would give (same
+ * checks and messages, fields sorted, undefined fields dropped) without building the JSON.
+ */
+export function copyValue(value: Value): Value {
+  return copy(value, value, "");
 }

@@ -767,8 +767,10 @@ which Convex's does not.
   is gone with the selection: the dialog does not restore focus (`finalFocus={false}`) and the screen asks
   the grid for it (`DataTable focusRequest`). Checked in a browser: Base UI hides the page behind a modal
   with `aria-hidden` and traps the focus (no `inert`), so axe is run on the dialog while it is open.
-- Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
-  search when the screen writes its own; harmless, to be fixed with the app's history setup.
+- ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
+  search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
+  host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
+  the address (`apps/dashboard/src/knobs.ts`).
 
 ### 12.5.6 Columns and room for the table
 
@@ -788,6 +790,66 @@ which Convex's does not.
   browser). A collapsible table list was built first and dropped at the owner's request in favour of the
   resizable one.
 - Checked in a browser at 1 400 and 1 600 px, and by dragging both handles (the widths are saved).
+
+### 12.5.7 Values as JavaScript literals, in a code editor
+
+STUDY-12 D9 was decided "match Convex" (30 Sep 2026): the syntax of our own (a bare word is text,
+comma lists) is gone.
+
+- **`literal.ts`** (dashboard): a hand-written parser and formatter for JavaScript literals — never
+  evaluated. Objects with bare or quoted keys, arrays, strings in either quote, numbers, `10n` for an int64
+  (range-checked), `Bytes("base64")`, `true`/`false`/`null`, comments and trailing commas. `undefined`
+  means "no field": it removes a field in a patch, drops a key in an object and is refused in a list;
+  `NaN`/`Infinity` are refused. Every error carries the offset where it is. JSON is a subset.
+- **`CodeEditor`** (`@bunvex/ui/components/code-editor`): Monaco (`monaco-editor` 0.57 through
+  `@monaco-editor/react`, **bundled, no CDN**, its worker built by Vite) loaded on demand, with a plain
+  input/textarea that has the same keys until it loads and in tests (`setCodeEditorImplementation("plain")`).
+  One line (Enter submits, Escape cancels, Tab leaves the field or calls `onTab`) or several (Ctrl+Enter or
+  Cmd+Enter submits). A Monarch language `bunvex-literal`, light and dark themes built from the design
+  tokens (redefined when the theme changes), the error underlined from its offset. Only the editor
+  contributions a value box needs are imported. Monaco is ~3.2 MB, in its own chunk, fetched when the
+  Database screen mounts (`preloadCodeEditor`), not with the app.
+- **Where**: every filter value (index equals, range bounds, clause values; a list without brackets is read
+  as one), a cell (one line for a scalar; a multi-line popover for an object or a list, opening leftwards
+  near the grid's edge), **Add documents**, and a new **Edit** on the document panel — the fields without
+  `_id`/`_creationTime`, saved whole with `replaceDocument` (shown when the source has it and the
+  credential can write).
+- Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
+  in a cell, the object popover at the right edge, no request leaves localhost.
+
+### 12.5.8 A cell's context menu and shortcuts
+
+As in Convex (STUDY-12 §1.4.1).
+
+- **`DataTable`**: `grid.cellMenu({ row, columnId, edit })` returns the items of a cell's context menu
+  (DropdownMenu items); the grid opens it on a right-click (at the pointer), Shift+F10, the Menu key or
+  Ctrl/Cmd+Enter (at the cell), and gives the focus back to the cell when it closes. `grid.onCellKey`
+  lets the caller take keys on a focused cell before the grid's own. `DropdownMenuContent` takes an
+  `anchor` (a virtual element here). Base UI closes a trigger-less menu when its submenu opens ("a
+  sibling opened"); the grid ignores that reason.
+- **Database**: **Filter by `<field>`** ▸ the operators that make sense for the value (as Convex's
+  `showFilter`), added to the applied filter at once; **Copy `<field>`** (Ctrl/Cmd+C: text as it is,
+  anything else as a literal); **Edit `<field>`** (Enter); **View document** (Shift+Space); **Copy
+  document** (Ctrl/Cmd+Shift+C); **Edit document** (Shift+Enter: the side panel opens in its editor).
+  Edit items are disabled without the grant. A copy is announced ("Copied email.").
+- The side panel's document view is keyed by the id, so another document never opens in the last one's
+  editor.
+
+### 12.5.9 Accessibility pass (slice 7)
+
+- **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each
+  side panel, a table not in the schema, an unknown table, Functions, Logs. Colour contrast, which the
+  test DOM cannot compute, was run with axe in Chrome on the same states in both themes: one failure, a
+  select's placeholder on its dark hover surface (4.29:1). Dark `--muted-foreground` went from
+  `oklch(0.72 0 0)` to `oklch(0.74 0 0)` (4.66:1), and the token test gained that pair
+  (`input/50@card`, dark only).
+- **Keyboard walk-through** (same file): skip link → main, sidebar → Database, table list → a table, one
+  tab stop into the grid, Enter on `_id` opens the document, Escape closes it and returns the focus to
+  the same cell. It found a bug: the first Tab into the grid focused the default cell without marking it
+  current, so no focus ring showed (WCAG 2.4.7); fixed in `DataTable`.
+- **Reduced motion**: the global rule in `globals.css` (animations and transitions to 0.01 ms) is now
+  under test; the grid's highlight already falls back to a steady tint (STUDY-12 D6).
+- READMEs for `@bunvex/ui`, `@bunvex/dashboard` and `apps/dashboard`.
 
 ### 12.6 Decisions (29 Sep 2026)
 

@@ -79,9 +79,10 @@ describe("filter model", () => {
     expect(fromDraft(d).expr.index?.range).toEqual({ lower: { op: "gte", value: 100 } });
   });
 
-  test("lists: JSON or comma-separated", () => {
+  test("lists: a literal list, with or without the brackets", () => {
     expect(parseList('["a", 1]')).toEqual({ ok: true, value: ["a", 1] });
-    expect(parseList("a, 1, true")).toEqual({ ok: true, value: ["a", 1, true] });
+    expect(parseList("'a', 1, true")).toEqual({ ok: true, value: ["a", 1, true] });
+    expect(parseList("a, 1").ok).toBe(false); // text needs quotes
     expect(parseList("").ok).toBe(false);
     expect(parseList("a, [1").ok).toBe(false);
   });

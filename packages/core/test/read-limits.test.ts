@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine(n: number, fields: Record<string, unknown> = {}) {
   const e = await new Engine(
-    new Schema().table("items", {}),
+    defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   for (let done = 0; done < n; done += 1000)

@@ -6,14 +6,27 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
-import { decodeId, encodeId } from "@bunvex/values";
+import {
+  checkValue,
+  copyValue,
+  decodeId,
+  encodeId,
+  fromJsonValue,
+  type GenericValidator,
+  isSimpleObject,
+  toJsonValue,
+  type Value,
+  v,
+} from "@bunvex/values";
 import BTree from "sorted-btree";
-import type { Catalog } from "./catalog.ts";
+import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
+import { checkIdentifier, type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
+
+const ANY = v.any();
 
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
@@ -78,7 +91,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
       );
     if (ineqField !== null && ineqField !== e.field)
       throw new Error(
-        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead. See https://docs.convex.dev/using/indexes for more info.`,
+        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead.`,
       );
     ineqField = e.field;
     const bound = { v: e.value, incl: e.op === "lte" || e.op === "gte" };
@@ -89,19 +102,17 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
     if (!rank.has(f))
       throw new Error(
-        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field. For more information see https://docs.convex.dev/using/indexes.`,
+        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field.`,
       );
   const eqFields = [...eqs.keys()].sort((a, b) => rank.get(a)! - rank.get(b)!);
   const used = [...eqFields, ...(ineqField ? [ineqField] : [])];
   used.forEach((f, i) => {
     if (withId[i] !== f)
       throw new Error(
-        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}\nFor more information see https://docs.convex.dev/using/indexes.`,
+        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}`,
       );
   });
-  // The trailing `_id` of a non-by_id index is stored as its UTF-8 bytes (schema.ts indexKey).
-  const keyValue = (f: string, v: KeyValue): KeyValue =>
-    f === "_id" && ix.name !== "by_id" && typeof v === "string" ? utf8.encode(v) : v;
+  const keyValue = (_f: string, v: KeyValue): KeyValue => v;
   const prefixVals = eqFields.map((f) => keyValue(f, eqs.get(f)!));
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
@@ -117,7 +128,6 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   }
   return { lo, hi };
 }
-const utf8 = new TextEncoder();
 
 /** Convex's per-transaction read limits (crates/common/src/knobs.rs). System transactions are exempt. */
 export const TRANSACTION_MAX_READ_SIZE_ROWS = 32_000;
@@ -150,8 +160,57 @@ export class Tx {
   private readonly day: number;
 
   private tableDef(name: string) {
-    if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
-    return this.catalog.table(name);
+    const t = this.findTable(name);
+    if (!t) throw new Error(`unknown table ${name}`);
+    return t;
+  }
+
+  /** A table visible to this transaction (the catalog, or one it created), or undefined. */
+  private findTable(name: string): TableDef | undefined {
+    if (name.startsWith("_") && !this.system && this.systemDepth === 0)
+      throw new Error(`System table ${name} is not accessible here.`);
+    return this.catalog.tables.get(name) ?? this.createdTables.get(name)?.def;
+  }
+
+  /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
+  readonly createdTables = new Map<
+    string,
+    { def: TableDef; meta: Omit<TableMeta, "_id">; indexes: Omit<IndexMeta, "_id">[] }
+  >();
+  private systemDepth = 0;
+
+  /**
+   * A read of a table that does not exist yet: nothing, but the read depends on `_tables`, so a cached
+   * query or a subscription re-runs when the table is created.
+   */
+  private readMissingTable() {
+    const byCreation = this.catalog.table(TABLES_TABLE).indexes.get("by_creation_time")!;
+    this.recordInterval({ index: byCreation.id, lo: FULL.lo, hi: FULL.hi });
+  }
+
+  /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
+  private async createTable(name: string): Promise<TableDef> {
+    checkIdentifier("table", name);
+    if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
+    this.systemDepth++;
+    try {
+      const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
+      const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
+      const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
+      const meta = plan.insertTables[0];
+      for (const t of plan.insertTables) await this.insert(TABLES_TABLE, t);
+      for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
+      const def = new Catalog().add(
+        name,
+        meta.tablet,
+        meta.number,
+        plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+      );
+      this.createdTables.set(name, { def, meta, indexes: plan.insertIndexes });
+      return def;
+    } finally {
+      this.systemDepth--;
+    }
   }
 
   private recordInterval(i: Interval) {
@@ -202,7 +261,11 @@ export class Tx {
   }
 
   private async read(table: string, id: string, method: string): Promise<Doc | null> {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
+    if (!t) {
+      this.readMissingTable();
+      return null;
+    }
     if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
@@ -211,11 +274,13 @@ export class Tx {
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
     if (json) this.recordDoc(json);
-    return json ? (JSON.parse(json) as Doc) : null;
+    return json ? decodeDoc(json) : null;
   }
 
   query(table: string) {
-    const t = this.tableDef(table);
+    const found = this.findTable(table);
+    if (!found) return this.missingTableQuery();
+    const t = found;
     let ix = t.indexes.get("by_creation_time")!;
     let range: Range = FULL;
     let desc = false;
@@ -227,7 +292,7 @@ export class Tx {
           p.scanDocs!(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc),
         );
         for (const j of rows) this.recordDoc(j);
-        return rows.map((j) => JSON.parse(j) as Doc);
+        return rows.map(decodeDoc);
       }
       const ids = await outsideExecution(() =>
         this.persistence.scan(ix.id, range.lo, range.hi, this.snapshot, limit, desc),
@@ -237,7 +302,7 @@ export class Tx {
         const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
         if (json) {
           this.recordDoc(json);
-          out.push(JSON.parse(json) as Doc);
+          out.push(decodeDoc(json));
         }
       }
       return out;
@@ -279,6 +344,19 @@ export class Tx {
     return q;
   }
 
+  /** The query of a table that does not exist: the same surface, no rows. */
+  private missingTableQuery() {
+    this.readMissingTable();
+    const q = {
+      withIndex: (_name: string, _f?: (b: IndexRangeBuilder) => IndexRangeBuilder) => q,
+      order: (_dir: "asc" | "desc") => q,
+      take: async (_n: number): Promise<Doc[]> => [],
+      first: async (): Promise<Doc | null> => null,
+      collect: async (): Promise<Doc[]> => [],
+    };
+    return q;
+  }
+
   /**
    * Merge a snapshot range with this transaction's pending entries for the same range. The snapshot was
    * fetched with `limit + removals` rows: each pending removal hides at most one of them, so the first
@@ -303,8 +381,19 @@ export class Tx {
     return rows.slice(0, limit).map(([, d]) => d);
   }
 
+  /** Validators of the declared tables' documents; set by the engine for mutations (STUDY-14). */
+  docValidators: Map<string, GenericValidator> | null = null;
+
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     if (!this.writable) throw new Error("queries cannot write");
+    const dv = next && this.docValidators?.get(t.name);
+    if (dv) {
+      const msg = checkValue(dv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+      if (msg)
+        throw new Error(
+          `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
+        );
+    }
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
@@ -323,7 +412,8 @@ export class Tx {
   }
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
-    const t = this.tableDef(table);
+    if (!this.writable) throw new Error("queries cannot write");
+    const t = this.findTable(table) ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
     const internal = new Uint8Array(16);
@@ -334,23 +424,31 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    // Copied at the call: mutating `fields` afterwards must not change what is written (Convex serializes).
-    this.stage(t, id, null, { ...structuredClone(fields), _id: id, _creationTime: creationTime } as Doc);
+    // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
+    // mutating `fields` afterwards cannot change what is written.
+    const doc = { ...copyFields(fields, "insert"), _id: id, _creationTime: creationTime };
+    checkSystemFields(doc, fields, id, creationTime);
+    this.stage(t, id, null, sortFields(doc));
     return id;
   }
 
   async patch(table: string, id: string, fields: Record<string, unknown>) {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
-    if (!cur) throw new Error(`patch: ${table}/${id} not found`);
+    if (!cur || !t) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
-    this.stage(t, id, old, { ...cur, ...structuredClone(fields), _id: id, _creationTime: cur._creationTime });
+    // Convex's shallow merge: a field set to `undefined` is removed.
+    const next: Record<string, unknown> = { ...cur };
+    for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
+    Object.assign(next, copyFields(fields, "patch"));
+    checkSystemFields(next, fields, id, cur._creationTime);
+    this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
   }
 
   async delete(table: string, id: string) {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
-    if (!cur) return;
+    if (!cur || !t) return;
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
   }
 
@@ -359,7 +457,7 @@ export class Tx {
     const docs: DocWrite[] = [];
     const idx: IndexWrite[] = [];
     for (const [id, w] of this.writes) {
-      docs.push({ table: w.table.id, id, json: w.next ? JSON.stringify(w.next) : null });
+      docs.push({ table: w.table.id, id, json: w.next ? encodeDoc(w.next) : null });
       for (const ix of w.table.indexes.values()) {
         const oldK = w.old ? indexKey(ix, w.old) : null;
         const newK = w.next ? indexKey(ix, w.next) : null;
@@ -386,3 +484,42 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
   for (const [, d] of pend) if (d === null) n++;
   return n;
 }
+
+/** A validated deep copy of a write's fields (Convex serializes values at the call). */
+function copyFields(fields: Record<string, unknown>, method: string): Record<string, unknown> {
+  if (!isSimpleObject(fields))
+    throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
+  return copyValue(fields as Value) as Record<string, unknown>;
+}
+
+/**
+ * As Convex's `ResolvedDocument::new`: `_id` / `_creationTime` in a written value must equal the document's,
+ * and no other top-level field may start with an underscore.
+ */
+function checkSystemFields(
+  doc: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  id: string,
+  creationTime: number,
+) {
+  if ("_id" in fields && fields._id !== undefined && fields._id !== id)
+    throw new Error(`Provided document ID "${id}" doesn't match '_id' field ${JSON.stringify(fields._id)}`);
+  if ("_creationTime" in fields && fields._creationTime !== undefined && fields._creationTime !== creationTime)
+    throw new Error(
+      `Provided creation time ${creationTime} doesn't match '_creationTime' field in ${JSON.stringify(fields)}`,
+    );
+  for (const k of Object.keys(doc))
+    if (k.startsWith("_") && k !== "_id" && k !== "_creationTime")
+      throw new Error(`Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`);
+}
+
+/** Documents keep their fields sorted by name, as Convex objects do. */
+function sortFields(doc: Record<string, unknown>): Doc {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(doc).sort()) out[k] = doc[k];
+  return out as Doc;
+}
+
+/** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
+export const encodeDoc = (doc: Doc): string => JSON.stringify(toJsonValue(doc as unknown as Value));
+export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) as unknown as Doc;

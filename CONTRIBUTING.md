@@ -22,6 +22,10 @@ Convex has, study how Convex does it in its source and write it up** in [`docs/s
 The full inventory of Convex's features and bunvex's status is [`docs/parity/`](docs/parity/README.md);
 update its rows in the PR that changes them.
 
+bunvex's own code never says "convex" outside comments: no identifier, exported name, string, error message
+or URL may contain it (`check:deps` rule 5). Cite Convex in comments and in `docs/study/`; name things, and
+word messages, as bunvex.
+
 Design decisions are recorded in [`docs/specs/`](docs/specs/). A change to the engine's guarantees, the
 persistence contract or the package layout starts with a spec (or an amendment to one).
 

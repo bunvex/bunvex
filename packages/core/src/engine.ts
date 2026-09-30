@@ -1,6 +1,7 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
+import { fromJsonValue, type GenericValidator, toJsonValue, type Value } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
@@ -16,8 +17,12 @@ import { Committer, ConflictError, type Interval, overlaps } from "./committer.t
 import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
-import { type Doc, indexKey, type Schema } from "./schema.ts";
-import { Tx } from "./tx.ts";
+import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
+import { decodeDoc, Tx } from "./tx.ts";
+
+/** A function result as Convex JSON text (`undefined` → null), and back. */
+export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
+export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
@@ -27,15 +32,23 @@ export class Engine {
   readonly committer: Committer;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = bootstrapCatalog();
+  /** Document validators of the declared tables (empty when `schemaValidation` is off). */
+  private readonly docValidators = new Map<string, GenericValidator>();
   private cache = new Map<string, CacheEntry>();
   stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
 
   constructor(
-    readonly schema: Schema,
+    readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: { cacheMax?: number; maxRetries?: number } = {},
   ) {
     installDeterminism();
+    // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
+    if (schema.schemaValidation)
+      for (const t of schema.tables.values()) {
+        const dv = documentValidator(t.name, t.document);
+        if (dv) this.docValidators.set(t.name, dv);
+      }
     this.committer = new Committer(persistence);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
@@ -96,7 +109,7 @@ export class Engine {
       const idx: IndexWrite[] = [];
       for (const id of ids) {
         const json = await this.persistence.get(t.id, id, snapshot);
-        if (json) idx.push({ index: ix.id, key: indexKey(ix, JSON.parse(json) as Doc), id });
+        if (json) idx.push({ index: ix.id, key: indexKey(ix, decodeDoc(json)), id });
       }
       if (idx.length) await this.committer.commit({ snapshot, reads: [], docs: [], idx });
       lo = prefixEnd(encodeKey([ids[ids.length - 1]]));
@@ -108,6 +121,7 @@ export class Engine {
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
   }
@@ -115,7 +129,7 @@ export class Engine {
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
   async query<T>(body: TxBody<T>, cacheKey?: string): Promise<T> {
     const r = await this.cachedQuery(body, cacheKey);
-    return "json" in r ? (JSON.parse(r.json) as T) : r.value;
+    return "json" in r ? (parseValue(r.json) as T) : r.value;
   }
 
   /**
@@ -124,7 +138,7 @@ export class Engine {
    */
   async queryJson(body: TxBody<unknown>, cacheKey?: string): Promise<string> {
     const r = await this.cachedQuery(body, cacheKey);
-    return "json" in r ? r.json : JSON.stringify(r.value ?? null);
+    return "json" in r ? r.json : stringifyValue(r.value);
   }
 
   private async cachedQuery<T>(body: TxBody<T>, cacheKey?: string): Promise<{ json: string } | { value: T }> {
@@ -144,7 +158,7 @@ export class Engine {
     if (cacheKey !== undefined && this.committer.visibleTs === snapshot) {
       const max = this.opts.cacheMax ?? 1000;
       if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
-      const json = JSON.stringify(value ?? null);
+      const json = stringifyValue(value);
       this.cache.set(cacheKey, { json, reads: tx.reads });
       return { json };
     }
@@ -183,6 +197,16 @@ export class Engine {
       const { docs, idx } = tx.toWrites();
       try {
         await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx });
+        // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
+        // durable; a transaction that raced to create the same table conflicted on _tables and retries).
+        for (const [name, c] of tx.createdTables)
+          if (!this.catalog.tables.has(name))
+            this.catalog.add(
+              name,
+              c.meta.tablet,
+              c.meta.number,
+              c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+            );
         return value;
       } catch (e) {
         if (!(e instanceof ConflictError) || attempt >= maxRetries) throw e;

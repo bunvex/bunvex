@@ -8,6 +8,7 @@
     "@bunvex/core": "workspace:*",
     "@bunvex/persistence": "workspace:*",
     "@bunvex/persistence-conformance": "workspace:*",
+    "@bunvex/values": "workspace:*",
     "bunvex": "workspace:*",
     "mongodb": "^7.7.0",
     "mysql2": "^3.24.4",
