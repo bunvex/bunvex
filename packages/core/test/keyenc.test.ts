@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { compareValues } from "@bunvex/values";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "../src/keyenc.ts";
 
-/** The reference order the byte encoding must reproduce: Convex's (STUDY-12). */
+/** The reference order the byte encoding must reproduce: Convex's (STUDY-18). */
 const cmpValue = (a: KeyValue, b: KeyValue) => compareValues(a, b);
 const sign = (n: number) => Math.sign(n);
 

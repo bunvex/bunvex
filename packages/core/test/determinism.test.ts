@@ -110,4 +110,33 @@ describe("deterministic execution", () => {
     expect(nextUp(x)).toBeGreaterThan(x);
     expect((x + nextUp(x)) / 2 === x || (x + nextUp(x)) / 2 === nextUp(x)).toBe(true);
   });
+  test("performance.now() is fixed in a query, at the execution's start (0.1 ms steps)", async () => {
+    const e = await engine();
+    const seen = await e.query(async () => {
+      const a = performance.now();
+      await tick();
+      await tick();
+      return { a, b: performance.now(), date: Date.now() };
+    });
+    expect(seen.b).toBe(seen.a);
+    expect(Math.abs(seen.a * 10 - Math.round(seen.a * 10))).toBeLessThan(1e-6); // a multiple of 0.1 ms
+    // the same instant as the frozen Date.now(), on performance's own origin
+    expect(Math.abs(performance.timeOrigin + seen.a - seen.date)).toBeLessThan(1.1);
+    expect(performance.now()).toBeGreaterThan(seen.a); // outside an execution the clock runs
+  });
+
+  test("performance.now() counts up in a mutation, from its start", async () => {
+    const e = await engine();
+    const outsideBefore = performance.now();
+    const seen = await e.mutation(async () => {
+      const a = performance.now();
+      await tick();
+      await tick();
+      return { a, b: performance.now(), date: Date.now() };
+    });
+    expect(seen.b - seen.a).toBeGreaterThanOrEqual(9); // two 5 ms ticks elapsed
+    expect(seen.a).toBeGreaterThanOrEqual(Math.floor(outsideBefore * 10) / 10);
+    expect(Math.abs(performance.timeOrigin + seen.a - seen.date)).toBeLessThan(1.1);
+    expect(Math.abs(seen.b * 10 - Math.round(seen.b * 10))).toBeLessThan(1e-6);
+  });
 });

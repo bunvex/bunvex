@@ -10,7 +10,8 @@
   "dependencies": {
     "@bunvex/core": "workspace:*",
     "@bunvex/protocol": "workspace:*",
-    "@bunvex/values": "workspace:*"
+    "@bunvex/values": "workspace:*",
+    "object-inspect": "^1.13.4"
   },
   "peerDependencies": {
     "@bunvex/persistence": "workspace:*"
@@ -21,7 +22,8 @@
     }
   },
   "devDependencies": {
-    "@bunvex/persistence": "workspace:*"
+    "@bunvex/persistence": "workspace:*",
+    "@types/object-inspect": "^1.13.0"
   },
   "repository": {
     "type": "git",

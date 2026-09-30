@@ -29,7 +29,7 @@ test("one socket subscribing twice to the same query holds one reference (B14)",
   stop();
 });
 
-test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STUDY-12)", async () => {
+test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STUDY-18)", async () => {
   const { mutation } = await import("../src/functions.ts");
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),

@@ -7,7 +7,7 @@
 //      would load the TypeScript as plain JavaScript (found the hard way during the ARCH-01 migration).
 //   5. no "convex" in the packages' shipped code (packages/*/src) outside comments: not in identifiers,
 //      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
-//      API and its messages carry its own names (owner's decision, STUDY-12 D1). Apps (apps/*, e.g. the site
+//      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
 //      comparing benchmarks) may name Convex descriptively.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

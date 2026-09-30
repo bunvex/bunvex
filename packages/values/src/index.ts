@@ -1,6 +1,7 @@
 // Package @bunvex/values — Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.
 
 export { checkValue, displayValidator, displayValue, type TableOfId } from "./check.ts";
+export { BunvexError, isBunvexError } from "./errors.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
 export { valuesToKey } from "./sorting.ts";
 export {

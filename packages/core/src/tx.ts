@@ -331,8 +331,39 @@ export class Tx {
     return true;
   }
 
-  async get(table: string, id: string): Promise<Doc | null> {
-    return this.read(table, id, "db.get");
+  /** `db.get(table, id)`, or Convex's one-argument `db.get(id)`: the id names its table. */
+  async get(tableOrId: string, id?: string): Promise<Doc | null> {
+    if (id !== undefined) return this.read(tableOrId, id, "db.get");
+    const table = this.tableOfIdArg(tableOrId, "db.get");
+    return table === undefined ? null : this.read(table, tableOrId, "db.get");
+  }
+
+  /** The table an id argument names (one-argument forms); undefined when it names no known table. */
+  private tableOfIdArg(id: unknown, method: string): string | undefined {
+    if (typeof id !== "string")
+      throw new Error(`Invalid argument \`id\` for \`${method}\`, expected string but got '${typeof id}': ${id}`);
+    let n: number;
+    try {
+      n = decodeId(id).tableNumber;
+    } catch (e) {
+      throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
+    }
+    const name = this.catalog.byNumber(n)?.name;
+    if (name?.startsWith("_") && !this.system) return undefined;
+    return name;
+  }
+
+  /** Convex's `db.normalizeId(table, s)`: `s` as an id of `table`, or null. */
+  normalizeId(table: string, idString: string): string | null {
+    if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
+    if (table.startsWith("_") && !this.system) return null;
+    const t = this.catalog.tables.get(table) ?? this.createdTables.get(table)?.def;
+    if (!t || typeof idString !== "string") return null;
+    try {
+      return decodeId(idString).tableNumber === t.number ? idString : null;
+    } catch {
+      return null;
+    }
   }
 
   private async read(table: string, id: string, method: string): Promise<Doc | null> {
@@ -665,7 +696,17 @@ export class Tx {
     return id;
   }
 
-  async patch(table: string, id: string, fields: Record<string, unknown>) {
+  /** `db.patch(table, id, fields)`, or Convex's `db.patch(id, fields)`. */
+  async patch(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
+    if (c === undefined) {
+      const table = this.tableOfIdArg(a, "db.patch");
+      if (table === undefined) throw new Error(`Update on nonexistent document ID ${a}`);
+      return this.patchIn(table, a, b as Record<string, unknown>);
+    }
+    return this.patchIn(a, b as string, c);
+  }
+
+  private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
@@ -678,8 +719,17 @@ export class Tx {
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
   }
 
-  /** Convex's `db.replace`: every non-system field is replaced; `_id` / `_creationTime` are kept. */
-  async replace(table: string, id: string, value: Record<string, unknown>) {
+  /** Convex's `db.replace(table, id, value)` or `db.replace(id, value)`: every non-system field is replaced. */
+  async replace(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
+    if (c === undefined) {
+      const table = this.tableOfIdArg(a, "db.replace");
+      if (table === undefined) throw new Error(`Replace on nonexistent document ID ${a}`);
+      return this.replaceIn(table, a, b as Record<string, unknown>);
+    }
+    return this.replaceIn(a, b as string, c);
+  }
+
+  private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
@@ -693,7 +743,17 @@ export class Tx {
     this.stage(t, id, old, sortFields(next));
   }
 
-  async delete(table: string, id: string) {
+  /** `db.delete(table, id)`, or Convex's `db.delete(id)`. */
+  async delete(a: string, b?: string) {
+    if (b === undefined) {
+      const table = this.tableOfIdArg(a, "db.delete");
+      if (table === undefined) throw new Error(`Delete on nonexistent document ID ${a}`);
+      return this.deleteIn(table, a);
+    }
+    return this.deleteIn(a, b);
+  }
+
+  private async deleteIn(table: string, id: string) {
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
     if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);

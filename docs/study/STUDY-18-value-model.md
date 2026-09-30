@@ -1,4 +1,4 @@
-# STUDY-12 — The value model: types, order, index keys, JSON
+# STUDY-18 — The value model: types, order, index keys, JSON
 
 - **Status:** implemented (#15 values, #21 core and wire); supersedes STUDY-05 D4/D6–D8 and STUDY-10 D1/D2/D10
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

@@ -46,7 +46,7 @@ function m1() {
     for (let i = 0; i < len; i++) s += String.fromCharCode([0, 1, 97, 98, 0xe9, 0x4e2d][Math.floor(Math.random() * 6)]);
     return s;
   };
-  const cmpVal = (a: KeyValue, b: KeyValue): number => compareValues(a, b); // Convex's order (STUDY-12)
+  const cmpVal = (a: KeyValue, b: KeyValue): number => compareValues(a, b); // Convex's order (STUDY-18)
   const tuples = Array.from({ length: 20000 }, () => [rnd(), rnd()] as KeyValue[]);
   const byVal = [...tuples].sort((a, b) => cmpVal(a[0], b[0]) || cmpVal(a[1], b[1]));
   const byKey = [...tuples].sort((a, b) => compareKeys(encodeKey(a), encodeKey(b)));

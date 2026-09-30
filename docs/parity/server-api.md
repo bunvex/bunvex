@@ -21,11 +21,11 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. |
-| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | missing | Ids now carry their table (#7), so this is unblocked; the one-argument form is not wired up yet. |
+| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | done (#44) | The id names its table. |
 | `db.get` returns `null` for a missing or deleted doc | impl/database_impl.ts | done | |
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
 | `db.query(table)` returns a QueryInitializer | server/query.ts | partial | Exists and defaults to `by_creation_time` ascending. It is one mutable object rather than Convex's chain of single-use stages. |
-| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | missing | Needs the Convex id format. |
+| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | done (#44) | Legacy v4/v5 id formats are not accepted (no legacy data). |
 | `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | missing | There are no user-visible system tables yet (`_storage`, `_scheduled_functions`). |
 | User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | missing | The in-flight schema change rejects `_`-prefixed user table names. There is no `db.system` split. |
 | `db.table(name)` scoped reader (`.get(id)`, `.query()`), the newer "WithTable" API | server/database.ts (`GenericDatabaseReaderWithTable`) | missing | |
@@ -99,7 +99,7 @@ Key bunvex facts behind the statuses:
 | `db.table(name)` scoped writer (`.insert` / `.patch` / `.replace` / `.delete`) | server/database.ts (`BaseTableWriter`) | missing | |
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | missing | New Convex feature. |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
-| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | partial | Retries up to 30 times with jittered backoff (Convex: 4). The conflict error isn't user-visible in Convex's shape. |
+| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | done (STUDY-21) | 4 retries with 100 ms – 2 s full-jitter backoff. After them comes `OptimisticConcurrencyControlFailure` with Convex's message (without its docs link); HTTP 503. |
 | Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | |
 
 ### 5. Function builders and registration
@@ -148,12 +148,13 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | `Date.now()` / `new Date()` frozen at the start of a query or mutation | crates/isolate/src/environment/udf/phase.rs | done | Via AsyncLocalStorage (determinism.ts). |
 | `Math.random()` seeded per execution | isolate/src/environment/udf | done | sfc32 PRNG. |
+| `performance.now()` fixed in queries, incrementing in mutations, rounded down to 0.1 ms | isolate/src/environment/udf/phase.rs, helpers/performance.rs, ops/time.rs | done | `performance.timeOrigin` is the process's, not the module import time (STUDY-03 D3). |
 | `fetch`, timers and `crypto.getRandomValues` throw in queries and mutations ("NoXInQueriesOrMutations") | isolate/src/environment/udf/mod.rs (`not_allowed_in_udf`) | partial | Blocked, but `crypto.randomUUID` and `crypto.subtle` aren't. This is not a sandbox: captured globals escape. |
 | `Date` / `Math.random` unsupported at module import time | udf/phase.rs | missing | |
 | Actions run with the real globals (`fetch`, timers) | isolate/src/environment/action | done | |
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | missing | Single shared process. Sandboxing is an open decision. |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | missing | Env var management is listed as M. |
-| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | missing | Logs are listed as M. |
+| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Cached query results carry no lines (STUDY-20 D2). |
 | `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | missing | New Convex feature. |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | missing | bunvex runs everything on Bun, which is arguably not needed. |
@@ -195,7 +196,7 @@ Key bunvex facts behind the statuses:
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
-| `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | missing | Errors reach the client as `String(message)` only. |
+| `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
 ### 9. Value ordering (index order and filter comparisons)
 
@@ -319,8 +320,8 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `throw new ConvexError(data)`, where the client receives `data` intact | values/errors.ts; impl/registration_impl.ts | missing | |
-| Non-ConvexError errors redacted in production ("Server Error") | crates/application | missing | Raw messages are returned. |
+| `throw new ConvexError(data)`, where the client receives `data` intact | values/errors.ts; impl/registration_impl.ts | partial (STUDY-20) | `BunvexError`: the server sends `data` intact; there is no client yet to rethrow it. |
+| Non-ConvexError errors redacted in production ("Server Error") | crates/application | done (STUDY-20) | `[Request ID: …] Server Error`, with the details unless `REDACT_LOGS_TO_CLIENT` / `redactLogsToClient` (off by default, as self-hosted Convex). |
 | Typed error codes for limits (e.g. `ValueTooLargeError`, `TooManyWrites`) | crates/common/src/document.rs, database | missing | |
 | `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | done (#40) | |
 
@@ -346,7 +347,7 @@ Key bunvex facts behind the statuses:
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | missing | |
 | Search: 16 terms, ≤1024 results; vector: ≤256 results, 2–4096 dimensions, ≤64 filter length | crates/search/src/constants.rs; crates/vector/src/lib.rs | missing | |
 | `runQuery` / `runMutation` call depth ≤ 8 | knobs.rs (`MAX_REACTOR_CALL_DEPTH`) | missing | |
-| OCC retries for mutations (4 by default) | knobs.rs | partial | 30 in bunvex. The behaviour is equivalent, but the budget differs. |
+| OCC retries for mutations (4 by default) | knobs.rs | done (STUDY-21) | |
 
 ---
 

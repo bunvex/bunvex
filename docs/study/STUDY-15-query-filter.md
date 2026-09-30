@@ -2,7 +2,7 @@
 
 - **Status:** implemented (#37)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
-- **Related:** [STUDY-07](STUDY-07-query-semantics.md), [STUDY-12](STUDY-12-value-model.md)
+- **Related:** [STUDY-07](STUDY-07-query-semantics.md), [STUDY-18](STUDY-18-value-model.md)
 
 ## 1. How Convex does it
 

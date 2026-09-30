@@ -14,6 +14,7 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
+import { perAttempt } from "./logs.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -153,7 +154,12 @@ export class Functions {
 
   async runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     const f = this.fn(name, "mutation", fromClient);
-    return this.engine.mutation(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args))));
+    // perAttempt: a retried run's console lines replace the aborted attempt's (logs.ts).
+    // The name is the write source other mutations' OCC errors cite (STUDY-21).
+    return this.engine.mutation(
+      perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
+      name,
+    );
   }
 
   async runAction(name: string, args: unknown): Promise<unknown> {

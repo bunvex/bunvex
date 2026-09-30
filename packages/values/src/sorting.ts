@@ -1,4 +1,4 @@
-// Sort keys (STUDY-12): an order-preserving, self-delimiting byte encoding of values, in the layout Convex
+// Sort keys (STUDY-18): an order-preserving, self-delimiting byte encoding of values, in the layout Convex
 // uses for index keys (`crates/value/src/sorting.rs`, after FoundationDB's tuple layer). Comparing two keys
 // byte-wise compares the values in Convex's order; a tuple is the concatenation of its values' keys.
 import type { Value } from "./value.ts";
