@@ -20,12 +20,12 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | partial | Exists as `Tx.get(table, id)`. It doesn't check that the id belongs to `table`, and it has no argument validation. |
-| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | missing | Ids now carry their table (#7), so this is unblocked; the one-argument form is not wired up yet. |
+| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. |
+| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | done (#44) | The id names its table. |
 | `db.get` returns `null` for a missing or deleted doc | impl/database_impl.ts | done | |
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
 | `db.query(table)` returns a QueryInitializer | server/query.ts | partial | Exists and defaults to `by_creation_time` ascending. It is one mutable object rather than Convex's chain of single-use stages. |
-| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | missing | Needs the Convex id format. |
+| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | done (#44) | Legacy v4/v5 id formats are not accepted (no legacy data). |
 | `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | missing | There are no user-visible system tables yet (`_storage`, `_scheduled_functions`). |
 | User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | missing | The in-flight schema change rejects `_`-prefixed user table names. There is no `db.system` split. |
 | `db.table(name)` scoped reader (`.get(id)`, `.query()`), the newer "WithTable" API | server/database.ts (`GenericDatabaseReaderWithTable`) | missing | |
@@ -43,26 +43,26 @@ Key bunvex facts behind the statuses:
 | IndexRangeBuilder `gt`/`gte` then `lt`/`lte` on the next field | index_range_builder.ts | partial | Works for the common case. A mismatched field name, or bounds on different fields, silently produce a wrong range. |
 | Index range on `undefined` (missing field) | crates/common/src/query.rs, value/sorting.rs | missing | bunvex maps missing fields to `null`. Convex keeps `undefined` as its own value that sorts below `null`. |
 | Using `by_id` / `by_creation_time` system indexes in `withIndex` | system_fields.ts (`SystemIndexes`) | done | Both are created for every table. |
-| Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | partial | bunvex appends only `_id` (as UTF-8 bytes). Ties on equal index values sort by UUID, not creation time. |
-| `.fullTableScan()` | impl/query_impl.ts | missing | Only the implicit default (`by_creation_time`). |
+| Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | done (#10) | |
+| `.fullTableScan()` | impl/query_impl.ts | done (#40) | |
 | `.order("asc" \| "desc")` | impl/query_impl.ts | partial | Works. It doesn't reject a second `.order()` or `.order()` on a search query. |
-| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | missing | Listed as "M" in ARCHITECTURE.md. |
-| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | missing | |
-| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | missing | |
-| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | missing | |
-| Filter logic `and` / `or` / `not` | filter_builder.ts | missing | |
+| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
+| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
+| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#37) | |
+| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
+| Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | missing | |
 | At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | missing | |
 | `.limit(n)` (non-terminal operator on OrderedQuery) | server/query.ts | missing | |
 | `.collect()` | impl/query_impl.ts | partial | bunvex silently stops at 8192 rows. Convex reads everything, up to the transaction read limits (32k rows / 16 MiB), and then throws. |
 | `.take(n)`, requiring a non-negative integer | impl/query_impl.ts | partial | Works, but `n` isn't validated. |
 | `.first()` | impl/query_impl.ts | done | |
-| `.unique()`: returns null or the only row, and throws if there are ≥2 | impl/query_impl.ts | missing | |
-| Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | missing | Needed for early exit without materialising the result. |
+| `.unique()`: returns null or the only row, and throws if there are ≥2 | impl/query_impl.ts | done (#40) | |
+| Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | missing | bunvex's query object is mutable and reusable. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | missing | |
 | `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
-| `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | missing | Full-text search is "D" in ARCHITECTURE.md. |
+| `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | missing | Search is phase 4. |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | missing | |
 | Search limits: 16 query terms, 32-char term max, ≤8 filter conditions, ≤1024 results | crates/search/src/constants.rs | missing | |
 
@@ -70,46 +70,47 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `.paginate({ numItems, cursor })` returns `{ page, isDone, continueCursor }` | server/pagination.ts, impl/query_impl.ts | missing | |
+| `.paginate({ numItems, cursor })` returns `{ page, isDone, continueCursor }` | server/pagination.ts, impl/query_impl.ts | done (#42) | See STUDY-17 §4. |
 | `numItems` must be > 0 and ≤ 32000 (`TRANSACTION_MAX_READ_SIZE_ROWS`) | isolate/src/environment/udf/async_syscall.rs | missing | |
 | Opaque, encrypted cursors (`cursor: null` starts at the beginning) | async_syscall.rs (`key_broker.encrypt_cursor`) | missing | |
-| `endCursor` pins the page end so a reactive page keeps its boundaries on re-run (taken from the query journal) | pagination.ts; async_syscall.rs | missing | |
-| `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | missing | |
-| `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts | missing | |
+| `endCursor` pins the page end so a reactive page keeps its boundaries on re-run (taken from the query journal) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
+| `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
+| `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts | done (#42) | See STUDY-17 §4. |
 | Only one paginated query per query or mutation (`MultiplePaginatedDatabaseQueries`) | async_syscall.rs | missing | |
-| `paginate()` isn't supported inside components | async_syscall.rs | missing | |
-| `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | missing | Depends on validators. |
+| `paginate()` isn't supported inside components | async_syscall.rs | missing | Components are phase 4. |
+| `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | done (#42) | See STUDY-17 §4. |
 
 ### 4. Database writer: `ctx.db` in mutations
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | partial | Returns a Convex-format id (#7), but the value isn't validated at all. Convex checks the schema, value types, field names and size. |
-| `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | missing | |
+| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. |
+| A write to a table that does not exist creates it (in the same transaction); reads of a missing table return nothing | database/src/bootstrap_model/table.rs (`insert_table_metadata`) | done (#33) | Reads depend on `_tables`, so they re-run when the table is created. |
+| `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | done (#6) | "System table … is not accessible here." |
 | `insert` assigns `_id` and `_creationTime` and rejects caller-supplied values that don't match | crates/common/src/document.rs | partial | bunvex overwrites `_id` / `_creationTime` silently instead of rejecting them. |
 | `_creationTime` is strictly increasing within a transaction, so inserts sort in insert order | crates/database/src/transaction.rs (`next_creation_time`) | done | `nextUp()` float increment, on main. |
 | Convex-format document ids (base32; table number plus random bytes plus checksum; ~31–37 chars) | crates/value/src/id_v6.rs | done (#7) | Convex's format and generator exactly (STUDY-01 option C). Legacy v4/v5 formats are not accepted by `normalizeId`, since bunvex has no legacy data. |
-| `db.patch(table, id, partial)`: shallow merge | server/database.ts | partial | Implemented. Missing: validation, rejecting patches of `_id` / `_creationTime` to a different value, and the legacy `patch(id, v)` form. |
+| `db.patch(table, id, partial)`: shallow merge | server/database.ts | done (#21) | Validation, `undefined` removes a field, system fields as Convex. |
 | `patch` with a field set to `undefined` removes that field | values/value.ts (`patchValueToJson`) | partial | It only works by accident: `JSON.stringify` drops the key on persist. Within the transaction, a read returns the key with the value `undefined`. |
 | `patch` / `replace` / `delete` on a nonexistent id throws `NonexistentDocument` | crates/database/src/transaction.rs | partial | `patch` throws. `delete` of a missing doc is a silent no-op. |
-| `db.replace(table, id, value)`: replace all non-system fields, keeping `_id` / `_creationTime` | server/database.ts | missing | |
-| `db.delete(table, id)` | server/database.ts | partial | Works for existing docs. It lacks the legacy `delete(id)` form and doesn't throw on a missing doc. |
+| `db.replace(table, id, value)`: replace all non-system fields, keeping `_id` / `_creationTime` | server/database.ts | done (#35) |  |
+| `db.delete(table, id)` | server/database.ts | done (#35) | Throws "Delete on nonexistent document ID …", as Convex. No legacy `delete(id)` form. |
 | Legacy single-argument forms: `patch(id, v)`, `replace(id, v)`, `delete(id)` | impl/database_impl.ts | missing | Needs ids that encode their table. |
 | `db.table(name)` scoped writer (`.insert` / `.patch` / `.replace` / `.delete`) | server/database.ts (`BaseTableWriter`) | missing | |
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | missing | New Convex feature. |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
-| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | partial | Retries up to 30 times with jittered backoff (Convex: 4). The conflict error isn't user-visible in Convex's shape. |
-| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | missing | There are no document validators. |
+| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | done (STUDY-21) | 4 retries with 100 ms – 2 s full-jitter backoff. After them comes `OptimisticConcurrencyControlFailure` with Convex's message (without its docs link); HTTP 503. |
+| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | |
 
 ### 5. Function builders and registration
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | partial | They exist but take only a bare handler: `query(handler, internal?)`. |
-| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | partial | Done as a boolean flag, not as separate builders. Clients can't call internal functions (done). |
-| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | missing | |
-| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | missing | `Args = any`, and nothing is validated. Listed as "N" in ARCHITECTURE.md. |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | missing | |
+| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
+| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
+| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
+| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | partial | Manual `register(module, fns)` builds `module:fn`. There is no default-export rule and no file-based discovery. |
@@ -153,7 +154,7 @@ Key bunvex facts behind the statuses:
 | Actions run with the real globals (`fetch`, timers) | isolate/src/environment/action | done | |
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | missing | Single shared process. Sandboxing is an open decision. |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | missing | Env var management is listed as M. |
-| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | missing | Logs are listed as M. |
+| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Cached query results carry no lines (STUDY-20 D2). |
 | `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | missing | New Convex feature. |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | missing | bunvex runs everything on Bun, which is arguably not needed. |
@@ -163,26 +164,26 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `v.id(table)` | values/validator.ts | missing | `@bunvex/values` is empty. |
-| `v.null()` | values/validator.ts | missing | |
-| `v.number()` / `v.float64()` | values/validator.ts | missing | |
-| `v.bigint()` / `v.int64()` | values/validator.ts | missing | |
-| `v.boolean()` | values/validator.ts | missing | |
-| `v.string()` | values/validator.ts | missing | |
-| `v.bytes()` (ArrayBuffer) | values/validator.ts | missing | |
-| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | missing | |
-| `v.array(el)` | values/validator.ts | missing | |
-| `v.object(fields)`, rejecting unknown fields | values/validator.ts | missing | |
-| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | missing | |
-| `v.union(...members)` | values/validator.ts | missing | |
-| `v.any()` | values/validator.ts | missing | |
-| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | missing | |
-| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | missing | |
+| `v.id(table)` | values/validator.ts | done (#24) | Checks the id names the table (catalog lookup). |
+| `v.null()` | values/validator.ts | done (#24) | |
+| `v.number()` / `v.float64()` | values/validator.ts | done (#24) | |
+| `v.bigint()` / `v.int64()` | values/validator.ts | done (#24) | |
+| `v.boolean()` | values/validator.ts | done (#24) | |
+| `v.string()` | values/validator.ts | done (#24) | |
+| `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | |
+| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | done (#24) | |
+| `v.array(el)` | values/validator.ts | done (#24) | |
+| `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
+| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | |
+| `v.union(...members)` | values/validator.ts | done (#24) | |
+| `v.any()` | values/validator.ts | done (#24) | |
+| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | done (#24) | |
+| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | done (#24) | |
 | `v.commitTs()` | values/validator.ts (`VCommitTs`) | missing | New. |
-| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | missing | |
-| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | missing | |
-| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | missing | |
-| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | missing | |
+| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | done (#24) | |
+| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | done (#24) | bunvex marker is `isValidator` (no "convex" in names). |
+| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | done (#24) | asObjectValidator not yet. |
+| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24) | |
 | Value `null` | values/value.ts | done | JSON. |
 | Value `boolean` | values/value.ts | done | |
 | Value `string` | values/value.ts | done | |
@@ -195,7 +196,7 @@ Key bunvex facts behind the statuses:
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
-| `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | missing | Errors reach the client as `String(message)` only. |
+| `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
 ### 9. Value ordering (index order and filter comparisons)
 
@@ -217,21 +218,21 @@ Key bunvex facts behind the statuses:
 | `_creationTime` (float64 ms since epoch) | system_fields.ts; common/src/document.rs | done | |
 | Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | missing | |
 | Top-level user fields can't start with `_` | crates/common/src/document.rs (validate) | missing | |
-| Field names: ≤1024 chars, non-control ASCII, no leading `$` | crates/convex/sync_types/src/identifier.rs; values/value.ts | missing | |
+| Field names: ≤1024 chars, non-control ASCII, no leading `$` | crates/convex/sync_types/src/identifier.rs; values/value.ts | done (#21) | `validateObjectField`, with the same messages. |
 | Documents must be objects | common/src/document.rs | partial | Implicit through the TS signature only. |
 
 ### 11. Schema
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineSchema({ table: defineTable(...) })` | server/schema.ts | partial | bunvex uses an imperative `new Schema().table(name, indexes)`. There is no `defineSchema` / `defineTable` API. |
-| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | missing | Tables have no document type. |
+| `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#29) | |
+| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29) | |
 | `.index(name, [fields])` | server/schema.ts | partial | Declared as `{ name: fields[] }` in `Schema.table`. |
 | `.index(name, { fields, staged })`: staged indexes that don't block a push | server/schema.ts | missing | |
 | `.searchIndex(name, { searchField, filterFields, staged })` | server/schema.ts | missing | |
 | `.vectorIndex(name, { vectorField, dimensions, filterFields, staged })` | server/schema.ts | missing | |
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
-| `schemaValidation` option (default true) | server/schema.ts | missing | |
+| `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
 | `strictTableNameTypes` option (type-level) | server/schema.ts | missing | |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | missing | |
@@ -319,25 +320,25 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `throw new ConvexError(data)`, where the client receives `data` intact | values/errors.ts; impl/registration_impl.ts | missing | |
-| Non-ConvexError errors redacted in production ("Server Error") | crates/application | missing | Raw messages are returned. |
+| `throw new ConvexError(data)`, where the client receives `data` intact | values/errors.ts; impl/registration_impl.ts | partial (STUDY-20) | `BunvexError`: the server sends `data` intact; there is no client yet to rethrow it. |
+| Non-ConvexError errors redacted in production ("Server Error") | crates/application | done (STUDY-20) | `[Request ID: …] Server Error`, with the details unless `REDACT_LOGS_TO_CLIENT` / `redactLogsToClient` (off by default, as self-hosted Convex). |
 | Typed error codes for limits (e.g. `ValueTooLargeError`, `TooManyWrites`) | crates/common/src/document.rs, database | missing | |
-| `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | missing | |
+| `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | done (#40) | |
 
 ### 19. Limits
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Document size ≤ 1 MiB (`MAX_USER_SIZE`, including system fields) | crates/common/src/document.rs | missing | |
-| Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | missing | |
+| Document size ≤ 1 MiB (`MAX_USER_SIZE`, including system fields) | crates/common/src/document.rs | done (#35) | |
+| Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | done (#35) | |
 | Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | missing | |
-| Array length ≤ 8192 | crates/value/src/array.rs | missing | |
-| Object fields ≤ 1024 | crates/value/src/object.rs | missing | |
-| Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | partial | Identifiers are in flight. There is no field-name check. |
+| Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | |
+| Object fields ≤ 1024 | crates/value/src/object.rs | done (#35) |  |
+| Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | done (#6, #21) |  |
 | Function args ≤ 16 MiB; function result ≤ 16 MiB | knobs.rs (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | missing | The WS frame cap of 8 MiB is incidental. |
 | Reads per transaction ≤ 32,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_READ_SIZE_ROWS/BYTES`) | missing | `collect()` silently truncates at 8192 instead. |
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | missing | |
-| Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | missing | |
+| Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
 | Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | missing | No timeout at all. |
 | Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
 | Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | missing | |
@@ -346,7 +347,7 @@ Key bunvex facts behind the statuses:
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | missing | |
 | Search: 16 terms, ≤1024 results; vector: ≤256 results, 2–4096 dimensions, ≤64 filter length | crates/search/src/constants.rs; crates/vector/src/lib.rs | missing | |
 | `runQuery` / `runMutation` call depth ≤ 8 | knobs.rs (`MAX_REACTOR_CALL_DEPTH`) | missing | |
-| OCC retries for mutations (4 by default) | knobs.rs | partial | 30 in bunvex. The behaviour is equivalent, but the budget differs. |
+| OCC retries for mutations (4 by default) | knobs.rs | done (STUDY-21) | |
 
 ---
 

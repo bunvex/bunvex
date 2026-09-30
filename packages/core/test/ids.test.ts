@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { decodeId } from "@bunvex/values";
+import { decodeId, v } from "@bunvex/values";
 import { wallClock } from "../src/determinism.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine() {
-  const schema = new Schema().table("users", {}).table("posts", {});
+  const schema = defineSchema({ users: defineTable(v.any()), posts: defineTable(v.any()) });
   return new Engine(schema, await MemoryPersistence.open(null, { durable: false })).init();
 }
 

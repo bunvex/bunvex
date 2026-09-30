@@ -302,8 +302,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| Capturing `console.*` from functions (up to 256 lines, 32 KiB per line; docs say 4 KiB) | `crates/isolate/environment/helpers`; `crates/common/log_lines.rs` | missing | ARCHITECTURE marks logs M. bunvex's `console.log` goes to the server's stdout. |
-| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | missing | |
+| Capturing `console.*` from functions (up to 256 lines, 32 KiB per line; docs say 4 KiB) | `crates/isolate/environment/helpers`; `crates/common/log_lines.rs` | done (STUDY-20) | Also still printed to the server's stdout. |
+| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | partial (STUDY-20) | HTTP `logLines` and WebSocket mutation `l`; subscriptions and cached query results carry none yet (STUDY-20 D2, D3). |
 | Function execution log (per call: type, path, duration, error, cache hit, usage) | `crates/application/function_log.rs` | missing | |
 | `GET /api/stream_function_logs?cursor=` and `/api/stream_udf_execution` | `crates/local_backend/logs.rs` | missing | |
 | Log sinks: Datadog, Axiom, Webhook, Sentry, PostHog, S3 export, local file (`--local-log-sink`) | `crates/log_streaming/sinks/*`; `crates/model/log_sinks` | missing | Event formats V1 and V2. Topics: console, function_execution, audit_log, scheduler_stats, and others. |
@@ -348,7 +348,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | bunvex has all three with `{path, args}` and `{status, value \| errorMessage}`. It has no `format`, no `logLines`, no `errorData`, no auth header, and returns 500 instead of Convex's status codes. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500. Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | missing | |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
@@ -369,7 +369,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Object fields / array length | 1024 / 8192 (`crates/value`) | missing | |
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
 | Page size / query operators / index key prefix | 1024 / 256 / 2500 bytes | missing | |
-| OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | partial | bunvex retries up to 30 times with its own backoff (`engine.ts`). Divergence? |
+| OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | done (STUDY-21) | Same budget and full-jitter backoff, plus the wait for the conflicting write. The knobs are `Engine` options. |
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
@@ -389,5 +389,5 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | missing | 224 |
 
 - The two done rows are system indexes and database selection.
-- The ten partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries, the self-hosted dashboard app and the data browser.
+- The ten partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

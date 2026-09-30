@@ -127,6 +127,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/core": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
     },
     "packages/protocol": {
@@ -143,9 +144,12 @@
       "dependencies": {
         "@bunvex/core": "workspace:*",
         "@bunvex/protocol": "workspace:*",
+        "@bunvex/values": "workspace:*",
+        "object-inspect": "^1.13.4",
       },
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
+        "@types/object-inspect": "^1.13.0",
       },
       "peerDependencies": {
         "@bunvex/persistence": "workspace:*",
@@ -529,6 +533,8 @@
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@types/node": ["@types/node@26.6.3", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg=="],
+
+    "@types/object-inspect": ["@types/object-inspect@1.13.0", "", {}, "sha512-lwGTVESDDV+XsQ1pH4UifpJ1f7OtXzQ6QBOX2Afq2bM/T3oOt8hF6exJMjjIjtEWeAN2YAo25J7HxWh97CCz9w=="],
 
     "@types/react": ["@types/react@19.3.0", "", { "dependencies": { "csstype": "^3.2.2" } }, "sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg=="],
 

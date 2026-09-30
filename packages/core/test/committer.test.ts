@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommitterStoppedError } from "../src/committer.ts";
+import { v } from "@bunvex/values";
+import { Committer, CommitterStoppedError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 
-const schema = new Schema().table("items", { by_n: ["n"] });
+const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
 const dirs: string[] = [];
 const open: Persistence[] = [];
 afterEach(async () => {
@@ -90,4 +91,15 @@ describe("committer fail-stop on persistence failure (Convex: the committer shut
     f.failFlush = false;
     expect(await count(e)).toBe(0);
   });
+});
+
+test("a commit queued right after another resolves, in the same microtask chain, is not lost", async () => {
+  const p = await MemoryPersistence.open(null, { durable: false });
+  const c = new Committer(p);
+  const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
+  const second = c
+    .commit({ snapshot: 0, reads: [], docs: [], idx: idx(1) })
+    .then(() => c.commit({ snapshot: 1, reads: [], docs: [], idx: idx(2) }));
+  const ts = await Promise.race([second, new Promise((r) => setTimeout(() => r("stuck"), 500))]);
+  expect(ts).toBe(2);
 });
