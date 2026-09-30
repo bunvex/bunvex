@@ -33,6 +33,8 @@ const ALLOWED: Record<string, string[]> = {
   ui: [],
   dashboard: ["ui"],
   "apps/dashboard": ["dashboard", "ui"],
+  // SITE-01: the website renders content only; it never talks to a deployment.
+  "apps/site": ["ui"],
 };
 /** Imports core must never contain (rule 2). */
 const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^mongodb$/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];

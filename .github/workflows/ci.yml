@@ -28,6 +28,7 @@ jobs:
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - run: bun run test
       - run: bun run build:dashboard
+      - run: bun run build:site
 
   # One job per external store, in parallel; `conformance` below keeps the required check's name.
   conformance-postgres:

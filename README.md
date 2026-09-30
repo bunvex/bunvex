@@ -37,6 +37,7 @@ Same 2-vCPU VPS, same harness, Convex self-hosted vs bunvex on **the same Postgr
 | `packages/server` | function runtime, HTTP API, WebSocket sync (`@bunvex/server`) |
 | `packages/protocol` | wire messages |
 | `packages/bunvex` | the package an app installs (`bunvex/server`, …) |
+| `apps/site` | [bunvex.dev](https://bunvex.dev), the website (landing now, user docs later) |
 | `bench/` | benchmarks, the conformance runner, the convex-bench adapter |
 | `docs/specs/` | design records |
 
