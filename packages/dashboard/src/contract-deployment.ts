@@ -2,11 +2,20 @@
 // the feature's methods. Reads are safe on any deployment; what changes data (cancelling scheduled runs)
 // runs only when the caller opts in.
 import { expect } from "bun:test";
-import { type DashboardDataSource, DataSourceError, type Page, type ScheduledFunction } from "./data-source.ts";
+import {
+  type DashboardDataSource,
+  DataSourceError,
+  type FileQuery,
+  type Page,
+  type ScheduledFunction,
+  type StoredFile,
+} from "./data-source.ts";
 
 export type DeploymentContractOptions = {
   /** Lets the suite cancel scheduled runs — every pending run of one function. Never on data you keep. */
   schedules?: { cancel: boolean };
+  /** Lets the suite upload a small text file and delete it again. */
+  files?: { write: boolean };
 };
 
 type Ctx = {
@@ -37,6 +46,26 @@ async function allScheduled(src: DashboardDataSource, fn?: string): Promise<Sche
     cursor = p.continueCursor;
   }
   throw new Error("pagination did not finish");
+}
+
+async function allFiles(
+  src: DashboardDataSource,
+  q: Omit<FileQuery, "numItems" | "cursor"> = {},
+): Promise<StoredFile[]> {
+  const out: StoredFile[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 1000; i++) {
+    const p: Page<StoredFile> = await src.listFiles!({ ...q, numItems: 3, cursor });
+    out.push(...p.page);
+    if (p.isDone) return out;
+    cursor = p.continueCursor;
+  }
+  throw new Error("pagination did not finish");
+}
+
+async function sha256(blob: Blob): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  return btoa(String.fromCharCode(...digest));
 }
 
 export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }: Ctx) {
@@ -92,6 +121,64 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         expect(canceled).toBeGreaterThan(0);
         expect((await allScheduled(src, fn)).filter((j) => j.state === "pending")).toEqual([]);
       }
+      if (off) {
+        const deadline = performance.now() + watchTimeoutMs;
+        while (heard === 0 && performance.now() < deadline) await sleep(5);
+        off();
+        expect(heard).toBeGreaterThan(0);
+      }
+    });
+
+  // ---------------------------------------------------------------- file storage
+  test("files (when offered): newest first by default, oldest on request, bounded by time, counted", async () => {
+    const src = await make();
+    if (!src.listFiles) return;
+    const newest = await allFiles(src);
+    for (let i = 1; i < newest.length; i++)
+      expect(newest[i]!.creationTime).toBeLessThanOrEqual(newest[i - 1]!.creationTime);
+    const oldest = await allFiles(src, { order: "asc" });
+    expect(oldest.map((f) => f.id)).toEqual([...newest].reverse().map((f) => f.id));
+    if (src.countFiles) expect(await src.countFiles()).toBe(newest.length);
+    if (newest.length >= 3) {
+      const from = newest.at(-2)!.creationTime;
+      const to = newest[1]!.creationTime;
+      const inside = await allFiles(src, { from, to });
+      expect(inside.map((f) => f.id)).toEqual(
+        newest.filter((f) => f.creationTime >= from && f.creationTime <= to).map((f) => f.id),
+      );
+    }
+    const first = newest[0];
+    if (first && src.getFile) {
+      const got = await src.getFile(first.id);
+      expect({ ...got, url: undefined }).toEqual({ ...first, url: undefined });
+      expect(await src.getFile("no-such-file")).toBeNull();
+    }
+    for (const f of newest) {
+      expect(f.size).toBeGreaterThanOrEqual(0);
+      expect(typeof f.url).toBe("string");
+    }
+  });
+
+  if (opts.files?.write)
+    test("uploading and deleting (opt-in): metadata as stored, first in the list, watchers hear it", async () => {
+      const src = await make();
+      if (!src.uploadFile || !src.deleteFiles || !src.getFile || !src.listFiles)
+        throw new Error("files.write was enabled but the source cannot upload, read and delete files");
+      let heard = 0;
+      const off = src.watchFiles?.(
+        () => heard++,
+        () => {},
+      );
+      const blob = new Blob(["contract suite\n"], { type: "text/plain" });
+      const id = await src.uploadFile(blob);
+      const f = await src.getFile(id);
+      expect(f).not.toBeNull();
+      expect(f!.size).toBe(blob.size);
+      expect(f!.contentType).toBe("text/plain");
+      expect(f!.sha256).toBe(await sha256(blob));
+      expect((await src.listFiles({ numItems: 1, cursor: null })).page[0]?.id).toBe(id);
+      await src.deleteFiles([id, "no-such-file"]);
+      expect(await src.getFile(id)).toBeNull();
       if (off) {
         const deadline = performance.now() + watchTimeoutMs;
         while (heard === 0 && performance.now() < deadline) await sleep(5);
