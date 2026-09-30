@@ -958,15 +958,17 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   and Logs are fetched when their route is first matched, in parallel with the route's loader. The function
   runner is a `React.lazy` panel, fetched when it first opens. The screens import `router.tsx` for their
   routes' hooks; loading them lazily also removes that import cycle.
-- Measured with `vite build` (entry chunk) and in Chrome (JS fetched until the screen's heading shows):
+- Measured with `vite build` (entry chunk) and in Chrome (JS the page fetched until the screen's heading
+  shows, from the Resource Timing API's decoded sizes):
 
   | | before | after |
   |---|---|---|
   | entry chunk | 739.8 kB (236.1 kB gzip) | 335.9 kB (109.2 kB gzip) |
-  | first load of `/` | 722 kB in 1 file | 375 kB in 7 files |
-  | first load of `/logs` | 722 kB in 1 file | 535 kB in 10 files |
-  | first load of `/database/users` | 3 923 kB in 2 files | 3 655 kB in 12 files |
+  | first load of `/` | 722 kB in 1 file | 494 kB in 7 files |
+  | first load of `/logs` | 722 kB in 1 file | 628 kB in 10 files |
+  | first load of `/database/users` | 3 923 kB in 2 files | 3 907 kB in 12 files |
 
   The Database screen stays heavy on purpose: it preloads Monaco (§12.5.7).
-- Guarded by an e2e test: the entry stays under 380 kB and holds no screen's own text; importing a screen
-  or the runner eagerly again fails it.
+- Guarded by an e2e test: the entry holds no screen's own text, and Health's first load stays under
+  600 kB of JS as the browser counts it; importing a screen or the runner eagerly again fails it. (The
+  entry's own size is not the bound: Rollup moves shared code in and out of it as screens are added.)
