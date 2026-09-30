@@ -18,7 +18,7 @@ export function Overview() {
 
   return (
     <>
-      <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
+      <h1 className="text-xl font-semibold tracking-tight">Health</h1>
       {error && (
         <div className="mt-4">
           <ErrorState error={error} />

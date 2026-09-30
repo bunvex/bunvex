@@ -19,7 +19,7 @@ export type DriverModule = {
   tearTail?(nextTs: number): void | Promise<void>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8"; // K3 also runs K4 and K5
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9"; // K3 also runs K4 and K5
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -184,6 +184,78 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     check(bad === 0, `K8 exact limits over dead ranges and many versions: ${probes} probes, ${bad} mismatches`);
   }
 
+  // K9 — long keys: keys far longer than a store's indexed-column limit (Postgres ~2.7 KB, MySQL 3072 B),
+  // many sharing their first 2500+ bytes, keep PERSIST-01's byte order, ranges and limits.
+  async function k9(st: Persistence) {
+    const T0 = 700; // after K8's commits
+    // Incompressible filler: Postgres compresses index entries, so repeated characters would hide its limit.
+    const noise = (seed: number) => {
+      let x = seed;
+      return Array.from({ length: 7000 }, () => {
+        x = (x * 1103515245 + 12345) & 0x7fffffff;
+        return String.fromCharCode(33 + (x % 94));
+      }).join("");
+    };
+    const fills: Record<string, string> = { x: noise(1), y: noise(2), z: noise(3) };
+    const long = (fill: string, n: number, tail: string) => fills[fill].slice(0, n) + tail;
+    const strings = [
+      "a",
+      "b",
+      long("x", 2490, ""),
+      long("x", 2496, ""),
+      long("x", 2497, ""), // with the tag and terminator: exactly around the 2500-byte prefix
+      ...["", "a", "b", "ba", "z", "\u0001", "zzzz"].map((t) => long("y", 3000, t)),
+      ...["1", "2", "10"].map((t) => long("y", 2600, t)),
+      long("y", 6000, "q"),
+      long("z", 2600, ""),
+    ];
+    const entries = strings.map((v, i) => ({ key: encodeKey([v, new TextEncoder().encode(`L${i}`)]), id: `L${i}` }));
+    const ordered = [...entries].sort((a, b) => compareKeys(a.key, b.key));
+    const model = new Map<string, { ts: number; live: boolean }[]>();
+    let ts = T0;
+    const commit = async (ws: [number, boolean][]) => {
+      ts++;
+      st.apply(
+        ts,
+        ws.map(([i, del]) => ({ table: 904, id: entries[i].id, json: del ? null : JSON.stringify({ i, ts }) })),
+        ws.map(([i, del]) => ({ index: 904, key: entries[i].key, id: del ? null : entries[i].id })),
+      );
+      for (const [i, del] of ws) model.set(entries[i].id, [...(model.get(entries[i].id) ?? []), { ts, live: !del }]);
+      await st.flush();
+    };
+    await commit(entries.map((_, i) => [i, false]));
+    for (let c = 0; c < 40; c++) await commit([[rnd(entries.length), Math.random() < 0.3]]);
+    const liveAt = (id: string, T: number) => {
+      const vs = model.get(id)?.filter((x) => x.ts <= T) ?? [];
+      return vs.length > 0 && vs[vs.length - 1].live;
+    };
+    const scanDocs = (st as Persistence & Partial<ScanDocs>).scanDocs?.bind(st);
+    let bad = 0;
+    let probes = 0;
+    for (const T of [T0 + 1, T0 + 10, ts])
+      for (const limit of [1, 2, 3, 7, 100])
+        for (const desc of [false, true])
+          for (let r = 0; r < 4; r++) {
+            const a = r === 0 ? 0 : rnd(ordered.length);
+            const b = r === 0 ? ordered.length : a + rnd(ordered.length - a + 1);
+            const lo = r === 0 ? FULL_LO : ordered[a].key;
+            const hi = b === ordered.length ? FULL_HI : ordered[b].key;
+            const live = ordered.slice(a, b).filter((e) => liveAt(e.id, T));
+            const want = (desc ? live.reverse() : live).slice(0, limit).map((e) => e.id);
+            probes++;
+            const got = await st.scan(904, lo, hi, T, limit, desc);
+            if (JSON.stringify(got) !== JSON.stringify(want)) {
+              bad++;
+              if (bad <= 3) log(`  K9 mismatch T=${T} limit=${limit} desc=${desc} [${a},${b}): ${got} vs ${want}`);
+            }
+            if (scanDocs) {
+              const docs = await scanDocs(904, 904, lo, hi, T, limit, desc);
+              if (docs.length !== want.length) bad++;
+            }
+          }
+    check(bad === 0, `K9 long keys (up to 6 KB, shared 2500-byte prefixes): ${probes} probes, ${bad} mismatches`);
+  }
+
   // K3–K5 — through the engine.
   async function k3to5(st: Persistence) {
     const e = await newEngine(st, 1000);
@@ -341,6 +413,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K1")) await k1(st);
   if (want("K2")) await k2(st);
   if (want("K8")) await k8(st);
+  if (want("K9")) await k9(st);
   await st.close();
   if (want("K3")) {
     const st2 = await mod.open(true);

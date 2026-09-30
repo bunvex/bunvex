@@ -12,7 +12,7 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { validateDocumentsSearch, validateLogsSearch } from "../src/router.tsx";
+import { validateLogsSearch } from "../src/router.tsx";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -41,21 +41,22 @@ const heading = (name: string) => screen.findByRole("heading", { level: 1, name 
 describe("navigation", () => {
   test("links navigate in place and mark the current page", async () => {
     mount();
-    await heading("Overview");
+    await heading("Health");
     const nav = screen.getByRole("navigation", { name: "Dashboard" });
-    expect(within(nav).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
-    const tables = within(nav).getByRole("link", { name: "Tables" });
-    expect(tables.getAttribute("href")).toBe("/tables");
-    await userEvent.setup().click(tables);
-    await heading("Tables");
-    expect(tables.getAttribute("aria-current")).toBe("page");
-    expect(within(nav).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBeNull();
+    expect(within(nav).getByRole("link", { name: "Health" }).getAttribute("aria-current")).toBe("page");
+    const logs = within(nav).getByRole("link", { name: "Logs" });
+    expect(logs.getAttribute("href")).toBe("/logs");
+    await userEvent.setup().click(logs);
+    await heading("Logs");
+    expect(logs.getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("link", { name: "Health" }).getAttribute("aria-current")).toBeNull();
   });
 
-  test("a nested address keeps its section current, and deep links load directly", async () => {
-    mount("/tables/tasks?order=asc");
-    await heading("Documents");
-    expect(screen.getByRole("link", { name: "Tables" }).getAttribute("aria-current")).toBe("page");
+  test("/database opens the first table, and keeps Database current", async () => {
+    const { history } = mount("/database");
+    await waitFor(() => expect(history.location.pathname).toBe("/database/imports"));
+    await heading("imports");
+    expect(screen.getByRole("link", { name: "Database" }).getAttribute("aria-current")).toBe("page");
   });
 
   test("under a basepath, links and addresses carry it", async () => {
@@ -72,7 +73,7 @@ describe("navigation", () => {
 
   test("a navigation moves focus to the main region; a search-only change does not", async () => {
     const { history } = mount();
-    await heading("Overview");
+    await heading("Health");
     const main = screen.getByRole("main");
     expect(document.activeElement).not.toBe(main); // not on the first load
     await userEvent.setup().click(screen.getByRole("link", { name: "Logs" }));
@@ -87,8 +88,6 @@ describe("navigation", () => {
   });
 
   test("search params are validated: invalid options are dropped", () => {
-    expect(validateDocumentsSearch({ index: "by_owner", order: "sideways" })).toEqual({ index: "by_owner" });
-    expect(validateDocumentsSearch({ index: "", order: "asc" })).toEqual({ order: "asc" });
     expect(validateLogsSearch({ level: "loud", function: "tasks:list" })).toEqual({ function: "tasks:list" });
     expect(validateLogsSearch({ level: "error" })).toEqual({ level: "error" });
   });
@@ -113,15 +112,15 @@ describe("data", () => {
     const base = mockSource();
     let fail = true;
     const source: DashboardDataSource = Object.assign(Object.create(base), {
-      listTables: (opts?: { signal?: AbortSignal }) =>
-        fail ? Promise.reject(new DataSourceError("unavailable", "connection refused")) : base.listTables(opts),
+      listFunctions: (opts?: { signal?: AbortSignal }) =>
+        fail ? Promise.reject(new DataSourceError("unavailable", "connection refused")) : base.listFunctions(opts),
     });
     const queryClient = createDashboardQueryClient();
     queryClient.setDefaultOptions({ queries: { retry: false } });
     render(
       <Dashboard
         dataSource={source}
-        history={createMemoryHistory({ initialEntries: ["/tables"] })}
+        history={createMemoryHistory({ initialEntries: ["/functions"] })}
         queryClient={queryClient}
       />,
     );
@@ -130,7 +129,7 @@ describe("data", () => {
     expect(screen.getByRole("navigation", { name: "Dashboard" })).toBeDefined();
     fail = false;
     await userEvent.setup().click(within(alert).getByRole("button", { name: "Try again" }));
-    await heading("Tables");
+    await heading("Functions");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
@@ -158,7 +157,7 @@ describe("overview", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("link", { name: "Functions" }));
     await heading("Functions");
-    await user.click(screen.getByRole("link", { name: "Overview" }));
+    await user.click(screen.getByRole("link", { name: "Health" }));
     // back at once with the samples kept, not "waiting for a second sample"
     expect((await screen.findByRole("img")).textContent).toMatch(/now/);
   });

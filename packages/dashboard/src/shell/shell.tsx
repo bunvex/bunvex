@@ -3,7 +3,7 @@
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouter } from "@tanstack/react-router";
-import { Activity, FunctionSquare, ScrollText, Table2 } from "lucide-react";
+import { Activity, Database, FunctionSquare, ScrollText } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect, useRef } from "react";
 import { useQueryScope } from "../context.tsx";
 import { deploymentQuery } from "../data/queries.ts";
@@ -51,13 +51,13 @@ export function Shell() {
           <li>
             <DashLink link={{ to: "/", activeOptions: { exact: true } }} className={NAV_LINK}>
               <Activity className={ICON} aria-hidden="true" />
-              Overview
+              Health
             </DashLink>
           </li>
           <li>
-            <DashLink link={{ to: "/tables" }} className={NAV_LINK}>
-              <Table2 className={ICON} aria-hidden="true" />
-              Tables
+            <DashLink link={{ to: "/database" }} className={NAV_LINK}>
+              <Database className={ICON} aria-hidden="true" />
+              Database
             </DashLink>
           </li>
           <li>

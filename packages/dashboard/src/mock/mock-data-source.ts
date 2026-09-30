@@ -1,24 +1,31 @@
-// A DashboardDataSource over an in-memory fixture, for development and tests (UI-01 §5.5). It keeps every
-// semantic of the contract: key-based cursors that stay valid when documents are inserted, cursors bound
-// to their query, aborts, `not_found` / `invalid_request`, and watchers that never fire synchronously.
-// `latencyMs` and `failRate` exercise loading and error states by hand.
+// A DashboardDataSource over an in-memory fixture, for development and tests (UI-01 §5.5, v2 in §12.4). It
+// keeps every semantic of the contract: filter expressions with the index rules, key-based cursors bound
+// to their query that stay valid across inserts, aborts, `not_found` / `invalid_request` naming the
+// clause, watchers that never fire synchronously, writes that are all-or-nothing and gated by the
+// capabilities. `latencyMs`, `failRate` and `liveWritesMs` exercise loading, errors and live data by hand.
 import {
   type CallOptions,
+  type Capabilities,
   type DashboardDataSource,
   DataSourceError,
   type DeploymentInfo,
   type DeploymentStats,
   type Document,
   type DocumentQuery,
+  type FieldPatch,
+  type FilterExpression,
   type FunctionInfo,
-  type Json,
   type LogEntry,
   type LogFilter,
   type LogQuery,
+  OPERATIONS,
   type Page,
+  type SchemaInfo,
   type TableInfo,
   type Unsubscribe,
+  type Value,
 } from "../data-source.ts";
+import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
 import { createRandom, type Random } from "./random.ts";
 
@@ -31,49 +38,25 @@ export type MockDataSourceOptions = FixtureOptions & {
   statsIntervalMs?: number;
   /** How often new function executions are logged while someone watches logs. Default 1 000 ms. */
   logIntervalMs?: number;
+  /** When set, a task is inserted (and now and then one deleted) this often, as a live app would. */
+  liveWritesMs?: number;
+  /** What the caller may do. Default: every operation, not read-only. */
+  capabilities?: Capabilities;
 };
 
-// ------------------------------------------------------------------ ordering and cursors
+/** At most this many documents per insert or delete call, as a server bounds a transaction. */
+export const MAX_WRITE = 4096;
 
-/** Convex's order across types: null < number < boolean < string < array < object. */
-function rank(v: Json | undefined): number {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number") return 1;
-  if (typeof v === "boolean") return 2;
-  if (typeof v === "string") return 3;
-  return Array.isArray(v) ? 4 : 5;
-}
+// ------------------------------------------------------------------ cursors
 
-export function compareValues(a: Json | undefined, b: Json | undefined): number {
-  const ra = rank(a);
-  const rb = rank(b);
-  if (ra !== rb) return ra - rb;
-  if (ra === 0) return 0;
-  if (ra === 4) {
-    const x = a as Json[];
-    const y = b as Json[];
-    for (let i = 0; i < Math.min(x.length, y.length); i++) {
-      const c = compareValues(x[i], y[i]);
-      if (c !== 0) return c;
-    }
-    return x.length - y.length;
-  }
-  if (ra === 5) return compareValues(JSON.stringify(a), JSON.stringify(b));
-  return (a as number | string | boolean) < (b as number | string | boolean) ? -1 : a === b ? 0 : 1;
-}
+type Key = Value[];
 
-/** The index key of a document: the indexed fields, then `_id` as the tiebreaker (unique). */
-const keyOf = (doc: Document, fields: string[]): Json[] =>
-  fields[0] === "_id" ? [doc._id] : [...fields.map((f) => doc[f] ?? null), doc._id];
-
-const compareKeys = (a: Json[], b: Json[]) => compareValues(a, b);
-
-function encodeCursor(query: string, key: Json[] | null): string {
+function encodeCursor(query: string, key: Key | null): string {
   const bytes = new TextEncoder().encode(JSON.stringify({ q: query, k: key }));
   return btoa(String.fromCharCode(...bytes));
 }
 
-function decodeCursor(cursor: string, query: string): Json[] | null {
+function decodeCursor(cursor: string, query: string): Key | null {
   let parsed: { q?: unknown; k?: unknown };
   try {
     const bytes = Uint8Array.from(atob(cursor), (c) => c.charCodeAt(0));
@@ -82,7 +65,7 @@ function decodeCursor(cursor: string, query: string): Json[] | null {
     throw new DataSourceError("invalid_request", "malformed cursor");
   }
   if (parsed.q !== query) throw new DataSourceError("invalid_request", "cursor belongs to another query");
-  return parsed.k as Json[] | null;
+  return parsed.k as Key | null;
 }
 
 function checkNumItems(n: number) {
@@ -92,9 +75,9 @@ function checkNumItems(n: number) {
 /** One page after `after` (exclusive) of items already in order; `null` = from the start. */
 function paginate<T>(
   items: T[],
-  key: (item: T) => Json[],
-  inOrder: (a: Json[], b: Json[]) => number,
-  after: Json[] | null,
+  key: (item: T) => Key,
+  inOrder: (a: Key, b: Key) => number,
+  after: Key | null,
   numItems: number,
   query: string,
 ): Page<T> {
@@ -107,6 +90,15 @@ function paginate<T>(
   return { page, isDone, continueCursor: encodeCursor(query, last === undefined ? after : key(last)) };
 }
 
+const NEWEST_FIRST: FilterExpression = { clauses: [], order: "desc" };
+const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+
+function checkFields(fields: Record<string, unknown>, what: string) {
+  for (const k of Object.keys(fields))
+    if (!FIELD_NAME.test(k))
+      throw new DataSourceError("invalid_request", `${what}: "${k}" is not a field name (system fields start with _)`);
+}
+
 // ------------------------------------------------------------------ the source
 
 export class MockDataSource implements DashboardDataSource {
@@ -115,14 +107,21 @@ export class MockDataSource implements DashboardDataSource {
   private readonly functions: FunctionInfo[];
   private readonly logs: LogEntry[];
   private readonly rnd: Random;
-  private readonly opts: Required<Pick<MockDataSourceOptions, "latencyMs" | "failRate">> & MockDataSourceOptions;
+  private readonly opts: MockDataSourceOptions & { latencyMs: number; failRate: number; capabilities: Capabilities };
   private stats: DeploymentStats;
   private readonly logWatchers = new Set<{ filter: LogFilter; deliver: (e: LogEntry[]) => void }>();
   private logTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
+  private liveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
-    this.opts = { latencyMs: 0, failRate: 0, ...opts };
+    this.opts = {
+      latencyMs: 0,
+      failRate: 0,
+      capabilities: { operations: [...OPERATIONS], readOnly: false },
+      ...opts,
+    };
     this.tables = new Map(fixture.tables.map((t) => [t.name, { ...t, documents: [...t.documents] }]));
     this.deployment = fixture.deployment;
     this.functions = fixture.functions;
@@ -174,12 +173,32 @@ export class MockDataSource implements DashboardDataSource {
     return t;
   }
 
+  private canWrite() {
+    const c = this.opts.capabilities;
+    if (c.readOnly || !c.operations.includes("writeData"))
+      throw new DataSourceError("unauthorized", "this credential cannot write data");
+  }
+
+  /** Tells the table's watchers, later (never inside the caller's stack). */
+  private changed(table: string) {
+    const watchers = this.tableWatchers.get(table);
+    if (!watchers?.size) return;
+    const count = this.tables.get(table)?.documents.length;
+    setTimeout(() => {
+      for (const w of watchers) w({ count });
+    }, 0);
+  }
+
   private now = () => Date.now();
 
   // ---------------------------------------------------------------- deployment
 
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo> {
     return this.call(opts?.signal, () => ({ ...this.deployment }));
+  }
+
+  getCapabilities(opts?: CallOptions): Promise<Capabilities> {
+    return this.call(opts?.signal, () => structuredClone(this.opts.capabilities));
   }
 
   getStats(opts?: CallOptions): Promise<DeploymentStats> {
@@ -219,34 +238,45 @@ export class MockDataSource implements DashboardDataSource {
     };
   }
 
-  // ---------------------------------------------------------------- tables and documents
+  // ---------------------------------------------------------------- tables, schema, documents
 
   listTables(opts?: CallOptions): Promise<TableInfo[]> {
     return this.call(opts?.signal, () =>
       [...this.tables.values()].map((t) => ({
         name: t.name,
-        indexes: t.indexes.map((i) => ({ ...i, fields: [...i.fields] })),
+        indexes: structuredClone(t.indexes),
         documentCount: t.documents.length,
+        declared: t.declared,
       })),
     );
+  }
+
+  getSchema(opts?: CallOptions): Promise<SchemaInfo> {
+    return this.call(opts?.signal, () => ({
+      enforced: false,
+      tables: [...this.tables.values()].filter((t) => t.declared).map((t) => ({ name: t.name })),
+    }));
   }
 
   listDocuments(q: DocumentQuery, opts?: CallOptions): Promise<Page<Document>> {
     return this.call(opts?.signal, () => {
       const t = this.table(q.table);
-      const indexName = q.index ?? "by_creation_time";
-      const ix = t.indexes.find((i) => i.name === indexName);
-      if (!ix) throw new DataSourceError("invalid_request", `no index "${indexName}" on "${q.table}"`);
-      const order = q.order ?? "desc";
-      if (order !== "asc" && order !== "desc") throw new DataSourceError("invalid_request", `bad order: ${order}`);
       checkNumItems(q.numItems);
-      const query = `docs\u0000${q.table}\u0000${indexName}\u0000${order}`;
+      const expr = q.filter ?? NEWEST_FIRST;
+      const ix = validateFilter(expr, t.indexes);
+      const fields = ix.name === "by_id" ? ["_id"] : ix.fields;
+      // the index key: its fields, then _id (unique, the tiebreaker) — except by_id, which is _id alone
+      const key = (d: Document): Key =>
+        ix.name === "by_id" ? [d._id] : [...fields.map((f) => fieldValue(d, f) ?? null), d._id];
+      const sign = expr.order === "asc" ? 1 : -1;
+      const inOrder = (a: Key, b: Key) => sign * compareValues(a, b);
+      const query = canonicalFilter(q.table, q.filter);
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
-      const sign = order === "asc" ? 1 : -1;
-      const inOrder = (a: Json[], b: Json[]) => sign * compareKeys(a, b);
-      const key = (d: Document) => keyOf(d, ix.fields);
-      const sorted = [...t.documents].sort((a, b) => inOrder(key(a), key(b)));
-      return paginate(sorted, key, inOrder, after, q.numItems, query);
+      const matching = t.documents
+        .filter((d) => matchesFilter(d, expr, ix))
+        .sort((a, b) => inOrder(key(a), key(b)))
+        .map((d) => structuredClone(d));
+      return paginate(matching, key, inOrder, after, q.numItems, query);
     });
   }
 
@@ -257,13 +287,136 @@ export class MockDataSource implements DashboardDataSource {
     });
   }
 
-  /** Not part of the contract: adds a document, as a client mutation would. Returns it. */
-  insertDocument(table: string, fields: Record<string, Json>): Document {
+  watchTable(table: string, onChange: (c: { count?: number }) => void, onError: (e: DataSourceError) => void) {
+    let live = true;
+    const deliver = (c: { count?: number }) => live && onChange(c);
+    if (!this.tables.has(table)) {
+      setTimeout(() => live && onError(new DataSourceError("not_found", `no table "${table}"`)), 0);
+      return () => {
+        live = false;
+      };
+    }
+    const set = this.tableWatchers.get(table) ?? new Set();
+    this.tableWatchers.set(table, set);
+    set.add(deliver);
+    if (this.opts.liveWritesMs) this.liveTimer ??= setInterval(() => this.liveWrite(), this.opts.liveWritesMs);
+    return () => {
+      live = false;
+      set.delete(deliver);
+      const anyone = [...this.tableWatchers.values()].some((s) => s.size > 0);
+      if (!anyone && this.liveTimer !== null) {
+        clearInterval(this.liveTimer);
+        this.liveTimer = null;
+      }
+    };
+  }
+
+  /** What `liveWritesMs` does: a new task most of the time, sometimes a deleted one. */
+  private liveWrite() {
+    const tasks = this.tables.get("tasks");
+    const users = this.tables.get("users");
+    if (!tasks || !users) return;
+    if (this.rnd.chance(0.2) && tasks.documents.length > 0) {
+      tasks.documents.splice(this.rnd.int(0, tasks.documents.length - 1), 1);
+    } else {
+      const last = tasks.documents.reduce((m, d) => Math.max(m, d._creationTime), 0);
+      tasks.documents.push({
+        _id: this.rnd.id(),
+        _creationTime: Math.max(this.now(), last + 0.001),
+        text: this.rnd.pick(["Review the new index", "Answer the issue", "Measure the fan-out", "Ship the fix"]),
+        done: false,
+        owner: this.rnd.pick(users.documents)._id,
+        priority: this.rnd.int(1, 5),
+        tags: [],
+      });
+    }
+    this.changed("tasks");
+  }
+
+  // ---------------------------------------------------------------- writes
+
+  insertDocuments(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const t = this.table(table);
+      if (documents.length > MAX_WRITE)
+        throw new DataSourceError("invalid_request", `at most ${MAX_WRITE} documents per insert`);
+      // validate everything first: all or nothing
+      for (const [i, d] of documents.entries()) checkFields(d, `document ${i + 1}`);
+      let last = t.documents.reduce((m, d) => Math.max(m, d._creationTime), 0);
+      const docs = documents.map((fields) => {
+        last = Math.max(this.now(), last + 0.001);
+        return { ...structuredClone(fields), _id: this.rnd.id(), _creationTime: last } as Document;
+      });
+      t.documents.push(...docs);
+      this.changed(table);
+      return docs.map((d) => d._id);
+    });
+  }
+
+  /** Not part of the contract: one document, synchronously — for tests that need a known state. */
+  insertDocument(table: string, fields: Record<string, Value>): Document {
     const t = this.table(table);
     const last = t.documents.reduce((m, d) => Math.max(m, d._creationTime), 0);
     const doc: Document = { ...fields, _id: this.rnd.id(), _creationTime: Math.max(this.now(), last + 0.001) };
     t.documents.push(doc);
+    this.changed(table);
     return doc;
+  }
+
+  patchDocuments(table: string, ids: string[], fields: Record<string, FieldPatch>, opts?: CallOptions) {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const t = this.table(table);
+      checkFields(fields, "patch");
+      const docs = ids.map((id) => {
+        const d = t.documents.find((x) => x._id === id);
+        if (!d) throw new DataSourceError("not_found", `no document ${id} in "${table}"`);
+        return d;
+      });
+      for (const d of docs)
+        for (const [k, v] of Object.entries(fields)) {
+          const isUnset = typeof v === "object" && v !== null && !Array.isArray(v) && "$unset" in v;
+          if (isUnset) delete d[k];
+          else d[k] = structuredClone(v as Value);
+        }
+      this.changed(table);
+    });
+  }
+
+  replaceDocument(table: string, id: string, document: Record<string, Value>, opts?: CallOptions) {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const t = this.table(table);
+      checkFields(document, "replace");
+      const i = t.documents.findIndex((x) => x._id === id);
+      if (i < 0) throw new DataSourceError("not_found", `no document ${id} in "${table}"`);
+      const old = t.documents[i]!;
+      t.documents[i] = { ...structuredClone(document), _id: old._id, _creationTime: old._creationTime };
+      this.changed(table);
+    });
+  }
+
+  deleteDocuments(table: string, ids: string[], opts?: CallOptions) {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const t = this.table(table);
+      if (ids.length > MAX_WRITE) throw new DataSourceError("invalid_request", `at most ${MAX_WRITE} deletes per call`);
+      const gone = new Set(ids);
+      t.documents = t.documents.filter((d) => !gone.has(d._id));
+      this.changed(table);
+    });
+  }
+
+  clearTable(table: string, opts?: CallOptions) {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const t = this.table(table);
+      const deleted = t.documents.length;
+      t.documents = [];
+      this.changed(table);
+      return { deleted };
+    });
   }
 
   // ---------------------------------------------------------------- functions
@@ -280,8 +433,8 @@ export class MockDataSource implements DashboardDataSource {
       const levels = q.levels ? [...q.levels].sort() : null;
       const query = `logs\u0000${q.function ?? ""}\u0000${levels?.join(",") ?? "*"}`;
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
-      const newestFirst = this.logs.filter((e) => matches(e, q)).reverse();
-      const inOrder = (a: Json[], b: Json[]) => -compareKeys(a, b);
+      const newestFirst = this.logs.filter((e) => logMatches(e, q)).reverse();
+      const inOrder = (a: Key, b: Key) => -compareValues(a, b);
       return paginate(newestFirst, (e) => [e.id], inOrder, after, q.numItems, query);
     });
   }
@@ -310,13 +463,13 @@ export class MockDataSource implements DashboardDataSource {
       fresh.push(...makeExecution(this.rnd, this.logs.length + fresh.length + 1, this.now()));
     this.logs.push(...fresh);
     for (const w of this.logWatchers) {
-      const mine = fresh.filter((e) => matches(e, w.filter));
+      const mine = fresh.filter((e) => logMatches(e, w.filter));
       if (mine.length > 0) w.deliver(mine);
     }
     return fresh;
   }
 }
 
-const matches = (e: LogEntry, f: LogFilter) =>
+const logMatches = (e: LogEntry, f: LogFilter) =>
   (f.function === undefined || e.function?.path === f.function) &&
   (f.levels === undefined || f.levels.includes(e.level));

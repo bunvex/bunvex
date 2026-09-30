@@ -6,6 +6,18 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
 GlobalRegistrator.register({ url: "http://localhost/" });
 
+// happy-dom has no layout: every offsetHeight is 0, so a virtualized DataTable would render no row. Its
+// scroll container (data-slot="data-table") gets the size a browser would give it: 360 × 800 px.
+for (const [key, size] of Object.entries({ offsetHeight: 360, offsetWidth: 800 })) {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
+  Object.defineProperty(HTMLElement.prototype, key, {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.slot === "data-table" ? size : (original?.call(this) ?? 0);
+    },
+  });
+}
+
 const { cleanup } = await import("@testing-library/react");
 afterEach(() => {
   cleanup();

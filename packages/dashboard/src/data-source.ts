@@ -1,18 +1,46 @@
-// The contract between the dashboard and whatever serves its data (UI-01 §5). Plain types and one error
-// class — no React and no bunvex import — so an implementation can live anywhere: an HTTP client in the
-// browser, a cloud API client, the mock. The semantics every implementation must keep are UI-01 §5.1 and
-// are checked by `describeDataSourceContract` (@bunvex/dashboard/contract).
+// The contract between the dashboard and whatever serves its data (UI-01 §5, v2 in §12.4). Plain types and
+// one error class — no React and no bunvex import — so an implementation can live anywhere: an HTTP client
+// in the browser, a cloud API client, the mock. The semantics every implementation must keep are checked
+// by `describeDataSourceContract` (@bunvex/dashboard/contract).
 
-/** Document values as the dashboard shows them. v0 is JSON; richer values arrive with @bunvex/values. */
+// ------------------------------------------------------------------ values
+
+/** Plain JSON. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+/** A 64-bit integer: its 8 bytes, little-endian two's complement, in base64. */
+export type EncodedInt64 = { $integer: string };
+/** Bytes, in base64. */
+export type EncodedBytes = { $bytes: string };
+
+/**
+ * A document value. JSON, plus the two encodings for what JSON cannot carry. Field names never start with
+ * `$`, so an object with a single `$integer` or `$bytes` key is always an encoding. A field a document
+ * does not have is absent — "unset" — which is not the same as `null`.
+ */
+export type Value = null | boolean | number | string | EncodedInt64 | EncodedBytes | Value[] | { [key: string]: Value };
+
+/** The type names a `type` / `notype` filter tests for. `unset` is a field the document does not have. */
+export type ValueType = "null" | "boolean" | "number" | "int64" | "string" | "bytes" | "array" | "object" | "unset";
+export const VALUE_TYPES: readonly ValueType[] = [
+  "null",
+  "boolean",
+  "number",
+  "int64",
+  "string",
+  "bytes",
+  "array",
+  "object",
+  "unset",
+];
+
 /** A document. System fields as in Convex: `_id` (unique in its table) and `_creationTime` (ms). */
-export type Document = { _id: string; _creationTime: number; [field: string]: Json };
+export type Document = { _id: string; _creationTime: number; [field: string]: Value };
 
 export type CallOptions = { signal?: AbortSignal };
 export type Unsubscribe = () => void;
 
-// ------------------------------------------------------------------ deployment
+// ------------------------------------------------------------------ deployment and capabilities
 
 export type DeploymentInfo = {
   /** Shown in the header; "local" for a self-hosted development server. */
@@ -23,6 +51,16 @@ export type DeploymentInfo = {
   persistence: string;
   /** The deployment's client URL, if the host wants it shown. */
   url?: string;
+};
+
+/** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
+export type Operation = "viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions";
+export const OPERATIONS: readonly Operation[] = ["viewData", "writeData", "viewLogs", "viewMetrics", "runFunctions"];
+
+export type Capabilities = {
+  operations: Operation[];
+  /** A read-only credential: no write succeeds, whatever `operations` says. */
+  readOnly: boolean;
 };
 
 /** A point-in-time sample of the counters the server keeps. Counters are totals since the server started. */
@@ -43,9 +81,17 @@ export type DeploymentStats = {
   subscriptionUpdates: number;
 };
 
-// ------------------------------------------------------------------ tables and documents
+// ------------------------------------------------------------------ tables, schema, indexes
 
-export type IndexInfo = { name: string; fields: string[]; system: boolean };
+export type IndexInfo = {
+  name: string;
+  fields: string[];
+  /** `by_id` and `by_creation_time`, which every table has. */
+  system: boolean;
+  /** A new index is `backfilling` until every existing document is in it; only `ready` ones can be queried. */
+  state: "ready" | "backfilling";
+  progress?: { indexed: number; total?: number };
+};
 
 export type TableInfo = {
   name: string;
@@ -53,10 +99,70 @@ export type TableInfo = {
   indexes: IndexInfo[];
   /** Omitted when the source cannot count cheaply. */
   documentCount?: number;
+  /** In the deployment's schema. A table can also exist only because documents were written to it. */
+  declared: boolean;
+};
+
+export type SchemaInfo = {
+  /** Whether documents are validated against the declared types. */
+  enforced: boolean;
+  /** One entry per declared table. `validator` is the declared document type, when the server has one. */
+  tables: { name: string; validator?: Json }[];
+};
+
+// ------------------------------------------------------------------ filters and pages
+
+export type FieldOp = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "anyOf" | "noneOf" | "type" | "notype";
+export const FIELD_OPS: readonly FieldOp[] = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "anyOf",
+  "noneOf",
+  "type",
+  "notype",
+];
+
+/**
+ * A condition on one field, applied to the documents the index range yields. `value` is a Value for the
+ * comparisons, an array of Values for `anyOf` / `noneOf`, a ValueType for `type` / `notype`. Comparisons
+ * follow the value order (null < int64 < number < boolean < string < bytes < array < object); an unset
+ * field only matches `neq`, `noneOf` and `type: "unset"`.
+ */
+export type FieldFilter = {
+  /** Stable within the expression; errors name the clause by it. */
+  id: string;
+  field: string;
+  op: FieldOp;
+  value?: Value | Value[] | ValueType;
+  /** A disabled clause is kept (the UI shows it) but not applied. */
+  enabled: boolean;
+};
+
+/**
+ * Which part of an index to read. `eq` fixes the index's leading fields in order (a prefix); `range`
+ * bounds the field right after them. Disabled `eq` clauses may only trail the enabled ones.
+ */
+export type IndexFilter = {
+  name: string;
+  eq: { value: Value; enabled: boolean }[];
+  range?: { lower?: { op: "gt" | "gte"; value: Value }; upper?: { op: "lt" | "lte"; value: Value } };
+};
+
+/** Everything that selects and orders a table's documents. Serializable: it lives in the URL. */
+export type FilterExpression = {
+  /** Default: `by_creation_time`, unbounded. */
+  index?: IndexFilter;
+  clauses: FieldFilter[];
+  /** The index order, ascending or descending. */
+  order: "asc" | "desc";
 };
 
 export type PageRequest = {
-  /** A hint: a page may hold fewer items without being the last one. */
+  /** A hint: a page may hold fewer items without being the last one (`isDone` decides). */
   numItems: number;
   /** `null` starts; then the previous page's `continueCursor`. */
   cursor: string | null;
@@ -67,13 +173,11 @@ export type Page<T> = { page: T[]; isDone: boolean; continueCursor: string };
 
 export type DocumentQuery = PageRequest & {
   table: string;
-  /** Default "by_creation_time". */
-  index?: string;
-  /** Default "desc". */
-  order?: "asc" | "desc";
+  /** Default: every document, newest first. */
+  filter?: FilterExpression;
 };
 
-// ------------------------------------------------------------------ functions
+// ------------------------------------------------------------------ functions and logs
 
 export type FunctionKind = "query" | "mutation" | "action";
 
@@ -83,8 +187,6 @@ export type FunctionInfo = {
   kind: FunctionKind;
   visibility: "public" | "internal";
 };
-
-// ------------------------------------------------------------------ logs
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
@@ -112,12 +214,16 @@ export type LogQuery = PageRequest & LogFilter;
 
 export type DataSourceErrorCode = "unauthorized" | "not_found" | "invalid_request" | "unavailable";
 
-/** What a source throws. Anything else is treated as `unavailable`; an abort rejects with the signal's reason. */
+/**
+ * What a source throws. Anything else is treated as `unavailable`; an abort rejects with the signal's
+ * reason. An invalid filter names the offending clause (`details.clause`, a FieldFilter id, or "index").
+ */
 export class DataSourceError extends Error {
   override readonly name = "DataSourceError";
   constructor(
     readonly code: DataSourceErrorCode,
     message: string,
+    readonly details: { clause?: string } = {},
   ) {
     super(message);
   }
@@ -131,16 +237,42 @@ export const isAbortError = (e: unknown) => e instanceof Error && e.name === "Ab
 
 // ------------------------------------------------------------------ the interface
 
+/** A field update in `patchDocuments`: a new value, or removing the field. */
+export type FieldPatch = Value | { $unset: true };
+
 export interface DashboardDataSource {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
+  getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;
   /** Pushes a fresh sample whenever the source has one (an implementation may poll). Never synchronously. */
   watchStats(onStats: (stats: DeploymentStats) => void, onError: (error: DataSourceError) => void): Unsubscribe;
 
   listTables(opts?: CallOptions): Promise<TableInfo[]>;
+  getSchema(opts?: CallOptions): Promise<SchemaInfo>;
   listDocuments(query: DocumentQuery, opts?: CallOptions): Promise<Page<Document>>;
   /** `null` when the table exists but the document does not; `not_found` when the table does not exist. */
   getDocument(table: string, id: string, opts?: CallOptions): Promise<Document | null>;
+  /**
+   * Tells the caller a table changed — a write committed — with its new count when the source knows it.
+   * The dashboard then refreshes what it shows. Never synchronously; coalescing several writes is allowed.
+   */
+  watchTable(
+    table: string,
+    onChange: (change: { count?: number }) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe;
+
+  // Writes: present when the source can write; allowed when `writeData` is granted and not `readOnly`.
+  /** All or nothing. Returns the new ids, in order. */
+  insertDocuments?(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]>;
+  /** Every id must exist (else `not_found`, nothing written). System fields cannot be patched. */
+  patchDocuments?(table: string, ids: string[], fields: Record<string, FieldPatch>, opts?: CallOptions): Promise<void>;
+  /** Keeps `_id` and `_creationTime`; replaces every other field. */
+  replaceDocument?(table: string, id: string, document: Record<string, Value>, opts?: CallOptions): Promise<void>;
+  /** Ids that do not exist are ignored. */
+  deleteDocuments?(table: string, ids: string[], opts?: CallOptions): Promise<void>;
+  /** Deletes every document of the table (the source may do it in several transactions). */
+  clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
 
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]>;
 

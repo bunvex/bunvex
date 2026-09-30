@@ -9,11 +9,13 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
 
-// ?latency=300&fail=0.2 in the URL exercises the loading and error states.
+// ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data.
 const params = new URLSearchParams(location.search);
 const source = new MockDataSource({
   latencyMs: Number(params.get("latency") ?? 120),
   failRate: Number(params.get("fail") ?? 0),
+  // a task inserted (or deleted) every few seconds, so the Database screen has something live to show
+  liveWritesMs: Number(params.get("writes") ?? 3000),
 });
 
 createRoot(document.getElementById("root")!).render(

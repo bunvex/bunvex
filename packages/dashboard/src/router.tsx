@@ -11,19 +11,15 @@ import {
   Link,
   type LinkComponentProps,
   type RouterHistory,
+  redirect,
   useRouter,
   type ValidateLinkOptions,
 } from "@tanstack/react-router";
 import type { ComponentProps, ReactNode } from "react";
-import {
-  documentQuery,
-  documentsQuery,
-  functionsQuery,
-  logsQuery,
-  type QueryScope,
-  tablesQuery,
-} from "./data/queries.ts";
+import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
 import { type DataSourceError, LOG_LEVELS, type LogLevel, toDataSourceError } from "./data-source.ts";
+import { decodeFilter } from "./database/filter-url.ts";
+import { DatabaseScreen } from "./database/screen.tsx";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
 import { Overview } from "./screens/overview.tsx";
 import { ErrorState } from "./shell/error-state.tsx";
@@ -33,17 +29,21 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 
 // ------------------------------------------------------------------ search params
 
-export type DocumentsSearch = { index?: string; order?: "asc" | "desc" };
 export type LogsSearch = { function?: string; level?: LogLevel };
+/** The Database screen's URL state (UI-01 §12.3): the applied filter, the open document, the open panel. */
+export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "indexes" | "add" | "columns" };
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
-export function validateDocumentsSearch(input: Record<string, unknown>): DocumentsSearch {
-  const out: DocumentsSearch = {};
-  const index = str(input.index);
-  if (index) out.index = index;
-  if (input.order === "asc" || input.order === "desc") out.order = input.order;
+export function validateTableSearch(input: Record<string, unknown>): TableSearch {
+  const out: TableSearch = {};
+  const filter = str(input.filter);
+  const doc = str(input.doc);
+  if (filter) out.filter = filter;
+  if (doc) out.doc = doc;
+  if (input.panel === "schema" || input.panel === "indexes" || input.panel === "add" || input.panel === "columns")
+    out.panel = input.panel;
   return out;
 }
 
@@ -65,35 +65,39 @@ export const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   ),
 });
 
-export const overviewRoute = createRoute({
+export const healthRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Overview,
 });
 
-export const tablesRoute = createRoute({
+/** `/database` opens the first table, alphabetically; with no table yet, it says so. */
+export const databaseRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "tables",
-  loader: ({ context: { queryClient, scope } }) => queryClient.ensureQueryData(tablesQuery(scope)),
-  component: () => <NotBuiltYet title="Tables" />,
+  path: "database",
+  loader: async ({ context: { queryClient, scope } }) => {
+    const tables = await queryClient.ensureQueryData(tablesQuery(scope));
+    const first = tables.map((t) => t.name).sort()[0];
+    if (first !== undefined) throw redirect({ to: "/database/$table", params: { table: first }, replace: true });
+  },
+  component: () => (
+    <NotBuiltYet title="Database" message="This deployment has no tables yet. They appear once data is written." />
+  ),
 });
 
-export const documentsRoute = createRoute({
+export const tableRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "tables/$table",
-  validateSearch: validateDocumentsSearch,
-  loaderDeps: ({ search }) => search,
-  loader: ({ context: { queryClient, scope }, params, deps }) =>
-    queryClient.ensureInfiniteQueryData(documentsQuery(scope, { table: params.table, ...deps })),
-  component: () => <NotBuiltYet title="Documents" />,
-});
-
-export const documentRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "tables/$table/$id",
-  loader: ({ context: { queryClient, scope }, params }) =>
-    queryClient.ensureQueryData(documentQuery(scope, params.table, params.id)),
-  component: () => <NotBuiltYet title="Document" />,
+  path: "database/$table",
+  validateSearch: validateTableSearch,
+  loaderDeps: ({ search }) => ({ filter: search.filter }),
+  loader: async ({ context: { queryClient, scope }, params, deps }) => {
+    const tables = await queryClient.ensureQueryData(tablesQuery(scope));
+    if (!tables.some((t) => t.name === params.table)) return;
+    const filter = decodeFilter(deps.filter) ?? undefined;
+    // a filter the source rejects is shown on the filter bar, not as a failed screen
+    await queryClient.ensureInfiniteQueryData(documentsQuery(scope, params.table, filter)).catch(() => {});
+  },
+  component: DatabaseScreen,
 });
 
 export const functionsRoute = createRoute({
@@ -115,14 +119,7 @@ export const logsRoute = createRoute({
   component: () => <NotBuiltYet title="Logs" />,
 });
 
-export const routeTree = rootRoute.addChildren([
-  overviewRoute,
-  tablesRoute,
-  documentsRoute,
-  documentRoute,
-  functionsRoute,
-  logsRoute,
-]);
+export const routeTree = rootRoute.addChildren([healthRoute, databaseRoute, tableRoute, functionsRoute, logsRoute]);
 
 // ------------------------------------------------------------------ the router
 
