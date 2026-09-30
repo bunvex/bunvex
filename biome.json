@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["**", "!**/node_modules", "!**/.data", "!bun.lock"] },
+  "files": { "includes": ["**", "!**/node_modules", "!**/.data", "!bun.lock", "!**/routeTree.gen.ts", "!**/dist"] },
   "css": { "parser": { "tailwindDirectives": true } },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" } },
