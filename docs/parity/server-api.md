@@ -107,7 +107,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
 | `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
-| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | missing | |
+| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
 | `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
 | `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
