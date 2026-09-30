@@ -10,7 +10,7 @@
   and [Self-hosted: develop and deploy](https://stack.convex.dev/self-hosted-develop-and-deploy)
   (marked **[blog]**).
 - **bunvex read at:** `main` @ `080c7f0` (and `feat/sync-session` @ `0c40e25` where noted).
-- **Related:** ENGINE-00 R1/R5, PERSIST-01, STUDY-06 (OCC; D9 counter ts, D10 log window), STUDY-08 (cache and
+- **Related:** ENGINE-00 R1/R5, PERSIST-01, STUDY-06 (OCC; D9 wall-clock ts, decided and built in #64; D10 log window), STUDY-08 (cache and
   subscriptions), STUDY-09 D6 (no by-ts log read), STUDY-21 (OCC retries), STUDY-22 (mutation order),
   STUDY-23 (sync protocol v1).
 
@@ -161,7 +161,7 @@ bunvex is strictly single-process. ENGINE-00 R5 defers "replicas fed by the comm
 
 | State | Where | Notes |
 |---|---|---|
-| Commit ts | `Committer.appliedTs`, `++` per accepted commit | Seeded from `persistence.maxTs()`. **Dense**: a rejected commit takes no ts. |
+| Commit ts | `max(appliedTs + 1, wall clock in µs)`, as Convex (STUDY-06 D9, #64) | Seeded from `persistence.maxTs()`. **Sparse**: `ts + 1` is not the next commit, so gaps are not visible from timestamps alone (§4.3). |
 | Visible ts | `Committer.visibleTs` | Advances after `flush()`. Flushes are serial today. |
 | OCC log | last 20 000 commits | Counted, not timed: 0.5–1.4 s at the engine's 14–42k commits/s |
 | Catalog | `Engine` | Extended only in the process that created the table |
@@ -194,6 +194,11 @@ yet (ARCH-01 §6.3).
 | S3 | **`open()` can wedge.** An idle-in-transaction session (a paused process) blocks `PostgresPersistence.open()`'s `create … if not exists` DDL forever. | Reproduced; hung 10 min |
 | S4 | **`Committer.validate` skips its window check when the log is empty** (`this.log.length && …`). An old snapshot would be accepted unvalidated. Latent today; real once snapshots can come from elsewhere. | Code reading |
 | S5 | **Startup backfill blocks all writes** (`engine.ts:149-191`). It runs synchronously in `init()`. A failover to a store with a `backfilling` index blocks writes until it finishes. Convex backfills in the background. | Code reading |
+
+**Status (30 Sep 2026):** S1 fixed on every driver by PERSIST-01 C7 (Postgres #62; MySQL #67; SQLite
+and memory #70, an OS lock; MongoDB #84, a transaction per flush on a replica set). S2 fixed with it (the
+durable prefix is recorded by each fenced flush). S3 fixed on Postgres (#62), MySQL (#67) and MongoDB
+(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 open.
 
 S1 in detail:
 
@@ -280,7 +285,7 @@ log, so followers need the write set **only** for cache and subscription invalid
 
 **The persisted log.**
 
-- **`indexes`, not `documents`, is the dense log.** Every accepted commit writes by-id index rows;
+- **`indexes`, not `documents`, is the complete log.** Every accepted commit writes by-id index rows;
   backfill commits write no documents.
 - This is a divergence from Convex, which reads `documents` by ts using `prev_ts`. bunvex has no `prev_ts`
   (STUDY-09 D6).
@@ -319,12 +324,13 @@ flush to the follower knowing the ts and write set:
   + your database".
 - **Frames:** one binary length-prefixed frame per group, `{epoch, entries: [{ts, writes}]}` plus a
   catalog flag. The leader pushes only after the flush.
-- **Gaps:** timestamps are dense, so the follower checks `ts === last + 1` and fills any gap by the by-ts
-  read. A slow poll (100 ms–1 s) is a safety net. **Followers drop frames from an older epoch.**
+- **Gaps:** timestamps are sparse since D9 (#64), so each frame entry carries `prevTs`, the ts of the
+  commit before it. The follower checks `prevTs === last` and fills any gap by the by-ts read. A slow
+  poll (100 ms–1 s) is a safety net. **Followers drop frames from an older epoch.**
 - **Back-pressure:** one follower stalled 3 s at 5k/s grew the leader's queue to 1.8 MB with no bound.
   - Cap each follower's queue, at about 4–8 MB or 2 s.
   - Past the cap, disconnect it. It catches up by the by-ts read: subscribe first, buffer, then fill.
-- **Follower `visibleTs` is the highest contiguous ts received.** Under pipelined commit, ts 3 can become
+- **Follower `visibleTs` is the highest ts up to which the `prevTs` chain is unbroken.** Under pipelined commit, ts 3 can become
   durable before ts 2, and a naive poller then skipped ts 2 forever. Reproduced.
 - **MongoDB** (owner's choice, 2026-09-30: **a transaction per flush on a replica set**): log reads are bounded by the commit marker.
 - **Fan-out cost at the leader** is O(followers), never O(clients).
@@ -456,7 +462,7 @@ mutations, half actions.
   wasted and 42 retry budgets exhausted. **Keep the queue loop on the leader**, like Convex's single
   executor, and hand action execution to any node through the same placement as client actions.
   - Under A1, distributing mutation jobs buys nothing: the leader executes them anyway.
-- **`nextTs` is wall-clock milliseconds.** bunvex's ts is a counter. Clock skew on other nodes lets a job
+- **`nextTs` is wall-clock milliseconds**, read on whichever node schedules. Clock skew on other nodes lets a job
   start early.
 
 | Work | Where |
@@ -587,7 +593,7 @@ mutations, half actions.
 | H8 | Fix S1–S3 now, before any scaling work | Silent corruption today on every driver | **Decided (owner, 2026-09-30): yes, Postgres first** (#62); MySQL, MongoDB, SQLite and memory follow |
 | H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | owner |
 | H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | owner |
-| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; `indexes` is dense | owner |
+| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | owner |
 | H12 | `_creationTime` and `Date.now()` derive from the leader (begin ts / leader clock), not each node's clock | Skew would reorder `by_creation_time` and break `_creationTime ≥ Date.now()` | owner |
 
 ## 7. Tests
