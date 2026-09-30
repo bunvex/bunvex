@@ -6,7 +6,7 @@
 // a Sub that is RUNNING when a commit arrives (its read-set is unknown or about to be replaced) is marked
 // dirty and re-runs once it finishes.
 import { type Interval, type LogEntry, overlaps } from "./committer.ts";
-import { type Engine, stringifyValue, type TxBody } from "./engine.ts";
+import { type Engine, type QueryJournal, stringifyValue, type TxBody } from "./engine.ts";
 
 type Sub = {
   key: string;
@@ -15,6 +15,8 @@ type Sub = {
   /** The last published result: `v` + JSON of the value, or `e` + the error message (never both). */
   last: string | null;
   running: boolean;
+  /** Carried across re-runs so a paginated query keeps its page boundary. */
+  journal: QueryJournal;
   dirty: boolean;
   refs: number;
 };
@@ -57,7 +59,8 @@ export class Subscriptions {
     do {
       s.dirty = false;
       this.stats.reruns++;
-      const r = await this.engine.queryTracked(s.body);
+      const r = await this.engine.queryTracked(s.body, s.journal);
+      s.journal = r.journal;
       // A failed run keeps its reads too, so the next overlapping commit re-runs it (Convex re-evaluates
       // errors like any result). Errors and values share `last`, so a value that comes back after an
       // error is published again.
@@ -84,7 +87,7 @@ export class Subscriptions {
       s.refs++;
       return this.current(key);
     }
-    const created: Sub = { key, body, reads: null, last: null, running: false, dirty: false, refs: 1 };
+    const created: Sub = { key, body, reads: null, last: null, running: false, dirty: false, refs: 1, journal: {} };
     this.subs.set(key, created);
     await this.run(created);
     return null;

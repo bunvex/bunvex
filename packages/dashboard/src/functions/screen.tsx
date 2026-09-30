@@ -1,11 +1,12 @@
 // The Functions screen (STUDY-12 §7, UI-01 §13.2): the deployment's modules as a tree beside the open
 // function — `?function=<module:name>` in the URL, as in Convex — with its kind, visibility, path and its
 // logs. No statistics yet: the server has no app metrics (STUDY-12 L1).
+import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { Input } from "@bunvex/ui/components/input";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { ChevronRight, FileCode2, Folder } from "lucide-react";
+import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
@@ -13,6 +14,7 @@ import type { FunctionInfo } from "../data-source.ts";
 import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
 import { useLogLines } from "../logs/use-logs.ts";
 import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
+import { useRunner } from "../runner/context.tsx";
 import { buildFunctionTree, describeFunction, type FunctionNode, matchFunctions, splitPath } from "./tree.ts";
 
 const ITEM =
@@ -139,6 +141,7 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
   const { module, name } = splitPath(fn.path);
+  const runner = useRunner();
   return (
     <LogsView
       key={fn.path}
@@ -156,6 +159,12 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
             <span className="ml-auto flex items-center gap-1">
               <code className="font-mono text-xs">{fn.path}</code>
               <CopyButton text={fn.path} label="Copy the function's path" />
+              {runner.available && (
+                <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
+                  <Play aria-hidden="true" />
+                  Run
+                </Button>
+              )}
             </span>
           </div>
           <h2 className="text-sm font-medium">Logs</h2>

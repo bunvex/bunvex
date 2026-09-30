@@ -1,20 +1,27 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
-import { fromJsonValue, type GenericValidator, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
   type Catalog,
   hasChanges,
   INDEX_TABLE,
+  INSTANCE_TABLE,
   type IndexMeta,
   planCatalog,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
 import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
-import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
+import {
+  type ExecutionKind,
+  installDeterminism,
+  outsideExecution,
+  preciseClock,
+  runDeterministic,
+} from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
 import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
@@ -24,6 +31,9 @@ import { decodeDoc, Tx } from "./tx.ts";
 export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
 export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
 
+/** What a subscribed query carries from one run to the next (Convex's `QueryJournal`). */
+export type QueryJournal = { endCursor?: string | null };
+
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
 type CacheEntry = { json: string; reads: Interval[] };
@@ -32,6 +42,8 @@ export class Engine {
   readonly committer: Committer;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = bootstrapCatalog();
+  /** Signs pagination cursors: INSTANCE_SECRET, or the one stored in `_instance` (set by init()). */
+  private instanceSecret = "";
   /** Document validators of the declared tables (empty when `schemaValidation` is off). */
   private readonly docValidators = new Map<string, GenericValidator>();
   private cache = new Map<string, CacheEntry>();
@@ -40,7 +52,12 @@ export class Engine {
   constructor(
     readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
-    private opts: { cacheMax?: number; maxRetries?: number } = {},
+    private opts: {
+      cacheMax?: number;
+      maxRetries?: number;
+      /** Signs pagination cursors (STUDY-17); the deployment's secret, as Convex's INSTANCE_SECRET. */
+      instanceSecret?: string;
+    } = {},
   ) {
     installDeterminism();
     // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
@@ -71,7 +88,28 @@ export class Engine {
     this.committer.appliedTs = m;
     this.committer.visibleTs = m;
     await this.reconcileCatalog();
+    await this.loadInstanceSecret();
     return this;
+  }
+
+  /**
+   * The secret that signs pagination cursors, as Convex's self-hosted image does it
+   * (self-hosted/docker-build/read_credentials.sh): the configured INSTANCE_SECRET wins; otherwise the one
+   * stored with the data; otherwise a random one, generated once and stored (in `_instance`, since the data
+   * may live in a remote database rather than a directory).
+   */
+  private async loadInstanceSecret() {
+    if (this.opts.instanceSecret) {
+      this.instanceSecret = this.opts.instanceSecret;
+      return;
+    }
+    this.instanceSecret = await this.runMutation(async (db) => {
+      const stored = (await db.query(INSTANCE_TABLE).first()) as { instanceSecret?: string } | null;
+      if (stored?.instanceSecret) return stored.instanceSecret;
+      const secret = Buffer.from(outsideExecution(() => crypto.getRandomValues(new Uint8Array(32)))).toString("hex");
+      await db.insert(INSTANCE_TABLE, { instanceSecret: secret });
+      return secret;
+    }, true);
   }
 
   /** Create missing tables and indexes, drop undeclared indexes, and backfill new indexes. */
@@ -82,7 +120,8 @@ export class Engine {
     });
     const { tables, indexes } = await this.runMutation(async (db) => {
       const current = await read(db);
-      const changes = planCatalog(this.schema.tables.values(), current.tables, current.indexes);
+      const systemTables = [{ name: INSTANCE_TABLE, indexes: {}, document: v.any() }];
+      const changes = planCatalog([...systemTables, ...this.schema.tables.values()], current.tables, current.indexes);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
       for (const id of changes.deleteIndexes) await db.delete(INDEX_TABLE, id);
@@ -121,6 +160,7 @@ export class Engine {
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    tx.instanceSecret = this.instanceSecret;
     if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
@@ -172,15 +212,22 @@ export class Engine {
    */
   async queryTracked<T>(
     body: TxBody<T>,
-  ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
+    journal: QueryJournal = {},
+  ): Promise<
+    ({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number; journal: QueryJournal }
+  > {
     const snapshot = this.committer.visibleTs;
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    tx.instanceSecret = this.instanceSecret;
+    // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
+    tx.prevEndCursor = journal.endCursor ?? null;
+    const out = () => ({ reads: tx.reads, ts: snapshot, journal: { endCursor: tx.nextEndCursor } });
     try {
       const value = await runDeterministic("query", now, () => body(tx));
-      return { ok: true, value, reads: tx.reads, ts: snapshot };
+      return { ok: true, value, ...out() };
     } catch (error) {
-      return { ok: false, error, reads: tx.reads, ts: snapshot };
+      return { ok: false, error, ...out() };
     }
   }
 

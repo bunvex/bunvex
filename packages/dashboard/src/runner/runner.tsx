@@ -1,0 +1,194 @@
+// The function runner (STUDY-12 §7, UI-01 §13.3): docked below every screen, as in Convex. Pick a function,
+// write its arguments as a JavaScript literal (the code editor, as for documents), run it once with the Run
+// button or Ctrl+Enter, and read its value, or its error, with the lines it logged. A read-only credential
+// runs queries only.
+import { Button } from "@bunvex/ui/components/button";
+import { CodeEditor } from "@bunvex/ui/components/code-editor";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
+import { cn } from "@bunvex/ui/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { Play, X } from "lucide-react";
+import { useId, useState } from "react";
+import { useQueryScope } from "../context.tsx";
+import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
+import { type FunctionInfo, type FunctionRun, toDataSourceError, type Value } from "../data-source.ts";
+import { formatLiteral, parseLiteral, UNSET } from "../database/literal.ts";
+import { describeFunction } from "../functions/tree.ts";
+import { formatDuration } from "../logs/log-list.tsx";
+
+type Args = { ok: true; args: Record<string, Value> } | { ok: false; error: string; offset?: number };
+
+/** A function's arguments: one object literal (`{}` for none). */
+export function parseArgs(text: string): Args {
+  if (text.trim() === "") return { ok: true, args: {} };
+  const r = parseLiteral(text);
+  if (!r.ok) return r;
+  const v = r.value;
+  if (v === UNSET || typeof v !== "object" || v === null || Array.isArray(v) || "$integer" in v || "$bytes" in v)
+    return { ok: false, error: "The arguments are one object: { name: value, … }", offset: 0 };
+  return { ok: true, args: v as Record<string, Value> };
+}
+
+// the arguments typed for each function, while the page is open
+const drafts = new Map<string, string>();
+
+type Outcome = { run: FunctionRun } | { failed: string };
+
+export function FunctionRunner(props: { path?: string; onPath: (path: string) => void; onClose: () => void }) {
+  const scope = useQueryScope();
+  const { data: functions = [] } = useQuery(functionsQuery(scope));
+  const { data: caps } = useQuery(capabilitiesQuery(scope));
+  const fn: FunctionInfo | undefined = functions.find((f) => f.path === props.path) ?? functions[0];
+  const [text, setText] = useState(() => drafts.get(fn?.path ?? "") ?? "{}");
+  const [outcome, setOutcome] = useState<Outcome>();
+  const [running, setRunning] = useState(false);
+  const titleId = useId();
+  const pickerId = useId();
+  const checkId = useId();
+  const args = parseArgs(text);
+  const readOnly = caps?.readOnly ?? false;
+  const blocked = fn !== undefined && readOnly && fn.kind !== "query";
+
+  // the shell keys the runner by path: another function starts afresh, with its own draft
+  const pick = (path: string) => props.onPath(path);
+
+  const run = async () => {
+    if (!fn || !args.ok || blocked || !scope.source.runFunction) return;
+    setRunning(true);
+    try {
+      setOutcome({ run: await scope.source.runFunction(fn.path, args.args) });
+    } catch (e) {
+      setOutcome({ failed: toDataSourceError(e).message });
+    }
+    setRunning(false);
+  };
+
+  const r = outcome && "run" in outcome ? outcome.run : undefined;
+  return (
+    <section
+      aria-labelledby={titleId}
+      className="fixed inset-x-0 bottom-0 z-20 flex h-[45svh] flex-col border-t bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:left-52"
+    >
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b px-4">
+        <h2 id={titleId} className="font-medium">
+          Run a function
+        </h2>
+        <span id={pickerId} className="sr-only">
+          Function
+        </span>
+        <Select
+          items={functions.map((f) => ({ value: f.path, label: f.path }))}
+          value={fn?.path ?? null}
+          onValueChange={(v) => pick(v as string)}
+        >
+          <SelectTrigger aria-labelledby={pickerId} className="h-8 min-w-56">
+            <SelectValue placeholder="Pick a function" />
+          </SelectTrigger>
+          <SelectContent>
+            {functions.map((f) => (
+              <SelectItem key={f.path} value={f.path}>
+                <span className="font-mono">{f.path}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {fn && <span className="text-sm text-muted-foreground">{describeFunction(fn)}</span>}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto"
+          aria-label="Close the runner"
+          onClick={props.onClose}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      </header>
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
+        <form
+          className="flex min-h-0 flex-col gap-2 border-b p-4 md:border-r md:border-b-0"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run();
+          }}
+        >
+          <CodeEditor
+            label="Arguments"
+            multiline
+            height={140}
+            value={text}
+            onChange={(t) => {
+              setText(t);
+              if (fn) drafts.set(fn.path, t);
+            }}
+            error={args.ok ? undefined : { message: args.error, offset: args.offset }}
+            describedBy={checkId}
+            onSubmit={() => void run()}
+          />
+          <p id={checkId} aria-live="polite" className="min-h-5 text-sm">
+            {!args.ok ? (
+              <span className="text-destructive">{args.error}</span>
+            ) : blocked ? (
+              <span className="text-muted-foreground">A read-only credential runs queries only.</span>
+            ) : (
+              <span className="text-muted-foreground">Ctrl+Enter runs it.</span>
+            )}
+          </p>
+          <div>
+            <Button type="submit" size="sm" disabled={!fn || !args.ok || blocked || running}>
+              <Play aria-hidden="true" />
+              {running ? "Running…" : `Run ${fn?.kind ?? "function"}`}
+            </Button>
+          </div>
+        </form>
+        <div className="min-h-0 overflow-y-auto p-4" aria-live="polite" aria-busy={running}>
+          {!outcome ? (
+            <p className="text-sm text-muted-foreground">The result shows here.</p>
+          ) : "failed" in outcome ? (
+            <p role="alert" className="text-sm text-destructive">
+              {outcome.failed}
+            </p>
+          ) : (
+            r && (
+              <>
+                <p className={cn("text-sm", r.error ? "text-destructive" : "text-muted-foreground")}>
+                  {r.error ? "Failed" : "Succeeded"} in {formatDuration(r.durationMs)}
+                </p>
+                <h3 className="mt-3 mb-1 text-sm font-medium">{r.error ? "Error" : "Result"}</h3>
+                <pre
+                  className={cn(
+                    "overflow-x-auto border bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap",
+                    r.error && "text-destructive",
+                  )}
+                >
+                  {r.error
+                    ? `${r.error.message}${r.error.data === undefined ? "" : `\n${formatLiteral(r.error.data, "  ")}`}`
+                    : formatLiteral(r.value ?? null, "  ")}
+                </pre>
+                {r.logLines.length > 0 && (
+                  <>
+                    <h3 className="mt-3 mb-1 text-sm font-medium">Logs</h3>
+                    <ol className="flex flex-col border font-mono text-xs">
+                      {r.logLines.map((l, i) => (
+                        <li
+                          // biome-ignore lint/suspicious/noArrayIndexKey: the lines of one run, in order, never reordered
+                          key={i}
+                          className={cn(
+                            "flex gap-3 border-b px-2 py-1 last:border-b-0",
+                            l.level === "error" && "text-destructive",
+                          )}
+                        >
+                          <span className="shrink-0 text-muted-foreground uppercase">{l.level}</span>
+                          <span className="min-w-0 break-words">{l.message}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+              </>
+            )
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
