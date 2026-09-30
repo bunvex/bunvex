@@ -54,8 +54,26 @@ export type DeploymentInfo = {
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
-export type Operation = "viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions";
-export const OPERATIONS: readonly Operation[] = ["viewData", "writeData", "viewLogs", "viewMetrics", "runFunctions"];
+export type Operation =
+  | "viewData"
+  | "writeData"
+  | "viewLogs"
+  | "viewMetrics"
+  | "runFunctions"
+  // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
+  | "viewEnvironmentVariables"
+  | "writeEnvironmentVariables"
+  | "viewAuditLog";
+export const OPERATIONS: readonly Operation[] = [
+  "viewData",
+  "writeData",
+  "viewLogs",
+  "viewMetrics",
+  "runFunctions",
+  "viewEnvironmentVariables",
+  "writeEnvironmentVariables",
+  "viewAuditLog",
+];
 
 export type Capabilities = {
   operations: Operation[];

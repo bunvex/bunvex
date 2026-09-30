@@ -256,6 +256,22 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Settings: show a hidden value, add a variable and save", async () => {
+    const { page, errors, close } = await open("/settings");
+    await heading(page, "Settings");
+    await page.waitForURL(`${ORIGIN}/settings/environment-variables`);
+    await page.getByRole("button", { name: "Show the value of LOG_LEVEL" }).click();
+    await page.getByText("info", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Add a variable" }).click();
+    await page.getByRole("textbox", { name: "Name" }).fill("E2E_FLAG");
+    await page.getByRole("textbox", { name: "Value" }).fill("yes");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    await page.getByRole("listitem").filter({ hasText: "E2E_FLAG" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -267,6 +283,7 @@ describe("the dashboard in a browser", () => {
         ["/schedules/functions", "Schedules"],
         ["/schedules/crons?cron=summarize+tasks", "Schedules"],
         ["/files", "Files"],
+        ["/settings/environment-variables", "Settings"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);
