@@ -1049,6 +1049,25 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   refused batch, credentials without write, read-only, without view, a source without them, axe); the
   contract suite on the mock; an e2e case and axe with colour contrast in both themes.
 
+### 14.5 History
+
+- **Contract**, optional: `listAuditEvents({ numItems, cursor, from?, to?, actions? })` — newest first
+  (`AuditEvent`: id, time, Convex's action name, author, JSON metadata); `watchAuditEvents(onChange, onError)`.
+  Needs `viewAuditLog`, as Convex's `ViewAuditLog`. The source records events; the dashboard only reads them.
+- **Contract suite**: the reads (order, time range, one action) whenever offered and allowed; with
+  `history: { table }` it inserts a document there and expects an `add_documents` event.
+- **Mock** (`mock/audit.ts`): nine past events (deploys, an index build, variables, documents) and, from then
+  on, what its writes do: `add_documents`, `update_documents`, `delete_documents`, `clear_tables`,
+  `cancel_scheduled_function`, `cancel_all_scheduled_functions`, `generate_upload_url`, `delete_files`,
+  `create_` / `update_` / `delete_environment_variable`. Author "admin key" (STUDY-12 H1).
+- **Screen** (`/history`): each event in words ("Added 2 documents to imports", `history/describe.ts`), its
+  time and author; one action and a day range in the URL (`?action=&from=&to=`); an event's details
+  (`?event=`) with its metadata as a literal. Live on `watchAuditEvents`. Without `viewAuditLog` the log is
+  not fetched.
+- Tests: the words for each action; the screen (order, action filter, day range, live recording of writes,
+  details, without the operation, a source without it, axe); the contract suite on the mock; an e2e case (a
+  change made in Settings shows up in History) and axe with colour contrast in both themes.
+
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
 ### 15.1 Validators on functions (STUDY-12 §8, V1)
@@ -1111,6 +1130,19 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Not yet: a deployment with no tables at all shows the `/database` message without the list, so no
   Create table there (the route component is in `router.tsx`, left alone while route splitting is under
   way elsewhere).
+
+### 15.5 A generated schema (STUDY-12 D11)
+
+- **Contract**: optional `inferDocumentType(table)` — a type every document in the table fits, in
+  Convex's JSON form without system fields, null for an empty table (Convex keeps "shapes" for this on
+  the server). The contract suite checks that every document of its fixture table fits what comes back.
+- **Mock** (`mock/infer.ts`): over the whole table — a field missing from some documents is optional,
+  several types make a union, objects merge their fields, arrays hold the union of their elements (an
+  array never seen with one: `v.any()`), and text that is always an id of one table is `v.id(table)`.
+- **Schema panel**: tabs, as Convex — **Saved** (§15.2) and **Generated**: the table alone in a
+  `bunvex/schema.ts` with `// Other tables here...` where the others go, a sentence saying it is
+  approximate and where to paste it, Copy; "Add at least one document…" for an empty table. It opens on
+  Saved, or on Generated when nothing is saved. Without `inferDocumentType`, no tabs.
 
 ### 15.6 The functions a request called (STUDY-12 L6)
 

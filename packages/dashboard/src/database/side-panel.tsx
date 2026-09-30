@@ -5,13 +5,14 @@ import { Badge } from "@bunvex/ui/components/badge";
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { JsonView } from "@bunvex/ui/components/json-view";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { documentQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
+import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -19,7 +20,7 @@ import { AddDocuments } from "./add-documents.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
 import { formatLiteral } from "./literal.ts";
-import { type SchemaCode, schemaCode } from "./schema-code.ts";
+import { generatedSchemaCode, type SchemaCode, schemaCode } from "./schema-code.ts";
 import { formatTime } from "./values.ts";
 
 export type PanelState =
@@ -157,37 +158,84 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
   const { data: tables = [] } = useQuery(tablesQuery(scope));
   const declared = schema?.tables.find((t) => t.name === info.name);
   const saved = schema ? schemaCode(schema, tables) : null;
+  const canGenerate = typeof scope.source.inferDocumentType === "function";
+  // as Convex: the saved schema first, or the generated one when nothing is saved
+  const [tab, setTab] = useState<"saved" | "generated">();
+  const shown = tab ?? (saved || !canGenerate ? "saved" : "generated");
+  const savedView = !schema ? (
+    <p className="text-sm text-muted-foreground">Loading the schema…</p>
+  ) : (
+    <>
+      <p className="text-sm">
+        {!declared ? (
+          <>
+            <strong className="font-medium">{info.name}</strong> is not in the schema: its documents were written
+            without a declaration.
+          </>
+        ) : declared.validator === undefined ? (
+          <>{info.name} is declared without a document type: any document is accepted.</>
+        ) : schema.enforced ? (
+          <>Documents in {info.name} are validated against its declared type.</>
+        ) : (
+          <>{info.name} has a declared type, but documents are not validated against it.</>
+        )}
+      </p>
+      {saved ? (
+        <SavedSchema code={saved} table={info.name} />
+      ) : (
+        <p className="mt-3 text-sm text-muted-foreground">
+          This deployment has no saved schema yet: declare tables in <code className="font-mono">bunvex/schema.ts</code>
+          .
+        </p>
+      )}
+    </>
+  );
   return (
     <Panel title={`Schema of ${info.name}`} onClose={onClose}>
-      {!schema ? (
-        <p className="text-sm text-muted-foreground">Loading the schema…</p>
+      {canGenerate ? (
+        <Tabs value={shown} onValueChange={(v) => setTab(v as "saved" | "generated")}>
+          <TabsList>
+            <TabsTrigger value="saved">Saved</TabsTrigger>
+            <TabsTrigger value="generated">Generated</TabsTrigger>
+          </TabsList>
+          <TabsContent value="saved" className="pt-3">
+            {savedView}
+          </TabsContent>
+          <TabsContent value="generated" className="pt-3">
+            {shown === "generated" && <GeneratedSchema table={info.name} />}
+          </TabsContent>
+        </Tabs>
       ) : (
-        <>
-          <p className="text-sm">
-            {!declared ? (
-              <>
-                <strong className="font-medium">{info.name}</strong> is not in the schema: its documents were written
-                without a declaration.
-              </>
-            ) : declared.validator === undefined ? (
-              <>{info.name} is declared without a document type: any document is accepted.</>
-            ) : schema.enforced ? (
-              <>Documents in {info.name} are validated against its declared type.</>
-            ) : (
-              <>{info.name} has a declared type, but documents are not validated against it.</>
-            )}
-          </p>
-          {saved ? (
-            <SavedSchema code={saved} table={info.name} />
-          ) : (
-            <p className="mt-3 text-sm text-muted-foreground">
-              This deployment has no saved schema yet: declare tables in{" "}
-              <code className="font-mono">bunvex/schema.ts</code>.
-            </p>
-          )}
-        </>
+        savedView
       )}
     </Panel>
+  );
+}
+
+/** A schema for the table generated from its documents (Convex's "Generated" tab), to start a declaration from. */
+function GeneratedSchema({ table }: { table: string }) {
+  const { data: type, error, isPending } = useQuery(inferredTypeQuery(useQueryScope(), table));
+  if (isPending) return <p className="text-sm text-muted-foreground">Looking at the documents…</p>;
+  if (error) return <ErrorState error={toDataSourceError(error)} />;
+  if (!type) return <p className="text-sm">Add at least one document to {table} to see a suggested schema here.</p>;
+  const code = generatedSchemaCode(table, type);
+  return (
+    <section aria-label="Generated schema">
+      <p className="text-sm">
+        An approximate schema for {table}, generated from its documents. Paste it into{" "}
+        <code className="font-mono">bunvex/schema.ts</code> and adjust the types if they do not fit.
+      </p>
+      <div className="mt-3 mb-1 flex justify-end">
+        <CopyButton text={code} label="Copy the generated schema" />
+      </div>
+      <pre
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
+        tabIndex={0}
+        className="max-h-[60svh] overflow-auto border bg-muted/40 p-2 font-mono text-xs"
+      >
+        {code}
+      </pre>
+    </section>
   );
 }
 
