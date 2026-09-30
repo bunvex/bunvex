@@ -27,11 +27,12 @@ test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; fro
   });
   // m:other commits between m:bump's read and its commit, every time: chain it on each execution.
   const origMutation = engine.mutation.bind(engine);
-  engine.mutation = ((body, source) =>
-    origMutation(async (db) => {
+  const origWithTs = engine.mutationWithTs.bind(engine);
+  engine.mutationWithTs = ((body, source) =>
+    origWithTs(async (db) => {
       if (source === "m:bump") rival = origMutation((d) => d.patch("counters", id, { n: Math.random() }), "m:other");
       return body(db);
-    }, source)) as typeof engine.mutation;
+    }, source)) as typeof engine.mutationWithTs;
   const { server, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false });
   try {
     const call = async (kind: string, path: string) => {

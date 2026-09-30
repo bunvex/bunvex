@@ -70,6 +70,19 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
+  test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", () => {
+    const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
+    const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
+    expect(entry.length).toBe(1);
+    const file = Bun.file(`${import.meta.dir}/../dist/assets/${entry[0]}`);
+    // 740 kB before route splitting, ~336 kB after
+    expect(file.size).toBeLessThan(380_000);
+    // no screen's own text in the entry: a screen imported eagerly again fails this
+    const code = readFileSync(file.name!, "utf8");
+    for (const text of ["Documents in ", "Log lines", "Search functions", "Run a function"])
+      expect(code).not.toContain(text);
+  });
+
   test("plain paths: a deep link opens, the knobs leave the address, reload and back keep the route", async () => {
     const { page, errors, close } = await open("/database/users?panel=schema");
     await heading(page, "users");
