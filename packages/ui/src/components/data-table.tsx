@@ -14,7 +14,14 @@ import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { DropdownMenu, DropdownMenuContent } from "@bunvex/ui/components/dropdown-menu";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
 import { cellKey, diffSnapshots, type Snapshot, snapshotOf } from "@bunvex/ui/lib/change-tracking";
-import { type ColumnState, clampWidth, MAX_WIDTH, MIN_WIDTH, mergeColumnOrder } from "@bunvex/ui/lib/column-state";
+import {
+  type ColumnState,
+  clampWidth,
+  MAX_WIDTH,
+  MIN_WIDTH,
+  mergeColumnOrder,
+  moveColumnBefore,
+} from "@bunvex/ui/lib/column-state";
 import { cn } from "@bunvex/ui/lib/utils";
 import { type ColumnDef, createColumnHelper, type RowData, tableFeatures, useTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -208,6 +215,37 @@ function DataTable<TData extends RowData>({
         ? dragging.width
         : (columnState?.widths?.[id] ??
           (typeof defaultColumnWidth === "function" ? defaultColumnWidth(id) : defaultColumnWidth));
+  // dragging a header to reorder (UI-01 §17.3), as Convex's `useColumnDragAndDrop.ts`; the keyboard way is
+  // the host's Columns panel. A press becomes a drag after 4 px; Escape or a release outside cancels it.
+  const headerCells = useRef(new Map<string, HTMLTableCellElement>());
+  const [moving, setMoving] = useState<{ id: string; x0: number; active: boolean; before: string | null } | null>(null);
+  const dropTarget = (x: number): string | null => {
+    for (const c of shown) {
+      const el = headerCells.current.get(idOf(c));
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (x < r.left + r.width / 2) return idOf(c);
+    }
+    return null;
+  };
+  const finishMove = (commit: boolean) => {
+    if (commit && moving?.active) {
+      const all = mergeColumnOrder(order ?? [], columns.map(idOf));
+      const next = moveColumnBefore(all, moving.id, moving.before);
+      if (next.join("\0") !== all.join("\0")) onColumnStateChange?.({ ...columnState, order: next });
+    }
+    setMoving(null);
+  };
+  // Escape cancels a drag wherever the focus is
+  const dragActive = !!moving?.active;
+  useEffect(() => {
+    if (!dragActive) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setMoving(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dragActive]);
   const setWidth = (id: string, width: number | undefined) => {
     const widths = { ...columnState?.widths };
     if (width === undefined) delete widths[id];
@@ -610,7 +648,47 @@ function DataTable<TData extends RowData>({
                   key={header.id}
                   scope="col"
                   aria-colindex={grid ? i + 1 : undefined}
-                  className="relative h-9 truncate border-r border-b px-3 font-medium whitespace-nowrap last:border-r-0"
+                  ref={(el) => {
+                    if (el) headerCells.current.set(header.column.id, el);
+                    else headerCells.current.delete(header.column.id);
+                  }}
+                  data-dragging={moving?.active && moving.id === header.column.id ? "" : undefined}
+                  data-drop={
+                    moving?.active
+                      ? moving.before === header.column.id
+                        ? "before"
+                        : moving.before === null && i === group.headers.length - 1
+                          ? "after"
+                          : undefined
+                      : undefined
+                  }
+                  className={cn(
+                    "relative h-9 truncate border-r border-b px-3 font-medium whitespace-nowrap last:border-r-0",
+                    onColumnStateChange && header.column.id !== SELECT_COLUMN && "cursor-grab select-none",
+                    "data-[dragging]:cursor-grabbing data-[dragging]:opacity-50",
+                    // the drop indicator: a bar on the edge the column lands at
+                    "data-[drop=before]:before:absolute data-[drop=before]:before:inset-y-0 data-[drop=before]:before:left-0 data-[drop=before]:before:w-0.5 data-[drop=before]:before:bg-primary",
+                    "data-[drop=after]:after:absolute data-[drop=after]:after:inset-y-0 data-[drop=after]:after:right-0 data-[drop=after]:after:w-0.5 data-[drop=after]:after:bg-primary",
+                  )}
+                  onPointerDown={
+                    onColumnStateChange && header.column.id !== SELECT_COLUMN
+                      ? (e) => {
+                          if (e.button !== 0) return;
+                          // the resize handle and anything interactive in the header keep their own drag
+                          if ((e.target as Element).closest("[role=separator],button,input,a")) return;
+                          e.currentTarget.setPointerCapture?.(e.pointerId);
+                          setMoving({ id: header.column.id, x0: e.clientX, active: false, before: null });
+                        }
+                      : undefined
+                  }
+                  onPointerMove={(e) => {
+                    if (!moving) return;
+                    if (!moving.active && Math.abs(e.clientX - moving.x0) < 4) return;
+                    const before = dropTarget(e.clientX);
+                    if (!moving.active || before !== moving.before) setMoving({ ...moving, active: true, before });
+                  }}
+                  onPointerUp={() => finishMove(true)}
+                  onPointerCancel={() => finishMove(false)}
                 >
                   {header.isPlaceholder ? null : <table.FlexRender header={header} />}
                   {onColumnStateChange && header.column.id !== SELECT_COLUMN && (

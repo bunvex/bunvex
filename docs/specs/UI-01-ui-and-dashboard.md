@@ -1190,3 +1190,14 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - **Mock**: while paused, `runFunction` is refused, its live writes stop, due scheduled runs wait and cron
   runs are skipped; pausing and resuming are recorded as `pause_deployment` / `unpause_deployment` events.
 
+### 17.3 Dragging a column header (STUDY-12 D10)
+
+- A header of a `DataTable` with `onColumnStateChange` can be **dragged** to move its column, as Convex's
+  (`Table/ColumnHeader.tsx`, `utils/useColumnDragAndDrop.ts`, which uses dnd-kit): a press becomes a drag
+  after 4 px; while dragging, the column is dimmed and a bar marks the edge it will land at (the left edge
+  of the column it goes before, or the last one's right edge); the release saves the order through
+  `columnState` (`moveColumnBefore`, hidden columns keep their places); Escape or a cancelled pointer
+  leaves it. The resize handle and anything interactive in a header keep their own drag.
+- Native pointer events, no new dependency. The **Columns** panel stays: it is the keyboard and screen-
+  reader way (the owner's call).
+
