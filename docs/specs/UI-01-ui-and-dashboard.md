@@ -815,6 +815,27 @@ comma lists) is gone.
 - Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
   in a cell, the object popover at the right edge, no request leaves localhost.
 
+### 12.5.10 Smoke tests in a real browser
+
+The owner decided (29 Sep 2026): Playwright, with a CI job that is not a required check until it has
+proved stable.
+
+- `apps/dashboard/e2e/dashboard.e2e.ts`, run by `bun run e2e` (root or `apps/dashboard`): builds the app,
+  serves it with `vite preview`, and drives Chromium through `playwright-core` (pinned, 1.63.0) —
+  the system Chrome locally, Playwright's Chromium in CI (`E2E_BROWSER=chromium`, job **e2e ·
+  dashboard in Chromium**).
+- What it covers, which the DOM tests cannot: Monaco loads from the app with no request elsewhere and
+  its worker is bundled; a cell edited in Monaco (Enter saves, Tab saves and moves right, Escape leaves
+  it); the object editor stays inside the grid; a document typed fast and saved with Ctrl+Enter is saved
+  exactly; the theme toggle switches Monaco's theme too; reduced motion cuts transitions; axe with
+  colour contrast on the main screens in both themes.
+- It found a bug on its first run: `CodeEditor` controlled Monaco through `value`, and typing faster than
+  React re-rendered lost keystrokes — a document was saved truncated. Fixed in #22 (Monaco holds the
+  text; `value` is written back only when it changes from outside; Enter / Tab / Ctrl+Enter render the
+  last keystroke before calling the handler).
+- Selecting everything and typing a quote wraps the selection in quotes (Monaco's `autoSurround`), as in
+  Convex's editor, which keeps Monaco's defaults; kept.
+
 ### 12.6 Decisions (29 Sep 2026)
 
 1. The screen is named **Database**, at **`/database/$table`**.

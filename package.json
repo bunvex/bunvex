@@ -20,6 +20,7 @@
     "test": "bun test && bun run --cwd packages/ui test && bun run --cwd packages/dashboard test && bun run --cwd apps/site test",
     "conformance": "bun bench/conformance.ts",
     "build:dashboard": "bun run --cwd apps/dashboard build",
+    "e2e": "bun run --cwd apps/dashboard e2e",
     "build:site": "bun run --cwd apps/site build",
     "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard && bun run build:site"
   },
