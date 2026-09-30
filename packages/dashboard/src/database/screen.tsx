@@ -14,7 +14,7 @@ import { type Document, type FilterExpression, type TableInfo, toDataSourceError
 import { DashLink, type TableSearch, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { DeleteDialog, DeleteSelected, type Outcome, TableMenu } from "./actions.tsx";
+import { DeleteDialog, DeleteSelected, deleteDocumentsNow, type Outcome, TableMenu } from "./actions.tsx";
 import { CellEditor } from "./cell-editor.tsx";
 import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
@@ -26,6 +26,15 @@ import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
 import { ValueView, type Viewing } from "./value-view.tsx";
 import { cellText, documentFields } from "./values.ts";
+
+/**
+ * Whether "Delete document" in a cell's menu asks first (STUDY-12 D13, the owner's call on 30 Sep 2026).
+ * Convex deletes at once and asks only on a production deployment (`isProtectedDeployment` in its
+ * `TableContextMenu.tsx`). bunvex has no deployment kinds yet, so every deployment is treated as one that
+ * may be production and asks. When deployments get a kind (production / development), replace this
+ * constant with a check of it — true for production — to match Convex.
+ */
+const CONFIRM_DELETE_FROM_CELL_MENU = true;
 
 export function DatabaseScreen(): ReactNode {
   const { table } = tableRoute.useParams();
@@ -187,7 +196,12 @@ function TableView({ info }: { info: TableInfo }) {
   const cellActions = (d: Document, field: string, anchor: () => DOMRect | undefined): CellActions => ({
     viewValue: () => setViewing({ field, value: d[field], anchor: anchor() ?? new DOMRect() }),
     goToReference: scope.source.tableOfId ? (id) => void goToReference(id) : undefined,
-    deleteDocument: can.delete ? () => setDeleting(d) : undefined,
+    deleteDocument: can.delete
+      ? () =>
+          CONFIRM_DELETE_FROM_CELL_MENU
+            ? setDeleting(d)
+            : void deleteDocumentsNow(scope.source, table, [d._id]).then(afterWrite)
+      : undefined,
     filter: (clause) => setSearch({ filter: encodeFilter(withClause(applied, clause)) }),
     copy: (text, what) =>
       void navigator.clipboard.writeText(text).then(
