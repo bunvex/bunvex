@@ -2,7 +2,7 @@
 // and cron jobs, file storage, environment variables, the audit log. Every method is optional — a source
 // offers a feature by having its methods (detected with `typeof`), so older sources stay valid — and the
 // shapes follow Convex's system tables. Re-exported by `data-source.ts`, the contract's module.
-import type { CallOptions, DataSourceError, Page, PageRequest, Unsubscribe, Value } from "./data-source.ts";
+import type { CallOptions, DataSourceError, Json, Page, PageRequest, Unsubscribe, Value } from "./data-source.ts";
 
 // ------------------------------------------------------------------ scheduled functions and crons
 
@@ -57,6 +57,51 @@ export type CronJob = {
   running: boolean;
 };
 
+// ------------------------------------------------------------------ file storage
+
+/** A stored file (Convex's `_storage`), with a URL the browser can fetch it from. */
+export type StoredFile = {
+  /** The storage id. */
+  id: string;
+  /** When it was stored (wall-clock ms). */
+  creationTime: number;
+  /** Base64 SHA-256 of the contents, as Convex stores it. */
+  sha256: string;
+  /** Bytes. */
+  size: number;
+  contentType: string | null;
+  /** Where to download or preview it; may expire (fetch the file again for a fresh one). */
+  url: string;
+};
+
+/** Newest first by default; `from` / `to` bound the creation time (ms, inclusive). */
+export type FileQuery = PageRequest & { order?: "asc" | "desc"; from?: number; to?: number };
+
+// ------------------------------------------------------------------ environment variables
+
+export type EnvironmentVariable = { name: string; value: string };
+
+/** One change in a batch: a value sets (adds or replaces) the variable, `null` deletes it. */
+export type EnvironmentVariableChange = { name: string; value: string | null };
+
+// ------------------------------------------------------------------ the audit log
+
+/** Something done to the deployment (Convex's `_deployment_audit_log`). */
+export type AuditEvent = {
+  id: string;
+  /** Wall-clock ms. */
+  time: number;
+  /** Convex's action names: `add_documents`, `delete_files`, `update_environment_variable`, `push_config`, … */
+  action: string;
+  /** Who did it, as the source names them ("admin key", a team member); null when unknown. */
+  author: string | null;
+  /** The action's details, e.g. `{ table: "tasks", count: 3 }`. */
+  metadata: { [key: string]: Json };
+};
+
+/** Newest first; `from` / `to` bound the time (ms, inclusive); `actions` keeps only those. */
+export type AuditEventQuery = PageRequest & { from?: number; to?: number; actions?: string[] };
+
 // ------------------------------------------------------------------ the optional methods
 
 export interface DeploymentFeatures {
@@ -72,4 +117,33 @@ export interface DeploymentFeatures {
   listCronJobs?(opts?: CallOptions): Promise<CronJob[]>;
   /** A cron job's runs, newest first (the source keeps a few per job, as Convex keeps 5). */
   listCronRuns?(name: string, opts?: CallOptions): Promise<CronRun[]>;
+
+  // File storage: read with `viewData`; uploading and deleting need `writeData` (and not `readOnly`).
+  listFiles?(query: FileQuery, opts?: CallOptions): Promise<Page<StoredFile>>;
+  /** Every stored file. */
+  countFiles?(opts?: CallOptions): Promise<number>;
+  /** `null` when there is no such file. */
+  getFile?(id: string, opts?: CallOptions): Promise<StoredFile | null>;
+  /** Stores the contents (the content type is the blob's); returns the new storage id. */
+  uploadFile?(file: Blob, opts?: CallOptions): Promise<string>;
+  /** Ids that do not exist are ignored. */
+  deleteFiles?(ids: string[], opts?: CallOptions): Promise<void>;
+  /** Tells the caller the stored files changed. Never synchronously. */
+  watchFiles?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+
+  // Environment variables: read with `viewEnvironmentVariables`, changed with `writeEnvironmentVariables`
+  // (and not `readOnly`), as Convex's operations.
+  /** Every variable, by name. */
+  listEnvironmentVariables?(opts?: CallOptions): Promise<EnvironmentVariable[]>;
+  /**
+   * Applies the changes together or not at all, as Convex's `update_environment_variables`: a bad name, a
+   * value over 8 KiB, more than 512 variables or 512 KiB in all is `invalid_request` naming the variable.
+   * Deleting an unknown name is allowed. A rename is a delete and a set in one batch.
+   */
+  updateEnvironmentVariables?(changes: EnvironmentVariableChange[], opts?: CallOptions): Promise<void>;
+
+  // The audit log: read with `viewAuditLog`. The source records the events; the dashboard only reads them.
+  listAuditEvents?(query: AuditEventQuery, opts?: CallOptions): Promise<Page<AuditEvent>>;
+  /** Tells the caller new events were recorded. Never synchronously. */
+  watchAuditEvents?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
 }

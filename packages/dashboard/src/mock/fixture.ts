@@ -33,7 +33,7 @@ export type FixtureOptions = {
   executions?: number;
 };
 
-const SYSTEM_INDEXES: IndexInfo[] = [
+export const SYSTEM_INDEXES: IndexInfo[] = [
   { name: "by_id", fields: ["_id"], system: true, state: "ready" },
   { name: "by_creation_time", fields: ["_creationTime"], system: true, state: "ready" },
 ];
@@ -140,9 +140,11 @@ export function makeExecution(
   seq: number,
   time: number,
   run?: { fn: FunctionInfo; error?: string },
+  within?: { requestId: string; parentExecutionId: string },
 ): LogEntry[] {
   const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
-  const requestId = rnd.id().slice(0, 16);
+  const requestId = within?.requestId ?? rnd.id().slice(0, 16);
+  const executionId = rnd.id().slice(0, 16);
   const failed = run ? run.error !== undefined : rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
   const durationMs = fn.kind === "action" ? rnd.int(20, 900) : rnd.int(0, 40);
   const lines: { level: LogLevel; message: string }[] = [];
@@ -157,18 +159,34 @@ export function makeExecution(
         }
       : { level: "info", message: fn.kind === "query" ? "query ran" : `${fn.kind} committed` },
   );
-  return lines.map((l, i) => {
-    const entry: LogEntry = {
-      id: logId(seq + i),
-      time: time + i,
-      level: l.level,
-      message: l.message,
-      function: { path: fn.path, kind: fn.kind as FunctionKind },
-      requestId,
-    };
-    if (i === lines.length - 1) entry.execution = { status: failed ? "failure" : "success", durationMs };
-    return entry;
+  const entry = (l: { level: LogLevel; message: string }, n: number, t: number): LogEntry => ({
+    id: logId(n),
+    time: t,
+    level: l.level,
+    message: l.message,
+    function: { path: fn.path, kind: fn.kind as FunctionKind },
+    requestId,
+    executionId,
+    ...(within && { parentExecutionId: within.parentExecutionId }),
   });
+  const out = lines.slice(0, -1).map((l, i) => entry(l, seq + i, time + i));
+  // an action may call queries and mutations: their executions sit inside it, in the same request
+  if (fn.kind === "action" && !within && rnd.chance(0.6)) {
+    const callable = MOCK_FUNCTIONS.filter((f) => f.kind !== "action");
+    for (let k = rnd.int(1, 2); k > 0; k--)
+      out.push(
+        ...makeExecution(
+          rnd,
+          seq + out.length,
+          time + out.length,
+          { fn: rnd.pick(callable) },
+          { requestId, parentExecutionId: executionId },
+        ),
+      );
+  }
+  const last = entry(lines.at(-1)!, seq + out.length, time + out.length);
+  last.execution = { status: failed ? "failure" : "success", durationMs };
+  return [...out, last];
 }
 
 export function createFixture(opts: FixtureOptions = {}): Fixture {

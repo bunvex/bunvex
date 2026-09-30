@@ -9,12 +9,12 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, useSuspen
 import { Plus } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { capabilitiesQuery, dashboardKeys, documentsQuery, tablesQuery } from "../data/queries.ts";
+import { capabilitiesQuery, dashboardKeys, documentsQuery, referenceQuery, tablesQuery } from "../data/queries.ts";
 import { type Document, type FilterExpression, type TableInfo, toDataSourceError } from "../data-source.ts";
 import { DashLink, type TableSearch, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { DeleteSelected, type Outcome, TableMenu } from "./actions.tsx";
+import { DeleteDialog, DeleteSelected, deleteDocumentsNow, type Outcome, TableMenu } from "./actions.tsx";
 import { CellEditor } from "./cell-editor.tsx";
 import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
@@ -24,16 +24,30 @@ import { decodeFilter, encodeFilter } from "./filter-url.ts";
 import { useLiveTable } from "./live.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
+import { ValueView, type Viewing } from "./value-view.tsx";
 import { cellText, documentFields } from "./values.ts";
+
+/**
+ * Whether "Delete document" in a cell's menu asks first (STUDY-12 D13, the owner's call on 30 Sep 2026).
+ * Convex deletes at once and asks only on a production deployment (`isProtectedDeployment` in its
+ * `TableContextMenu.tsx`). bunvex has no deployment kinds yet, so every deployment is treated as one that
+ * may be production and asks. When deployments get a kind (production / development), replace this
+ * constant with a check of it — true for production — to match Convex.
+ */
+const CONFIRM_DELETE_FROM_CELL_MENU = true;
 
 export function DatabaseScreen(): ReactNode {
   const { table } = tableRoute.useParams();
-  const { data: tables } = useSuspenseQuery(tablesQuery(useQueryScope()));
+  const scope = useQueryScope();
+  const { data: tables } = useSuspenseQuery(tablesQuery(scope));
+  const { data: caps } = useQuery(capabilitiesQuery(scope));
   const info = tables.find((t) => t.name === table);
+  const canCreate =
+    !!caps && !caps.readOnly && caps.operations.includes("writeData") && typeof scope.source.createTable === "function";
   return (
     // full-bleed inside <main>: the sidebar and the panel run to its edges
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 md:flex-row">
-      <TablesSidebar tables={tables} current={table} />
+      <TablesSidebar tables={tables} current={table} canCreate={canCreate} />
       {info ? (
         <TableView key={info.name} info={info} />
       ) : (
@@ -172,7 +186,22 @@ function TableView({ info }: { info: TableInfo }) {
   const closePanel = useCallback(() => setSearch({ doc: undefined, panel: undefined }), [setSearch]);
   const [editRequest, setEditRequest] = useState<number>();
   // what a cell's context menu and shortcuts do (cell-menu.tsx)
-  const cellActions = (d: Document): CellActions => ({
+  const [viewing, setViewing] = useState<Viewing | null>(null);
+  const [deleting, setDeleting] = useState<Document | null>(null);
+  const goToReference = async (id: string) => {
+    const target = await queryClient.fetchQuery(referenceQuery(scope, id)).catch(() => null);
+    if (target) void navigate({ to: "/database/$table", params: { table: target }, search: { doc: id } });
+    else setNotice({ ok: false, message: `No document has the id ${id}.` });
+  };
+  const cellActions = (d: Document, field: string, anchor: () => DOMRect | undefined): CellActions => ({
+    viewValue: () => setViewing({ field, value: d[field], anchor: anchor() ?? new DOMRect() }),
+    goToReference: scope.source.tableOfId ? (id) => void goToReference(id) : undefined,
+    deleteDocument: can.delete
+      ? () =>
+          CONFIRM_DELETE_FROM_CELL_MENU
+            ? setDeleting(d)
+            : void deleteDocumentsNow(scope.source, table, [d._id]).then(afterWrite)
+      : undefined,
     filter: (clause) => setSearch({ filter: encodeFilter(withClause(applied, clause)) }),
     copy: (text, what) =>
       void navigator.clipboard.writeText(text).then(
@@ -333,16 +362,17 @@ function TableView({ info }: { info: TableInfo }) {
               renderEditor: ({ row, columnId, done }) => (
                 <CellEditor table={table} doc={row} field={columnId} done={done} />
               ),
-              cellMenu: ({ row, columnId, edit }) => (
+              cellMenu: ({ row, columnId, edit, anchor }) => (
                 <CellMenuItems
                   doc={row}
                   field={columnId}
                   canEdit={writable && !columnId.startsWith("_")}
                   edit={edit}
-                  actions={cellActions(row)}
+                  actions={cellActions(row, columnId, anchor)}
                 />
               ),
-              onCellKey: (e, { row, columnId }) => cellShortcut(e, row, columnId, cellActions(row)),
+              onCellKey: (e, { row, columnId, anchor }) =>
+                cellShortcut(e, row, columnId, cellActions(row, columnId, anchor)),
             }}
             empty={
               query.isPending
@@ -356,6 +386,28 @@ function TableView({ info }: { info: TableInfo }) {
         )}
       </div>
       {panel && <SidePanel state={panel} info={info} onClose={closePanel} />}
+      {viewing && (
+        <ValueView
+          viewing={viewing}
+          onClose={() => {
+            setViewing(null);
+            setFocusRequest((n) => n + 1);
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteDialog
+          table={table}
+          ids={[deleting._id]}
+          open
+          onOpenChange={(open) => {
+            if (open) return;
+            setDeleting(null);
+            setFocusRequest((n) => n + 1);
+          }}
+          onDone={afterWrite}
+        />
+      )}
     </div>
   );
 }

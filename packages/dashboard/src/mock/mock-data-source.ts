@@ -4,6 +4,8 @@
 // clause, watchers that never fire synchronously, writes that are all-or-nothing and gated by the
 // capabilities. `latencyMs`, `failRate` and `liveWritesMs` exercise loading, errors and live data by hand.
 import {
+  type AuditEvent,
+  type AuditEventQuery,
   type CallOptions,
   type Capabilities,
   type CronJob,
@@ -14,7 +16,10 @@ import {
   type DeploymentStats,
   type Document,
   type DocumentQuery,
+  type EnvironmentVariable,
+  type EnvironmentVariableChange,
   type FieldPatch,
+  type FileQuery,
   type FilterExpression,
   type FunctionInfo,
   type FunctionRun,
@@ -26,14 +31,21 @@ import {
   type ScheduledFunction,
   type ScheduledFunctionQuery,
   type SchemaInfo,
+  type StoredFile,
   type TableInfo,
   type Unsubscribe,
+  type ValidatorJson,
   type Value,
 } from "../data-source.ts";
+import { tableNameProblem } from "../database/table-name.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
-import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
+import { MockAudit } from "./audit.ts";
+import { MockEnvironmentVariables } from "./env-vars.ts";
+import { MockFiles } from "./files.ts";
+import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
+import { inferDocumentType } from "./infer.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 
@@ -54,6 +66,10 @@ export type MockDataSourceOptions = FixtureOptions & {
   scheduled?: number;
   /** How often due scheduled runs and crons run while someone watches them. Default 1 000 ms. */
   schedulerIntervalMs?: number;
+  /** Start with a few stored files (images, texts, binaries). Default true. */
+  sampleFiles?: boolean;
+  /** Start with a few past audit events (deploys, index builds, variables). Default true. */
+  sampleAudit?: boolean;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -127,6 +143,11 @@ export class MockDataSource implements DashboardDataSource {
   private liveTimer: ReturnType<typeof setInterval> | null = null;
   /** Scheduled functions and cron jobs (UI-01 §14). Not part of the contract: tests drive it directly. */
   readonly scheduler: MockScheduler;
+  /** File storage (UI-01 §14). Not part of the contract: tests read blobs from it. */
+  readonly files: MockFiles;
+  private readonly envVars = new MockEnvironmentVariables();
+  /** The audit log (UI-01 §14.5). Not part of the contract: tests read what the writes recorded. */
+  readonly audit: MockAudit;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -170,6 +191,30 @@ export class MockDataSource implements DashboardDataSource {
       opts.now ?? Date.now(),
       opts.scheduled ?? 24,
     );
+    this.files = new MockFiles(
+      {
+        rnd: this.rnd,
+        paginate: (items, key, q, query) => {
+          checkNumItems(q.numItems);
+          const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+          return paginate(items, key, compareValues, after, q.numItems, query);
+        },
+      },
+      opts.now ?? Date.now(),
+      opts.sampleFiles ?? true,
+    );
+    this.audit = new MockAudit(
+      {
+        rnd: this.rnd,
+        paginate: (items, key, q, query) => {
+          checkNumItems(q.numItems);
+          const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+          return paginate(items, key, compareValues, after, q.numItems, query);
+        },
+      },
+      opts.now ?? Date.now(),
+      opts.sampleAudit ?? true,
+    );
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.stats = {
       at: opts.now ?? Date.now(),
@@ -188,7 +233,7 @@ export class MockDataSource implements DashboardDataSource {
   // ---------------------------------------------------------------- plumbing
 
   /** Simulated latency and failures; rejects with the signal's reason on abort, before or during the wait. */
-  private async call<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+  private async call<T>(signal: AbortSignal | undefined, body: () => T | Promise<T>): Promise<T> {
     signal?.throwIfAborted();
     if (this.opts.latencyMs > 0)
       await new Promise<void>((resolve, reject) => {
@@ -334,6 +379,22 @@ export class MockDataSource implements DashboardDataSource {
     });
   }
 
+  inferDocumentType(table: string, opts?: CallOptions): Promise<ValidatorJson | null> {
+    return this.call(opts?.signal, () => {
+      const t = this.table(table);
+      const owner = new Map<string, string>();
+      for (const other of this.tables.values()) for (const d of other.documents) owner.set(d._id, other.name);
+      return inferDocumentType(t.documents, (id) => owner.get(id) ?? null);
+    });
+  }
+
+  tableOfId(id: string, opts?: CallOptions): Promise<string | null> {
+    return this.call(opts?.signal, () => {
+      for (const t of this.tables.values()) if (t.documents.some((d) => d._id === id)) return t.name;
+      return null;
+    });
+  }
+
   watchTable(table: string, onChange: (c: { count?: number }) => void, onError: (e: DataSourceError) => void) {
     let live = true;
     const deliver = (c: { count?: number }) => live && onChange(c);
@@ -382,6 +443,16 @@ export class MockDataSource implements DashboardDataSource {
 
   // ---------------------------------------------------------------- writes
 
+  createTable(name: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const invalid = tableNameProblem(name);
+      if (invalid) throw new DataSourceError("invalid_request", invalid);
+      if (this.tables.has(name)) throw new DataSourceError("invalid_request", `Table "${name}" already exists.`);
+      this.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: false });
+    });
+  }
+
   insertDocuments(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]> {
     return this.call(opts?.signal, () => {
       this.canWrite();
@@ -397,6 +468,7 @@ export class MockDataSource implements DashboardDataSource {
       });
       t.documents.push(...docs);
       this.changed(table);
+      this.record("add_documents", { table, count: docs.length });
       return docs.map((d) => d._id);
     });
   }
@@ -428,6 +500,7 @@ export class MockDataSource implements DashboardDataSource {
           else d[k] = structuredClone(v as Value);
         }
       this.changed(table);
+      this.record("update_documents", { table, count: docs.length });
     });
   }
 
@@ -441,6 +514,7 @@ export class MockDataSource implements DashboardDataSource {
       const old = t.documents[i]!;
       t.documents[i] = { ...structuredClone(document), _id: old._id, _creationTime: old._creationTime };
       this.changed(table);
+      this.record("update_documents", { table, count: 1 });
     });
   }
 
@@ -450,8 +524,10 @@ export class MockDataSource implements DashboardDataSource {
       const t = this.table(table);
       if (ids.length > MAX_WRITE) throw new DataSourceError("invalid_request", `at most ${MAX_WRITE} deletes per call`);
       const gone = new Set(ids);
+      const before = t.documents.length;
       t.documents = t.documents.filter((d) => !gone.has(d._id));
       this.changed(table);
+      if (t.documents.length < before) this.record("delete_documents", { table, count: before - t.documents.length });
     });
   }
 
@@ -462,6 +538,7 @@ export class MockDataSource implements DashboardDataSource {
       const deleted = t.documents.length;
       t.documents = [];
       this.changed(table);
+      this.record("clear_tables", { tables: [table], count: deleted });
       return { deleted };
     });
   }
@@ -589,14 +666,18 @@ export class MockDataSource implements DashboardDataSource {
   cancelScheduledFunction(id: string, opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canWrite();
+      const fn = this.scheduler.list({ numItems: 100_000, cursor: null }).page.find((j) => j.id === id)?.function;
       this.scheduler.cancel(id);
+      this.record("cancel_scheduled_function", { id, function: fn ?? null });
     });
   }
 
   cancelAllScheduledFunctions(fn?: string, opts?: CallOptions): Promise<{ canceled: number }> {
     return this.call(opts?.signal, () => {
       this.canWrite();
-      return this.scheduler.cancelAll(fn);
+      const r = this.scheduler.cancelAll(fn);
+      if (r.canceled > 0) this.record("cancel_all_scheduled_functions", { function: fn ?? null, count: r.canceled });
+      return r;
     });
   }
 
@@ -606,6 +687,93 @@ export class MockDataSource implements DashboardDataSource {
 
   listCronRuns(name: string, opts?: CallOptions): Promise<CronRun[]> {
     return this.call(opts?.signal, () => this.scheduler.cronRuns(name));
+  }
+
+  // ---------------------------------------------------------------- file storage (§14)
+
+  listFiles(q: FileQuery, opts?: CallOptions): Promise<Page<StoredFile>> {
+    return this.call(opts?.signal, () => this.files.list(q));
+  }
+
+  countFiles(opts?: CallOptions): Promise<number> {
+    return this.call(opts?.signal, () => this.files.count());
+  }
+
+  getFile(id: string, opts?: CallOptions): Promise<StoredFile | null> {
+    return this.call(opts?.signal, () => this.files.get(id));
+  }
+
+  uploadFile(file: Blob, opts?: CallOptions): Promise<string> {
+    return this.call(opts?.signal, async () => {
+      this.canWrite();
+      const id = await this.files.upload(file, this.scheduler.now());
+      this.record("generate_upload_url", { storage_id: id, size: file.size });
+      return id;
+    });
+  }
+
+  deleteFiles(ids: string[], opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, async () => {
+      this.canWrite();
+      const before = await this.files.count();
+      await this.files.delete(ids);
+      const deleted = before - (await this.files.count());
+      if (deleted > 0) this.record("delete_files", { count: deleted });
+    });
+  }
+
+  watchFiles(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
+    return this.files.watch(onChange);
+  }
+
+  // ---------------------------------------------------------------- environment variables (§14)
+
+  private can(op: "viewEnvironmentVariables" | "writeEnvironmentVariables") {
+    const c = this.opts.capabilities;
+    if (!c.operations.includes(op) || (op === "writeEnvironmentVariables" && c.readOnly))
+      throw new DataSourceError(
+        "unauthorized",
+        `this credential cannot ${op === "viewEnvironmentVariables" ? "view" : "change"} environment variables`,
+      );
+  }
+
+  listEnvironmentVariables(opts?: CallOptions): Promise<EnvironmentVariable[]> {
+    return this.call(opts?.signal, () => {
+      this.can("viewEnvironmentVariables");
+      return this.envVars.list();
+    });
+  }
+
+  updateEnvironmentVariables(changes: EnvironmentVariableChange[], opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.can("writeEnvironmentVariables");
+      const had = new Set(this.envVars.list().map((v) => v.name));
+      this.envVars.update(changes);
+      for (const c of changes) {
+        if (c.value === null && !had.has(c.name)) continue;
+        const action = c.value === null ? "delete" : had.has(c.name) ? "update" : "create";
+        this.record(`${action}_environment_variable`, { variable_name: c.name });
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------- the audit log (§14)
+
+  /** What the dashboard did, at the mock clock's now. */
+  private record(action: string, metadata: Parameters<MockAudit["record"]>[1]) {
+    this.audit.record(action, metadata, this.scheduler.now());
+  }
+
+  listAuditEvents(q: AuditEventQuery, opts?: CallOptions): Promise<Page<AuditEvent>> {
+    return this.call(opts?.signal, () => {
+      if (!this.opts.capabilities.operations.includes("viewAuditLog"))
+        throw new DataSourceError("unauthorized", "this credential cannot view the audit log");
+      return this.audit.list(q);
+    });
+  }
+
+  watchAuditEvents(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
+    return this.audit.watch(onChange);
   }
 }
 

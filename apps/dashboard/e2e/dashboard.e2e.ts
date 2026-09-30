@@ -236,6 +236,55 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Files: upload one, see it first, preview an image", async () => {
+    const { page, errors, close } = await open("/files");
+    await heading(page, "Files");
+    await page
+      .getByLabel("Files to upload")
+      .setInputFiles({ name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("hi\n") });
+    await page.getByText("Uploaded 1 file.").waitFor();
+    const grid = page.getByRole("grid", { name: "Files" });
+    expect(await grid.getByRole("row").nth(1).textContent()).toContain("text/plain");
+    await grid.getByRole("gridcell", { name: "image/svg+xml" }).first().click();
+    const img = page.getByRole("complementary", { name: "File" }).getByRole("img");
+    await img.waitFor();
+    // the preview really loaded (a broken image has no natural width)
+    await page.waitForFunction(
+      () => (document.querySelector("aside img") as HTMLImageElement | null)?.naturalWidth === 96,
+    );
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Settings: show a hidden value, add a variable and save", async () => {
+    const { page, errors, close } = await open("/settings");
+    await heading(page, "Settings");
+    await page.waitForURL(`${ORIGIN}/settings/environment-variables`);
+    await page.getByRole("button", { name: "Show the value of LOG_LEVEL" }).click();
+    await page.getByText("info", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Add a variable" }).click();
+    await page.getByRole("textbox", { name: "Name" }).fill("E2E_FLAG");
+    await page.getByRole("textbox", { name: "Value" }).fill("yes");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    await page.getByRole("listitem").filter({ hasText: "E2E_FLAG" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("History: a change made in Settings is recorded", async () => {
+    const { page, errors, close } = await open("/settings/environment-variables");
+    await page.getByRole("button", { name: "Delete LOG_LEVEL" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    await page.getByRole("link", { name: "History" }).click();
+    await heading(page, "History");
+    const first = page.getByRole("grid", { name: "Audit log" }).getByRole("row").nth(1);
+    await first.getByText("Deleted environment variable LOG_LEVEL").waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -246,6 +295,9 @@ describe("the dashboard in a browser", () => {
         ["/database/users?panel=add", "users"],
         ["/schedules/functions", "Schedules"],
         ["/schedules/crons?cron=summarize+tasks", "Schedules"],
+        ["/files", "Files"],
+        ["/settings/environment-variables", "Settings"],
+        ["/history", "History"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

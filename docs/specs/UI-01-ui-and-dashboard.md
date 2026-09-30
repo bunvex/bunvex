@@ -1005,6 +1005,69 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   read-only and no-`writeData` credentials, the crons and their runs, a source without them, axe); the
   contract suite on the mock; an e2e case and axe with colour contrast in both themes.
 
+### 14.3 Files
+
+- **Contract**, optional: `listFiles({ numItems, cursor, order?, from?, to? })` — newest first by default
+  (`StoredFile`: storage id, creation time, base64 SHA-256, size, content type or null, a URL);
+  `countFiles()`; `getFile(id)` (null when absent); `uploadFile(blob)` → the new storage id (the content type
+  is the blob's); `deleteFiles(ids)` (unknown ids ignored); `watchFiles(onChange, onError)`. Reading needs
+  `viewData`; uploading and deleting `writeData`, as Convex.
+- **Contract suite**: the reads (both orders, a time range, the count, `getFile`) whenever offered; upload
+  and delete only with `files: { write: true }` (it checks size, type and SHA-256 of what it stored).
+- **Mock** (`mock/files.ts`): six SVG avatars, a text, a JSON, a CSV, a PDF-like and two binaries (one with
+  no type), over the last 30 days; object URLs, so previews and downloads work in a browser.
+- **Screen** (`/files`): the total ("12 files stored"), **Upload files** (several at once), a lookup by
+  storage id (opens its details), the order and a day range in the URL (`?order=asc&from=&to=`, days in
+  the viewer's zone), the grid (storage id, size, content type, uploaded) with row selection and **Delete N**
+  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1,
+  decided: no text previews), size, type, SHA-256, time, **Download**, **Delete**.
+- Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
+  lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
+  e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
+
+### 14.4 Settings: environment variables
+
+- **Contract**, optional: `listEnvironmentVariables()` — by name; `updateEnvironmentVariables(changes)` — a
+  batch of `{ name, value | null }` (null deletes), applied whole or not at all, as Convex's
+  `update_environment_variables`; a rename is a delete and a set. New operations, Convex's:
+  `viewEnvironmentVariables`, `writeEnvironmentVariables` (and `viewAuditLog`, for §14.5).
+- **Rules** (`settings/env-vars.ts`, used by the screen and enforced by the mock): names
+  `^[a-zA-Z_]+[a-zA-Z0-9_]*$` up to 256 characters, values up to 8 KiB, at most 512 variables and 512 KiB in
+  all; warnings (not errors) for quotes around a value and spaces at its ends; reading a pasted `.env` file
+  (comments, `export`, quotes, `\n` in double quotes) and writing one.
+- **Contract suite**: the read whenever offered and allowed; the batch semantics (all or nothing, the limits,
+  deleting an unknown name) only with `environmentVariables: { write: true }`.
+- **Screen**: `/settings` opens `/settings/environment-variables`, under a Settings heading with its own
+  navigation (one page so far). Values are **hidden** until shown (a toggle per variable), **Copy** one as
+  `NAME=value` or **Copy all as .env**. With `writeEnvironmentVariables`: **Edit** (name and value, so a
+  rename), **Delete** (marked, **Undo**), **Add a variable**; a `.env` file pasted into an empty name box
+  becomes a row per line. The changes wait in a bar ("2 unsaved changes") with **Discard** and **Save**; Save
+  is blocked while a name or value is invalid (said under the field) or a name is used twice. A refused
+  batch keeps the changes, with the reason. Without `viewEnvironmentVariables` the values are not fetched.
+- Tests: the rules; the batch a set of rows makes; the screen (hidden values, edit and save, a new variable
+  with bad and duplicate names and a quote warning, delete and undo and discard, rename, a pasted `.env`, a
+  refused batch, credentials without write, read-only, without view, a source without them, axe); the
+  contract suite on the mock; an e2e case and axe with colour contrast in both themes.
+
+### 14.5 History
+
+- **Contract**, optional: `listAuditEvents({ numItems, cursor, from?, to?, actions? })` — newest first
+  (`AuditEvent`: id, time, Convex's action name, author, JSON metadata); `watchAuditEvents(onChange, onError)`.
+  Needs `viewAuditLog`, as Convex's `ViewAuditLog`. The source records events; the dashboard only reads them.
+- **Contract suite**: the reads (order, time range, one action) whenever offered and allowed; with
+  `history: { table }` it inserts a document there and expects an `add_documents` event.
+- **Mock** (`mock/audit.ts`): nine past events (deploys, an index build, variables, documents) and, from then
+  on, what its writes do: `add_documents`, `update_documents`, `delete_documents`, `clear_tables`,
+  `cancel_scheduled_function`, `cancel_all_scheduled_functions`, `generate_upload_url`, `delete_files`,
+  `create_` / `update_` / `delete_environment_variable`. Author "admin key" (STUDY-12 H1).
+- **Screen** (`/history`): each event in words ("Added 2 documents to imports", `history/describe.ts`), its
+  time and author; one action and a day range in the URL (`?action=&from=&to=`); an event's details
+  (`?event=`) with its metadata as a literal. Live on `watchAuditEvents`. Without `viewAuditLog` the log is
+  not fetched.
+- Tests: the words for each action; the screen (order, action filter, day range, live recording of writes,
+  details, without the operation, a source without it, axe); the contract suite on the mock; an e2e case (a
+  change made in Settings shows up in History) and axe with colour contrast in both themes.
+
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
 ### 15.1 Validators on functions (STUDY-12 §8, V1)
@@ -1037,3 +1100,61 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
   arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
   test makes `scrollIntoView` return a Promise.
+
+### 15.3 The cell menu, completed (STUDY-12 D11, D13)
+
+- **View `<field>`** (Space, or the menu): the whole value beside the cell (`ValueView`, a Popover
+  anchored to the cell's rectangle, which `DataTable` now hands to `cellMenu` and `onCellKey` as
+  `anchor()`): the field's name, the value as a literal, Copy. Escape closes it; the focus returns to the
+  cell.
+- **Go to reference** (Cmd/Ctrl+G, or the menu) takes View's place when the value is id-shaped text (31–37
+  characters of lowercase base32, not the row's own `_id`) and the source's optional `tableOfId(id)`
+  names a table — Convex decodes the id with its table mapping; bunvex asks the source. It opens the
+  document in its table (`/database/<table>?doc=<id>`). The mock answers by looking the id up.
+- **Delete document** (the menu, destructive): the same confirmation as Delete selected
+  (`DeleteDialog`, now controlled; STUDY-12 D13, decided: keep asking). The behaviour sits behind
+  `CONFIRM_DELETE_FROM_CELL_MENU` (`database/screen.tsx`): `false` deletes at once, as Convex does outside
+  production; it becomes a check of the deployment's kind once deployments have one.
+- Read-only: Delete document disabled, like the edit items.
+
+### 15.4 Creating a table (STUDY-12 D11)
+
+- **Contract**: optional `createTable(name)` — an empty table outside the schema; a taken name or one
+  that is not an identifier is `invalid_request`. The mock implements it; the contract suite (writes,
+  opt-in) checks both.
+- **Table list**: "Create table" at its foot (where the credential can write and the source can),
+  turning into a name box as in Convex: the name is checked as it is typed (`table-name.ts`, Convex's
+  rules: letters, digits and `_`, not starting with a digit or `_`, at most 64; not taken), Create (or
+  Enter) makes the table and opens it, Cancel or Escape puts the button back with the focus on it; a
+  refusal from the source is an alert under the box.
+- Not yet: a deployment with no tables at all shows the `/database` message without the list, so no
+  Create table there (the route component is in `router.tsx`, left alone while route splitting is under
+  way elsewhere).
+
+### 15.5 A generated schema (STUDY-12 D11)
+
+- **Contract**: optional `inferDocumentType(table)` — a type every document in the table fits, in
+  Convex's JSON form without system fields, null for an empty table (Convex keeps "shapes" for this on
+  the server). The contract suite checks that every document of its fixture table fits what comes back.
+- **Mock** (`mock/infer.ts`): over the whole table — a field missing from some documents is optional,
+  several types make a union, objects merge their fields, arrays hold the union of their elements (an
+  array never seen with one: `v.any()`), and text that is always an id of one table is `v.id(table)`.
+- **Schema panel**: tabs, as Convex — **Saved** (§15.2) and **Generated**: the table alone in a
+  `bunvex/schema.ts` with `// Other tables here...` where the others go, a sentence saying it is
+  approximate and where to paste it, Copy; "Add at least one document…" for an empty table. It opens on
+  Saved, or on Generated when nothing is saved. Without `inferDocumentType`, no tabs.
+
+### 15.6 The functions a request called (STUDY-12 L6)
+
+- **Contract**: `LogEntry.executionId` and `parentExecutionId` (optional): the execution a line belongs to,
+  and the one that called it in the same request. The contract suite checks they agree (an execution stays
+  in one request; its caller is another execution of the same request).
+- **Mock**: an action may call one or two queries or mutations; their lines sit inside the action's, in
+  its request, with its execution as their caller.
+- **Details**: when the request ran more than one function, **Functions called** — Convex's outline
+  (`FunctionCallTree.tsx`): one row per execution under its caller, in starting order, with its outcome
+  (an icon and, for screen readers, "Succeeded:" / "Failed:" / "Running:") and duration; the line's own
+  execution is marked "this line". `logs/call-tree.ts` builds it from the loaded lines (a caller not
+  loaded: its call stands at the top; no outcome yet: running). The **Outcome** is now the line's own
+  execution's, not another call's in the same request.
+

@@ -54,8 +54,26 @@ export type DeploymentInfo = {
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
-export type Operation = "viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions";
-export const OPERATIONS: readonly Operation[] = ["viewData", "writeData", "viewLogs", "viewMetrics", "runFunctions"];
+export type Operation =
+  | "viewData"
+  | "writeData"
+  | "viewLogs"
+  | "viewMetrics"
+  | "runFunctions"
+  // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
+  | "viewEnvironmentVariables"
+  | "writeEnvironmentVariables"
+  | "viewAuditLog";
+export const OPERATIONS: readonly Operation[] = [
+  "viewData",
+  "writeData",
+  "viewLogs",
+  "viewMetrics",
+  "runFunctions",
+  "viewEnvironmentVariables",
+  "writeEnvironmentVariables",
+  "viewAuditLog",
+];
 
 export type Capabilities = {
   operations: Operation[];
@@ -230,8 +248,15 @@ export type LogEntry = {
   level: LogLevel;
   message: string;
   function?: { path: string; kind: FunctionKind };
-  /** Groups the lines of one execution. */
+  /** Groups the lines of one request: a call from a client, and every function it runs. */
   requestId?: string;
+  /**
+   * The execution (one function running once) the line belongs to; a request runs one, or more when an action
+   * calls other functions (STUDY-12 L6, the call tree).
+   */
+  executionId?: string;
+  /** The execution that called this one, in the same request; absent for the request's first. */
+  parentExecutionId?: string;
   /** On the line that ends an execution. */
   execution?: { status: "success" | "failure"; durationMs: number };
 };
@@ -323,6 +348,26 @@ export interface DashboardDataSource extends DeploymentFeatures {
   deleteDocuments?(table: string, ids: string[], opts?: CallOptions): Promise<void>;
   /** Deletes every document of the table (the source may do it in several transactions). */
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
+
+  /**
+   * Creates an empty table (STUDY-12 D11), not in the schema until declared there. A name that is taken, or
+   * not an identifier (letters, digits, `_`; not starting with a digit or `_`; at most 64): `invalid_request`.
+   * Convex's dashboard does it with a mutation that inserts a document and deletes it.
+   */
+  createTable?(name: string, opts?: CallOptions): Promise<void>;
+
+  /**
+   * A document type every document in the table fits (STUDY-12 D11, the "Generated" schema), in Convex's
+   * JSON form without system fields — what Convex computes as the table's shape. Null when the table is
+   * empty; an unknown table is `not_found`.
+   */
+  inferDocumentType?(table: string, opts?: CallOptions): Promise<ValidatorJson | null>;
+
+  /**
+   * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what
+   * Convex's dashboard reads off the id with its table mapping. Optional; without it, ids are plain text.
+   */
+  tableOfId?(id: string, opts?: CallOptions): Promise<string | null>;
 
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]>;
   /**

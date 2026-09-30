@@ -151,4 +151,100 @@ describe("a cell's context menu and shortcuts on the Database screen", () => {
     await user.keyboard("{Shift>}{Enter}{/Shift}");
     expect(screen.queryByRole("textbox")).toBeNull();
   });
+
+  test("View shows the cell's whole value beside it; Space too; Escape closes and the cell has the focus", async () => {
+    mount("/database/tasks");
+    await heading("tasks");
+    const user = userEvent.setup();
+    const row = await toCell(user, "tasks", "text");
+    const cell = within(row).getAllByRole("gridcell")[colIndex(grid("tasks"), "text")]!;
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "View text" }));
+    const view = await screen.findByRole("dialog", { name: "Value of text" });
+    expect(within(view).getByText(`"${cell.textContent}"`, { selector: "pre" })).toBeDefined();
+    expect(within(view).getByRole("button", { name: "Copy text" })).toBeDefined();
+    await expectAccessible(view);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(cell));
+    await user.keyboard(" ");
+    expect(await screen.findByRole("dialog", { name: "Value of text" })).toBeDefined();
+  });
+
+  test("an id that names a document: Go to reference (and Ctrl+G) opens it in its table", async () => {
+    const { history } = mount("/database/tasks");
+    await heading("tasks");
+    const user = userEvent.setup();
+    const row = await toCell(user, "tasks", "owner");
+    const owner = within(row).getAllByRole("gridcell")[colIndex(grid("tasks"), "owner")]!.textContent!;
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = await screen.findByRole("menu", { name: "Actions on owner" });
+    await user.click(await within(menu).findByRole("menuitem", { name: "Go to reference" }));
+    await waitFor(() => expect(history.location.pathname).toBe("/database/users"));
+    expect(new URLSearchParams(history.location.search).get("doc")).toBe(owner);
+    await screen.findByRole("complementary", { name: new RegExp(owner) });
+    history.back();
+    await heading("tasks");
+    await toCell(user, "tasks", "owner");
+    await user.keyboard("{Control>}g{/Control}");
+    await waitFor(() => expect(history.location.pathname).toBe("/database/users"));
+  });
+
+  test("the row's own _id, and id-shaped text that names no document, are not references", async () => {
+    const src = source();
+    const [first] = (await src.listDocuments({ table: "tasks", numItems: 1, cursor: null })).page;
+    await src.patchDocuments("tasks", [first!._id], { text: "0000000000000000000000000000zzzz" });
+    mount("/database/tasks", src);
+    await heading("tasks");
+    const user = userEvent.setup();
+    for (const field of ["_id", "text"]) {
+      await toCell(user, "tasks", field);
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      expect(await screen.findByRole("menuitem", { name: `View ${field}` })).toBeDefined();
+      expect(screen.queryByRole("menuitem", { name: "Go to reference" })).toBeNull();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    }
+  });
+
+  test("a source that cannot tell an id's table offers View", async () => {
+    const src = source();
+    src.tableOfId = undefined as never;
+    mount("/database/tasks", src);
+    await heading("tasks");
+    const user = userEvent.setup();
+    await toCell(user, "tasks", "owner");
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    expect(await screen.findByRole("menuitem", { name: "View owner" })).toBeDefined();
+    expect(screen.queryByRole("menuitem", { name: "Go to reference" })).toBeNull();
+  });
+
+  test("Delete document asks first, then deletes that one document", async () => {
+    const { src } = mount("/database/tasks");
+    await heading("tasks");
+    const user = userEvent.setup();
+    const row = await toCell(user, "tasks", "text");
+    const id = idOf(row);
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "Delete document" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete 1 document?" });
+    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
+    expect(await src.getDocument("tasks", id)).not.toBeNull();
+    await toCell(user, "tasks", "text");
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(await screen.findByRole("menuitem", { name: "Delete document" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete 1 document" }));
+    await screen.findByText("Deleted 1 document from tasks.");
+    expect(await src.getDocument("tasks", id)).toBeNull();
+  });
+
+  test("read-only: Delete document is disabled", async () => {
+    mount("/database/users", source({ capabilities: { operations: ["viewData"], readOnly: false } }));
+    await heading("users");
+    const user = userEvent.setup();
+    await toCell(user, "users", "name");
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Delete document" }).getAttribute("aria-disabled")).toBe("true");
+  });
 });

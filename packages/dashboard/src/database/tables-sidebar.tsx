@@ -1,5 +1,5 @@
-// The table list beside the Database screen: search, one link per table with its size, and a marker on
-// tables the schema does not declare. Its right edge resizes it (the width is kept in this browser). Below
+// The table list beside the Database screen: search, one link per table with its size, a marker on
+// tables the schema does not declare, and "Create table" where the credential can write. Its right edge resizes it (the width is kept in this browser). Below
 // the md breakpoint it is a picker above the table instead.
 import { Input } from "@bunvex/ui/components/input";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
@@ -9,6 +9,7 @@ import { useId, useState } from "react";
 import type { TableInfo } from "../data-source.ts";
 import { DashLink, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
+import { CreateTable } from "./create-table.tsx";
 
 const ITEM =
   "flex h-8 items-center gap-2 border-l-2 border-transparent px-3 text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset aria-[current=page]:border-foreground aria-[current=page]:bg-muted aria-[current=page]:font-medium";
@@ -40,7 +41,8 @@ function useWidth(): [number, (w: number | undefined) => void] {
   return [width, set];
 }
 
-export function TablesSidebar({ tables, current }: { tables: TableInfo[]; current: string }) {
+export function TablesSidebar(props: { tables: TableInfo[]; current: string; canCreate: boolean }) {
+  const { tables, current } = props;
   const [query, setQuery] = useState("");
   const [width, setWidth] = useWidth();
   const [dragging, setDragging] = useState<number>();
@@ -113,6 +115,11 @@ export function TablesSidebar({ tables, current }: { tables: TableInfo[]; curren
             <li className="px-3 py-2 text-sm text-muted-foreground">No table matches “{query}”.</li>
           )}
         </ul>
+        {props.canCreate && (
+          <div className="border-t p-2">
+            <CreateTable tables={tables.map((t) => t.name)} />
+          </div>
+        )}
         <ResizeHandle
           label="Resize the table list"
           value={dragging ?? width}

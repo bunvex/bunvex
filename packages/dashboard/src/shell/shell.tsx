@@ -5,7 +5,17 @@ import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouter } from "@tanstack/react-router";
-import { Activity, CalendarClock, Database, FunctionSquare, Play, ScrollText } from "lucide-react";
+import {
+  Activity,
+  CalendarClock,
+  Database,
+  FileBox,
+  FunctionSquare,
+  History,
+  Play,
+  ScrollText,
+  Settings,
+} from "lucide-react";
 import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
@@ -75,6 +85,12 @@ export function Shell() {
               </DashLink>
             </li>
             <li>
+              <DashLink link={{ to: "/files" }} className={NAV_LINK}>
+                <FileBox className={ICON} aria-hidden="true" />
+                Files
+              </DashLink>
+            </li>
+            <li>
               <DashLink link={{ to: "/schedules" }} className={NAV_LINK}>
                 <CalendarClock className={ICON} aria-hidden="true" />
                 Schedules
@@ -84,6 +100,18 @@ export function Shell() {
               <DashLink link={{ to: "/logs" }} className={NAV_LINK}>
                 <ScrollText className={ICON} aria-hidden="true" />
                 Logs
+              </DashLink>
+            </li>
+            <li>
+              <DashLink link={{ to: "/history" }} className={NAV_LINK}>
+                <History className={ICON} aria-hidden="true" />
+                History
+              </DashLink>
+            </li>
+            <li>
+              <DashLink link={{ to: "/settings" }} className={NAV_LINK}>
+                <Settings className={ICON} aria-hidden="true" />
+                Settings
               </DashLink>
             </li>
           </ul>

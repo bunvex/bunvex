@@ -20,7 +20,7 @@ import { Input } from "@bunvex/ui/components/input";
 import { MoreHorizontal } from "lucide-react";
 import { useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { toDataSourceError } from "../data-source.ts";
+import { type DashboardDataSource, toDataSourceError } from "../data-source.ts";
 import { formatCount } from "../screens/stats.ts";
 
 /** At most this many ids per deleteDocuments call (the contract's bound). */
@@ -29,6 +29,17 @@ const docs = (n: number) => `${formatCount(n)} document${n === 1 ? "" : "s"}`;
 
 export type Outcome = { ok: true; message: string } | { ok: false; message: string };
 
+/** Deletes `ids` from `table` in bounded batches, and says how it went. */
+export async function deleteDocumentsNow(source: DashboardDataSource, table: string, ids: string[]): Promise<Outcome> {
+  try {
+    for (let i = 0; i < ids.length; i += DELETE_BATCH)
+      await source.deleteDocuments!(table, ids.slice(i, i + DELETE_BATCH));
+    return { ok: true, message: `Deleted ${docs(ids.length)} from ${table}.` };
+  } catch (e) {
+    return { ok: false, message: `Could not delete: ${toDataSourceError(e).message}` };
+  }
+}
+
 /** `onClosed` runs once the dialog is gone, whatever happened: the caller puts the focus somewhere useful. */
 export function DeleteSelected(props: {
   table: string;
@@ -36,34 +47,43 @@ export function DeleteSelected(props: {
   onDone: (o: Outcome) => void;
   onClosed: () => void;
 }) {
-  const { source } = useQueryScope();
   const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+        Delete {formatCount(props.ids.length)}
+      </Button>
+      <DeleteDialog
+        {...props}
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) props.onClosed();
+        }}
+      />
+    </>
+  );
+}
+
+/** Asks before deleting documents (the selected ones, or one from a cell's menu), then deletes them in batches. */
+export function DeleteDialog(props: {
+  table: string;
+  ids: string[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: (o: Outcome) => void;
+}) {
+  const { source } = useQueryScope();
   const [busy, setBusy] = useState(false);
   const n = props.ids.length;
   const confirm = async () => {
     setBusy(true);
-    try {
-      for (let i = 0; i < n; i += DELETE_BATCH)
-        await source.deleteDocuments!(props.table, props.ids.slice(i, i + DELETE_BATCH));
-      props.onDone({ ok: true, message: `Deleted ${docs(n)} from ${props.table}.` });
-    } catch (e) {
-      props.onDone({ ok: false, message: `Could not delete: ${toDataSourceError(e).message}` });
-    }
+    props.onDone(await deleteDocumentsNow(source, props.table, props.ids));
     setBusy(false);
-    setOpen(false);
-    props.onClosed();
+    props.onOpenChange(false);
   };
   return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) props.onClosed();
-      }}
-    >
-      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
-        Delete {formatCount(n)}
-      </Button>
+    <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialogContent
         // the caller puts the focus back (the Delete button that opened the dialog may be gone)
         finalFocus={false}

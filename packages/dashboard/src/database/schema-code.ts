@@ -57,3 +57,15 @@ export function schemaCode(schema: SchemaInfo, tables: TableInfo[]): SchemaCode 
   out.push(...(options ? ["  },", "  { schemaValidation: false },", ");"] : ["});"]));
   return { code: out.join("\n"), lines };
 }
+
+/**
+ * A schema generated for one table from its documents (the "Generated" tab), as Convex's dashboard writes it:
+ * the table alone, with a comment where the deployment's other tables go.
+ */
+export function generatedSchemaCode(table: string, type: ValidatorJson): string {
+  const one = schemaCode({ enforced: true, tables: [{ name: table, validator: type }] }, [])!;
+  const lines = one.code.split("\n");
+  const at = lines.indexOf("export default defineSchema({") + 1;
+  lines.splice(at, 0, "  // Other tables here...", "");
+  return lines.join("\n");
+}

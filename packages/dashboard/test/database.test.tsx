@@ -173,6 +173,31 @@ describe("the Database screen", () => {
     Element.prototype.scrollIntoView = original;
   });
 
+  test("the Generated tab infers a schema from the table's documents; nothing saved opens on it", async () => {
+    mount("/database/tasks?panel=schema");
+    const panel = await screen.findByRole("complementary", { name: "Schema of tasks" });
+    const user = userEvent.setup();
+    expect(within(panel).getByRole("tab", { name: "Saved" }).getAttribute("aria-selected")).toBe("true");
+    await user.click(within(panel).getByRole("tab", { name: "Generated" }));
+    const generated = await within(panel).findByRole("region", { name: "Generated schema" });
+    const code = generated.querySelector("pre")!.textContent!;
+    expect(code).toContain("  // Other tables here...");
+    expect(code).toContain('owner: v.id("users")');
+    expect(code).toContain("tags: v.array(v.string())");
+    expect(within(generated).getByRole("button", { name: "Copy the generated schema" })).toBeDefined();
+    await expectAccessible();
+    cleanup();
+    const src = mockSource();
+    src.getSchema = () => Promise.resolve({ enforced: true, tables: [] });
+    await src.createTable("empty");
+    mount("/database/empty?panel=schema", src);
+    const other = await screen.findByRole("complementary", { name: "Schema of empty" });
+    expect(within(other).getByRole("tab", { name: "Generated" }).getAttribute("aria-selected")).toBe("true");
+    expect(
+      await within(other).findByText("Add at least one document to empty to see a suggested schema here."),
+    ).toBeDefined();
+  });
+
   test("live: a document written elsewhere appears at the top, and the count follows", async () => {
     const { source } = mount("/database/tasks");
     await heading("tasks");

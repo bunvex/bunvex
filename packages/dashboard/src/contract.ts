@@ -21,7 +21,7 @@ import {
   type Value,
 } from "./data-source.ts";
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
-import { isValidatorJson } from "./validators.ts";
+import { isValidatorJson, validateValue } from "./validators.ts";
 
 export type ContractOptions = DeploymentContractOptions & {
   /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
@@ -321,6 +321,26 @@ export function describeDataSourceContract(
       expect(await src.getDocument(table, "0000000000000000000000000000zzzz")).toBeNull();
     });
 
+    test("inferDocumentType (when present): every document fits it; system fields are left out", async () => {
+      const { src, table, docs } = await fixture();
+      if (!src.inferDocumentType) return;
+      const v = await src.inferDocumentType(table);
+      expect(v !== null && isValidatorJson(v)).toBe(true);
+      if (v?.type === "object") expect(Object.keys(v.value).some((k) => k.startsWith("_"))).toBe(false);
+      for (const d of docs) {
+        const own = Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith("_"))) as Record<string, Value>;
+        expect(validateValue(v!, own)).toEqual([]);
+      }
+      await expectError(src.inferDocumentType("no_such_table"), "not_found");
+    });
+
+    test("tableOfId (when present) names a document's table, and null for an unknown id", async () => {
+      const { src, table, docs } = await fixture();
+      if (!src.tableOfId) return;
+      expect(await src.tableOfId(docs[0]!._id)).toBe(table);
+      expect(await src.tableOfId("0000000000000000000000000000zzzz")).toBeNull();
+    });
+
     test("functions have a module:name path and a kind", async () => {
       for (const f of await (await make()).listFunctions()) {
         expect(f.path).toMatch(/^[^:]+:[^:]+$/);
@@ -330,6 +350,22 @@ export function describeDataSourceContract(
         if (f.args !== undefined) expect(isValidatorJson(f.args)).toBe(true);
         if (f.returns !== undefined) expect(isValidatorJson(f.returns)).toBe(true);
       }
+    });
+
+    test("log lines name their execution consistently: a caller is another execution of the same request", async () => {
+      const src = await make();
+      const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
+      const requestOf = new Map<string, string | undefined>();
+      for (const e of page) {
+        if (e.executionId === undefined) continue;
+        expect(e.parentExecutionId).not.toBe(e.executionId);
+        const seen = requestOf.get(e.executionId);
+        if (seen !== undefined) expect(e.requestId).toBe(seen);
+        requestOf.set(e.executionId, e.requestId);
+      }
+      for (const e of page)
+        if (e.parentExecutionId && requestOf.has(e.parentExecutionId))
+          expect(requestOf.get(e.parentExecutionId)).toBe(e.requestId);
     });
 
     test("logs page newest first with increasing ids, and respect the filter", async () => {
@@ -511,6 +547,19 @@ export function describeDataSourceContract(
       while (counts.length === 0 && performance.now() < deadline) await sleep(5);
       off();
       expect(counts.length).toBeGreaterThan(0);
+    });
+
+    test("createTable (when present) makes an empty table outside the schema; a taken or bad name is refused", async () => {
+      const src = await make();
+      if (!src.createTable) return;
+      const name = `contract_${Date.now().toString(36)}`;
+      await src.createTable(name);
+      const made = (await src.listTables()).find((t) => t.name === name);
+      expect(made).toMatchObject({ name, declared: false });
+      expect(made?.documentCount ?? 0).toBe(0);
+      await expectError(src.createTable(name), "invalid_request");
+      await expectError(src.createTable("_system"), "invalid_request");
+      await expectError(src.createTable("9lives"), "invalid_request");
     });
 
     test(`writes are all or nothing, and say what is wrong (${table})`, async () => {

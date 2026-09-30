@@ -2,21 +2,12 @@
 // functions (`/schedules/functions`) and cron jobs (`/schedules/crons`).
 import { useQueryScope } from "../context.tsx";
 import { DashLink } from "../router.tsx";
+import { NotOffered } from "../shell/not-offered.tsx";
 import { CronsView } from "./crons-view.tsx";
 import { ScheduledView } from "./scheduled-view.tsx";
 
 const TAB =
   "border-b-2 border-transparent px-1 pb-1 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-foreground";
-
-/** A screen for a feature the source does not have (an optional contract method). */
-export function NotOffered({ title, what }: { title: string; what: string }) {
-  return (
-    <>
-      <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-      <p className="mt-2 text-sm text-muted-foreground">This deployment does not offer {what} yet.</p>
-    </>
-  );
-}
 
 function Schedules({ view }: { view: "functions" | "crons" }) {
   const { source } = useQueryScope();

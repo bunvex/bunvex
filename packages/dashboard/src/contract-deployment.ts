@@ -2,11 +2,26 @@
 // the feature's methods. Reads are safe on any deployment; what changes data (cancelling scheduled runs)
 // runs only when the caller opts in.
 import { expect } from "bun:test";
-import { type DashboardDataSource, DataSourceError, type Page, type ScheduledFunction } from "./data-source.ts";
+import {
+  type AuditEvent,
+  type AuditEventQuery,
+  type DashboardDataSource,
+  DataSourceError,
+  type FileQuery,
+  type Page,
+  type ScheduledFunction,
+  type StoredFile,
+} from "./data-source.ts";
 
 export type DeploymentContractOptions = {
   /** Lets the suite cancel scheduled runs — every pending run of one function. Never on data you keep. */
   schedules?: { cancel: boolean };
+  /** Lets the suite upload a small text file and delete it again. */
+  files?: { write: boolean };
+  /** Lets the suite add, change and delete a variable named BUNVEX_CONTRACT_SUITE. */
+  environmentVariables?: { write: boolean };
+  /** A table the suite may add a document to, to check that the write is recorded in the audit log. */
+  history?: { table: string };
 };
 
 type Ctx = {
@@ -32,6 +47,41 @@ async function allScheduled(src: DashboardDataSource, fn?: string): Promise<Sche
   let cursor: string | null = null;
   for (let i = 0; i < 1000; i++) {
     const p: Page<ScheduledFunction> = await src.listScheduledFunctions!({ numItems: 7, cursor, function: fn });
+    out.push(...p.page);
+    if (p.isDone) return out;
+    cursor = p.continueCursor;
+  }
+  throw new Error("pagination did not finish");
+}
+
+async function allFiles(
+  src: DashboardDataSource,
+  q: Omit<FileQuery, "numItems" | "cursor"> = {},
+): Promise<StoredFile[]> {
+  const out: StoredFile[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 1000; i++) {
+    const p: Page<StoredFile> = await src.listFiles!({ ...q, numItems: 3, cursor });
+    out.push(...p.page);
+    if (p.isDone) return out;
+    cursor = p.continueCursor;
+  }
+  throw new Error("pagination did not finish");
+}
+
+async function sha256(blob: Blob): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
+  return btoa(String.fromCharCode(...digest));
+}
+
+async function allEvents(
+  src: DashboardDataSource,
+  q: Omit<AuditEventQuery, "numItems" | "cursor"> = {},
+): Promise<AuditEvent[]> {
+  const out: AuditEvent[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 1000; i++) {
+    const p: Page<AuditEvent> = await src.listAuditEvents!({ ...q, numItems: 4, cursor });
     out.push(...p.page);
     if (p.isDone) return out;
     cursor = p.continueCursor;
@@ -92,6 +142,146 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         expect(canceled).toBeGreaterThan(0);
         expect((await allScheduled(src, fn)).filter((j) => j.state === "pending")).toEqual([]);
       }
+      if (off) {
+        const deadline = performance.now() + watchTimeoutMs;
+        while (heard === 0 && performance.now() < deadline) await sleep(5);
+        off();
+        expect(heard).toBeGreaterThan(0);
+      }
+    });
+
+  // ---------------------------------------------------------------- file storage
+  test("files (when offered): newest first by default, oldest on request, bounded by time, counted", async () => {
+    const src = await make();
+    if (!src.listFiles) return;
+    const newest = await allFiles(src);
+    for (let i = 1; i < newest.length; i++)
+      expect(newest[i]!.creationTime).toBeLessThanOrEqual(newest[i - 1]!.creationTime);
+    const oldest = await allFiles(src, { order: "asc" });
+    expect(oldest.map((f) => f.id)).toEqual([...newest].reverse().map((f) => f.id));
+    if (src.countFiles) expect(await src.countFiles()).toBe(newest.length);
+    if (newest.length >= 3) {
+      const from = newest.at(-2)!.creationTime;
+      const to = newest[1]!.creationTime;
+      const inside = await allFiles(src, { from, to });
+      expect(inside.map((f) => f.id)).toEqual(
+        newest.filter((f) => f.creationTime >= from && f.creationTime <= to).map((f) => f.id),
+      );
+    }
+    const first = newest[0];
+    if (first && src.getFile) {
+      const got = await src.getFile(first.id);
+      expect({ ...got, url: undefined }).toEqual({ ...first, url: undefined });
+      expect(await src.getFile("no-such-file")).toBeNull();
+    }
+    for (const f of newest) {
+      expect(f.size).toBeGreaterThanOrEqual(0);
+      expect(typeof f.url).toBe("string");
+    }
+  });
+
+  if (opts.files?.write)
+    test("uploading and deleting (opt-in): metadata as stored, first in the list, watchers hear it", async () => {
+      const src = await make();
+      if (!src.uploadFile || !src.deleteFiles || !src.getFile || !src.listFiles)
+        throw new Error("files.write was enabled but the source cannot upload, read and delete files");
+      let heard = 0;
+      const off = src.watchFiles?.(
+        () => heard++,
+        () => {},
+      );
+      const blob = new Blob(["contract suite\n"], { type: "text/plain" });
+      const id = await src.uploadFile(blob);
+      const f = await src.getFile(id);
+      expect(f).not.toBeNull();
+      expect(f!.size).toBe(blob.size);
+      expect(f!.contentType).toBe("text/plain");
+      expect(f!.sha256).toBe(await sha256(blob));
+      expect((await src.listFiles({ numItems: 1, cursor: null })).page[0]?.id).toBe(id);
+      await src.deleteFiles([id, "no-such-file"]);
+      expect(await src.getFile(id)).toBeNull();
+      if (off) {
+        const deadline = performance.now() + watchTimeoutMs;
+        while (heard === 0 && performance.now() < deadline) await sleep(5);
+        off();
+        expect(heard).toBeGreaterThan(0);
+      }
+    });
+
+  // ---------------------------------------------------------------- environment variables
+  test("environment variables (when offered and allowed): by name, with valid names", async () => {
+    const src = await make();
+    if (!src.listEnvironmentVariables) return;
+    if (!(await src.getCapabilities()).operations.includes("viewEnvironmentVariables")) return;
+    const vars = await src.listEnvironmentVariables();
+    const names = vars.map((v) => v.name);
+    expect(names).toEqual([...names].sort());
+    for (const n of names) expect(n).toMatch(/^[a-zA-Z_]+[a-zA-Z0-9_]*$/);
+  });
+
+  if (opts.environmentVariables?.write)
+    test("changing environment variables (opt-in): a batch applies whole or not at all", async () => {
+      const src = await make();
+      if (!src.listEnvironmentVariables || !src.updateEnvironmentVariables)
+        throw new Error("environmentVariables.write was enabled but the source cannot change them");
+      const name = "BUNVEX_CONTRACT_SUITE";
+      const get = async () => (await src.listEnvironmentVariables!()).find((v) => v.name === name)?.value;
+      await src.updateEnvironmentVariables([{ name, value: "one" }]);
+      expect(await get()).toBe("one");
+      const names = (await src.listEnvironmentVariables()).map((v) => v.name);
+      expect(names).toEqual([...names].sort()); // still by name with a new one
+      await expectCode(
+        src.updateEnvironmentVariables([
+          { name, value: "two" },
+          { name: "1_BAD NAME", value: "x" },
+        ]),
+        "invalid_request",
+      );
+      expect(await get()).toBe("one"); // nothing of the failed batch applied
+      await expectCode(src.updateEnvironmentVariables([{ name, value: "x".repeat(8 * 1024 + 1) }]), "invalid_request");
+      await src.updateEnvironmentVariables([
+        { name, value: null },
+        { name: "BUNVEX_NEVER_SET", value: null },
+      ]);
+      expect(await get()).toBeUndefined();
+    });
+
+  // ---------------------------------------------------------------- the audit log
+  test("audit events (when offered and allowed): newest first, bounded by time, one action on request", async () => {
+    const src = await make();
+    if (!src.listAuditEvents) return;
+    if (!(await src.getCapabilities()).operations.includes("viewAuditLog")) return;
+    const events = await allEvents(src);
+    expect(new Set(events.map((e) => e.id)).size).toBe(events.length);
+    for (let i = 1; i < events.length; i++) expect(events[i]!.time).toBeLessThanOrEqual(events[i - 1]!.time);
+    const action = events[0]?.action;
+    if (action !== undefined) {
+      const only = await allEvents(src, { actions: [action] });
+      expect(only.map((e) => e.id)).toEqual(events.filter((e) => e.action === action).map((e) => e.id));
+    }
+    if (events.length >= 3) {
+      const from = events.at(-2)!.time;
+      const to = events[1]!.time;
+      const inside = await allEvents(src, { from, to });
+      expect(inside.map((e) => e.id)).toEqual(events.filter((e) => e.time >= from && e.time <= to).map((e) => e.id));
+    }
+  });
+
+  const history = opts.history;
+  if (history)
+    test(`the audit log records a write (opt-in, ${history.table})`, async () => {
+      const src = await make();
+      if (!src.listAuditEvents || !src.insertDocuments)
+        throw new Error("history was enabled but the source cannot list audit events or insert documents");
+      let heard = 0;
+      const off = src.watchAuditEvents?.(
+        () => heard++,
+        () => {},
+      );
+      await src.insertDocuments(history.table, [{ label: "audited" }]);
+      const [latest] = (await src.listAuditEvents({ numItems: 1, cursor: null })).page;
+      expect(latest?.action).toBe("add_documents");
+      expect(latest?.metadata.table).toBe(history.table);
       if (off) {
         const deadline = performance.now() + watchTimeoutMs;
         while (heard === 0 && performance.now() < deadline) await sleep(5);
