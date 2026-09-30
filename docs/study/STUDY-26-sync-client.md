@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** draft
+- **Status:** accepted: C3–C7 as recommended (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -192,11 +192,11 @@ inference (ARCH-01 open decision 1), plugs in without changing the client.
 |---|---|---|---|
 | C1 | Public names say bunvex: `BaseBunvexClient`, `BunvexClient` (later `BunvexReactClient`, `BunvexProvider`, `BunvexHttpClient`), and the option `skipDeploymentUrlCheck` | Owner's rule: no "convex" in public names | follows the rule |
 | C2 | Messages say bunvex: `[BUNVEX M(path)] …`, `[BUNVEX FATAL ERROR] …`; the function-argument error says "a bunvex function" | Same rule, same message structure | follows the rule |
-| C3 | Function references live in `@bunvex/protocol` and are re-exported by `bunvex/server` (Convex: `convex/server`) | Both sides need them; the client may not pull the server | **recommend** |
-| C4 | No `reportDebugInfoToConvex` option and no `/api/debug_event` reporting; the client sends no `Event` messages | bunvex has no telemetry endpoint; the server ignores `Event` (P11) | **recommend** omitting |
-| C5 | `getMaxObservedTimestamp()` returns a `bigint`, not a `Long` | bunvex's values use bigint for 64-bit integers | **recommend** |
-| C6 | `setAuth`, paginated queries and the HTTP client come in later PRs (§3); until then `setAuth` is absent | They depend on `@bunvex/auth` and `@bunvex/react` | **recommend** this order |
-| C7 | The official `convex` npm package becomes a **dev dependency**, used only in tests as the protocol oracle: `ConvexClient` against a bunvex server | STUDY-23 P1 chose wire compatibility so this is possible; Apache-2.0, never shipped | **recommend** |
+| C3 | Function references live in `@bunvex/protocol` and are re-exported by `bunvex/server` (Convex: `convex/server`) | Both sides need them; the client may not pull the server | **accepted** |
+| C4 | No `reportDebugInfoToConvex` option and no `/api/debug_event` reporting; the client sends no `Event` messages | bunvex has no telemetry endpoint; the server ignores `Event` (P11) | **accepted** omitting |
+| C5 | `getMaxObservedTimestamp()` returns a `bigint`, not a `Long` | bunvex's values use bigint for 64-bit integers | **accepted** |
+| C6 | `setAuth`, paginated queries and the HTTP client come in later PRs (§3); until then `setAuth` is absent | They depend on `@bunvex/auth` and `@bunvex/react` | **accepted** this order |
+| C7 | The official `convex` npm package becomes a **dev dependency**, used only in tests as the protocol oracle: `ConvexClient` against a bunvex server | STUDY-23 P1 chose wire compatibility so this is possible; Apache-2.0, never shipped | **accepted** |
 
 ## 5. Tests
 
