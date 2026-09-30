@@ -135,9 +135,7 @@ describe("JSON form (toJsonValue / fromJsonValue)", () => {
   });
 
   test("unsupported types and field names are refused with Convex's messages", () => {
-    expect(() => toJsonValue({ d: new Date(0) } as never)).toThrow(
-      "is not a supported value type (present at path .d",
-    );
+    expect(() => toJsonValue({ d: new Date(0) } as never)).toThrow("is not a supported value type (present at path .d");
     expect(() => toJsonValue(new Map() as never)).toThrow("Map[] is not a supported value type.");
     expect(() => toJsonValue(new Set([1]) as never)).toThrow("Set[1] is not a supported value type.");
     class Point {

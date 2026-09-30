@@ -61,9 +61,7 @@ function unsupported(context: string, typeName: string, value: unknown, original
 function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (value === undefined) {
     const where = context && ` (present at path ${context} in original object ${stringifyValueForError(original)})`;
-    throw new Error(
-      `undefined is not a valid value${where}.`,
-    );
+    throw new Error(`undefined is not a valid value${where}.`);
   }
   if (value === null) return null;
   if (typeof value === "bigint") {

@@ -126,7 +126,9 @@ for (const [name, dir] of dirOfName) {
       const code = withoutComments(text).split("\n");
       code.forEach((line, n) => {
         if (/convex/i.test(line))
-          errors.push(`${rel}:${n + 1}: "convex" in shipped code outside a comment — use bunvex's own names and messages (rule 5)`);
+          errors.push(
+            `${rel}:${n + 1}: "convex" in shipped code outside a comment — use bunvex's own names and messages (rule 5)`,
+          );
       });
     }
     if (text.startsWith("// @bun"))
