@@ -76,6 +76,14 @@ export const documentQuery = ({ source, scope }: QueryScope, table: string, id: 
     queryFn: ({ signal }) => source.getDocument(table, id, { signal }),
   });
 
+/** The table an id refers to (null: none); for "Go to reference". Ids do not move between tables. */
+export const referenceQuery = ({ source, scope }: QueryScope, id: string) =>
+  queryOptions({
+    queryKey: [...dashboardKeys.all(scope), "reference", id] as const,
+    queryFn: ({ signal }) => source.tableOfId?.(id, { signal }) ?? Promise.resolve(null),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
 export const functionsQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: dashboardKeys.functions(scope),

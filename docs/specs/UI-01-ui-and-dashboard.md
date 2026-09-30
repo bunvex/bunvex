@@ -1057,3 +1057,20 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
   arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
   test makes `scrollIntoView` return a Promise.
+
+### 15.3 The cell menu, completed (STUDY-12 D11, D13)
+
+- **View `<field>`** (Space, or the menu): the whole value beside the cell (`ValueView`, a Popover
+  anchored to the cell's rectangle, which `DataTable` now hands to `cellMenu` and `onCellKey` as
+  `anchor()`): the field's name, the value as a literal, Copy. Escape closes it; the focus returns to the
+  cell.
+- **Go to reference** (Cmd/Ctrl+G, or the menu) takes View's place when the value is id-shaped text (31–37
+  characters of lowercase base32, not the row's own `_id`) and the source's optional `tableOfId(id)`
+  names a table — Convex decodes the id with its table mapping; bunvex asks the source. It opens the
+  document in its table (`/database/<table>?doc=<id>`). The mock answers by looking the id up.
+- **Delete document** (the menu, destructive): the same confirmation as Delete selected
+  (`DeleteDialog`, now controlled; STUDY-12 D13, decided: keep asking). The behaviour sits behind
+  `CONFIRM_DELETE_FROM_CELL_MENU` (`database/screen.tsx`): `false` deletes at once, as Convex does outside
+  production; it becomes a check of the deployment's kind once deployments have one.
+- Read-only: Delete document disabled, like the edit items.
+
