@@ -20,6 +20,8 @@ no single status.
 - A row goes from *missing* to *done* only with the study (`docs/study/`) and tests.
 - Rows marked **Divergence?** in their notes are places where bunvex might deliberately differ. The owner
   decides them; until then, the default is to match Convex.
+- **Every decided divergence gets a row in [divergences.md](divergences.md)**, the central ledger of what
+  bunvex does differently from Convex and why. A PR that decides, changes or resolves one updates it.
 - **Statuses:**
   - **done** means it matches Convex's behaviour.
   - **partial** means it exists but differs, and the note says how.
