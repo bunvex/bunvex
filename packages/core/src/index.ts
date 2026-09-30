@@ -1,5 +1,12 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
-export { Committer, ConflictError, type Interval, type LogEntry, overlaps } from "./committer.ts";
+export {
+  Committer,
+  CommitterStoppedError,
+  ConflictError,
+  type Interval,
+  type LogEntry,
+  overlaps,
+} from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export { Engine, type TxBody } from "./engine.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
