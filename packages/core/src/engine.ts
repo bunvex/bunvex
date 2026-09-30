@@ -247,10 +247,12 @@ export class Engine {
   async queryTracked<T>(
     body: TxBody<T>,
     journal: QueryJournal = {},
+    /** Run at this snapshot (≤ visibleTs) instead of the latest: a sync transition runs all at one ts. */
+    at?: number,
   ): Promise<
     ({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number; journal: QueryJournal }
   > {
-    const snapshot = this.committer.visibleTs;
+    const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.instanceSecret = this.instanceSecret;
@@ -271,19 +273,35 @@ export class Engine {
    * the transactions it beats.
    */
   mutation<T>(body: TxBody<T>, source?: string): Promise<T> {
-    return this.runMutation(body, false, source);
+    return this.runMutation(body, false, source, false);
   }
 
-  private async runMutation<T>(body: TxBody<T>, system: boolean, source?: string): Promise<T> {
+  /**
+   * The same, with the commit timestamp (the snapshot, for a mutation that wrote nothing): what the sync
+   * protocol's MutationResponse carries so a client can wait for its queries to reflect the write.
+   */
+  mutationWithTs<T>(body: TxBody<T>, source?: string): Promise<{ value: T; ts: number }> {
+    return this.runMutation(body, false, source, true);
+  }
+
+  private runMutation<T>(body: TxBody<T>, system: boolean, source?: string, withTs?: false): Promise<T>;
+  private runMutation<T>(
+    body: TxBody<T>,
+    system: boolean,
+    source: string | undefined,
+    withTs: true,
+  ): Promise<{ value: T; ts: number }>;
+  // `withTs` rather than a wrapper, so the common path costs no extra promise.
+  private async runMutation<T>(body: TxBody<T>, system: boolean, source?: string, withTs = false): Promise<unknown> {
     const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
       const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system);
-      if (!tx.hasWrites) return value;
+      if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
       const { docs, idx } = tx.toWrites();
       try {
-        await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx, source });
+        const ts = await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx, source });
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)
@@ -294,7 +312,7 @@ export class Engine {
               c.meta.number,
               c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
             );
-        return value;
+        return withTs ? { value, ts } : value;
       } catch (e) {
         if (!(e instanceof ConflictError)) throw e;
         if (failures >= maxRetries) throw this.occError(e.conflict, source);

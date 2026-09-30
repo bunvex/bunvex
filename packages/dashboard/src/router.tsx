@@ -1,5 +1,5 @@
 // The dashboard's routes (UI-01 §4.3), code-based so they ship inside the package and any host can mount
-// them: the host picks the history (hash, browser under a basepath, memory in tests). The package does
+// them: the host picks the history (the browser's, under a basepath, or memory in tests). The package does
 // NOT declare TanStack Router's global `Register` — a host with its own router would collide with it —
 // so links are typed against `DashboardRouter` explicitly (`DashLink`).
 import type { QueryClient } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import {
   type ErrorComponentProps,
   Link,
   type LinkComponentProps,
+  lazyRouteComponent,
   type RouterHistory,
   redirect,
   useRouter,
@@ -19,13 +20,9 @@ import type { ComponentProps, ReactNode } from "react";
 import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
 import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
-import { DatabaseScreen } from "./database/screen.tsx";
-import { FunctionsScreen } from "./functions/screen.tsx";
 import { validateLogsSearch } from "./logs/log-filter.ts";
-import { LogsScreen } from "./logs/screen.tsx";
 import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
-import { Overview } from "./screens/overview.tsx";
 import { ErrorState } from "./shell/error-state.tsx";
 import { Shell } from "./shell/shell.tsx";
 
@@ -63,6 +60,14 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
 }
 
 // ------------------------------------------------------------------ routes
+
+// Each screen is its own chunk, fetched when its route is first matched (while its loader runs), so the
+// first load carries the shell only (UI-01 §14.1). The screens import this module for their routes' hooks;
+// loading them lazily also breaks that import cycle.
+const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Overview");
+const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
+const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
+const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 
 export const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   component: Shell,

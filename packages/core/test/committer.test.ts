@@ -103,3 +103,22 @@ test("a commit queued right after another resolves, in the same microtask chain,
   const ts = await Promise.race([second, new Promise((r) => setTimeout(() => r("stuck"), 500))]);
   expect(ts).toBe(2);
 });
+
+test("changedBetween: whether a commit in (from, to] wrote into the reads, and true beyond the log", async () => {
+  const p = await MemoryPersistence.open(null, { durable: false });
+  const c = new Committer(p, 3);
+  const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
+  const reads = (lo: number, hi: number) => [{ index: 9, lo: new Uint8Array([lo]), hi: new Uint8Array([hi]) }];
+  for (let n = 1; n <= 3; n++) await c.commit({ snapshot: n - 1, reads: [], docs: [], idx: idx(n) });
+  // ts 1, 2, 3 wrote keys 1, 2, 3.
+  expect(c.changedBetween(reads(2, 3), 0, 3)).toBe(true);
+  expect(c.changedBetween(reads(2, 3), 2, 3)).toBe(false); // ts 2 is not in (2, 3]
+  expect(c.changedBetween(reads(2, 3), 0, 1)).toBe(false);
+  expect(c.changedBetween(reads(5, 9), 0, 3)).toBe(false);
+  expect(c.changedBetween(reads(1, 9), 3, 3)).toBe(false); // empty range
+  expect(() => c.changedBetween(reads(1, 9), 0, 4)).toThrow("past the visible ts");
+  // The log keeps 3 entries: after ts 4, (0, 4] is no longer covered, and nothing can be proven.
+  await c.commit({ snapshot: 3, reads: [], docs: [], idx: idx(4) });
+  expect(c.changedBetween(reads(5, 9), 0, 4)).toBe(true);
+  expect(c.changedBetween(reads(5, 9), 1, 4)).toBe(false);
+});

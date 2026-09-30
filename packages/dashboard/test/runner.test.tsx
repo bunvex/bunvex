@@ -55,7 +55,8 @@ describe("the function runner", () => {
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
-    expect(within(runner()).getByText("Query")).toBeDefined();
+    // the runner is its own chunk: it shows once loaded
+    expect(within(await screen.findByRole("region", { name: "Run a function" })).getByText("Query")).toBeDefined();
     fireEvent.change(args(), { target: { value: "{ limit: 2 }" } });
     await user.click(within(runner()).getByRole("button", { name: "Run query" }));
     await within(runner()).findByText(/^Succeeded in \d+ ms$/);
