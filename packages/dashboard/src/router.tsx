@@ -77,6 +77,16 @@ export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch
   file: str(input.file),
 });
 
+/** History (UI-01 §14.5): one action, a day range (`YYYY-MM-DD`, the viewer's zone), the open event. */
+export type HistorySearch = { action?: string; from?: string; to?: string; event?: string };
+export const validateHistorySearch = (input: Record<string, unknown>): HistorySearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  action: typeof input.action === "string" && /^[a-z_]+$/.test(input.action) ? input.action : undefined,
+  from: day(input.from),
+  to: day(input.to),
+  event: str(input.event),
+});
+
 /** Cron jobs: the job whose details are open. */
 export type CronsSearch = { cron?: string };
 export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch => ({ cron: str(input.cron) });
@@ -93,6 +103,7 @@ const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsSc
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
 const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
+const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const EnvironmentVariablesScreen = lazyRouteComponent(
   () => import("./settings/screen.tsx"),
   "EnvironmentVariablesScreen",
@@ -165,6 +176,13 @@ export const filesRoute = createRoute({
   component: FilesScreen,
 });
 
+export const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "history",
+  validateSearch: validateHistorySearch,
+  component: HistoryScreen,
+});
+
 /** `/settings` opens its only page so far, the environment variables (UI-01 §14.4). */
 export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -213,6 +231,7 @@ export const routeTree = rootRoute.addChildren([
   schedulesRoute,
   scheduledRoute,
   cronsRoute,
+  historyRoute,
   settingsRoute,
   envVarsRoute,
 ]);

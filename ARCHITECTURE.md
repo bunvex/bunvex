@@ -106,6 +106,7 @@ bunvex/
 │   │   ├── schedules                scheduled runs (cancel), cron jobs and their runs (STUDY-12 §9) ✅
 │   │   ├── files                    stored files: upload, image preview, download, delete (§9)     ✅
 │   │   ├── settings                 environment variables: hidden values, batch edits (§9)        ✅
+│   │   ├── history                  the audit log, in words, filtered, live (STUDY-12 §9)           ✅
 │   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli

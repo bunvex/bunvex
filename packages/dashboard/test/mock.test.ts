@@ -18,6 +18,7 @@ describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(sm
   schedules: { cancel: true },
   files: { write: true },
   environmentVariables: { write: true },
+  history: { table: "imports" },
 });
 
 describe("MockDataSource, running functions", () => {
