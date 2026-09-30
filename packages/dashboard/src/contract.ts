@@ -7,6 +7,7 @@
 // suite may fill and empty — never point it at data you want to keep.
 import { test as bunTest, describe, expect } from "bun:test";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
+import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import {
   type DashboardDataSource,
   DataSourceError,
@@ -24,24 +25,25 @@ import {
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
 import { isValidatorJson, validateValue } from "./validators.ts";
 
-export type ContractOptions = DeploymentContractOptions & {
-  /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
-  watchTimeoutMs?: number;
-  /** Per test. Default 30 000 ms: a live server walks many pages. */
-  timeoutMs?: number;
-  /** Enables the write tests on this table; `clear: true` also lets the suite empty it. */
-  writes?: { table: string; clear?: boolean };
-  /**
-   * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
-   * which returns without throwing.
-   */
-  run?: {
-    query: string;
-    args?: Record<string, Value>;
-    /** Arguments that do not fit the query's declared arguments validator (enables that test; STUDY-12 V1). */
-    misfitArgs?: Record<string, Value>;
+export type ContractOptions = DeploymentContractOptions &
+  DeploymentStateContractOptions & {
+    /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
+    watchTimeoutMs?: number;
+    /** Per test. Default 30 000 ms: a live server walks many pages. */
+    timeoutMs?: number;
+    /** Enables the write tests on this table; `clear: true` also lets the suite empty it. */
+    writes?: { table: string; clear?: boolean };
+    /**
+     * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
+     * which returns without throwing.
+     */
+    run?: {
+      query: string;
+      args?: Record<string, Value>;
+      /** Arguments that do not fit the query's declared arguments validator (enables that test; STUDY-12 V1). */
+      misfitArgs?: Record<string, Value>;
+    };
   };
-};
 
 async function expectError(p: Promise<unknown>, code: DataSourceErrorCode, clause?: string) {
   const e = await p.then(
@@ -551,6 +553,7 @@ export function describeDataSourceContract(
 
     // -------------------------------------------------------------- the deployment's other features (§14)
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
+    describeDeploymentStateContract({ make, test, opts });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;

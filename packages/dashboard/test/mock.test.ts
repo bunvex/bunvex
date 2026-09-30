@@ -19,6 +19,33 @@ describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(sm
   files: { write: true },
   environmentVariables: { write: true },
   history: { table: "imports" },
+  pause: { toggle: true, query: "tasks:list" },
+});
+
+describe("MockDataSource, paused (UI-01 §17.2)", () => {
+  test("due runs wait and crons are skipped while paused; resumed, the runs go", async () => {
+    const src = new MockDataSource(small);
+    const pending = async () => (await src.listScheduledFunctions({ numItems: 1000, cursor: null })).page.length;
+    const cronRuns = async () => (await src.listCronJobs()).reduce((n, c) => n + (c.lastRun ? 1 : 0), 0);
+    const before = await pending();
+    expect(before).toBeGreaterThan(0);
+    await src.pauseDeployment();
+    const lastRuns = JSON.stringify((await src.listCronJobs()).map((c) => c.lastRun));
+    const t = src.scheduler.now() + 7 * 86_400_000; // a week later: everything is due
+    src.scheduler.now = () => t;
+    src.scheduler.tick();
+    expect(await pending()).toBe(before);
+    expect(JSON.stringify((await src.listCronJobs()).map((c) => c.lastRun))).toBe(lastRuns);
+    await src.resumeDeployment();
+    src.scheduler.tick();
+    expect(await pending()).toBeLessThan(before);
+    expect(await cronRuns()).toBeGreaterThan(0);
+  });
+
+  test("pausing needs its operation; a read-only credential cannot", async () => {
+    const ro = new MockDataSource({ ...small, capabilities: { operations: ["viewData"], readOnly: true } });
+    await expect(ro.pauseDeployment()).rejects.toThrow("cannot pause");
+  });
 });
 
 describe("MockDataSource, running functions", () => {

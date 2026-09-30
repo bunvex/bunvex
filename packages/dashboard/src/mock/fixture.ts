@@ -231,7 +231,13 @@ export function createFixture(opts: FixtureOptions = {}): Fixture {
     logs.push(...makeExecution(rnd, logs.length + 1, time));
   }
   return {
-    deployment: { name: "local", version: "0.0.0-mock", persistence: "memory", url: "http://127.0.0.1:3210" },
+    deployment: {
+      name: "local",
+      version: "0.0.0-mock",
+      persistence: "memory",
+      url: "http://127.0.0.1:3210",
+      httpActionsUrl: "http://127.0.0.1:3211",
+    },
     tables,
     functions: MOCK_FUNCTIONS,
     logs,

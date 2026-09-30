@@ -18,6 +18,8 @@ import type { Random } from "./random.ts";
 /** What the scheduler needs from the source. */
 export type SchedulerHost = {
   rnd: Random;
+  /** A paused deployment (UI-01 §17.2): due runs wait, cron runs are skipped, nothing new is scheduled. */
+  paused?: () => boolean;
   functions: FunctionInfo[];
   /** Logs an execution of `fn` at `time`; returns its outcome. */
   run: (fn: FunctionInfo, time: number) => { failed: boolean; error?: string; durationMs: number; lines: string[] };
@@ -196,6 +198,16 @@ export class MockScheduler {
   tick() {
     const now = this.now();
     let changed = false;
+    if (this.host.paused?.()) {
+      // as Convex while paused: scheduled runs wait for the resume; cron runs that fall due are skipped
+      for (const c of this.crons)
+        while (c.nextRun <= now) {
+          c.nextRun = nextRunAfter(c.schedule, c.nextRun);
+          changed = true;
+        }
+      if (changed) this.changed();
+      return;
+    }
     for (const job of this.jobs.filter((j) => j.scheduledTime <= now)) {
       const fn = this.host.functions.find((f) => f.path === job.function);
       if (fn) this.host.run(fn, now);
