@@ -103,7 +103,7 @@ export class BunvexClient {
         unsubscribe();
       },
       getCurrentValue: () => this.client.localQueryResultByToken(queryToken) as FunctionReturnType<Q> | undefined,
-      getQueryLogs: () => this.client.localQueryLogs(queryToken),
+      getQueryLogs: () => this.client.localQueryLogsByToken(queryToken),
     };
     return Object.assign(props.unsubscribe, props) as Unsubscribe<FunctionReturnType<Q>>;
   }

@@ -193,18 +193,18 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | missing | `@bunvex/react` is a stub. |
-| `ConvexProvider` / `useConvex()` context | `react/client.ts` | missing | ARCHITECTURE names it `BunvexProvider`. |
-| `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | missing | — |
-| `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | missing | — |
-| `useQueries(record)`: many queries in one hook, errors returned as `Error` values | `react/use_queries.ts`, `react/queries_observer.ts` | missing | — |
-| Concurrent-mode-safe subscription hook (no tearing between render and subscribe) | `react/use_subscription.ts` | missing | Could use `useSyncExternalStore`. |
-| `useMutation(ref)`: stable function + `.withOptimisticUpdate` | `react/client.ts` | missing | — |
-| `useAction(ref)` | `react/client.ts` | missing | — |
-| `useConvexConnectionState()` | `react/client.ts` | missing | — |
-| Accepting a function reference or a plain string name (`makeFunctionReference`) | `react/client.ts` | missing | Depends on the codegen/inference decision (ARCH open decision 1). |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but `setAuth` (with `@bunvex/auth`) and the paginated client (with `usePaginatedQuery`); `baseClient` injection included. |
+| `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
+| `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
+| `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
+| `useQueries(record)`: many queries in one hook, errors returned as `Error` values | `react/use_queries.ts`, `react/queries_observer.ts` | done (STUDY-26) |  |
+| Concurrent-mode-safe subscription hook (no tearing between render and subscribe) | `react/use_subscription.ts` | done (STUDY-26) | On `useSyncExternalStore`, with a re-read after subscribing (R2). |
+| `useMutation(ref)`: stable function + `.withOptimisticUpdate` | `react/client.ts` | done (STUDY-26) |  |
+| `useAction(ref)` | `react/client.ts` | done (STUDY-26) |  |
+| `useConvexConnectionState()` | `react/client.ts` | done (STUDY-26) | `useBunvexConnectionState()` (R1). |
+| Accepting a function reference or a plain string name (`makeFunctionReference`) | `react/client.ts` | done (STUDY-26) | `anyApi` / `makeFunctionReference`, untyped until the typed API (ARCH open decision 1). |
 | `convexQueryOptions` for TanStack Query-style integration | `browser/query_options.ts` | missing | Low priority. |
-| Guard: helpful errors when used outside a provider / when called with an event object by mistake (`assertNotAccidentalArgument`) | `react/client.ts` | missing | — |
+| Guard: helpful errors when used outside a provider / when called with an event object by mistake (`assertNotAccidentalArgument`) | `react/client.ts` | done (STUDY-26) | Same messages, naming bunvex and `BunvexProvider`, without the docs link. |
 
 ### 12. React auth helpers and providers
 

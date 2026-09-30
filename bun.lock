@@ -167,6 +167,17 @@
     "packages/react": {
       "name": "@bunvex/react",
       "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/client": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "react": "^19.3.0",
+      },
+      "peerDependencies": {
+        "react": "^19.3.0",
+      },
     },
     "packages/server": {
       "name": "@bunvex/server",
@@ -195,11 +206,19 @@
         "@bunvex/client": "workspace:*",
         "@bunvex/core": "workspace:*",
         "@bunvex/protocol": "workspace:*",
+        "@bunvex/react": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
       "devDependencies": {
+        "@happy-dom/global-registrator": "^20.14.5",
+        "@testing-library/dom": "^10.4.2",
+        "@testing-library/react": "^16.3.3",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
         "convex": "^1.46.0",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
       },
     },
     "packages/testing": {

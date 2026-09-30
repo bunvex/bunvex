@@ -32,7 +32,7 @@ const ALLOWED: Record<string, string[]> = {
   cli: ["server", "core", "values"],
   testing: ["server", "core", "values"],
   // Test-only, never published: end-to-end sync tests (a server and clients in one process, STUDY-26).
-  "sync-e2e": ["client", "server", "core", "protocol", "values"],
+  "sync-e2e": ["client", "react", "server", "core", "protocol", "values"],
   bunvex: ["server", "values", "client", "react", "nextjs", "cli"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.

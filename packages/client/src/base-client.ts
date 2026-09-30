@@ -326,8 +326,13 @@ export class BaseBunvexClient {
     return this.optimisticQueryResults.hasQueryResult(queryToken);
   }
 
+  /** @internal A query's log lines from its last result. */
+  localQueryLogs(udfPath: string, args?: Record<string, Value>): string[] | undefined {
+    return this.optimisticQueryResults.queryLogs(serializePathAndArgs(udfPath, parseArgs(args)));
+  }
+
   /** @internal */
-  localQueryLogs(queryToken: QueryToken): string[] | undefined {
+  localQueryLogsByToken(queryToken: QueryToken): string[] | undefined {
     return this.optimisticQueryResults.queryLogs(queryToken);
   }
 
