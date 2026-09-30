@@ -958,18 +958,72 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   and Logs are fetched when their route is first matched, in parallel with the route's loader. The function
   runner is a `React.lazy` panel, fetched when it first opens. The screens import `router.tsx` for their
   routes' hooks; loading them lazily also removes that import cycle.
-- Measured with `vite build` (entry chunk) and in Chrome (JS fetched until the screen's heading shows):
+- Measured with `vite build` (entry chunk) and in Chrome (JS the page fetched until the screen's heading
+  shows, from the Resource Timing API's decoded sizes):
 
   | | before | after |
   |---|---|---|
   | entry chunk | 739.8 kB (236.1 kB gzip) | 335.9 kB (109.2 kB gzip) |
-  | first load of `/` | 722 kB in 1 file | 375 kB in 7 files |
-  | first load of `/logs` | 722 kB in 1 file | 535 kB in 10 files |
-  | first load of `/database/users` | 3 923 kB in 2 files | 3 655 kB in 12 files |
+  | first load of `/` | 722 kB in 1 file | 494 kB in 7 files |
+  | first load of `/logs` | 722 kB in 1 file | 628 kB in 10 files |
+  | first load of `/database/users` | 3 923 kB in 2 files | 3 907 kB in 12 files |
 
   The Database screen stays heavy on purpose: it preloads Monaco (§12.5.7).
-- Guarded by an e2e test: the entry stays under 380 kB and holds no screen's own text; importing a screen
-  or the runner eagerly again fails it.
+- Guarded by an e2e test: the entry holds no screen's own text, and Health's first load stays under
+  600 kB of JS as the browser counts it; importing a screen or the runner eagerly again fails it. (The
+  entry's own size is not the bound: Rollup moves shared code in and out of it as screens are added.)
+
+### 14.2 Schedules
+
+STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
+
+- **Contract** (`data-source-deployment.ts`, re-exported by `@bunvex/dashboard/data-source`), all optional:
+  `listScheduledFunctions({ numItems, cursor, function? })` — the runs still to happen, nearest first
+  (`ScheduledFunction`: id, creation time, function, arguments, scheduled time, `pending` / `inProgress`);
+  `watchScheduledFunctions(onChange, onError)`; `cancelScheduledFunction(id)` (a started run is
+  `invalid_request`, a gone one `not_found`); `cancelAllScheduledFunctions(fn?)` → `{ canceled }`;
+  `listCronJobs()` — each job with its `CronSchedule` (Convex's `interval` / `hourly` / `daily` / `weekly` /
+  `monthly` / `cron`, UTC), next run and last run; `listCronRuns(name)` — newest first. Reading needs
+  `viewData`; cancelling `writeData`, as Convex's `WriteData`.
+- **Contract suite** (`contract-deployment.ts`): the reads run whenever the source has the methods;
+  cancelling runs only with `schedules: { cancel: true }`.
+- **Mock** (`mock/schedules.ts`): 24 pending runs and one running, four cron jobs (daily, every 15 minutes, a
+  `*/30 * * * *` expression, weekly) with five past runs each, on a clock that starts at the fixture's `now`.
+  While watched, due runs and crons run and are logged like any execution, and new runs get scheduled.
+- **Screen**: `/schedules` opens `/schedules/functions`; `/schedules/crons` is the second tab, as Convex's two
+  pages.
+  - Scheduled functions: a function picker (`?function=`), the grid (scheduled for, with a relative time;
+    state; function; id), and a run's details beside it (`?run=`): function, id (copy), times, state,
+    arguments as a literal, and **Cancel run** after a confirmation (disabled once started or without
+    `writeData`). **Cancel all** (or all of the picked function's) after a confirmation.
+  - Cron jobs: name, schedule in words (`schedules/cron.ts`), function, last run (status and when), next
+    run; a job's details (`?cron=`) with arguments and its recent runs (status, time, duration, error, log
+    lines).
+  - Refreshed on `watchScheduledFunctions` (STUDY-12 S1). A source without the methods gets "This deployment
+    does not offer … yet"; the sidebar always lists the screen, as Convex's does.
+- Tests: the cron helpers; the screen (order, picker in the URL, details, cancel one and all, a running run,
+  read-only and no-`writeData` credentials, the crons and their runs, a source without them, axe); the
+  contract suite on the mock; an e2e case and axe with colour contrast in both themes.
+
+### 14.3 Files
+
+- **Contract**, optional: `listFiles({ numItems, cursor, order?, from?, to? })` — newest first by default
+  (`StoredFile`: storage id, creation time, base64 SHA-256, size, content type or null, a URL);
+  `countFiles()`; `getFile(id)` (null when absent); `uploadFile(blob)` → the new storage id (the content type
+  is the blob's); `deleteFiles(ids)` (unknown ids ignored); `watchFiles(onChange, onError)`. Reading needs
+  `viewData`; uploading and deleting `writeData`, as Convex.
+- **Contract suite**: the reads (both orders, a time range, the count, `getFile`) whenever offered; upload
+  and delete only with `files: { write: true }` (it checks size, type and SHA-256 of what it stored).
+- **Mock** (`mock/files.ts`): six SVG avatars, a text, a JSON, a CSV, a PDF-like and two binaries (one with
+  no type), over the last 30 days; object URLs, so previews and downloads work in a browser.
+- **Screen** (`/files`): the total ("12 files stored"), **Upload files** (several at once), a lookup by
+  storage id (opens its details), the order and a day range in the URL (`?order=asc&from=&to=`, days in
+  the viewer's zone), the grid (storage id, size, content type, uploaded) with row selection and **Delete N**
+  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1,
+  decided: no text previews), size, type, SHA-256, time, **Download**, **Delete**.
+- Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
+  lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
+  e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
 
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
