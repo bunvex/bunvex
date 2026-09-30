@@ -98,7 +98,10 @@ export function planCatalog(
       changes.insertTables.push({ name: d.name, number, tablet, state: "active" });
     }
     const stored = indexes.filter((i) => i.tablet === tablet);
-    const wanted = { ...SYSTEM_INDEXES, ...d.indexes };
+    // As in Convex, every user index ends with an implicit `_creationTime` (then `_id`, in the key), so
+    // documents with equal indexed values come back in creation order.
+    const userIndexes = Object.fromEntries(Object.entries(d.indexes).map(([n, f]) => [n, [...f, "_creationTime"]]));
+    const wanted = { ...SYSTEM_INDEXES, ...userIndexes };
     for (const [name, fields] of Object.entries(wanted)) {
       const have = stored.find((i) => i.name === name);
       if (have && sameFields(have.fields, fields)) continue;
