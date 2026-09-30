@@ -6,12 +6,14 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouter } from "@tanstack/react-router";
 import { Activity, Database, FunctionSquare, Play, ScrollText } from "lucide-react";
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
-import { FunctionRunner } from "../runner/runner.tsx";
+
+// the runner is fetched when it first opens (it brings the code editor and the result views)
+const FunctionRunner = lazy(() => import("../runner/runner.tsx").then((m) => ({ default: m.FunctionRunner })));
 
 /** What the host renders at the end of the header (`<Dashboard headerActions>`). */
 export const HeaderActionsContext = createContext<ReactNode>(null);
@@ -112,12 +114,14 @@ export function Shell() {
           </main>
         </div>
         {runner.context.shown && (
-          <FunctionRunner
-            key={runner.path ?? ""}
-            path={runner.path}
-            onPath={runner.context.open}
-            onClose={runner.context.close}
-          />
+          <Suspense fallback={null}>
+            <FunctionRunner
+              key={runner.path ?? ""}
+              path={runner.path}
+              onPath={runner.context.open}
+              onClose={runner.context.close}
+            />
+          </Suspense>
         )}
       </div>
     </RunnerContext.Provider>
