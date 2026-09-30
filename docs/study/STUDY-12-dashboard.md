@@ -355,7 +355,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
 | L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
-| L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10 (live query results built there, §10.1) |
+| L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10: live query results, run history, acting as a user, deployment events, usage and identity all built |
 
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
@@ -543,8 +543,9 @@ where bunvex shows an event's details (Convex opens it in the log's drilldown). 
 I/O read / written, file bandwidth, text and vector search, the bytes returned, summed across the executions
 ("Total resources used across N executions") — and who started it (`FunctionIdentity`: Admin, User, Admin
 (acting as user), System, Unknown) and the environment (Convex's isolate or Node.js). bunvex: optional
-`usage`, `identity` and `environment` on an execution's last line in the contract; the details show them.
-**Status: planned**, as Convex.
+`usage` and `identity` on an execution's last line in the contract; the details show who started the request
+and its resources summed over its loaded executions. Not shown: the environment (bunvex runs functions in
+one runtime) and text / vector search (bunvex has neither yet). **Status: built**.
 
 ## 11. Settings → General, narrow screens, the design system (added 30 Sep 2026)
 

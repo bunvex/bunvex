@@ -3,6 +3,8 @@
 import type {
   DeploymentInfo,
   Document,
+  ExecutionIdentity,
+  ExecutionUsage,
   FunctionInfo,
   FunctionKind,
   IndexInfo,
@@ -142,11 +144,16 @@ export function makeExecution(
   seq: number,
   time: number,
   run?: { fn: FunctionInfo; error?: string; identity?: { subject: string; issuer: string; name?: unknown } },
-  within?: { requestId: string; parentExecutionId: string },
+  within?: { requestId: string; parentExecutionId: string; startedBy: ExecutionIdentity },
 ): LogEntry[] {
   const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
   const requestId = within?.requestId ?? rnd.id().slice(0, 16);
   const executionId = rnd.id().slice(0, 16);
+  // who started the request (STUDY-12 §10.5): a call inside one inherits it; the runner's are an admin's (or
+  // an admin acting as a user); otherwise a user, sometimes the scheduler. From the sequence, not the random
+  // stream, so the fixture's data stays what it was.
+  const startedBy: ExecutionIdentity =
+    within?.startedBy ?? (run?.identity ? "acting_as_user" : run ? "admin" : seq % 7 === 0 ? "system" : "user");
   const failed = run ? run.error !== undefined : rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
   const durationMs = fn.kind === "action" ? rnd.int(20, 900) : rnd.int(0, 40);
   const lines: { level: LogLevel; message: string }[] = [];
@@ -187,13 +194,29 @@ export function makeExecution(
           seq + out.length,
           time + out.length,
           { fn: rnd.pick(callable) },
-          { requestId, parentExecutionId: executionId },
+          { requestId, parentExecutionId: executionId, startedBy },
         ),
       );
   }
   const last = entry(lines.at(-1)!, seq + out.length, time + out.length);
-  last.execution = { status: failed ? "failure" : "success", durationMs };
+  last.execution = {
+    status: failed ? "failure" : "success",
+    durationMs,
+    usage: usageOf(fn, durationMs, seq, !within),
+    identity: startedBy,
+  };
   return [...out, last];
+}
+
+/** What an execution used: made up from its kind, duration and place, without the random stream. */
+function usageOf(fn: FunctionInfo, durationMs: number, seq: number, top: boolean): ExecutionUsage {
+  const read = ((seq * 7919 + durationMs * 131) % 48_000) + 512;
+  return {
+    memoryMb: fn.kind === "action" ? 128 : 16,
+    databaseReadBytes: fn.kind === "action" ? 0 : read,
+    databaseWriteBytes: fn.kind === "mutation" ? Math.round(read / 6) : 0,
+    ...(top && { returnBytes: (seq * 104_729) % 8_192 }),
+  };
 }
 
 export function createFixture(opts: FixtureOptions = {}): Fixture {

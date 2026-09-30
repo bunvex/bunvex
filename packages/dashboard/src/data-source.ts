@@ -268,8 +268,33 @@ export type LogEntry = {
   /** The execution that called this one, in the same request; absent for the request's first. */
   parentExecutionId?: string;
   /** On the line that ends an execution. */
-  execution?: { status: "success" | "failure"; durationMs: number };
+  execution?: {
+    status: "success" | "failure";
+    durationMs: number;
+    /** What it used (STUDY-12 §10.5), as far as the source measures it. */
+    usage?: ExecutionUsage;
+    /** Who started the request it belongs to. */
+    identity?: ExecutionIdentity;
+  };
 };
+
+/** An execution's resources, as Convex's usage stats (each absent when not measured). */
+export type ExecutionUsage = {
+  /** Memory the execution used, in MB (with the duration: the compute). */
+  memoryMb?: number;
+  databaseReadBytes?: number;
+  databaseWriteBytes?: number;
+  fileReadBytes?: number;
+  fileWriteBytes?: number;
+  /** The size of the value it returned. */
+  returnBytes?: number;
+};
+
+/**
+ * Who started a request, as Convex's `identityType`: a developer with the admin key, a signed-in user, an
+ * admin acting as a user (the runner's "Act as a user"), the system (the scheduler, crons), or unknown.
+ */
+export type ExecutionIdentity = "admin" | "user" | "acting_as_user" | "system" | "unknown";
 
 /**
  * What running a function from the dashboard gave (STUDY-12 §7): its value, or the error it threw, with the

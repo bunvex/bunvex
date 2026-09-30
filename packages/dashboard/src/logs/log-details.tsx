@@ -8,9 +8,11 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 import { useId } from "react";
 import type { LogEntry } from "../data-source.ts";
+import { formatBytes } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
 import { formatDuration, formatLogTime, isFailure } from "./log-list.tsx";
+import { IDENTITY_TEXT, sumUsage } from "./usage.ts";
 
 function CallItem({ node, current }: { node: CallNode; current?: string }) {
   const mine = node.executionId === current;
@@ -65,6 +67,9 @@ export function LogDetails(props: {
   // this line's execution ends on the line that carries its outcome (not another call's, in the same request)
   const end = request.find((e) => e.execution && (e.executionId === undefined || e.executionId === line.executionId));
   const calls = callTree(request);
+  const usage = sumUsage(request);
+  const startedBy = end?.execution?.identity;
+  const usageId = useId();
   return (
     <Panel title={<span className="font-mono text-sm">{formatLogTime(line.time)}</span>} onClose={props.onClose}>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
@@ -91,7 +96,60 @@ export function LogDetails(props: {
             ? `${end.execution.status === "success" ? "Succeeded" : "Failed"} in ${formatDuration(end.execution.durationMs)}`
             : "Not in the loaded lines"}
         </dd>
+        {startedBy && (
+          <>
+            <dt className="text-muted-foreground">Started by</dt>
+            <dd>
+              {IDENTITY_TEXT[startedBy][0]}
+              <span className="block text-xs text-muted-foreground">{IDENTITY_TEXT[startedBy][1]}</span>
+            </dd>
+          </>
+        )}
       </dl>
+      {usage && (
+        <section aria-labelledby={usageId} className="mt-5">
+          <h3 id={usageId} className="mb-2 text-sm font-medium">
+            Resources used
+          </h3>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+            {usage.memoryMb !== undefined && (
+              <>
+                <dt className="text-muted-foreground">Compute</dt>
+                <dd>
+                  {usage.memoryMb} MB for {(usage.runtimeMs / 1000).toFixed(2)} s
+                </dd>
+              </>
+            )}
+            {(usage.databaseReadBytes !== undefined || usage.databaseWriteBytes !== undefined) && (
+              <>
+                <dt className="text-muted-foreground">Database</dt>
+                <dd>
+                  {formatBytes(usage.databaseReadBytes ?? 0)} read, {formatBytes(usage.databaseWriteBytes ?? 0)} written
+                </dd>
+              </>
+            )}
+            {(usage.fileReadBytes !== undefined || usage.fileWriteBytes !== undefined) && (
+              <>
+                <dt className="text-muted-foreground">Files</dt>
+                <dd>
+                  {formatBytes(usage.fileReadBytes ?? 0)} read, {formatBytes(usage.fileWriteBytes ?? 0)} written
+                </dd>
+              </>
+            )}
+            {usage.returnBytes !== undefined && (
+              <>
+                <dt className="text-muted-foreground">Returned</dt>
+                <dd>{formatBytes(usage.returnBytes)}</dd>
+              </>
+            )}
+          </dl>
+          {usage.executions > 1 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              In total, across the {usage.executions} executions of this request that are loaded.
+            </p>
+          )}
+        </section>
+      )}
       <h3 className="mt-5 mb-2 text-sm font-medium">Message</h3>
       <pre
         className={cn(

@@ -371,6 +371,21 @@ export function describeDataSourceContract(
           expect(requestOf.get(e.parentExecutionId)).toBe(e.requestId);
     });
 
+    test("an execution's usage and identity, when given, are well-formed (STUDY-12 §10.5)", async () => {
+      const src = await make();
+      const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
+      const identities = ["admin", "user", "acting_as_user", "system", "unknown"];
+      for (const e of page) {
+        const x = e.execution;
+        if (!x) continue;
+        if (x.identity !== undefined) expect(identities).toContain(x.identity);
+        for (const v of Object.values(x.usage ?? {})) {
+          expect(typeof v).toBe("number");
+          expect(v as number).toBeGreaterThanOrEqual(0);
+        }
+      }
+    });
+
     test("logs page newest first with increasing ids, and respect the filter", async () => {
       const src = await make();
       const first: LogEntry[] = (await src.listLogs({ numItems: 50, cursor: null })).page;
