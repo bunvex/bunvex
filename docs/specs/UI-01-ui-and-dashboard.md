@@ -1032,3 +1032,16 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   Create table there (the route component is in `router.tsx`, left alone while route splitting is under
   way elsewhere).
 
+### 15.5 A generated schema (STUDY-12 D11)
+
+- **Contract**: optional `inferDocumentType(table)` — a type every document in the table fits, in
+  Convex's JSON form without system fields, null for an empty table (Convex keeps "shapes" for this on
+  the server). The contract suite checks that every document of its fixture table fits what comes back.
+- **Mock** (`mock/infer.ts`): over the whole table — a field missing from some documents is optional,
+  several types make a union, objects merge their fields, arrays hold the union of their elements (an
+  array never seen with one: `v.any()`), and text that is always an id of one table is `v.id(table)`.
+- **Schema panel**: tabs, as Convex — **Saved** (§15.2) and **Generated**: the table alone in a
+  `bunvex/schema.ts` with `// Other tables here...` where the others go, a sentence saying it is
+  approximate and where to paste it, Copy; "Add at least one document…" for an empty table. It opens on
+  Saved, or on Generated when nothing is saved. Without `inferDocumentType`, no tabs.
+

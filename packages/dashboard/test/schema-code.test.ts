@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { IndexInfo, SchemaInfo, TableInfo } from "../src/data-source.ts";
-import { schemaCode } from "../src/database/schema-code.ts";
+import { generatedSchemaCode, schemaCode } from "../src/database/schema-code.ts";
 
 const SYS: IndexInfo[] = [
   { name: "by_id", fields: ["_id"], system: true, state: "ready" },
@@ -75,5 +75,19 @@ describe("the saved schema as code", () => {
     )!;
     expect(r.code).toContain("users: defineTable(v.union(v.null())),");
     expect(schemaCode({ enforced: true, tables: [] }, tables)).toBeNull();
+  });
+
+  test("generated for one table: the table alone, a comment for the others", () => {
+    const code = generatedSchemaCode("tasks", {
+      type: "object",
+      value: { text: { fieldType: { type: "string" }, optional: false } },
+    });
+    expect(code.split("\n").slice(3)).toEqual([
+      "export default defineSchema({",
+      "  // Other tables here...",
+      "",
+      "  tasks: defineTable({ text: v.string() }),",
+      "});",
+    ]);
   });
 });

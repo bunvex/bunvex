@@ -20,7 +20,7 @@ import {
   type Value,
 } from "./data-source.ts";
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
-import { isValidatorJson } from "./validators.ts";
+import { isValidatorJson, validateValue } from "./validators.ts";
 
 export type ContractOptions = {
   /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
@@ -318,6 +318,19 @@ export function describeDataSourceContract(
       const d = docs[1]!;
       expect(await src.getDocument(table, d._id)).toEqual(d);
       expect(await src.getDocument(table, "0000000000000000000000000000zzzz")).toBeNull();
+    });
+
+    test("inferDocumentType (when present): every document fits it; system fields are left out", async () => {
+      const { src, table, docs } = await fixture();
+      if (!src.inferDocumentType) return;
+      const v = await src.inferDocumentType(table);
+      expect(v !== null && isValidatorJson(v)).toBe(true);
+      if (v?.type === "object") expect(Object.keys(v.value).some((k) => k.startsWith("_"))).toBe(false);
+      for (const d of docs) {
+        const own = Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith("_"))) as Record<string, Value>;
+        expect(validateValue(v!, own)).toEqual([]);
+      }
+      await expectError(src.inferDocumentType("no_such_table"), "not_found");
     });
 
     test("tableOfId (when present) names a document's table, and null for an unknown id", async () => {

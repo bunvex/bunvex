@@ -24,6 +24,7 @@ import {
   type SchemaInfo,
   type TableInfo,
   type Unsubscribe,
+  type ValidatorJson,
   type Value,
 } from "../data-source.ts";
 import { tableNameProblem } from "../database/table-name.ts";
@@ -31,6 +32,7 @@ import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilt
 import { validateValue } from "../validators.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
+import { inferDocumentType } from "./infer.ts";
 import { createRandom, type Random } from "./random.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
@@ -293,6 +295,15 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       const doc = this.table(table).documents.find((d) => d._id === id);
       return doc ? structuredClone(doc) : null;
+    });
+  }
+
+  inferDocumentType(table: string, opts?: CallOptions): Promise<ValidatorJson | null> {
+    return this.call(opts?.signal, () => {
+      const t = this.table(table);
+      const owner = new Map<string, string>();
+      for (const other of this.tables.values()) for (const d of other.documents) owner.set(d._id, other.name);
+      return inferDocumentType(t.documents, (id) => owner.get(id) ?? null);
     });
   }
 
