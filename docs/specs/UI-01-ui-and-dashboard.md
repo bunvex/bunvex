@@ -817,6 +817,24 @@ comma lists) is gone.
 - Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
   in a cell, the object popover at the right edge, no request leaves localhost.
 
+### 12.5.8 A cell's context menu and shortcuts
+
+As in Convex (STUDY-12 §1.4.1).
+
+- **`DataTable`**: `grid.cellMenu({ row, columnId, edit })` returns the items of a cell's context menu
+  (DropdownMenu items); the grid opens it on a right-click (at the pointer), Shift+F10, the Menu key or
+  Ctrl/Cmd+Enter (at the cell), and gives the focus back to the cell when it closes. `grid.onCellKey`
+  lets the caller take keys on a focused cell before the grid's own. `DropdownMenuContent` takes an
+  `anchor` (a virtual element here). Base UI closes a trigger-less menu when its submenu opens ("a
+  sibling opened"); the grid ignores that reason.
+- **Database**: **Filter by `<field>`** ▸ the operators that make sense for the value (as Convex's
+  `showFilter`), added to the applied filter at once; **Copy `<field>`** (Ctrl/Cmd+C: text as it is,
+  anything else as a literal); **Edit `<field>`** (Enter); **View document** (Shift+Space); **Copy
+  document** (Ctrl/Cmd+Shift+C); **Edit document** (Shift+Enter: the side panel opens in its editor).
+  Edit items are disabled without the grant. A copy is announced ("Copied email.").
+- The side panel's document view is keyed by the id, so another document never opens in the last one's
+  editor.
+
 ### 12.5.9 Accessibility pass (slice 7)
 
 - **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each

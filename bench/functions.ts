@@ -1,6 +1,6 @@
 // The convex-bench functions, mirroring ~/sandbox/convex-bench/convex/bench.ts: same names, arguments
 // and semantics (so the same k6 script and fan-out harness run unchanged).
-import { action, mutation, query, Schema } from "bunvex/server";
+import { action, internalMutation, internalQuery, mutation, query, Schema } from "bunvex/server";
 
 export const benchSchema = new Schema()
   .table("items", { by_tenant_created: ["tenantId", "createdAt"] })
@@ -72,20 +72,18 @@ export const bench = {
     return null;
   }),
 
-  _latestForTenant: query(
-    async ({ db }, { tenantId }) =>
-      db
-        .query("items")
-        .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenantId))
-        .order("desc")
-        .first(),
-    true,
+  _latestForTenant: internalQuery(async ({ db }, { tenantId }) =>
+    db
+      .query("items")
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenantId))
+      .order("desc")
+      .first(),
   ),
 
-  _insertInternal: mutation(async ({ db }, { tenantId, amount }) => {
+  _insertInternal: internalMutation(async ({ db }, { tenantId, amount }) => {
     await db.insert("items", { tenantId, title: "from action", status: "open", amount, createdAt: Date.now() });
     return null;
-  }, true),
+  }),
 
   readThenWrite: action(async (ctx, { tenantId }) => {
     const latest = (await ctx.runQuery("bench:_latestForTenant", { tenantId })) as { amount: number } | null;
