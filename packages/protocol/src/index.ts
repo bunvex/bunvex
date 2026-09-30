@@ -42,6 +42,7 @@ export {
   type AnyFunctionReference,
   anyApi,
   type DefaultFunctionArgs,
+  type EmptyObject,
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,

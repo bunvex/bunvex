@@ -1,7 +1,19 @@
 // Package @bunvex/client — the sync client (STUDY-26): one WebSocket that reconnects by itself, every
 // subscription of the client advancing together, mutations that resolve once their write is visible, and
 // optimistic updates. The counterpart of Convex's `convex/browser`.
-export { anyApi, getFunctionName, makeFunctionReference } from "@bunvex/protocol";
+export {
+  type AnyApi,
+  type AnyFunctionReference,
+  anyApi,
+  type EmptyObject,
+  type FunctionArgs,
+  type FunctionReference,
+  type FunctionReturnType,
+  getFunctionName,
+  makeFunctionReference,
+  type OptionalRestArgs,
+  v1,
+} from "@bunvex/protocol";
 export {
   BaseBunvexClient,
   type BaseBunvexClientOptions,

@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7 as recommended (owner, 2026-09-30)
+- **Status:** accepted: C3–C7 and R2–R3 as recommended (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -224,3 +224,70 @@ DV-90–DV-93, C6 under Gaps.
 
 - `unsavedChangesWarning` stays on by default in browsers, as in Convex. Is that also right for bunvex's
   dashboard (another session's work)?
+
+## 7. The React bindings (`@bunvex/react`)
+
+### 7.1 How Convex does it (`npm-packages/convex/src/react/`)
+
+- **`ConvexReactClient`** (`client.ts`):
+  - it creates the base client lazily, on first use, and `baseClient` injects another one;
+  - it keeps listeners by query token, and a transition calls the callbacks of the tokens it changed;
+  - `watchQuery(query, args, {journal})` returns `{onUpdate, localQueryResult, localQueryLogs, journal}`,
+    and nothing is subscribed before the first `onUpdate`;
+  - `prewarmQuery` holds a subscription for 5 s;
+  - also `query`, `mutation`, `action`, `connectionState`, `subscribeToConnectionState`, `setAuth`,
+    `clearAuth`, `setAdminAuth` and `close`.
+- **`ConvexProvider` / `useConvex`:** a React context.
+- **`useQuery(query, args | "skip")`:**
+  - it goes through `useQueries` with one entry, memoized by the function name and the args' JSON;
+  - it returns `undefined` while loading and throws a failed query's error to the error boundary.
+- **`useQuery_experimental({query, args, throwOnError})`:** returns `{status: "pending" | "success" |
+  "error"}`.
+- **`useQueries`** (`use_queries.ts` and `queries_observer.ts`):
+  - a `QueriesObserver` holds one watch per identifier and replaces a watch when its function or args
+    change;
+  - results are read in render (`getLocalResults`), and failures come back as `Error` values;
+  - subscribing happens in the subscription's `subscribe`, after render.
+- **`useSubscription`** (`use_subscription.ts`) keeps a component's value in step with a store, safely in
+  concurrent React. It re-checks the value right after subscribing. Convex's own comment says it "could
+  probably be replaced with `useSyncExternalStore()`".
+- **`useMutation(ref)`** returns a function that is stable per client and name. `.withOptimisticUpdate(fn)`
+  returns a new one, and a second call throws `Already specified optimistic update for mutation <name>`.
+- **`useAction(ref)`** and **`useConvexConnectionState()`**.
+- **Guards:**
+  - a hook outside the provider throws "Could not find Convex client! `useQuery` must be used in the React
+    component tree under `ConvexProvider`…";
+  - a React event passed as the arguments throws (`assertNotAccidentalArgument`).
+- **Consistency:** one transition calls every changed query's listeners together, so React renders them
+  in one pass. Two queries never disagree on screen.
+
+### 7.2 How bunvex does it
+
+`@bunvex/react` is `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useQuery` (with `"skip"`),
+`useQuery_experimental`, `useQueries`, `useMutation` (with `withOptimisticUpdate`), `useAction` and
+`useBunvexConnectionState`, with the same structure (client, observer, hooks). `usePaginatedQuery`, the
+auth helpers and hydration (`usePreloadedQuery`) come with the paginated client, `@bunvex/auth` and
+`@bunvex/nextjs`.
+
+Tests run against a real server in `packages/sync-e2e/react`, in their own process with a DOM
+(happy-dom, as the UI packages do):
+
+- loading, value and changes;
+- **read-your-writes in the rendered page** after `await mutate()`;
+- two queries a mutation changes render together, never one without the other;
+- `"skip"`;
+- error boundary with `.data`;
+- the optimistic guess renders at once, and only one update is allowed per mutation;
+- `useAction`, the connection state, and the provider guard;
+- `useSubscription` re-reads after subscribing.
+
+### 7.3 Divergences
+
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): R1 under DV-03, R2 as DV-95, R3 under Gaps.
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
+| R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **recommend** |
+| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order |
+

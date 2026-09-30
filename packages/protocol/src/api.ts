@@ -29,10 +29,14 @@ export type FunctionReference<
 export type AnyFunctionReference = FunctionReference<any, any, any, any>;
 export type FunctionArgs<F extends AnyFunctionReference> = F["_args"];
 export type FunctionReturnType<F extends AnyFunctionReference> = F["_returnType"];
-/** `[args?]` when the function takes no arguments or only optional ones, else `[args]`, as Convex's. */
-export type OptionalRestArgs<F extends AnyFunctionReference> = keyof F["_args"] extends never
-  ? [args?: Record<string, never>]
-  : [args: F["_args"]];
+/** An object with no fields: the arguments of a function that takes none. */
+export type EmptyObject = Record<string, never>;
+/**
+ * `[args?]` when the function takes no arguments, else `[args]`, as Convex's. With an untyped reference
+ * (`anyApi`, args `any`) both forms are allowed.
+ */
+export type OptionalRestArgs<F extends AnyFunctionReference> =
+  FunctionArgs<F> extends EmptyObject ? [args?: EmptyObject] : [args: FunctionArgs<F>];
 
 /** An api object: any property path, each one a reference (Convex's `AnyApi`). */
 export type AnyApi = { [module: string]: AnyApi & AnyFunctionReference };
