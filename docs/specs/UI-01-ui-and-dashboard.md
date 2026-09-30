@@ -1278,3 +1278,17 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   nothing to the dashboard's first load.
 - An e2e case loads it and runs axe, colour contrast included, over both themes at once.
 
+## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
+
+### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+- **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
+  `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,
+  in the config's order. Needs `viewData` and `viewEnvironmentVariables`. **Contract suite**: when offered and
+  allowed, every provider is well-formed (`isAuthProvider`).
+- **Page** (`settings/auth.tsx`, lazy): a list item per provider named by its kind and domain / issuer, its
+  values as code with copy buttons; none → "This deployment has no authentication providers yet." and where they
+  are declared (Convex links its docs; bunvex has no docs site yet); without both operations the page says why and asks nothing of the source; a source without the method
+  gets the "not offered" screen.
+- **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
+

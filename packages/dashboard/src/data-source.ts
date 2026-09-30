@@ -357,12 +357,14 @@ import type { DeploymentFeatures } from "./data-source-deployment.ts";
 /** A field update in `patchDocuments`: a new value, or removing the field. */
 export type FieldPatch = Value | { $unset: true };
 
+import type { AuthFeatures } from "./data-source-auth.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
 
+export * from "./data-source-auth.ts";
 export * from "./data-source-deployment.ts";
 export * from "./data-source-state.ts";
 
-export interface DashboardDataSource extends DeploymentFeatures, DeploymentStateFeatures {
+export interface DashboardDataSource extends DeploymentFeatures, DeploymentStateFeatures, AuthFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;

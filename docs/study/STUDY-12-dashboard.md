@@ -570,3 +570,20 @@ one runtime) and text / vector search (bunvex has neither yet). **Status: built*
 |---|---|---|---|
 | G1 | The URLs (client, HTTP actions) and the deployment's name, version and persistence sit on **Settings → General**, next to pausing; Convex shows the URLs with the Health summary (cloud only) | self-hosted has no cloud page for them; General is where a self-hosted reader looks for "what is this deployment" | **decided** (30 Sep 2026): the owner asked for them in Settings |
 
+## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
+
+### 13.1 Authentication (A1)
+
+Convex: **Settings → Authentication** (`dashboard-common/src/features/settings/components/AuthenticationView.tsx`,
+`AuthConfig.tsx`) lists the providers from `_system/frontend/listAuthProviders.ts` (the `_auth` system table,
+which `auth.config.ts` fills on push; types in `npm-packages/convex/src/server/authentication.ts`): an OIDC
+provider shows its domain and application ID, a custom JWT provider its issuer, JWKS URL, algorithm and optional
+application ID, each value copyable, with a link to the docs of that kind; with none, "This deployment has no
+authentication providers yet." and a docs link. The page needs both `ViewData` and `ViewEnvironmentVariables`.
+
+bunvex: an optional `listAuthProviders` in the contract (`data-source-auth.ts`) with Convex's two shapes; the
+page under Settings, after Environment variables; the same permission rule; the mock declares one provider of
+each kind (`authProviders` overrides). One difference, from the repository's rule against Convex's names in
+shipped code: with no providers the page says they are declared in `auth.config.ts` instead of linking Convex's
+docs (bunvex has no docs site yet). **Status: built** (UI-01 §19.1).
+

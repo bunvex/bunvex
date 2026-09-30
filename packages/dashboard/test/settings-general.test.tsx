@@ -28,7 +28,7 @@ describe("Settings: General", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["General", "Environment variables"]);
+    ).toEqual(["General", "Environment variables", "Authentication"]);
     expect(within(nav).getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 
