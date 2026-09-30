@@ -396,17 +396,18 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         log(`  kill ${k}: live docs ${live}, index entries ${JSON.stringify(counts)} (torn commit)`);
         bad++;
       }
-      // Writing resumes at M + 1 and the result is readable.
+      // Writing resumes above M and the result is readable (timestamps follow the clock: STUDY-06 D9).
       const id = await e.mutation(insertItem("resume"));
-      if (e.committer.visibleTs !== M + 1 || (await st.get(items.id, id, M + 1)) === null) {
-        log(`  kill ${k}: resume wrote ts ${e.committer.visibleTs}, expected ${M + 1}`);
+      const next = e.committer.visibleTs;
+      if (next <= M || (await st.get(items.id, id, next)) === null) {
+        log(`  kill ${k}: resume wrote ts ${next}, expected above ${M}`);
         bad++;
       }
       await e.close();
     }
     check(
       bad === 0,
-      `K6 ${kills} SIGKILLs mid-commit: no acknowledged commit lost, no torn commit, resume at maxTs+1 (${bad} violations)`,
+      `K6 ${kills} SIGKILLs mid-commit: no acknowledged commit lost, no torn commit, resume above maxTs (${bad} violations)`,
     );
   }
 
@@ -431,7 +432,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const torn = await st3.get(e3.catalog.table("items").id, "torn", M3);
     await e3.close();
     check(
-      M2 === M && M3 === M + 1 && torn === null,
+      M2 === M && M3 > M && torn === null,
       `K7 a torn log tail is cut off and writing resumes (maxTs ${M} → ${M2} → ${M3})`,
     );
   }
@@ -661,7 +662,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
           stoppedBy !== "" &&
           childAfter === childBefore &&
           parent === 20 &&
-          at === M + 20 &&
+          at > M &&
           new Set([...counts, live]).size === 1 &&
           took <= CHILD_TTL_MS + IDLE_TX_BOUND_MS + 2000;
         if (!ok) {

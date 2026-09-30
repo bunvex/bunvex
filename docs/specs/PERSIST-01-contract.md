@@ -17,7 +17,9 @@ Two logical collections, Convex's shape:
 - **indexes**: `(index_id, key, ts) → document_id | deleted`. Every version of every index entry.
 
 `key` is an opaque byte string produced by `src/keyenc.ts`. `ts` is the commit timestamp assigned by the
-committer: a strictly increasing integer.
+committer: a strictly increasing integer, the wall clock in microseconds as Convex's `next_commit_ts`
+does it in nanoseconds (`max(last + 1, clock)`; STUDY-06 D9). Timestamps are therefore **sparse**: a
+driver must not assume that `ts + 1` is the next commit.
 
 ## C2 — ordering
 
@@ -61,8 +63,8 @@ For a snapshot `T`:
 
 ## C5 — recovery
 
-`maxTs()` returns `M` from C4. On open, the engine resumes its committer at `M`: the next commit gets
-`M + 1`, and `M` is the first snapshot served. A driver keeping state in memory (the memory+log store)
+`maxTs()` returns `M` from C4. On open, the engine resumes its committer at `M`: the next commit gets a
+ts above `M` (the clock, or `M + 1` if the clock is behind), and `M` is the first snapshot served. A driver keeping state in memory (the memory+log store)
 rebuilds it from its log, ignoring a torn trailing record.
 
 ## C6 — optional fast paths
@@ -120,7 +122,7 @@ runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` r
 | K3 | no lost update | 64 concurrent increments of 1 and of 4 counters through the engine |
 | K4 | cache invalidation | an insert outside a cached range keeps the entry, one inside it is seen |
 | K5 | atomic visibility | readers racing 2-document mutations never see one of the two |
-| K6 | crash atomicity (process crash) | a child process commits continuously and is SIGKILLed at random moments, N times; after each kill the store reopens with `maxTs ≥` the last acknowledged commit, every commit `≤ maxTs` is complete (doc + all its index entries), none above it is visible, and writing resumes at `maxTs + 1` |
+| K6 | crash atomicity (process crash) | a child process commits continuously and is SIGKILLed at random moments, N times; after each kill the store reopens with `maxTs ≥` the last acknowledged commit, every commit `≤ maxTs` is complete (doc + all its index entries), none above it is visible, and writing resumes above `maxTs` |
 | K7 | torn tail (log-based drivers) | half a record appended to the log: it is cut off on open, and a commit written after recovery survives the next reopen |
 | K8 | exact limits | a range whose ends are full of deleted keys and whose live keys have hundreds of versions: for limits 0–100, asc and desc, whole and partial ranges, at several snapshots, `scan` (and `scanDocs`) return exactly the reference model's first `limit` live entries |
 | K9 | long keys | incompressible keys up to 6 KB, many sharing their first 2500+ bytes, plus keys around the 2500-byte boundary, with versions and deletes: scans over whole and partial ranges (bounds that are themselves long keys), both directions, several limits and snapshots, equal the reference model |

@@ -95,7 +95,7 @@ describe("committer fail-stop on persistence failure (Convex: the committer shut
 
 test("a commit queued right after another resolves, in the same microtask chain, is not lost", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
-  const c = new Committer(p);
+  const c = new Committer(p, 20_000, () => 0); // a stopped clock: timestamps 1, 2, 3… (as the asserts expect)
   const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
   const second = c
     .commit({ snapshot: 0, reads: [], docs: [], idx: idx(1) })
@@ -106,7 +106,7 @@ test("a commit queued right after another resolves, in the same microtask chain,
 
 test("changedBetween: whether a commit in (from, to] wrote into the reads, and true beyond the log", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
-  const c = new Committer(p, 3);
+  const c = new Committer(p, 3, () => 0); // a stopped clock: timestamps 1, 2, 3…
   const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
   const reads = (lo: number, hi: number) => [{ index: 9, lo: new Uint8Array([lo]), hi: new Uint8Array([hi]) }];
   for (let n = 1; n <= 3; n++) await c.commit({ snapshot: n - 1, reads: [], docs: [], idx: idx(n) });

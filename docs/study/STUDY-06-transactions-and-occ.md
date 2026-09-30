@@ -116,7 +116,7 @@
 
 `packages/core/src/committer.ts`:
 
-- **Timestamps:** `appliedTs` is a counter (`++this.appliedTs`) resumed from `maxTs()`.
+- **Timestamps:** `appliedTs = max(appliedTs + 1, wall clock in µs)`, resumed from `maxTs()` (D9, as Convex).
 - **Validation:** `validate` checks the pending commit's intervals against each `LogEntry` with
   `ts > snapshot`, linearly (`overlaps`). The log holds commits already *applied* in the current or
   previous group, so it plays the role of Convex's `pending_writes` too.
@@ -157,7 +157,7 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
 | D6 | No transaction limits: reads (32k docs / 16 MiB), intervals (4 096), writes (16k docs / 16 MiB) | OBSERVABLE | Code that works on bunvex can fail on Convex, and unbounded transactions can exhaust memory or stall the single committer | owner |
 | D7 | No mutation idempotency: no session or request id, no recorded result | OBSERVABLE | A re-sent mutation after a reconnect runs twice. Needed with the client sync work | owner |
 | D8 | No `db.vars.commitTs` | OBSERVABLE | Missing API | owner |
-| D9 | Commit timestamps are a counter, not nanosecond wall-clock values | INTERNAL | Not exposed to apps today. Matters for time-based retention and for any future `ts` in the protocol | owner |
+| D9 | Commit timestamps are a counter, not nanosecond wall-clock values | ~~INTERNAL~~ observable since sync protocol v1 (transition and mutation `ts`, `maxObservedTimestamp`) | A recreated store restarts the counter at 1 and refuses clients that saw a higher ts; `maxTs` errors reuse a ts (STUDY-24 S2) | **Decided (owner, 2026-09-30): as Convex.** `ts = max(last + 1, wall clock)`, in **microseconds** internally (a JS number is exact only to 2^53) and × 1000 on the wire, so clients see Convex's wall-clock nanoseconds at µs resolution. The write log's window is tracked explicitly (`purgedTs`), since timestamps are sparse |
 | D10 | The write log is trimmed by count (20 000 commits), not by time or size, and a snapshot outside it is a retried conflict, not `OutOfRetention` | INTERNAL | Very long mutations fail differently; rare | owner |
 | D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4) | owner |
 | D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only | owner |
