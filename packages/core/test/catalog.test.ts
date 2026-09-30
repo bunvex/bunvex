@@ -30,7 +30,7 @@ describe("catalog (_tables / _index)", () => {
     await open(
       defineSchema({ users: defineTable(v.any()), posts: defineTable(v.any()).index("by_author", ["author"]) }),
       async (e) => {
-        expect(numbers(e)).toEqual({ _tables: 513, _index: 514, users: 10001, posts: 10002 });
+        expect(numbers(e)).toEqual({ _tables: 513, _index: 514, _instance: 515, users: 10001, posts: 10002 });
         expect([...e.catalog.table("posts").indexes.keys()]).toEqual(["by_id", "by_creation_time", "by_author"]);
       },
     );
