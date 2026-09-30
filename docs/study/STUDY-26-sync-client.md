@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7 and R2–R3 as recommended (owner, 2026-09-30)
+- **Status:** accepted: C3–C7, R2–R3 and H2–H4 as recommended (owner, 2026-09-30); P1–P2 open
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -386,7 +386,7 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | H1 | The client header is `Bunvex-Client: npm-<version>`, and no `format` field is sent (Convex: `Convex-Client`, `format: "convex_encoded_json"`) | Owner's naming rule; the server ignores both and always answers encoded JSON | follows the rule |
-| H2 | Admin auth is sent as `Authorization: Bunvex <key>` (Convex: `Convex <key>`) | Same rule. The server verifies no admin key yet, so the scheme is decided now for when it does | **recommend** |
-| H3 | No `function(name, componentPath, args)` / `/api/function` | Components are phase 4 | **recommend** later |
-| H4 | `query_at_ts` with a ts ahead of the server's answers 400 `InvalidTimestamp` | Convex's behavior there comes from its database layer; bunvex has only one node, so its own clients never send one | **recommend** |
+| H2 | Admin auth is sent as `Authorization: Bunvex <key>` (Convex: `Convex <key>`) | Same rule. The server verifies no admin key yet, so the scheme is decided now for when it does | **accepted** |
+| H3 | No `function(name, componentPath, args)` / `/api/function` | Components are phase 4 | **accepted** later |
+| H4 | `query_at_ts` with a ts ahead of the server's answers 400 `InvalidTimestamp` | Convex's behavior there comes from its database layer; bunvex has only one node, so its own clients never send one | **accepted** |
 
