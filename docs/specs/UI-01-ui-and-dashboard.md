@@ -913,7 +913,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   drilldown).
 - **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
   that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
-- Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.
+- Not yet (STUDY-12 L6): usage and identity (the call tree came with §15.6, deployment events with §16.4).
 
 ### 13.2 The Functions screen
 
@@ -1198,3 +1198,11 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   typed, `customClaims` flattened (`runner/identity.ts`). It is one setting for the page, as in Convex,
   starting from Convex's `{ subject: "fake_id", issuer: "fake_issuer" }`. An invalid identity blocks Run and
   pauses a watched query; a run keeps its identity in the history, and Previous / Next bring it back.
+
+### 16.4 The deployment's events among the log lines (STUDY-12 §10.4, L8)
+
+- On the Logs screen (not a function's logs), the audit log's events (§14.5) from the oldest loaded line on
+  are placed among the lines by time (`logs/events.ts`, as Convex's `interleaveLogs.ts`): level **event**,
+  the author where a line has its function, the event in words (History's `describeEvent`). The log filters
+  leave them, as in Convex. They refresh on `watchAuditEvents`. Enter on one opens it on the History screen.
+- Only when the source has `listAuditEvents` and the credential `viewAuditLog`.

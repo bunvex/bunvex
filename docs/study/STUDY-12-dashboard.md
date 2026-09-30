@@ -534,7 +534,8 @@ for the whole page with Convex's default `{ subject: "fake_id", issuer: "fake_is
 `lib/interleaveLogs.ts` merges the execution log lines with the deployment's audit-log events by time
 (`DeploymentEventListItem.tsx` shows one as a line of its own: who did what), and a "cleared" marker.
 bunvex: the Logs list interleaves the audit log's events (§9) when the source has `listAuditEvents` and the
-credential may read it. **Status: planned**, as Convex.
+credential may read it; they are not filtered (Convex's are not); Enter on one opens it on the History screen,
+where bunvex shows an event's details (Convex opens it in the log's drilldown). **Status: built**.
 
 ### 10.5 Usage and identity in a line's details (L9)
 
