@@ -1,6 +1,6 @@
 # STUDY-17 — `.paginate()`, cursors and reactive page boundaries
 
-- **Status:** implemented (#42, draft: one decision pending, see §4)
+- **Status:** implemented (#42)
 - **Convex source read:** commit `4577b9031`
   - `crates/isolate/src/environment/udf/async_syscall.rs` (`query_page`, `read_page_from_query`);
   - `crates/common/src/query.rs` (`Cursor`);
@@ -45,8 +45,8 @@ the split fields, and the validators.
 ## 3. How bunvex does it
 
 - **`packages/core/src/cursor.ts`:** the same content (position + fingerprint), base64url-encoded and
-  signed with HMAC-SHA256 under the instance secret (`Engine` option `instanceSecret`, `INSTANCE_SECRET`
-  in the bench server).
+  signed with HMAC-SHA256 under the instance secret: the `Engine` option `instanceSecret` (`INSTANCE_SECRET`
+  in the bench server), or else the one generated once and stored in `_instance` (D2).
 - **`Tx` query `.paginate()`:**
   - streams the sub-range between the cursors, with filters, the transaction's own writes, the limits and
     the split fields as in §1;
@@ -61,7 +61,7 @@ the split fields, and the validators.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | Cursors are signed (HMAC), not encrypted: the index key position is visible to a client who decodes base64 | Tampering is refused all the same; encryption needs the key broker (admin keys, phase 3) | owner |
-| D2 | **Default secret:** without `instanceSecret`, cursors are signed with a fixed development secret | There is no deployment secret yet. Alternatives: a random per-process secret (cursors break on restart) or refuse to paginate without one | **owner — decision needed** |
+| D2 | Without `INSTANCE_SECRET`, a random secret is generated on first start and stored with the data (system table `_instance`), as Convex's self-hosted image does (`self-hosted/docker-build/read_credentials.sh`: the env var, else the stored secret, else a new random one that is then saved). Convex saves it in a file of its data directory; bunvex saves it in the store, because the data may live in a remote database | accepted: option D (owner, 2026-09-30) |
 | D3 | The fingerprint covers table, index, range and order, not filter expressions | Filters are closures here, not a serialized expression | accepted |
 | D4 | `InvalidCursor` errors are plain errors, without Convex's error `data` | The error-data class lands with the errors work (track B, #32) | follow-up |
 

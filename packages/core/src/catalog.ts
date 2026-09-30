@@ -9,9 +9,12 @@ import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from
 
 export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
+/** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
+export const INSTANCE_TABLE = "_instance";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
+const FIRST_SYSTEM_TABLE_NUMBER = 513;
 
 export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: "active" };
 export type IndexMeta = {
@@ -86,12 +89,14 @@ export function planCatalog(
   const changes: CatalogChanges = { insertTables: [], insertIndexes: [], deleteIndexes: [] };
   let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
   let nextIndexId = Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
-  const usedNumbers = new Set(tables.map((t) => t.number));
+  // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
+  const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
   for (const d of declared) {
     let tablet = tables.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {
-      let number = FIRST_USER_TABLE_NUMBER;
+      // System tables take the first free number above 512, user tables above 10 000 (Convex).
+      let number = d.name.startsWith("_") ? FIRST_SYSTEM_TABLE_NUMBER : FIRST_USER_TABLE_NUMBER;
       while (usedNumbers.has(number)) number++;
       usedNumbers.add(number);
       tablet = nextTablet++;
