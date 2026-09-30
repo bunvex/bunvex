@@ -1201,3 +1201,14 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Native pointer events, no new dependency. The **Columns** panel stays: it is the keyboard and screen-
   reader way (the owner's call).
 
+### 17.4 Narrow screens
+
+Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrolls sideways but a grid.
+- Below `md` the screens' list is behind **Menu** in the shell: a disclosure (`aria-expanded`,
+  `aria-controls`) that closes when a screen is picked, or on Escape (the focus goes back to Menu).
+- Below `lg`, the second columns become a row above the content: the table list becomes the **Table**
+  picker, the Functions tree sits above the function, and the Settings pages above the page — a 768 px
+  screen no longer holds the dashboard's sidebar, a list and the content side by side.
+- Button rows wrap (a table's actions, a function's path and buttons, a URL and its copy button).
+- An e2e case at 390 px checks that no screen scrolls sideways and that Menu works.
+

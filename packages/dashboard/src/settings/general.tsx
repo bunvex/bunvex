@@ -36,8 +36,8 @@ function Row({ term, children }: { term: string; children: ReactNode }) {
 
 function Url({ href, label }: { href: string; label: string }) {
   return (
-    <span className="flex items-center gap-2">
-      <code className="font-mono text-xs break-all">{href}</code>
+    <span className="flex flex-wrap items-center gap-2">
+      <code className="min-w-0 font-mono text-xs break-all">{href}</code>
       <CopyButton text={href} label={`Copy the ${label}`} />
     </span>
   );
