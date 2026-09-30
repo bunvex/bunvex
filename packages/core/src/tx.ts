@@ -133,9 +133,6 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   return { lo, hi };
 }
 
-/** The secret that signs pagination cursors when the deployment sets none (development only). */
-export const DEFAULT_INSTANCE_SECRET = "bunvex-development-instance-secret";
-
 /** Convex's document and write limits (crates/common/src/document.rs, knobs.rs). */
 export const MAX_USER_SIZE = 1 << 20; // 1 MiB, the size of the whole document (system fields included)
 export const MAX_DOCUMENT_NESTING = 16;
@@ -208,7 +205,7 @@ export type PaginationResult = {
 export class Tx {
   reads: Interval[] = [];
   /** The instance secret that signs pagination cursors (STUDY-17). */
-  instanceSecret = DEFAULT_INSTANCE_SECRET;
+  instanceSecret = "";
   /**
    * Reactive pagination's journal: the end cursor of this query's previous run (a subscription re-run
    * keeps its page boundary), and the one this run ends at.
