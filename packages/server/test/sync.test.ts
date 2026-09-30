@@ -44,14 +44,21 @@ async function setup() {
 }
 
 /** A bare v1 client: sends messages, records what the server sends. */
-async function client(url: string) {
+async function client(url: string, maxObservedTimestamp?: bigint) {
   const ws = new WebSocket(url);
   const got: v1.ServerMessage[] = [];
   ws.onmessage = (m) => got.push(v1.parseServerMessage(String(m.data)));
   const closed = new Promise<CloseEvent>((r) => (ws.onclose = r));
   await new Promise((r) => (ws.onopen = r));
   const send = (m: v1.ClientMessage) => ws.send(v1.encodeClientMessage(m));
-  send({ type: "Connect", sessionId: crypto.randomUUID(), connectionCount: 0, lastCloseReason: null, clientTs: 0 });
+  send({
+    type: "Connect",
+    sessionId: crypto.randomUUID(),
+    connectionCount: 0,
+    lastCloseReason: null,
+    clientTs: 0,
+    ...(maxObservedTimestamp === undefined ? {} : { maxObservedTimestamp }),
+  });
   let querySet = 0;
   const modify = (modifications: (v1.AddQuery | v1.RemoveQuery)[]) =>
     send({ type: "ModifyQuerySet", baseVersion: querySet, newVersion: ++querySet, modifications });
@@ -172,11 +179,35 @@ describe("sync protocol v1", () => {
         sessionId: crypto.randomUUID(),
         connectionCount: 1,
         lastCloseReason: null,
-        maxObservedTimestamp: 1_000_000n,
+        maxObservedTimestamp: (BigInt(Date.now()) + 3_600_000n) * 1_000_000n, // an hour ahead, in ns
         clientTs: 0,
       }),
     );
     expect((await closed).code).toBe(1011);
+  });
+
+  test("timestamps travel as Convex's: wall-clock nanoseconds (bunvex's microseconds × 1000)", async () => {
+    const { url, engine } = await setup();
+    const c = await client(url);
+    const before = BigInt(Date.now()) * 1_000_000n;
+    c.send({ type: "Mutation", requestId: 0, udfPath: "m:both", args: [{}] });
+    const r = (await c.until(() => c.got.find((m) => m.type === "MutationResponse"))) as v1.MutationResponse;
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.ts).toBe(BigInt(engine.committer.visibleTs) * 1000n);
+    expect(r.ts >= before && r.ts <= BigInt(Date.now() + 1) * 1_000_000n).toBe(true);
+  });
+
+  test("a client that observed exactly the server's latest ts connects", async () => {
+    const { url } = await setup();
+    const a = await client(url);
+    a.send({ type: "Mutation", requestId: 0, udfPath: "m:both", args: [{}] });
+    const r = (await a.until(() => a.got.find((m) => m.type === "MutationResponse"))) as v1.MutationResponse;
+    if (!r.success) throw new Error("mutation failed");
+    const b = await client(url, r.ts);
+    b.modify([add(1, "m:count", { table: "a" })]);
+    const t = await b.transition(0);
+    expect(t.endVersion.ts >= r.ts).toBe(true);
   });
 
   test("a failing query: QueryFailed with the error's data", async () => {
