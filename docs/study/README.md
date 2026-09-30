@@ -50,6 +50,7 @@ to a spec.
 | [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | draft: D1–D4 decided, D5–D10 await the owner |
 | [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 await the owner |
 | [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1–D3 await the owner |
+| [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 awaits the owner |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

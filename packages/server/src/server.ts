@@ -10,12 +10,22 @@ import {
   stringifyValue,
 } from "@bunvex/core";
 import { type ClientMessage, subscriptionKey } from "@bunvex/protocol";
-import type { Server } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
 
-type WsData = { keys: Set<string> };
+/**
+ * One connection's state. `mutations` is the tail of its mutation queue: as in Convex's sync worker
+ * (`mutation_futures … buffered(1)`, crates/sync/src/worker.rs), a connection's mutations run one at a
+ * time, in the order they arrived (STUDY-22).
+ */
+type WsData = { keys: Set<string>; mutations: Promise<void>; pendingMutations: number; closed: boolean };
+
+/** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
+export const MAX_PENDING_MUTATIONS = 1000;
+/** Close code for "try again later" (RFC 6455 1013), which Convex uses for rate-limit errors. */
+const CLOSE_TRY_AGAIN_LATER = 1013;
 
 export type ServerOptions = {
   engine: Engine;
@@ -100,6 +110,20 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
+  /** Run one WebSocket mutation and send its `res` frame. Never throws. */
+  const runWsMutation = async (ws: ServerWebSocket<WsData>, id: number, path: string, args: unknown) => {
+    const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
+    if (ws.data.closed) return;
+    const lines = linesField("l", r.logLines, redact);
+    if (r.ok) ws.send(`{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`);
+    else {
+      // An exhausted OCC budget is not the function's error: Convex ends the connection with it
+      // (STUDY-21 D2); v0 sends its message as the result.
+      const e = r.error instanceof OccError ? { error: r.error.message } : formatError(r.error);
+      ws.send(`{"t":"res","id":${JSON.stringify(id)}${errorFields(e)}${lines}}`);
+    }
+  };
+
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
     idleTimeout: 120,
@@ -141,25 +165,36 @@ export function createServer(opts: ServerOptions) {
           }
         } else if (m.t === "mut") {
           const { id, path, args } = m;
-          const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
-          const lines = linesField("l", r.logLines, redact);
-          if (r.ok) ws.send(`{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`);
-          else {
-            // An exhausted OCC budget is not the function's error: Convex ends the connection with it
-            // (STUDY-21 D2); v0 sends its message as the result.
-            const e = r.error instanceof OccError ? { error: r.error.message } : formatError(r.error);
-            ws.send(`{"t":"res","id":${JSON.stringify(id)}${errorFields(e)}${lines}}`);
+          const conn = ws.data;
+          // Convex refuses the 1001st pending mutation with a rate-limit error that ends the connection
+          // ("TooManyConcurrentMutations", close code 1013).
+          if (conn.pendingMutations >= MAX_PENDING_MUTATIONS) {
+            ws.close(CLOSE_TRY_AGAIN_LATER, "TooManyConcurrentMutations");
+            return;
           }
+          conn.pendingMutations++;
+          // Queued synchronously, before any await, so the queue order is the order frames arrived.
+          conn.mutations = conn.mutations.then(async () => {
+            try {
+              // A closed connection's queued mutations never start, as when Convex drops the worker; the
+              // client re-sends what it did not get an answer for.
+              if (!conn.closed) await runWsMutation(ws, id, path, args);
+            } finally {
+              conn.pendingMutations--;
+            }
+          });
         }
       },
       close(ws) {
+        ws.data.closed = true;
         for (const k of ws.data.keys) subs.unsubscribe(k);
       },
     },
     async fetch(req, srv) {
       const url = new URL(req.url);
       if (url.pathname === "/ws") {
-        if (srv.upgrade(req, { data: { keys: new Set<string>() } })) return undefined as never;
+        const data: WsData = { keys: new Set(), mutations: Promise.resolve(), pendingMutations: 0, closed: false };
+        if (srv.upgrade(req, { data })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");

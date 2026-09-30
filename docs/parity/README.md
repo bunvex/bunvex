@@ -76,7 +76,7 @@ Protocol v1:
 
 - all queries advance together (Transition with state versions);
 - read-your-writes (the mutation commit ts);
-- mutation ordering per connection;
+- mutation ordering per connection (done in STUDY-22);
 - idempotency (session and request ids);
 - reconnect and resend, auth messages.
 

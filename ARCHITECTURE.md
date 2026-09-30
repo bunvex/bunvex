@@ -65,6 +65,7 @@ bunvex/
 │   │   │                            validation N · determinism ✅ (in core) · sandbox D
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
 │   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
+│   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
