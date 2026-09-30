@@ -354,4 +354,48 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
 | L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
-| L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", argument validation, run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), later — a query runs once for now |
+| L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), later — a query runs once for now |
+
+## 8. Validators and the declared schema (added 30 Sep 2026)
+
+### 8.1 How Convex does it
+
+- **The form.** A `v.*` validator serializes to JSON (`npm-packages/convex/src/values/validators.ts`,
+  `ValidatorJSON`): `{ type: "string" }`, `{ type: "id", tableName }`, `{ type: "object", value: { f: {
+  fieldType, optional } } }`, `{ type: "union", value: [...] }`, `{ type: "record", keys, values }`, a
+  `literal` with a JSON value (an int64 as `{ $integer }`). Push analysis stores each function's `args` and
+  `returns` in this form.
+- **What the dashboard receives.** `_system/frontend/modules:argsValidator` returns a function's arguments
+  validator as a JSON string, or `{ "type": "any" }` when none is declared
+  (`npm-packages/system-udfs/convex/_system/frontend/modules.ts`, `_system/cli/modules.ts`
+  `DEFAULT_ARGS_VALIDATOR`); the CLI's `apiSpec` also returns `returns`.
+- **The runner** (`dashboard-common/src/features/functionRunner/components/FunctionTester.tsx`) starts the
+  arguments from `defaultValueForValidator` (`dashboard-common/src/lib/defaultValueForValidator.ts`:
+  `""`, `0`, `0n`, `false`, `[]`, `{}`, a literal's value, a union's first member; optional fields left
+  out), and its editor (`elements/ObjectEditor`) checks what is typed against the validator as it changes,
+  underlining every misfit (`ConvexSchemaValidationError`: missing property, extra property, type not
+  assignable, no union member matches) and disabling Run while there are errors.
+- **Display.** `dashboard-common/src/lib/format.ts` `displayValidator` prints a validator as `v.*` code
+  (`v.float64()` for a number, `v.int64()`, `v.id("t")`, `v.optional(...)` inside objects).
+- **The server** validates arguments too: a misfit fails the call with an `ArgumentValidationError`.
+- The Functions screen does not show validators; only the runner uses them.
+
+### 8.2 How bunvex does it
+
+- `FunctionInfo` carries optional `args` / `returns` in Convex's JSON form (`ValidatorJson` in the
+  contract); absent means none declared. `src/validators.ts` displays them as `v.*` code (one line, or one
+  field per line when wide), makes the template, and checks a value — each misfit with its path, so the
+  runner's editor underlines the value (or the key, for an extra property) with the parser's positions
+  (`parseLiteralLocated`). The dashboard never imports `@bunvex/values`: the JSON form is the contract.
+- The runner follows Convex's: template, check as you type, every misfit underlined, Run disabled.
+- The mock declares validators for most of its functions (some declare none) and checks arguments like a
+  server: a misfit is the run's `ArgumentValidationError`, not a rejected call. The contract suite checks
+  that declared validators are well-formed, and (opt-in) that a misfit fails the run.
+- An `id` validator checks that the value is text; the table an id belongs to is not checked.
+
+### 8.3 Divergences
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| V1 | The Functions screen shows a function's declared arguments and return validators as code; Convex's shows neither | the owner asked for it | **decided** (30 Sep 2026) by the owner |
+

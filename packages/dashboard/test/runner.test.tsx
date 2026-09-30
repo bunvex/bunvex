@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { Dashboard, DataSourceError } from "@bunvex/dashboard";
+import { Dashboard, DataSourceError, type ValidatorJson } from "@bunvex/dashboard";
 import { MockDataSource, type MockDataSourceOptions } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -26,6 +26,26 @@ describe("arguments", () => {
     expect(parseArgs("{ limit: 2, owner: 'x' }")).toEqual({ ok: true, args: { limit: 2, owner: "x" } });
     expect(parseArgs("[1]")).toMatchObject({ ok: false, offset: 0 });
     expect(parseArgs("{ limit: }").ok).toBe(false);
+  });
+
+  test("checked against a validator, the first misfit points at its place", () => {
+    const v: ValidatorJson = {
+      type: "object",
+      value: {
+        limit: { fieldType: { type: "number" }, optional: true },
+        owner: { fieldType: { type: "id", tableName: "users" }, optional: false },
+      },
+    };
+    expect(parseArgs("{ owner: 'x' }", v)).toEqual({ ok: true, args: { owner: "x" } });
+    expect(parseArgs("{ owner: 'x', limit: 'a' }", v)).toMatchObject({ ok: false, offset: 21 }); // the value
+    expect(parseArgs("{ owner: 'x', nope: 1 }", v)).toMatchObject({ ok: false, offset: 14 }); // the key
+    expect(parseArgs("{ limit: 1 }", v)).toMatchObject({ ok: false, offset: 0 }); // the object missing it
+    // every misfit has its place; the first is the message
+    expect(parseArgs("{ owner: 1, limit: 'a' }", v)).toMatchObject({
+      ok: false,
+      offset: 9,
+      more: [{ message: "limit: Type 'string' is not assignable to v.float64()", offset: 19 }],
+    });
   });
 });
 
@@ -71,8 +91,39 @@ describe("the function runner", () => {
     fireEvent.change(args(), { target: { value: "{ id: }" } });
     expect(within(runner()).getByText(`Unexpected "}"`)).toBeDefined();
     expect(within(runner()).getByRole("button", { name: "Run query" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("a declared arguments validator gives the template and checks what is typed; Run waits for a fit", async () => {
+    mount("/functions?function=tasks:byOwner");
+    await screen.findByRole("heading", { level: 1, name: "byOwner" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect((args() as HTMLTextAreaElement).value).toBe('{\n  owner: "",\n}');
+    const run = () => within(runner()).getByRole("button", { name: "Run query" });
+    for (const [text, message] of [
+      ["{}", `Property 'owner' is missing but required: v.id("users")`],
+      ["{ owner: 1 }", `owner: Type 'number' is not assignable to v.id("users")`],
+      ["{ owner: 'x', extra: 1 }", `Property 'extra' does not exist in v.object({ owner: v.id("users") })`],
+    ] as const) {
+      fireEvent.change(args(), { target: { value: text } });
+      expect(within(runner()).getByText(message)).toBeDefined();
+      expect(run().hasAttribute("disabled")).toBe(true);
+    }
+    fireEvent.change(args(), { target: { value: "{ owner: 'x' }" } });
+    expect(run().hasAttribute("disabled")).toBe(false);
+  });
+
+  test("the source checks the arguments too: a misfit is the run's error; a thrown error is the result", async () => {
+    const source = mockSource();
+    const bad = await source.runFunction("users:get", { id: 1 });
+    expect(bad.error?.message).toBe(`ArgumentValidationError: id: Type 'number' is not assignable to v.id("users")`);
+    mount("/functions?function=tasks:summarize", source); // declares no validator: anything goes
+    await screen.findByRole("heading", { level: 1, name: "summarize" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect((args() as HTMLTextAreaElement).value).toBe("{}");
     fireEvent.change(args(), { target: { value: "{ throw: 'no such user' }" } });
-    await user.click(within(runner()).getByRole("button", { name: "Run query" }));
+    await user.click(within(runner()).getByRole("button", { name: "Run action" }));
     await within(runner()).findByText(/^Failed in/);
     expect(within(runner()).getByText("Uncaught Error: no such user", { selector: "pre" })).toBeDefined();
   });
