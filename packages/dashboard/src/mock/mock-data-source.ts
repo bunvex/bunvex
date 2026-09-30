@@ -26,9 +26,10 @@ import {
   type Unsubscribe,
   type Value,
 } from "../data-source.ts";
+import { tableNameProblem } from "../database/table-name.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
-import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
+import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
 
@@ -349,6 +350,16 @@ export class MockDataSource implements DashboardDataSource {
   }
 
   // ---------------------------------------------------------------- writes
+
+  createTable(name: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const invalid = tableNameProblem(name);
+      if (invalid) throw new DataSourceError("invalid_request", invalid);
+      if (this.tables.has(name)) throw new DataSourceError("invalid_request", `Table "${name}" already exists.`);
+      this.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: false });
+    });
+  }
 
   insertDocuments(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]> {
     return this.call(opts?.signal, () => {

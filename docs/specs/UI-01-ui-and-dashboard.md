@@ -1012,3 +1012,17 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   (`DeleteDialog`, now controlled; STUDY-12 D13, open: Convex does not ask outside production).
 - Read-only: Delete document disabled, like the edit items.
 
+### 15.4 Creating a table (STUDY-12 D11)
+
+- **Contract**: optional `createTable(name)` — an empty table outside the schema; a taken name or one
+  that is not an identifier is `invalid_request`. The mock implements it; the contract suite (writes,
+  opt-in) checks both.
+- **Table list**: "Create table" at its foot (where the credential can write and the source can),
+  turning into a name box as in Convex: the name is checked as it is typed (`table-name.ts`, Convex's
+  rules: letters, digits and `_`, not starting with a digit or `_`, at most 64; not taken), Create (or
+  Enter) makes the table and opens it, Cancel or Escape puts the button back with the focus on it; a
+  refusal from the source is an alert under the box.
+- Not yet: a deployment with no tables at all shows the `/database` message without the list, so no
+  Create table there (the route component is in `router.tsx`, left alone while route splitting is under
+  way elsewhere).
+
