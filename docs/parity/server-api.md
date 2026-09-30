@@ -46,11 +46,11 @@ Key bunvex facts behind the statuses:
 | Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | done (#10) | |
 | `.fullTableScan()` | impl/query_impl.ts | missing | Only the implicit default (`by_creation_time`). |
 | `.order("asc" \| "desc")` | impl/query_impl.ts | partial | Works. It doesn't reject a second `.order()` or `.order()` on a search query. |
-| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | missing | Listed as "M" in ARCHITECTURE.md. |
-| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | missing | |
-| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | missing | |
-| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | missing | |
-| Filter logic `and` / `or` / `not` | filter_builder.ts | missing | |
+| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
+| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
+| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#37) | |
+| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
+| Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | missing | |
 | At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | missing | |
 | `.limit(n)` (non-terminal operator on OrderedQuery) | server/query.ts | missing | |
@@ -62,7 +62,7 @@ Key bunvex facts behind the statuses:
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | missing | bunvex's query object is mutable and reusable. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | missing | |
 | `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
-| `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | missing | Full-text search is "D" in ARCHITECTURE.md. |
+| `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | missing | Search is phase 4. |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | missing | |
 | Search limits: 16 query terms, 32-char term max, ≤8 filter conditions, ≤1024 results | crates/search/src/constants.rs | missing | |
 

@@ -24,6 +24,7 @@ import BTree from "sorted-btree";
 import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
+import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 import { checkIdentifier, type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
@@ -304,19 +305,16 @@ export class Tx {
     let ix = t.indexes.get("by_creation_time")!;
     let range: Range = FULL;
     let desc = false;
-    const snapshotRange = async (limit: number): Promise<Doc[]> => {
+    const filters: ExpressionOrValue[] = [];
+    const snapshotRange = async (lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> => {
       const p = this.persistence as Persistence & Partial<ScanDocs>;
       if (p.scanDocs) {
         // Remote persistence fuses the index range and the document fetches into one round trip.
-        const rows = await outsideExecution(() =>
-          p.scanDocs!(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc),
-        );
+        const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, desc));
         for (const j of rows) this.recordDoc(j);
         return rows.map(decodeDoc);
       }
-      const ids = await outsideExecution(() =>
-        this.persistence.scan(ix.id, range.lo, range.hi, this.snapshot, limit, desc),
-      );
+      const ids = await outsideExecution(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, desc));
       const out: Doc[] = [];
       for (const id of ids) {
         const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
@@ -327,17 +325,47 @@ export class Tx {
       }
       return out;
     };
+    /** Up to `limit` documents of [lo, hi), this transaction's own writes merged in. */
+    const page = async (lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> => {
+      const pend: [Uint8Array, Doc | null][] = [];
+      this.pending.get(ix.id)?.forRange(lo, hi, false, (k, val) => {
+        pend.push([k, val]);
+      });
+      if (pend.length === 0) return snapshotRange(lo, hi, limit); // the common case: nothing written here
+      return this.mergePending(ix, pend, await snapshotRange(lo, hi, limit + countRemovals(pend)), limit, desc);
+    };
     const run = async (limit: number): Promise<Doc[]> => {
       if (limit <= 0) return [];
       // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only
       // affects how often the query cache is invalidated, never correctness).
       this.recordInterval({ index: ix.id, lo: range.lo, hi: range.hi });
-      const pend: [Uint8Array, Doc | null][] = [];
-      this.pending.get(ix.id)?.forRange(range.lo, range.hi, false, (k, v) => {
-        pend.push([k, v]);
-      });
-      if (pend.length === 0) return snapshotRange(limit); // the common case: nothing written here
-      return this.mergePending(ix, pend, await snapshotRange(limit + countRemovals(pend)), limit, desc);
+      if (filters.length === 0) return page(range.lo, range.hi, limit);
+      // With filters: stream the range in pages until `limit` documents pass (reads count toward the
+      // transaction's limits as they happen, as in Convex).
+      const out: Doc[] = [];
+      for await (const d of stream()) {
+        if (filters.every((f) => passes(f, d))) out.push(d);
+        if (out.length >= limit) break;
+      }
+      return out;
+    };
+    /** Every document of the range in order, fetched in growing pages past the last key seen. */
+    const stream = async function* (): AsyncGenerator<Doc> {
+      let lo = range.lo;
+      let hi = range.hi;
+      let n = 64;
+      for (;;) {
+        const docs = await page(lo, hi, n);
+        for (const d of docs) yield d;
+        if (docs.length < n) return;
+        const last = indexKey(ix, docs[docs.length - 1]);
+        if (desc) hi = last;
+        else {
+          lo = new Uint8Array(last.length + 1);
+          lo.set(last);
+        }
+        n = Math.min(n * 2, 1024);
+      }
     };
     const q = {
       withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder) {
@@ -349,6 +377,12 @@ export class Tx {
       },
       order(dir: "asc" | "desc") {
         desc = dir === "desc";
+        return q;
+      },
+      /** Keep the documents for which `predicate` is true (Convex's filter builder). */
+      filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>) {
+        if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
+        filters.push(predicate(filterBuilder));
         return q;
       },
       take: (n: number) => {
@@ -370,6 +404,7 @@ export class Tx {
     const q = {
       withIndex: (_name: string, _f?: (b: IndexRangeBuilder) => IndexRangeBuilder) => q,
       order: (_dir: "asc" | "desc") => q,
+      filter: (_predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>) => q,
       take: async (_n: number): Promise<Doc[]> => [],
       first: async (): Promise<Doc | null> => null,
       collect: async (): Promise<Doc[]> => [],
