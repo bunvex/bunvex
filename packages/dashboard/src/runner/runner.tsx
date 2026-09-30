@@ -6,6 +6,7 @@
 // source can watch one (`watchFunction`), is not run but subscribed, as in Convex (STUDY-12 §10, R1): its result
 // follows the arguments while they are valid, and updates as the data changes; with invalid ones it pauses.
 import { Button } from "@bunvex/ui/components/button";
+import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { cn } from "@bunvex/ui/lib/utils";
@@ -26,6 +27,7 @@ import { describeFunction } from "../functions/tree.ts";
 import { formatDuration } from "../logs/log-list.tsx";
 import { defaultValueFor, validateValue } from "../validators.ts";
 import { appendRunHistory, type RunHistoryEntry, readRunHistory } from "./history.ts";
+import { DEFAULT_IDENTITY, parseIdentity } from "./identity.ts";
 
 type Args =
   | { ok: true; args: Record<string, Value> }
@@ -60,6 +62,8 @@ export function argsTemplate(fn: FunctionInfo | undefined): string {
 
 // the arguments typed for each function, while the page is open
 const drafts = new Map<string, string>();
+// the user acted as, one for every function, as in Convex (STUDY-12 §10.3), while the page is open
+const acting = { on: false, text: DEFAULT_IDENTITY };
 
 type Outcome = { run: FunctionRun } | { failed: string };
 
@@ -78,7 +82,24 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
   const readOnly = caps?.readOnly ?? false;
   const blocked = fn !== undefined && readOnly && fn.kind !== "query";
   const live = fn?.kind === "query" && typeof scope.source.watchFunction === "function";
-  const argsKey = args.ok ? JSON.stringify(args.args) : null;
+  const canActAs = caps?.operations.includes("actAsUser") ?? false;
+  const [actAs, setActAs] = useState(acting.on);
+  const [identityText, setIdentityText] = useState(acting.text);
+  const identity = actAs && canActAs ? parseIdentity(identityText) : undefined;
+  const identityOk = identity === undefined || identity.ok;
+  const runAs = identity?.ok ? identity.identity : undefined;
+  const argsKey = args.ok && identityOk ? JSON.stringify([args.args, runAs ?? null]) : null;
+  const identityId = useId();
+  const identityCheckId = useId();
+  const actAsId = useId();
+  const toggleActAs = (on: boolean) => {
+    acting.on = on;
+    setActAs(on);
+  };
+  const setIdentity = (t: string) => {
+    acting.text = t;
+    setIdentityText(t);
+  };
   const [waiting, setWaiting] = useState(false);
   // a mutation's or an action's past arguments (a query follows its own): Previous / Next step through them
   const [history, setHistory] = useState<RunHistoryEntry[]>(() =>
@@ -92,12 +113,15 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
     setText(t);
     drafts.set(fn.path, t);
     setHistoryAt(i);
+    // the run's user comes back with its arguments, as in Convex
+    if (entry.identity) setIdentity(formatLiteral(entry.identity, "  "));
+    toggleActAs(entry.identity !== undefined);
   };
 
   // a watched query: subscribed with the current (valid) arguments; the last result stays until the next
   // biome-ignore lint/correctness/useExhaustiveDependencies: argsKey stands for args.args
   useEffect(() => {
-    if (!live || !fn || !args.ok) return;
+    if (!live || !fn || !args.ok || !identityOk) return;
     setWaiting(true);
     return scope.source.watchFunction!(
       fn.path,
@@ -110,6 +134,7 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
         setOutcome({ failed: e.message });
         setWaiting(false);
       },
+      runAs && { identity: runAs },
     );
   }, [live, fn?.path, argsKey, scope.source]);
 
@@ -118,15 +143,21 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
 
   const run = async () => {
     // a watched query is not run: it follows its arguments
-    if (!fn || !args.ok || blocked || live || !scope.source.runFunction) return;
+    if (!fn || !args.ok || !identityOk || blocked || live || !scope.source.runFunction) return;
     setRunning(true);
     // a query keeps none, even run once (without watchFunction)
     if (fn.kind !== "query") {
-      setHistory(appendRunHistory(scope.scope, fn.path, { args: args.args, startedAt: Date.now() }));
+      setHistory(
+        appendRunHistory(scope.scope, fn.path, {
+          args: args.args,
+          startedAt: Date.now(),
+          ...(runAs && { identity: runAs }),
+        }),
+      );
       setHistoryAt(0);
     }
     try {
-      setOutcome({ run: await scope.source.runFunction(fn.path, args.args) });
+      setOutcome({ run: await scope.source.runFunction(fn.path, args.args, runAs && { identity: runAs }) });
     } catch (e) {
       setOutcome({ failed: toDataSourceError(e).message });
     }
@@ -236,9 +267,50 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
               <span className="text-muted-foreground">Ctrl+Enter runs it.</span>
             )}
           </p>
+          <div className="flex flex-col gap-1">
+            <span className="flex w-fit items-center gap-2 text-sm">
+              <Checkbox
+                id={actAsId}
+                checked={actAs && canActAs}
+                disabled={!canActAs}
+                onCheckedChange={(on) => toggleActAs(on === true)}
+                aria-describedby={canActAs ? undefined : identityId}
+              />
+              <label htmlFor={actAsId}>Act as a user</label>
+            </span>
+            {!canActAs ? (
+              <p id={identityId} className="text-xs text-muted-foreground">
+                This credential cannot act as a user.
+              </p>
+            ) : (
+              actAs && (
+                <>
+                  <CodeEditor
+                    label="User identity"
+                    multiline
+                    height={90}
+                    value={identityText}
+                    onChange={setIdentity}
+                    error={identity && !identity.ok ? { message: identity.error, offset: identity.offset } : undefined}
+                    describedBy={identityCheckId}
+                  />
+                  <p id={identityCheckId} aria-live="polite" className="min-h-4 text-xs">
+                    {identity && !identity.ok ? (
+                      <span className="text-destructive">{identity.error}</span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        What <code className="font-mono">ctx.auth.getUserIdentity()</code> returns: subject and issuer,
+                        then any claims.
+                      </span>
+                    )}
+                  </p>
+                </>
+              )
+            )}
+          </div>
           {!live && (
             <div>
-              <Button type="submit" size="sm" disabled={!fn || !args.ok || blocked || running}>
+              <Button type="submit" size="sm" disabled={!fn || !args.ok || !identityOk || blocked || running}>
                 <Play aria-hidden="true" />
                 {running ? "Running…" : `Run ${fn?.kind ?? "function"}`}
               </Button>

@@ -63,7 +63,9 @@ export type Operation =
   // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
   | "viewEnvironmentVariables"
   | "writeEnvironmentVariables"
-  | "viewAuditLog";
+  | "viewAuditLog"
+  // STUDY-12 §10.3: Convex's ActAsUser — run functions as a user (the runner's "Act as a user")
+  | "actAsUser";
 export const OPERATIONS: readonly Operation[] = [
   "viewData",
   "writeData",
@@ -73,6 +75,7 @@ export const OPERATIONS: readonly Operation[] = [
   "viewEnvironmentVariables",
   "writeEnvironmentVariables",
   "viewAuditLog",
+  "actAsUser",
 ];
 
 export type Capabilities = {
@@ -276,6 +279,15 @@ export type FunctionRun = {
   durationMs: number;
 };
 
+/**
+ * A user's identity to run a function as (STUDY-12 §10.3), as Convex's runner takes it: `subject` and
+ * `issuer`, the OpenID claims (`name`, `email`, …), and any custom claims, flattened.
+ */
+export type UserIdentity = { subject: string; issuer: string } & Record<string, Value>;
+
+/** `identity`: run as that user (`actAsUser`); without it, the function sees no user, as an admin's run. */
+export type RunOptions = CallOptions & { identity?: UserIdentity };
+
 export type LogFilter = { function?: string; levels?: LogLevel[] };
 
 /** Newest first; the cursor walks back in time. */
@@ -375,7 +387,7 @@ export interface DashboardDataSource extends DeploymentFeatures {
    * when `runFunctions` is granted (a read-only credential runs queries only). Unknown path: `not_found`;
    * not allowed: `unauthorized`. The run is logged like any other execution.
    */
-  runFunction?(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun>;
+  runFunction?(path: string, args: Record<string, Value>, opts?: RunOptions): Promise<FunctionRun>;
 
   /**
    * Keeps a query subscribed, as Convex's runner does (STUDY-12 §10, R1): `onResult` gets its run
@@ -388,6 +400,7 @@ export interface DashboardDataSource extends DeploymentFeatures {
     args: Record<string, Value>,
     onResult: (run: FunctionRun) => void,
     onError: (error: DataSourceError) => void,
+    opts?: Pick<RunOptions, "identity">,
   ): Unsubscribe;
 
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;

@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Dashboard, DataSourceError, type ValidatorJson } from "@bunvex/dashboard";
 import { MockDataSource, type MockDataSourceOptions } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { appendRunHistory, RUN_HISTORY_LENGTH, readRunHistory } from "../src/runner/history.ts";
+import { parseIdentity } from "../src/runner/identity.ts";
 import { parseArgs } from "../src/runner/runner.tsx";
 import { expectAccessible } from "./axe.ts";
 
@@ -17,6 +18,11 @@ function mount(path: string, source = mockSource()) {
   return source;
 }
 const runner = () => screen.getByRole("region", { name: "Run a function" });
+/** Turns "Act as a user" on — it is one setting for the whole page, as in Convex, so it may be on already. */
+async function actAs(user: ReturnType<typeof userEvent.setup>) {
+  const box = within(runner()).getByRole("checkbox", { name: "Act as a user" });
+  if (box.getAttribute("aria-checked") !== "true") await user.click(box);
+}
 const args = () => within(runner()).getByRole("textbox", { name: "Arguments" });
 
 beforeEach(() => localStorage.clear());
@@ -185,6 +191,7 @@ describe("the function runner", () => {
     await screen.findByRole("heading", { level: 1, name: "summarize" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" }); // its own chunk
     expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
     for (const text of ["{ n: 1 }", "{ n: 2 }", "{ n: 2 }"]) {
       fireEvent.change(args(), { target: { value: text } });
@@ -211,5 +218,75 @@ describe("the function runner", () => {
     await screen.findByRole("heading", { level: 1, name: "list" });
     await userEvent.setup().click(screen.getByRole("button", { name: "Run" }));
     expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
+  });
+
+  test("an identity: subject and issuer required, claims typed, customClaims flattened", () => {
+    expect(
+      parseIdentity("{ subject: 'u1', issuer: 'https://auth', name: 'Ada', customClaims: { role: 'admin' } }"),
+    ).toEqual({
+      ok: true,
+      identity: { subject: "u1", issuer: "https://auth", name: "Ada", role: "admin" },
+    });
+    expect(parseIdentity("{ subject: 'u1' }")).toMatchObject({
+      ok: false,
+      error: 'The identity needs "issuer", as text.',
+    });
+    expect(parseIdentity("{ subject: 'u', issuer: 'i', emailVerified: 'yes' }")).toMatchObject({
+      ok: false,
+      error: '"emailVerified" is true or false.',
+    });
+    expect(parseIdentity("[1]").ok).toBe(false);
+  });
+
+  test("Act as a user: the run carries the identity, the history keeps it, an invalid one blocks the run", async () => {
+    mount("/functions?function=tasks:summarize");
+    await screen.findByRole("heading", { level: 1, name: "summarize" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" }); // its own chunk
+    await actAs(user);
+    const who = within(runner()).getByRole("textbox", { name: "User identity" }) as HTMLTextAreaElement;
+    expect(who.value).toBe('{\n  subject: "fake_id",\n  issuer: "fake_issuer",\n}'); // Convex's default
+    fireEvent.change(who, { target: { value: "{ subject: 'u1' }" } });
+    expect(within(runner()).getByText('The identity needs "issuer", as text.')).toBeDefined();
+    expect(within(runner()).getByRole("button", { name: "Run action" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.change(who, { target: { value: "{ subject: 'u1', issuer: 'https://auth', name: 'Ada' }" } });
+    await user.click(within(runner()).getByRole("button", { name: "Run action" }));
+    await within(runner()).findByText("authenticated as Ada (https://auth)");
+    expect(readRunHistory("default", "tasks:summarize")[0]?.identity).toEqual({
+      subject: "u1",
+      issuer: "https://auth",
+      name: "Ada",
+    });
+    await expectAccessible();
+  });
+
+  test("a watched query runs as the user too; a credential without actAsUser cannot", async () => {
+    mount("/functions?function=tasks:list");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" }); // its own chunk
+    await actAs(user);
+    fireEvent.change(within(runner()).getByRole("textbox", { name: "User identity" }), {
+      target: { value: "{ subject: 'q1', issuer: 'https://auth' }" },
+    });
+    await within(runner()).findByText("authenticated as q1 (https://auth)");
+    cleanup();
+    const limited = mockSource({
+      capabilities: { operations: ["viewData", "viewLogs", "runFunctions"], readOnly: false },
+    });
+    await expect(
+      limited.runFunction("tasks:list", {}, { identity: { subject: "u", issuer: "i" } }),
+    ).rejects.toMatchObject({ code: "unauthorized" });
+    mount("/functions?function=tasks:list", limited);
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" });
+    const box = within(runner()).getByRole("checkbox", { name: "Act as a user" });
+    expect(
+      box.getAttribute("aria-disabled") === "true" || box.hasAttribute("disabled") || box.hasAttribute("data-disabled"),
+    ).toBe(true);
+    expect(within(runner()).getByText("This credential cannot act as a user.")).toBeDefined();
   });
 });

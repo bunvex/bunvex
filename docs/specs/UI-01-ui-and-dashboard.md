@@ -947,7 +947,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   runner is open, the screen keeps room to scroll past it.
 - Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
   credential runs queries only.
-- Not yet (STUDY-12 L6): "act as a user", custom test
+- Not yet (STUDY-12 L6): custom test
   queries. (Argument validation came with §15.1.)
 
 ## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
@@ -1186,3 +1186,15 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   entry. **Previous arguments** / **Next arguments** beside the editor fill it with them. A query keeps none
   — watched, it follows its arguments; run once (without `watchFunction`), it still keeps none, as Convex's
   queries.
+
+### 16.3 Acting as a user (STUDY-12 §10.3, R3)
+
+- **Contract**: an `actAsUser` operation (Convex's `ActAsUser`); `UserIdentity` (`subject`, `issuer`, any
+  claims); `RunOptions.identity` on `runFunction` and, as `opts`, on `watchFunction`. Without the operation,
+  an identity is `unauthorized`. **Mock**: the run's first line says `authenticated as <name or subject>
+  (<issuer>)`, as a function reading `ctx.auth.getUserIdentity()` would.
+- **Runner**: **Act as a user** (disabled, with the reason, without `actAsUser`) opens a **User identity**
+  editor, checked as Convex's `parseImpersonatedUser`: `subject` and `issuer` required, the OpenID claims
+  typed, `customClaims` flattened (`runner/identity.ts`). It is one setting for the page, as in Convex,
+  starting from Convex's `{ subject: "fake_id", issuer: "fake_issuer" }`. An invalid identity blocks Run and
+  pauses a watched query; a run keeps its identity in the history, and Previous / Next bring it back.
