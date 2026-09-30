@@ -1,9 +1,9 @@
 // Function results and errors on the wire, as Convex answers them (STUDY-20): the HTTP API's status codes
 // and body shape, BunvexError data, redaction, and the log lines a call returns.
 import { afterEach, expect, test } from "bun:test";
-import { Engine, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { BunvexError } from "@bunvex/values";
+import { BunvexError, v } from "@bunvex/values";
 import { action, type FunctionDef, Functions, mutation, query } from "../src/functions.ts";
 import { formatLogLine, MAX_LOG_LINE_LENGTH } from "../src/logs.ts";
 import { createServer, type ServerOptions } from "../src/server.ts";
@@ -15,7 +15,7 @@ afterEach(() => {
 
 async function serve(fns: Record<string, FunctionDef>, opts: Partial<ServerOptions> = {}) {
   const persistence = await MemoryPersistence.open(null, { durable: false });
-  const engine = await new Engine(new Schema().table("items", {}), persistence).init();
+  const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), persistence).init();
   const functions = new Functions(engine).register("m", fns);
   const { server, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false, ...opts });
   stops.push(stop);

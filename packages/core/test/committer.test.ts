@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { v } from "@bunvex/values";
 import { CommitterStoppedError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 
-const schema = new Schema().table("items", { by_n: ["n"] });
+const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
 const dirs: string[] = [];
 const open: Persistence[] = [];
 afterEach(async () => {

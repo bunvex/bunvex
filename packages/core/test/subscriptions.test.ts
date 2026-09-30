@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 import { Subscriptions } from "../src/subscriptions.ts";
 
 async function setup() {
   const e = await new Engine(
-    new Schema().table("flags", { by_name: ["name"] }),
+    defineSchema({ flags: defineTable(v.any()).index("by_name", ["name"]) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const log: string[] = [];

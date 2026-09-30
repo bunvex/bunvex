@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, Schema } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine() {
   return new Engine(
-    new Schema().table("items", { by_n: ["n"] }),
+    defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
 }
