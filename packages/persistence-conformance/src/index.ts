@@ -440,6 +440,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // K10–K18 — single writer (PERSIST-01 C7): the lease, its fence, and the durable prefix.
   async function leaseChecks() {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    // A process-scoped lease (an OS lock: the embedded stores) lives exactly as long as its process: there
+    // is no TTL to expire and no paused holder to replace, so K11–K14 do not apply; K19 covers the rest.
+    const probe = await mod.open(false);
+    const processScoped = (probe as { leaseScope?: string }).leaseScope === "process";
+    await probe.close();
     const raw = async (fresh: boolean) => {
       const s = await mod.open(fresh);
       if (!hasLease(s)) throw new Error("driver lost its lease between opens");
@@ -466,14 +471,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         "epoch" in ra &&
           "heldBy" in rb &&
           rb.heldBy === "k10-a" &&
-          rb.expiresInMs > 0 &&
+          (processScoped ? rb.expiresInMs === null : rb.expiresInMs !== null && rb.expiresInMs > 0) &&
           second instanceof LeaseHeldError,
         "K10 a live lease is exclusive (driver: heldBy; engine: LeaseHeldError)",
       );
     }
 
     // K11 — a holder that stops renewing is replaced within TTL + ε, with a greater epoch.
-    {
+    if (!processScoped) {
       const a = await raw(false);
       const b = await raw(false);
       const ttl = 400;
@@ -495,7 +500,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }
 
     // K12 — after a takeover, the old holder's flush is refused and leaves nothing visible.
-    {
+    if (!processScoped) {
       const a = await raw(false);
       const b = await raw(false);
       await a.acquireLease({ holder: "k12-a", ttlMs: 200 });
@@ -588,8 +593,42 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
     }
 
-    // K13 (+ K14) — a paused writer resumes after a takeover: it must stop with a lost lease and land nothing.
+    // K19 — another PROCESS holds the store: an engine refuses to open, and takes over once it is gone.
     {
+      await mod.open(true).then((s) => s.close());
+      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
+      const child = spawn(process.execPath, [childPath, opts.driverModule], {
+        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      let started = false;
+      child.stdout.on("data", (d) => {
+        if (String(d).includes("start")) started = true;
+      });
+      const exited = new Promise((r) => child.on("exit", r));
+      while (!started) await sleep(20);
+      const refused = await newEngine(await mod.open(false)).then(
+        async (e) => {
+          await e.close();
+          return null;
+        },
+        (e) => e,
+      );
+      child.kill("SIGKILL");
+      await exited;
+      const t0 = Date.now();
+      const e = await newEngine(await mod.open(false), { lease: { waitMs: 20 * CHILD_TTL_MS } }).catch((err) => err);
+      const took = Date.now() - t0;
+      const ok = refused instanceof LeaseHeldError && !(e instanceof Error);
+      if (!(e instanceof Error)) await (e as Engine).close();
+      check(
+        ok && took <= CHILD_TTL_MS + 2000,
+        `K19 a store another process holds is refused (${refused?.constructor?.name ?? "opened"}), and taken over once it dies (${took} ms)`,
+      );
+    }
+
+    // K13 (+ K14) — a paused writer resumes after a takeover: it must stop with a lost lease and land nothing.
+    if (!processScoped) {
       const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
       let bad = 0;
       let worst = 0;
