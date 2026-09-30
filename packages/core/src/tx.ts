@@ -23,6 +23,7 @@ import {
 import BTree from "sorted-btree";
 import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
+import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -179,11 +180,39 @@ export type TxQuery = {
   first(): Promise<Doc | null>;
   unique(): Promise<Doc | null>;
   collect(): Promise<Doc[]>;
+  paginate(opts: PaginationOptions): Promise<PaginationResult>;
   [Symbol.asyncIterator](): AsyncIterator<Doc>;
+};
+
+/** Convex's `PaginationOptions`. */
+export type PaginationOptions = {
+  numItems: number;
+  cursor: string | null;
+  endCursor?: string | null;
+  id?: number;
+  maximumRowsRead?: number;
+  maximumBytesRead?: number;
+};
+/** Convex's `PaginationResult`. */
+export type PaginationResult = {
+  page: Doc[];
+  isDone: boolean;
+  continueCursor: string;
+  splitCursor: string | null;
+  pageStatus: "SplitRecommended" | "SplitRequired" | null;
 };
 
 export class Tx {
   reads: Interval[] = [];
+  /** The instance secret that signs pagination cursors (STUDY-17). */
+  instanceSecret = "";
+  /**
+   * Reactive pagination's journal: the end cursor of this query's previous run (a subscription re-run
+   * keeps its page boundary), and the one this run ends at.
+   */
+  prevEndCursor: string | null = null;
+  nextEndCursor: string | null = null;
+  private paginated = false;
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
@@ -412,6 +441,105 @@ export class Tx {
       }
       n = Math.min(n * 2, 1024);
     }
+  }
+
+  /** `.paginate()` as Convex's `query_page` (crates/isolate/src/environment/udf/async_syscall.rs). */
+  /** @internal (QueryImpl) */
+  async paginate(table: string, st: QState, opts: PaginationOptions): Promise<PaginationResult> {
+    const n = opts?.numItems;
+    if (typeof n !== "number" || !(n > 0))
+      throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
+    const pageSize = Math.floor(n);
+    if (pageSize === 0) throw new Error("Must request at least 1 document while paginating");
+    if (pageSize > TRANSACTION_MAX_READ_SIZE_ROWS) throw new Error(`Requested too many items: ${pageSize}`);
+    if (opts.maximumRowsRead === 0 || opts.maximumBytesRead === 0)
+      throw new Error("maximumRowsRead and maximumBytesRead must be greater than 0");
+    if (this.paginated)
+      throw new Error(
+        "This query or mutation function ran multiple paginated queries. Only a single paginated query is supported in each function.",
+      );
+    this.paginated = true;
+    const fp = queryFingerprint({
+      tablet: st.t?.id ?? 0,
+      index: st.ix?.id ?? 0,
+      lo: st.range.lo,
+      hi: st.range.hi,
+      desc: st.desc,
+    });
+    const secret = this.instanceSecret;
+    const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
+    const endStr = opts.endCursor ?? this.prevEndCursor;
+    const end = endStr ? decodeCursor(secret, endStr, fp) : null;
+    const done = (page: Doc[], pos: CursorPosition, status: PaginationResult["pageStatus"], split: string | null) => {
+      const continueCursor = encodeCursor(secret, pos, fp);
+      this.nextEndCursor = continueCursor;
+      return { page, isDone: pos === "end", continueCursor, splitCursor: split, pageStatus: status };
+    };
+    if (!st.t || !st.ix) return done([], "end", null, null);
+    if (start === "end") {
+      this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
+      return done([], "end", null, null);
+    }
+    // The page's range: after the start cursor, up to (and including) the end cursor.
+    const succ = (k: Uint8Array) => {
+      const x = new Uint8Array(k.length + 1);
+      x.set(k);
+      return x;
+    };
+    let lo = st.range.lo;
+    let hi = st.range.hi;
+    if (!st.desc) {
+      if (start) lo = succ(start.after);
+      if (end && end !== "end") hi = succ(end.after);
+    } else {
+      if (start) hi = start.after;
+      if (end && end !== "end") lo = end.after;
+    }
+    const page: Doc[] = [];
+    const keys: Uint8Array[] = [];
+    let rowsRead = 0;
+    let bytesRead = 0;
+    let last: Uint8Array | null = null;
+    let exhausted = true;
+    let status: PaginationResult["pageStatus"] = null;
+    const maxRows = opts.maximumRowsRead;
+    const maxBytes = opts.maximumBytesRead;
+    const sub: QState = { ...st, range: { lo, hi } };
+    for await (const d of this.stream(sub)) {
+      if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
+        status = "SplitRequired";
+        exhausted = false;
+        break;
+      }
+      rowsRead++;
+      bytesRead += valueSize(d as unknown as Value);
+      last = indexKey(st.ix, d);
+      if (st.filters.every((f) => passes(f, d))) {
+        page.push(d);
+        keys.push(last);
+        // As Convex: a full page stops without looking further, so its cursor is "after the last
+        // document" even if nothing follows (the next page is then empty and done).
+        if (!end && page.length >= pageSize) {
+          exhausted = false;
+          break;
+        }
+      }
+    }
+    // Read-set: the range this page covers (to the end cursor, or to the last key read).
+    const readHi = st.desc ? hi : exhausted ? hi : succ(last ?? lo);
+    const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
+    this.recordInterval({ index: st.ix.id, lo: readLo, hi: readHi });
+    if (
+      status === null &&
+      ((maxRows !== undefined && rowsRead > (maxRows * 3) / 4) ||
+        (maxBytes !== undefined && bytesRead > (maxBytes * 3) / 4) ||
+        page.length > (8192 * 3) / 4)
+    )
+      status = "SplitRecommended";
+    const split =
+      status && keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
+    const pos: CursorPosition = exhausted ? (end ?? "end") : { after: last ?? lo };
+    return done(page, pos, status, split);
   }
 
   /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
@@ -733,6 +861,12 @@ class QueryImpl implements TxQuery {
     // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
     // enough to raise Convex's error).
     return this.results(this.tx.collectLimit());
+  }
+
+  paginate(opts: PaginationOptions): Promise<PaginationResult> {
+    if (this.st.closed || this.st.iterated) throw reusedError();
+    this.st.closed = true;
+    return this.tx.paginate(this.table, this.st, opts);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Doc> {

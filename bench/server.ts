@@ -8,6 +8,7 @@ import { bench, benchSchema } from "./functions.ts";
 const config = persistenceConfigFromEnv();
 const engine = await new Engine(benchSchema, await openPersistence(config), {
   cacheMax: Number(process.env.CACHE_MAX ?? 1000),
+  instanceSecret: process.env.INSTANCE_SECRET,
 }).init();
 const functions = new Functions(engine).register("bench", bench);
 createServer({ engine, functions, port: Number(process.env.PORT ?? 3210), label: config.kind });
