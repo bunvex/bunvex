@@ -153,10 +153,15 @@ export class Functions {
   }
 
   async runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
+    return (await this.runMutationWithTs(name, args, fromClient)).value;
+  }
+
+  /** The same, with the commit ts (what the sync protocol's MutationResponse carries). */
+  runMutationWithTs(name: string, args: unknown, fromClient = true): Promise<{ value: unknown; ts: number }> {
     const f = this.fn(name, "mutation", fromClient);
     // perAttempt: a retried run's console lines replace the aborted attempt's (logs.ts).
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
-    return this.engine.mutation(
+    return this.engine.mutationWithTs(
       perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
       name,
     );
