@@ -2,6 +2,7 @@
 // indexes and fields, live while it is open, with one side panel for a document, the schema or the
 // indexes. Everything that says what is shown lives in the URL: the table, the filter, the open panel.
 import { Button } from "@bunvex/ui/components/button";
+import { preloadCodeEditor } from "@bunvex/ui/components/code-editor";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -15,10 +16,11 @@ import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { DeleteSelected, type Outcome, TableMenu } from "./actions.tsx";
 import { CellEditor } from "./cell-editor.tsx";
+import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
 import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
-import { decodeFilter } from "./filter-url.ts";
+import { decodeFilter, encodeFilter } from "./filter-url.ts";
 import { useLiveTable } from "./live.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
@@ -121,6 +123,7 @@ function TableView({ info }: { info: TableInfo }) {
     insert: canWrite && typeof source.insertDocuments === "function",
     delete: canWrite && typeof source.deleteDocuments === "function",
     clear: canWrite && typeof source.clearTable === "function",
+    replace: canWrite && typeof source.replaceDocument === "function",
   };
   const writable = can.edit;
   const queryClient = useQueryClient();
@@ -140,6 +143,7 @@ function TableView({ info }: { info: TableInfo }) {
   const [columnState, setColumnState] = useColumnState(scope.scope, table);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new filter is a new list
   useEffect(() => setSelected(new Set()), [search.filter]);
+  useEffect(preloadCodeEditor, []); // the filter, cell and document editors all use it
   const selectedIds = useMemo(() => docs.filter((d) => selected.has(d._id)).map((d) => d._id), [docs, selected]);
 
   // what the last action did, said once (and to screen readers)
@@ -166,8 +170,25 @@ function TableView({ info }: { info: TableInfo }) {
     [navigate],
   );
   const closePanel = useCallback(() => setSearch({ doc: undefined, panel: undefined }), [setSearch]);
+  const [editRequest, setEditRequest] = useState<number>();
+  // what a cell's context menu and shortcuts do (cell-menu.tsx)
+  const cellActions = (d: Document): CellActions => ({
+    filter: (clause) => setSearch({ filter: encodeFilter(withClause(applied, clause)) }),
+    copy: (text, what) =>
+      void navigator.clipboard.writeText(text).then(
+        () => setNotice({ ok: true, message: `Copied ${what === "document" ? "the document" : what}.` }),
+        () => setNotice({ ok: false, message: "Could not copy to the clipboard." }),
+      ),
+    viewDocument: () => setSearch({ doc: d._id, panel: undefined }),
+    editDocument: can.replace
+      ? () => {
+          setEditRequest((n) => (n ?? 0) + 1);
+          setSearch({ doc: d._id, panel: undefined });
+        }
+      : undefined,
+  });
   const panel: PanelState | null = search.doc
-    ? { kind: "document", id: search.doc }
+    ? { kind: "document", id: search.doc, canEdit: can.replace, editRequest }
     : search.panel === "add"
       ? can.insert
         ? {
@@ -312,6 +333,16 @@ function TableView({ info }: { info: TableInfo }) {
               renderEditor: ({ row, columnId, done }) => (
                 <CellEditor table={table} doc={row} field={columnId} done={done} />
               ),
+              cellMenu: ({ row, columnId, edit }) => (
+                <CellMenuItems
+                  doc={row}
+                  field={columnId}
+                  canEdit={writable && !columnId.startsWith("_")}
+                  edit={edit}
+                  actions={cellActions(row)}
+                />
+              ),
+              onCellKey: (e, { row, columnId }) => cellShortcut(e, row, columnId, cellActions(row)),
             }}
             empty={
               query.isPending

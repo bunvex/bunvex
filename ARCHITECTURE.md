@@ -30,7 +30,7 @@ bunvex/
 │   ├── values/                      @bunvex/values
 │   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      ✅
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
-│   │   ├── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
+│   │   ├── types                    Value, JSON form, sort keys (STUDY-18) ✅ · Infer<> N
 │   │   └── errors                   BunvexError (Convex's ConvexError) with `data` (STUDY-20)  ✅
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
@@ -100,7 +100,10 @@ bunvex/
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
-│   │   └── screens                  health ✅ (engine counters) · functions, logs                 D
+│   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
+│   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
+│   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
+│   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M
@@ -118,7 +121,7 @@ bunvex/
 │
 ├── apps/
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard (mock data for now) 🟡
-│   └── docs/                        documentation site for USERS                               D
+│   └── site/                        bunvex.dev (SITE-01): landing now, user docs later; TanStack Start 🟡
 │
 ├── examples/
 │   ├── todo/                        the minimal example                                        M
@@ -178,6 +181,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
 cli ──► server, core                                      bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)
+ui ◄── apps/site
 ```
 
 - `core` knows no external database, no HTTP and no WebSocket.

@@ -1,4 +1,4 @@
-// Convex values (STUDY-12): the types a document, an argument or a result may hold, and their JSON form.
+// Convex values (STUDY-18): the types a document, an argument or a result may hold, and their JSON form.
 //
 //   null · bigint (Int64) · number (Float64, NaN/±Infinity/−0 included) · boolean · string ·
 //   ArrayBuffer (Bytes) · Value[] · { [field]: Value }

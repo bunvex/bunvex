@@ -5,7 +5,7 @@
 // against the clause it names.
 import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
-import { Input } from "@bunvex/ui/components/input";
+import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { cn } from "@bunvex/ui/lib/utils";
 import { Plus, X } from "lucide-react";
@@ -40,8 +40,17 @@ import {
   valueKind,
 } from "./filter-model.ts";
 import { encodeFilter, isEmptyFilter } from "./filter-url.ts";
+import { parseValueInput } from "./value-input.ts";
 
 const APPLY_AFTER_MS = 350;
+
+/** Where a value box's text stops parsing (for the editor's underline); a list box is read as `[…]`. */
+function offsetOf(text: string, list = false): number | undefined {
+  const t = list && !text.trim().startsWith("[") ? `[${text}]` : text;
+  const r = parseValueInput(t);
+  if (r.ok || r.offset === undefined) return undefined;
+  return list && t !== text ? Math.max(0, r.offset - 1) : r.offset;
+}
 
 type FilterBarProps = {
   info: TableInfo;
@@ -231,13 +240,13 @@ function IndexEq(props: {
   return (
     <span className="flex items-center gap-1">
       <span className="font-mono text-xs">{props.field} =</span>
-      <Input
-        aria-label={`${props.field} equals`}
-        aria-invalid={props.error ? true : undefined}
-        aria-describedby={props.error ? errorId : undefined}
-        className="h-7 w-32 font-mono text-xs"
+      <CodeEditor
+        label={`${props.field} equals`}
+        error={props.error ? { message: props.error, offset: offsetOf(props.text) } : undefined}
+        describedBy={props.error ? errorId : undefined}
+        className="w-40"
         value={props.text}
-        onChange={(e) => props.onText(e.target.value)}
+        onChange={props.onText}
       />
       <Button
         variant="ghost"
@@ -285,13 +294,13 @@ function Range(props: {
             ))}
           </SelectContent>
         </Select>
-        <Input
-          aria-label={`${field} ${side} bound`}
-          aria-invalid={props.errors[side] ? true : undefined}
+        <CodeEditor
+          label={`${field} ${side} bound`}
+          error={props.errors[side] ? { message: props.errors[side]!, offset: offsetOf(b.text) } : undefined}
           placeholder="any"
-          className="h-7 w-32 font-mono text-xs"
+          className="w-40"
           value={b.text}
-          onChange={(e) => set({ text: e.target.value })}
+          onChange={(text) => set({ text })}
         />
       </span>
     );
@@ -385,14 +394,17 @@ function Clause(props: {
           </SelectContent>
         </Select>
       ) : (
-        <Input
-          aria-label={`${name} value`}
-          aria-invalid={props.error ? true : undefined}
-          aria-describedby={props.error ? errorId : undefined}
-          placeholder={kind === "list" ? "a, b, c" : "value"}
-          className="h-7 w-48 font-mono text-xs"
+        <CodeEditor
+          label={`${name} value`}
+          // "Pick a field" is not about the value: only the value's own mistakes mark it
+          error={
+            props.error && c.field ? { message: props.error, offset: offsetOf(c.text, kind === "list") } : undefined
+          }
+          describedBy={props.error ? errorId : undefined}
+          placeholder={kind === "list" ? '"a", "b", 1' : '"text", 42, true…'}
+          className="w-56"
           value={c.text}
-          onChange={(e) => props.onChange({ text: e.target.value })}
+          onChange={(text) => props.onChange({ text })}
         />
       )}
       <Button variant="ghost" size="icon-xs" aria-label={`Remove the ${name} filter`} onClick={props.onRemove}>

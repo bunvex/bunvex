@@ -9,7 +9,7 @@ async function engine() {
   return new Engine(schema, await MemoryPersistence.open(null, { durable: false })).init();
 }
 
-describe("Convex values in documents and indexes (STUDY-12)", () => {
+describe("Convex values in documents and indexes (STUDY-18)", () => {
   test("every value type round-trips through storage exactly", async () => {
     const e = await engine();
     const id = await e.mutation((db) =>

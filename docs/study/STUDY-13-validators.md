@@ -2,7 +2,7 @@
 
 - **Status:** implemented (#24 validators; the next PR wires `args` / `returns` into functions)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
-- **Related:** [STUDY-12](STUDY-12-value-model.md) (values), STUDY-14 (schemas, next)
+- **Related:** [STUDY-18](STUDY-18-value-model.md) (values), STUDY-14 (schemas, next)
 
 ## 1. How Convex does it
 
