@@ -1,7 +1,6 @@
 # STUDY-12 — The dashboard (Data browser first)
 
-- **Status:** draft — divergences in §4 await the owner (the ones marked *decided* were decided during the
-  work, 29 Sep 2026)
+- **Status:** accepted — every divergence in §4 decided by the owner (29–30 Sep 2026)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard`,
   `dashboard-common`, `dashboard-self-hosted`, `@convex-dev/design-system`, `system-udfs`,
   `crates/local_backend`)
@@ -226,12 +225,12 @@ columns, add documents).
 | D2 | The screen is **Database** at `/database/$table`; Convex's is **Data** at `/data?table=` | the owner's naming | **decided** (UI-01 §12.6) |
 | D3 | Live documents by `watchTable` ("the table changed") + refreshing the loaded pages, not reactive pages | simpler for the server; same screen | **decided** (UI-01 §12.6) |
 | D4 | Changed data flashes **blue** (our `--info`), not yellow | blue already means "live" in bunvex; yellow reads as our `--warning` | **decided** (UI-01 §12.5.4) |
-| D5 | Changes compared by **row id**, not by position; a row counts as new when it arrives between or above rows already shown, not when `_creationTime` is within 1 s of the viewer's clock | scrolling and paging never flash; no dependence on a skewed clock | awaiting the owner |
-| D6 | With reduced motion, a steady tint for the same time instead of no flash; a polite screen-reader announcement ("2 documents changed"), at most every 5 s | accessibility | awaiting the owner |
-| D7 | The filter lives in one `filter` param: base64url of bunvex's `FilterExpression` (`index.eq` + `range`, `clauses`, `order`); Convex's `filters` param is base64 of its own shape (`indexEq`/`indexRange` clauses, a search-index variant) | our contract's shape; search indexes do not exist yet | awaiting the owner |
-| D8 | A link to a document is `?doc=<id>` (opens the side panel); Convex links a filter `_id eq <id>` | the document opens beside the list instead of replacing it | awaiting the owner |
-| D9 | Values are typed in the filter bar's syntax (`42`, `true`, `"text"`, `[1, 2]`, `42n`, a bare word is text; an empty cell removes the field); Convex edits JS literals in a Monaco editor | no editor dependency; one syntax for filters and edits | awaiting the owner |
-| D10 | Columns are reordered from a **Columns** panel (keyboard-first); Convex drags headers (dnd-kit) | accessible first; header dragging can come later | awaiting the owner |
+| D5 | Changes compared by **row id**, not by position; a row counts as new when it arrives between or above rows already shown, not when `_creationTime` is within 1 s of the viewer's clock | scrolling and paging never flash; no dependence on a skewed clock | **decided: keep** (30 Sep 2026) |
+| D6 | With reduced motion, a steady tint for the same time instead of no flash; a polite screen-reader announcement ("2 documents changed"), at most every 5 s | accessibility | **decided: keep** (30 Sep 2026) |
+| D7 | The filter lives in one `filter` param: base64url of bunvex's `FilterExpression` (`index.eq` + `range`, `clauses`, `order`); Convex's `filters` param is base64 of its own shape (`indexEq`/`indexRange` clauses, a search-index variant) | our contract's shape; search indexes do not exist yet | **decided: keep** (30 Sep 2026) |
+| D8 | A link to a document is `?doc=<id>` (opens the side panel); Convex links a filter `_id eq <id>` | the document opens beside the list instead of replacing it | **decided: keep** (30 Sep 2026) |
+| D9 | ~~Values typed in a syntax of our own (`42`, `"text"`, `42n`, a bare word is text)~~ | — | **decided: match Convex** (30 Sep 2026): values are JavaScript literals (`{ name: "Ada", credits: 10n }`, `Bytes("…")`, `undefined` removes a field), edited in a Monaco editor where a value can be long — filter values, cells with objects or arrays, the whole document, adding documents. No longer a divergence. |
+| D10 | Columns are reordered from a **Columns** panel (keyboard-first); Convex drags headers (dnd-kit) | accessible first; header dragging can come later | **decided: keep** (30 Sep 2026) |
 | D11 | Not yet built: create table, generate schema, custom query, metrics per table, the context menu, "filter by this value", copy/view shortcuts per cell, `Shift+Enter` document editing | scope of the first PR | follow-up |
 | D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | follow-up |
 
@@ -248,6 +247,6 @@ columns, add documents).
 
 ## 6. Open questions
 
-1. D5–D10: keep bunvex's choice, or match Convex?
+1. ~~D5–D10~~ decided (§4).
 2. Should the admin API mirror Convex's system UDFs and routes (§1.5) closely enough that Convex's own
    dashboard could run against bunvex too? (UI-01 §5.7 puts the admin messages in `@bunvex/protocol`.)

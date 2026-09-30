@@ -1,7 +1,8 @@
 // How document values read in a table cell, and which columns a page of documents has. Pure, so it is
 // tested without a DOM.
 import type { Document, Value } from "../data-source.ts";
-import { decodeInt64, valueType } from "../filters.ts";
+import { valueType } from "../filters.ts";
+import { formatLiteral } from "./literal.ts";
 
 /** `_id` first, then every other field in the order it first appears, `_creationTime` last (as Convex). */
 export function documentFields(docs: Document[]): string[] {
@@ -41,23 +42,8 @@ export function formatTime(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** A value as a compact literal: `12n` for int64, `Bytes("…")` for bytes, JSON for the rest. */
-export function literal(v: Value): string {
-  switch (valueType(v)) {
-    case "int64":
-      return `${decodeInt64(v as { $integer: string })}n`;
-    case "bytes":
-      return `Bytes("${(v as { $bytes: string }).$bytes}")`;
-    case "array":
-      return `[${(v as Value[]).map(literal).join(", ")}]`;
-    case "object":
-      return `{ ${Object.entries(v as Record<string, Value>)
-        .map(([k, x]) => `${k}: ${literal(x)}`)
-        .join(", ")} }`;
-    default:
-      return JSON.stringify(v);
-  }
-}
+/** A value as a compact JavaScript literal: `12n` for int64, `Bytes("…")` for bytes (STUDY-12 D9). */
+export const literal = (v: Value): string => formatLiteral(v);
 
 /** One cell: `undefined` is a field the document does not have, which is not the same as `null`. */
 export function cellText(field: string, value: Value | undefined): CellText {

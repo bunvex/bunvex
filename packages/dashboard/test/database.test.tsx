@@ -90,7 +90,7 @@ describe("the Database screen", () => {
     });
     mount(`/database/tasks?filter=${filter}`, source);
     await heading("tasks");
-    expect((screen.getByRole("textbox", { name: "owner equals" }) as HTMLInputElement).value).toBe(user!._id);
+    expect((screen.getByRole("textbox", { name: "owner equals" }) as HTMLInputElement).value).toBe(`"${user!._id}"`);
     await waitFor(() => expect(new Set(column(docsTable("tasks"), "owner"))).toEqual(new Set([user!._id])));
   });
 
@@ -195,7 +195,7 @@ describe("editing in the grid", () => {
     await user.keyboard("{Enter}");
     const input = screen.getByRole("textbox", { name: "Edit name" });
     await user.clear(input);
-    await user.type(input, "Grace Hopper{Enter}");
+    await user.type(input, '"Grace Hopper"{Enter}'); // a literal: text is quoted
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Edit name" })).toBeNull());
     expect((await source.getDocument("users", id))?.name).toBe("Grace Hopper");
     expect((document.activeElement as HTMLElement).textContent).toBe("Grace Hopper");
@@ -215,7 +215,7 @@ describe("editing in the grid", () => {
     const input = screen.getByRole("textbox", { name: "Edit admin" });
     await user.clear(input);
     await user.type(input, "[[1,{Enter}"); // "[[" types one "["
-    expect(screen.getByRole("alert").textContent).toBe("Not valid JSON");
+    expect(screen.getByRole("alert").textContent).toBe("Expected a value");
     expect(screen.getByRole("textbox", { name: "Edit admin" })).toBeDefined();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -275,7 +275,8 @@ describe("editing in the grid", () => {
     const user = userEvent.setup();
     await toCell(user, "users", "name");
     await user.keyboard("{Enter}");
-    await user.type(screen.getByRole("textbox"), "!{Enter}");
+    await user.clear(screen.getByRole("textbox"));
+    await user.type(screen.getByRole("textbox"), '"Ada!"{Enter}');
     expect((await screen.findByRole("alert")).textContent).toBe("document too large");
     expect(screen.getByRole("textbox", { name: "Edit name" })).toBeDefined();
   });
