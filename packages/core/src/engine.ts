@@ -1,6 +1,7 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
+import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
@@ -17,7 +18,11 @@ import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic 
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
 import { type Doc, indexKey, type Schema } from "./schema.ts";
-import { Tx } from "./tx.ts";
+import { decodeDoc, Tx } from "./tx.ts";
+
+/** A function result as Convex JSON text (`undefined` → null), and back. */
+export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
+export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
@@ -96,7 +101,7 @@ export class Engine {
       const idx: IndexWrite[] = [];
       for (const id of ids) {
         const json = await this.persistence.get(t.id, id, snapshot);
-        if (json) idx.push({ index: ix.id, key: indexKey(ix, JSON.parse(json) as Doc), id });
+        if (json) idx.push({ index: ix.id, key: indexKey(ix, decodeDoc(json)), id });
       }
       if (idx.length) await this.committer.commit({ snapshot, reads: [], docs: [], idx });
       lo = prefixEnd(encodeKey([ids[ids.length - 1]]));
@@ -115,7 +120,7 @@ export class Engine {
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
   async query<T>(body: TxBody<T>, cacheKey?: string): Promise<T> {
     const r = await this.cachedQuery(body, cacheKey);
-    return "json" in r ? (JSON.parse(r.json) as T) : r.value;
+    return "json" in r ? (parseValue(r.json) as T) : r.value;
   }
 
   /**
@@ -124,7 +129,7 @@ export class Engine {
    */
   async queryJson(body: TxBody<unknown>, cacheKey?: string): Promise<string> {
     const r = await this.cachedQuery(body, cacheKey);
-    return "json" in r ? r.json : JSON.stringify(r.value ?? null);
+    return "json" in r ? r.json : stringifyValue(r.value);
   }
 
   private async cachedQuery<T>(body: TxBody<T>, cacheKey?: string): Promise<{ json: string } | { value: T }> {
@@ -144,7 +149,7 @@ export class Engine {
     if (cacheKey !== undefined && this.committer.visibleTs === snapshot) {
       const max = this.opts.cacheMax ?? 1000;
       if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
-      const json = JSON.stringify(value ?? null);
+      const json = stringifyValue(value);
       this.cache.set(cacheKey, { json, reads: tx.reads });
       return { json };
     }

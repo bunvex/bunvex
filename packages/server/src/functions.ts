@@ -1,7 +1,10 @@
 // The function runtime: query / mutation / action definitions, the registry that names them
 // ("module:fn"), internal functions, and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
-import type { Engine, Tx } from "@bunvex/core";
+import { type Engine, stringifyValue, type Tx } from "@bunvex/core";
+
+/** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
+const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
 
 export type QueryCtx = { db: Tx };
 export type MutationCtx = { db: Tx };
@@ -56,11 +59,11 @@ export class Functions {
   }
 
   runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
-    return this.engine.query(this.queryBody(name, args, fromClient), `${name}\u0000${JSON.stringify(args ?? {})}`);
+    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args));
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored). */
   runQueryJson(name: string, args: unknown): Promise<string> {
-    return this.engine.queryJson(this.queryBody(name, args, true), `${name}\u0000${JSON.stringify(args ?? {})}`);
+    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args));
   }
 
   runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {

@@ -58,7 +58,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       return s;
     };
     const entries = Array.from({ length: 1500 }, (_, i) => ({
-      key: encodeKey([vals(), vals(), new TextEncoder().encode(`id${i}`)]),
+      key: encodeKey([vals(), vals(), `id${i}`]),
       id: `id${i}`,
     }));
     st.apply(
@@ -209,7 +209,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       long("y", 6000, "q"),
       long("z", 2600, ""),
     ];
-    const entries = strings.map((v, i) => ({ key: encodeKey([v, new TextEncoder().encode(`L${i}`)]), id: `L${i}` }));
+    const entries = strings.map((v, i) => ({ key: encodeKey([v, `L${i}`]), id: `L${i}` }));
     const ordered = [...entries].sort((a, b) => compareKeys(a.key, b.key));
     const model = new Map<string, { ts: number; live: boolean }[]>();
     let ts = T0;
