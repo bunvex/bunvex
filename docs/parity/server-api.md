@@ -105,11 +105,11 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | partial | They exist but take only a bare handler: `query(handler, internal?)`. |
-| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | partial | Done as a boolean flag, not as separate builders. Clients can't call internal functions (done). |
-| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | missing | |
-| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | missing | `Args = any`, and nothing is validated. Listed as "N" in ARCHITECTURE.md. |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | missing | |
+| `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
+| `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
+| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
+| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | partial | Manual `register(module, fns)` builds `module:fn`. There is no default-export rule and no file-based discovery. |
