@@ -114,7 +114,7 @@ bunvex/
 │
 ├── apps/
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard (mock data for now) 🟡
-│   └── docs/                        documentation site for USERS                               D
+│   └── site/                        bunvex.dev (SITE-01): landing now, user docs later; TanStack Start 🟡
 │
 ├── examples/
 │   ├── todo/                        the minimal example                                        M
@@ -174,6 +174,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
 cli ──► server, core                                      bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)
+ui ◄── apps/site
 ```
 
 - `core` knows no external database, no HTTP and no WebSocket.
