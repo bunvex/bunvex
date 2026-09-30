@@ -106,8 +106,11 @@ export type TableInfo = {
 export type SchemaInfo = {
   /** Whether documents are validated against the declared types. */
   enforced: boolean;
-  /** One entry per declared table. `validator` is the declared document type, when the server has one. */
-  tables: { name: string; validator?: Json }[];
+  /**
+   * One entry per declared table. `validator` is the declared document type (STUDY-12 V2), in Convex's JSON
+   * form, without the system fields; absent when the table is declared without one.
+   */
+  tables: { name: string; validator?: ValidatorJson }[];
 };
 
 // ------------------------------------------------------------------ filters and pages
@@ -287,10 +290,14 @@ export const isAbortError = (e: unknown) => e instanceof Error && e.name === "Ab
 
 // ------------------------------------------------------------------ the interface
 
+import type { DeploymentFeatures } from "./data-source-deployment.ts";
+
 /** A field update in `patchDocuments`: a new value, or removing the field. */
 export type FieldPatch = Value | { $unset: true };
 
-export interface DashboardDataSource {
+export * from "./data-source-deployment.ts";
+
+export interface DashboardDataSource extends DeploymentFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;

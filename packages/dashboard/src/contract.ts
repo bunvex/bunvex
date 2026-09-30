@@ -6,6 +6,7 @@
 // Reads need one table with at least 3 documents. WRITES RUN ONLY when `writes.table` names a table the
 // suite may fill and empty — never point it at data you want to keep.
 import { test as bunTest, describe, expect } from "bun:test";
+import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import {
   type DashboardDataSource,
   DataSourceError,
@@ -22,7 +23,7 @@ import {
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
 import { isValidatorJson } from "./validators.ts";
 
-export type ContractOptions = {
+export type ContractOptions = DeploymentContractOptions & {
   /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
   watchTimeoutMs?: number;
   /** Per test. Default 30 000 ms: a live server walks many pages. */
@@ -139,6 +140,13 @@ export function describeDataSourceContract(
       const schema = await src.getSchema();
       const declared = tables.filter((t) => t.declared).map((t) => t.name);
       expect(schema.tables.map((t) => t.name).sort()).toEqual(declared.sort());
+      // a declared document type comes in Convex's JSON form, without the system fields (STUDY-12 V2)
+      for (const t of schema.tables) {
+        if (t.validator === undefined) continue;
+        expect(isValidatorJson(t.validator)).toBe(true);
+        if (t.validator.type === "object")
+          expect(Object.keys(t.validator.value).some((k) => k.startsWith("_"))).toBe(false);
+      }
     });
 
     // -------------------------------------------------------------- pagination
@@ -471,6 +479,9 @@ export function describeDataSourceContract(
           expect(r.error?.message).toMatch(/ArgumentValidationError/);
         });
     }
+
+    // -------------------------------------------------------------- the deployment's other features (§14)
+    describeDeploymentContract({ make, test, watchTimeoutMs, opts });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;

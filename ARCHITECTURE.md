@@ -103,6 +103,7 @@ bunvex/
 │   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
 │   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
 │   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
+│   │   ├── schedules                scheduled runs (cancel), cron jobs and their runs (STUDY-12 §9) ✅
 │   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli
