@@ -1019,8 +1019,8 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - **Screen** (`/files`): the total ("12 files stored"), **Upload files** (several at once), a lookup by
   storage id (opens its details), the order and a day range in the URL (`?order=asc&from=&to=`, days in
   the viewer's zone), the grid (storage id, size, content type, uploaded) with row selection and **Delete N**
-  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1
-  keeps text previews an open proposal), size, type, SHA-256, time, **Download**, **Delete**.
+  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1,
+  decided: no text previews), size, type, SHA-256, time, **Download**, **Delete**.
 - Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
   lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
   e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
