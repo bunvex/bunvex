@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7 as recommended (owner, 2026-09-30)
+- **Status:** accepted: C3–C7 and R2–R3 as recommended (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -284,5 +284,5 @@ Tests run against a real server in `packages/sync-e2e/react`, in their own proce
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
 | R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **recommend** |
-| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **recommend** this order |
+| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order |
 
