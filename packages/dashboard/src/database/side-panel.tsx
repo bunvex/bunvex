@@ -6,11 +6,12 @@ import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { JsonView } from "@bunvex/ui/components/json-view";
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
+import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { documentQuery, schemaQuery } from "../data/queries.ts";
+import { documentQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -18,6 +19,7 @@ import { AddDocuments } from "./add-documents.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
 import { formatLiteral } from "./literal.ts";
+import { type SchemaCode, schemaCode } from "./schema-code.ts";
 import { formatTime } from "./values.ts";
 
 export type PanelState =
@@ -150,31 +152,93 @@ function DocumentPanel(props: {
 }
 
 function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }) {
-  const { data: schema } = useQuery(schemaQuery(useQueryScope()));
+  const scope = useQueryScope();
+  const { data: schema } = useQuery(schemaQuery(scope));
+  const { data: tables = [] } = useQuery(tablesQuery(scope));
   const declared = schema?.tables.find((t) => t.name === info.name);
+  const saved = schema ? schemaCode(schema, tables) : null;
   return (
     <Panel title={`Schema of ${info.name}`} onClose={onClose}>
       {!schema ? (
         <p className="text-sm text-muted-foreground">Loading the schema…</p>
-      ) : !declared ? (
-        <p className="text-sm">
-          <strong className="font-medium">{info.name}</strong> is not in the schema: its documents were written without
-          a declaration. Declare it to give it indexes and, once validation exists, a document type.
-        </p>
-      ) : declared.validator === undefined ? (
-        <p className="text-sm">
-          {info.name} is declared, without a document type: any document is accepted.
-          {!schema.enforced && " Documents are not validated on this deployment."}
-        </p>
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">
-            {schema.enforced ? "Documents are validated against this type." : "Declared, but not enforced."}
+          <p className="text-sm">
+            {!declared ? (
+              <>
+                <strong className="font-medium">{info.name}</strong> is not in the schema: its documents were written
+                without a declaration.
+              </>
+            ) : declared.validator === undefined ? (
+              <>{info.name} is declared without a document type: any document is accepted.</>
+            ) : schema.enforced ? (
+              <>Documents in {info.name} are validated against its declared type.</>
+            ) : (
+              <>{info.name} has a declared type, but documents are not validated against it.</>
+            )}
           </p>
-          <JsonView className="mt-3" value={declared.validator} label={`Document type of ${info.name}`} />
+          {saved ? (
+            <SavedSchema code={saved} table={info.name} />
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">
+              This deployment has no saved schema yet: declare tables in{" "}
+              <code className="font-mono">bunvex/schema.ts</code>.
+            </p>
+          )}
         </>
       )}
     </Panel>
+  );
+}
+
+/** The saved schema as the file that declares it, the table's lines highlighted and scrolled to (as Convex). */
+function SavedSchema({ code, table }: { code: SchemaCode; table?: string }) {
+  const range = table ? code.lines.get(table) : undefined;
+  const first = useRef<HTMLSpanElement>(null);
+  const noteId = useId();
+  // a block body: scrollIntoView returns a Promise in recent browsers, and an effect may only return a cleanup
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the table changes
+  useEffect(() => {
+    first.current?.scrollIntoView?.({ block: "nearest" });
+  }, [table]);
+  return (
+    <section aria-label="Saved schema" className="mt-4">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">Saved schema</h3>
+        <CopyButton text={code.code} label="Copy the schema" />
+      </div>
+      {range && (
+        <p id={noteId} className="sr-only">
+          Lines {range.from} to {range.to} declare {table}.
+        </p>
+      )}
+      <pre
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
+        tabIndex={0}
+        aria-describedby={range ? noteId : undefined}
+        className="max-h-[60svh] overflow-auto border bg-muted/40 py-2 font-mono text-xs"
+      >
+        {code.code.split("\n").map((line, i) => {
+          const n = i + 1;
+          const mine = range !== undefined && n >= range.from && n <= range.to;
+          return (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: the lines of one text, by position
+              key={i}
+              ref={mine && n === range.from ? first : undefined}
+              data-table-line={mine ? "" : undefined}
+              // as wide as the longest line, so a marked line's tint runs under all of it
+              className={cn(
+                "block w-max min-w-full border-l-2 px-2",
+                mine ? "border-info bg-info/10" : "border-transparent",
+              )}
+            >
+              {line || " "}
+            </span>
+          );
+        })}
+      </pre>
+    </section>
   );
 }
 
