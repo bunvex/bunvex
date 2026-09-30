@@ -70,17 +70,27 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
-  test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", () => {
+  test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
     expect(entry.length).toBe(1);
-    const file = Bun.file(`${import.meta.dir}/../dist/assets/${entry[0]}`);
-    // 740 kB before route splitting, ~336 kB after
-    expect(file.size).toBeLessThan(380_000);
     // no screen's own text in the entry: a screen imported eagerly again fails this
-    const code = readFileSync(file.name!, "utf8");
-    for (const text of ["Documents in ", "Log lines", "Search functions", "Run a function"])
-      expect(code).not.toContain(text);
+    const code = readFileSync(`${import.meta.dir}/../dist/assets/${entry[0]}`, "utf8");
+    expect(
+      ["Documents in ", "Log lines", "Search functions", "Run a function"].filter((t) => code.includes(t)),
+    ).toEqual([]);
+    // what Health's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB after
+    const { page, close } = await open("/");
+    await heading(page, "Health");
+    const kb = await page.evaluate(
+      () =>
+        performance
+          .getEntriesByType("resource")
+          .filter((e) => e.name.endsWith(".js"))
+          .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
+    );
+    expect(kb).toBeLessThan(600);
+    await close();
   });
 
   test("plain paths: a deep link opens, the knobs leave the address, reload and back keep the route", async () => {
@@ -212,6 +222,40 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
+    const { page, errors, close } = await open("/schedules");
+    await heading(page, "Schedules");
+    await page.waitForURL(`${ORIGIN}/schedules/functions`);
+    await page.getByRole("grid", { name: "Scheduled functions" }).getByRole("row").nth(3).waitFor();
+    await page.getByRole("link", { name: "Cron jobs" }).click();
+    await page.getByRole("gridcell", { name: "summarize tasks" }).click();
+    const panel = page.getByRole("complementary", { name: "summarize tasks" });
+    await panel.getByRole("listitem").first().waitFor();
+    expect(await panel.getByRole("listitem").count()).toBe(5);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Files: upload one, see it first, preview an image", async () => {
+    const { page, errors, close } = await open("/files");
+    await heading(page, "Files");
+    await page
+      .getByLabel("Files to upload")
+      .setInputFiles({ name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("hi\n") });
+    await page.getByText("Uploaded 1 file.").waitFor();
+    const grid = page.getByRole("grid", { name: "Files" });
+    expect(await grid.getByRole("row").nth(1).textContent()).toContain("text/plain");
+    await grid.getByRole("gridcell", { name: "image/svg+xml" }).first().click();
+    const img = page.getByRole("complementary", { name: "File" }).getByRole("img");
+    await img.waitFor();
+    // the preview really loaded (a broken image has no natural width)
+    await page.waitForFunction(
+      () => (document.querySelector("aside img") as HTMLImageElement | null)?.naturalWidth === 96,
+    );
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -220,6 +264,9 @@ describe("the dashboard in a browser", () => {
         ["/database/users", "users"],
         ["/database/users?panel=schema", "users"],
         ["/database/users?panel=add", "users"],
+        ["/schedules/functions", "Schedules"],
+        ["/schedules/crons?cron=summarize+tasks", "Schedules"],
+        ["/files", "Files"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

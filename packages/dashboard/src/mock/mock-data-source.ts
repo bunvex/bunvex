@@ -6,6 +6,8 @@
 import {
   type CallOptions,
   type Capabilities,
+  type CronJob,
+  type CronRun,
   type DashboardDataSource,
   DataSourceError,
   type DeploymentInfo,
@@ -13,6 +15,7 @@ import {
   type Document,
   type DocumentQuery,
   type FieldPatch,
+  type FileQuery,
   type FilterExpression,
   type FunctionInfo,
   type FunctionRun,
@@ -21,7 +24,10 @@ import {
   type LogQuery,
   OPERATIONS,
   type Page,
+  type ScheduledFunction,
+  type ScheduledFunctionQuery,
   type SchemaInfo,
+  type StoredFile,
   type TableInfo,
   type Unsubscribe,
   type Value,
@@ -29,9 +35,11 @@ import {
 import { tableNameProblem } from "../database/table-name.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
+import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
+import { MockScheduler } from "./schedules.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
   /** Delay before every call resolves. Default 0. */
@@ -46,6 +54,12 @@ export type MockDataSourceOptions = FixtureOptions & {
   liveWritesMs?: number;
   /** What the caller may do. Default: every operation, not read-only. */
   capabilities?: Capabilities;
+  /** Pending scheduled runs at the start. Default 24. */
+  scheduled?: number;
+  /** How often due scheduled runs and crons run while someone watches them. Default 1 000 ms. */
+  schedulerIntervalMs?: number;
+  /** Start with a few stored files (images, texts, binaries). Default true. */
+  sampleFiles?: boolean;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -117,6 +131,10 @@ export class MockDataSource implements DashboardDataSource {
   private logTimer: ReturnType<typeof setInterval> | null = null;
   private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
   private liveTimer: ReturnType<typeof setInterval> | null = null;
+  /** Scheduled functions and cron jobs (UI-01 §14). Not part of the contract: tests drive it directly. */
+  readonly scheduler: MockScheduler;
+  /** File storage (UI-01 §14). Not part of the contract: tests read blobs from it. */
+  readonly files: MockFiles;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -132,6 +150,46 @@ export class MockDataSource implements DashboardDataSource {
     this.logs = [...fixture.logs];
     // a separate stream for everything that happens after construction (failures, live data)
     this.rnd = createRandom((opts.seed ?? 1) ^ 0x5eed);
+    this.scheduler = new MockScheduler(
+      {
+        rnd: this.rnd,
+        functions: this.functions,
+        run: (fn, time) => {
+          const lines = makeExecution(this.rnd, this.logs.length + 1, time, {
+            fn,
+            error: this.rnd.chance(0.1) ? "timeout" : undefined,
+          });
+          this.log(lines);
+          const end = lines.at(-1)?.execution;
+          const failed = end?.status === "failure";
+          return {
+            failed,
+            durationMs: end?.durationMs ?? 0,
+            lines: lines.map((l) => l.message),
+            ...(failed && { error: lines.at(-1)!.message }),
+          };
+        },
+        paginate: (items, key, q, query) => {
+          checkNumItems(q.numItems);
+          const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+          return paginate(items, key, compareValues, after, q.numItems, query);
+        },
+      },
+      opts.now ?? Date.now(),
+      opts.scheduled ?? 24,
+    );
+    this.files = new MockFiles(
+      {
+        rnd: this.rnd,
+        paginate: (items, key, q, query) => {
+          checkNumItems(q.numItems);
+          const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+          return paginate(items, key, compareValues, after, q.numItems, query);
+        },
+      },
+      opts.now ?? Date.now(),
+      opts.sampleFiles ?? true,
+    );
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.stats = {
       at: opts.now ?? Date.now(),
@@ -150,7 +208,7 @@ export class MockDataSource implements DashboardDataSource {
   // ---------------------------------------------------------------- plumbing
 
   /** Simulated latency and failures; rejects with the signal's reason on abort, before or during the wait. */
-  private async call<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+  private async call<T>(signal: AbortSignal | undefined, body: () => T | Promise<T>): Promise<T> {
     signal?.throwIfAborted();
     if (this.opts.latencyMs > 0)
       await new Promise<void>((resolve, reject) => {
@@ -553,6 +611,70 @@ export class MockDataSource implements DashboardDataSource {
         .filter((d) => d.owner === args.owner)
         .map(copy);
     return null;
+  }
+
+  // ---------------------------------------------------------------- scheduled functions and crons (§14)
+
+  listScheduledFunctions(q: ScheduledFunctionQuery, opts?: CallOptions): Promise<Page<ScheduledFunction>> {
+    return this.call(opts?.signal, () => this.scheduler.list(q));
+  }
+
+  watchScheduledFunctions(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
+    return this.scheduler.watch(onChange, this.opts.schedulerIntervalMs ?? 1000);
+  }
+
+  cancelScheduledFunction(id: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      this.scheduler.cancel(id);
+    });
+  }
+
+  cancelAllScheduledFunctions(fn?: string, opts?: CallOptions): Promise<{ canceled: number }> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      return this.scheduler.cancelAll(fn);
+    });
+  }
+
+  listCronJobs(opts?: CallOptions): Promise<CronJob[]> {
+    return this.call(opts?.signal, () => this.scheduler.cronJobs());
+  }
+
+  listCronRuns(name: string, opts?: CallOptions): Promise<CronRun[]> {
+    return this.call(opts?.signal, () => this.scheduler.cronRuns(name));
+  }
+
+  // ---------------------------------------------------------------- file storage (§14)
+
+  listFiles(q: FileQuery, opts?: CallOptions): Promise<Page<StoredFile>> {
+    return this.call(opts?.signal, () => this.files.list(q));
+  }
+
+  countFiles(opts?: CallOptions): Promise<number> {
+    return this.call(opts?.signal, () => this.files.count());
+  }
+
+  getFile(id: string, opts?: CallOptions): Promise<StoredFile | null> {
+    return this.call(opts?.signal, () => this.files.get(id));
+  }
+
+  uploadFile(file: Blob, opts?: CallOptions): Promise<string> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      return this.files.upload(file, this.scheduler.now());
+    });
+  }
+
+  deleteFiles(ids: string[], opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      return this.files.delete(ids);
+    });
+  }
+
+  watchFiles(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
+    return this.files.watch(onChange);
   }
 }
 
