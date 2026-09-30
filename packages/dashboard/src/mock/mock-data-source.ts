@@ -13,6 +13,7 @@ import {
   type DashboardDataSource,
   DataSourceError,
   type DeploymentInfo,
+  type DeploymentState,
   type DeploymentStats,
   type Document,
   type DocumentQuery,
@@ -28,11 +29,13 @@ import {
   type LogQuery,
   OPERATIONS,
   type Page,
+  type RunOptions,
   type ScheduledFunction,
   type ScheduledFunctionQuery,
   type SchemaInfo,
   type StoredFile,
   type TableInfo,
+  toDataSourceError,
   type Unsubscribe,
   type ValidatorJson,
   type Value,
@@ -141,6 +144,8 @@ export class MockDataSource implements DashboardDataSource {
   private logTimer: ReturnType<typeof setInterval> | null = null;
   private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
   private liveTimer: ReturnType<typeof setInterval> | null = null;
+  /** UI-01 §17.2: a paused deployment refuses new calls; its scheduler waits and skips crons. */
+  private paused = false;
   /** Scheduled functions and cron jobs (UI-01 §14). Not part of the contract: tests drive it directly. */
   readonly scheduler: MockScheduler;
   /** File storage (UI-01 §14). Not part of the contract: tests read blobs from it. */
@@ -167,6 +172,7 @@ export class MockDataSource implements DashboardDataSource {
       {
         rnd: this.rnd,
         functions: this.functions,
+        paused: () => this.paused,
         run: (fn, time) => {
           const lines = makeExecution(this.rnd, this.logs.length + 1, time, {
             fn,
@@ -279,6 +285,29 @@ export class MockDataSource implements DashboardDataSource {
   private now = () => Date.now();
 
   // ---------------------------------------------------------------- deployment
+
+  // pausing (UI-01 §17.2, data-source-state.ts)
+  getDeploymentState(opts?: CallOptions): Promise<DeploymentState> {
+    return this.call(opts?.signal, () => ({ state: this.paused ? "paused" : "running" }));
+  }
+
+  pauseDeployment(opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => this.setPaused(true, "pauseDeployment"));
+  }
+
+  resumeDeployment(opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => this.setPaused(false, "resumeDeployment"));
+  }
+
+  private setPaused(paused: boolean, op: "pauseDeployment" | "resumeDeployment") {
+    const c = this.opts.capabilities;
+    if (c.readOnly || !c.operations.includes(op))
+      throw new DataSourceError("unauthorized", `this credential cannot ${paused ? "pause" : "resume"} the deployment`);
+    if (this.paused === paused) return;
+    this.paused = paused;
+    // Convex's deployment events
+    this.record(paused ? "pause_deployment" : "unpause_deployment", {});
+  }
 
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo> {
     return this.call(opts?.signal, () => ({ ...this.deployment }));
@@ -421,6 +450,7 @@ export class MockDataSource implements DashboardDataSource {
 
   /** What `liveWritesMs` does: a new task most of the time, sometimes a deleted one. */
   private liveWrite() {
+    if (this.paused) return; // no function runs while paused
     const tasks = this.tables.get("tasks");
     const users = this.tables.get("users");
     if (!tasks || !users) return;
@@ -604,7 +634,7 @@ export class MockDataSource implements DashboardDataSource {
    * `<table>:get` the document `id` (or null), `tasks:byOwner` the tasks of `owner`; everything else returns
    * null, and nothing changes data. Mock only: `throw: "message"` in the arguments makes it throw.
    */
-  runFunction(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun> {
+  runFunction(path: string, args: Record<string, Value>, opts?: RunOptions): Promise<FunctionRun> {
     return this.call(opts?.signal, () => {
       const fn = this.functions.find((f) => f.path === path);
       if (!fn) throw new DataSourceError("not_found", `no function "${path}"`);
@@ -613,6 +643,14 @@ export class MockDataSource implements DashboardDataSource {
         throw new DataSourceError("unauthorized", "this credential cannot run functions");
       if (c.readOnly && fn.kind !== "query")
         throw new DataSourceError("unauthorized", `a read-only credential cannot run a ${fn.kind}`);
+      const identity = opts?.identity;
+      if (identity && !c.operations.includes("actAsUser"))
+        throw new DataSourceError("unauthorized", "this credential cannot act as a user");
+      if (this.paused)
+        throw new DataSourceError(
+          "invalid_request",
+          "This deployment is paused: new function calls fail until it is resumed (Settings → General).",
+        );
       // arguments that do not fit the declared validator fail the call, as a server's validation does
       const invalid = fn.args ? validateValue(fn.args, args)[0] : undefined;
       const error = invalid
@@ -620,7 +658,7 @@ export class MockDataSource implements DashboardDataSource {
         : typeof args.throw === "string"
           ? `Uncaught Error: ${args.throw}`
           : undefined;
-      const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error });
+      const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error, identity });
       this.log(lines);
       const run: FunctionRun = {
         logLines: lines.map((l) => ({ level: l.level, message: l.message })),
@@ -630,6 +668,38 @@ export class MockDataSource implements DashboardDataSource {
       else run.value = this.mockValue(path, args);
       return run;
     });
+  }
+
+  watchFunction(
+    path: string,
+    args: Record<string, Value>,
+    onResult: (run: FunctionRun) => void,
+    onError: (error: DataSourceError) => void,
+    opts?: Pick<RunOptions, "identity">,
+  ): Unsubscribe {
+    let live = true;
+    const fail = (e: unknown) => live && onError(toDataSourceError(e));
+    const fn = this.functions.find((f) => f.path === path);
+    if (fn && fn.kind !== "query") {
+      setTimeout(
+        () => fail(new DataSourceError("invalid_request", `${path} is a ${fn.kind}: only a query is watched`)),
+        0,
+      );
+      return () => {
+        live = false;
+      };
+    }
+    // a query reads its module's table (tasks:list reads tasks): it runs again when that table changes
+    const rerun = () => {
+      if (live) this.runFunction(path, args, opts).then((r) => live && onResult(r), fail);
+    };
+    rerun();
+    const table = path.split(":")[0]!;
+    const off = this.tables.has(table) ? this.watchTable(table, rerun, () => {}) : () => {};
+    return () => {
+      live = false;
+      off();
+    };
   }
 
   private mockValue(path: string, args: Record<string, Value>): Value {

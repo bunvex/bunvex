@@ -5,6 +5,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // a second page: the design system's (UI-01 §17.5), at /design-system.html
+  build: { rollupOptions: { input: { index: "index.html", "design-system": "design-system.html" } } },
   plugins: [
     react(),
     tailwindcss(),

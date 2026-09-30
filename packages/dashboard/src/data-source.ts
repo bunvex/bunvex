@@ -51,6 +51,8 @@ export type DeploymentInfo = {
   persistence: string;
   /** The deployment's client URL, if the host wants it shown. */
   url?: string;
+  /** Where its HTTP actions are served (Convex's "site" URL, `CONVEX_SITE_URL`), if the host wants it shown. */
+  httpActionsUrl?: string;
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
@@ -63,7 +65,12 @@ export type Operation =
   // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
   | "viewEnvironmentVariables"
   | "writeEnvironmentVariables"
-  | "viewAuditLog";
+  | "viewAuditLog"
+  // UI-01 §17.2: Convex's PauseDeployment, UnpauseDeployment
+  | "pauseDeployment"
+  | "resumeDeployment"
+  // STUDY-12 §10.3: Convex's ActAsUser — run functions as a user (the runner's "Act as a user")
+  | "actAsUser";
 export const OPERATIONS: readonly Operation[] = [
   "viewData",
   "writeData",
@@ -73,6 +80,9 @@ export const OPERATIONS: readonly Operation[] = [
   "viewEnvironmentVariables",
   "writeEnvironmentVariables",
   "viewAuditLog",
+  "actAsUser",
+  "pauseDeployment",
+  "resumeDeployment",
 ];
 
 export type Capabilities = {
@@ -258,8 +268,33 @@ export type LogEntry = {
   /** The execution that called this one, in the same request; absent for the request's first. */
   parentExecutionId?: string;
   /** On the line that ends an execution. */
-  execution?: { status: "success" | "failure"; durationMs: number };
+  execution?: {
+    status: "success" | "failure";
+    durationMs: number;
+    /** What it used (STUDY-12 §10.5), as far as the source measures it. */
+    usage?: ExecutionUsage;
+    /** Who started the request it belongs to. */
+    identity?: ExecutionIdentity;
+  };
 };
+
+/** An execution's resources, as Convex's usage stats (each absent when not measured). */
+export type ExecutionUsage = {
+  /** Memory the execution used, in MB (with the duration: the compute). */
+  memoryMb?: number;
+  databaseReadBytes?: number;
+  databaseWriteBytes?: number;
+  fileReadBytes?: number;
+  fileWriteBytes?: number;
+  /** The size of the value it returned. */
+  returnBytes?: number;
+};
+
+/**
+ * Who started a request, as Convex's `identityType`: a developer with the admin key, a signed-in user, an
+ * admin acting as a user (the runner's "Act as a user"), the system (the scheduler, crons), or unknown.
+ */
+export type ExecutionIdentity = "admin" | "user" | "acting_as_user" | "system" | "unknown";
 
 /**
  * What running a function from the dashboard gave (STUDY-12 §7): its value, or the error it threw, with the
@@ -275,6 +310,15 @@ export type FunctionRun = {
   logLines: { level: LogLevel; message: string }[];
   durationMs: number;
 };
+
+/**
+ * A user's identity to run a function as (STUDY-12 §10.3), as Convex's runner takes it: `subject` and
+ * `issuer`, the OpenID claims (`name`, `email`, …), and any custom claims, flattened.
+ */
+export type UserIdentity = { subject: string; issuer: string } & Record<string, Value>;
+
+/** `identity`: run as that user (`actAsUser`); without it, the function sees no user, as an admin's run. */
+export type RunOptions = CallOptions & { identity?: UserIdentity };
 
 export type LogFilter = { function?: string; levels?: LogLevel[] };
 
@@ -313,9 +357,12 @@ import type { DeploymentFeatures } from "./data-source-deployment.ts";
 /** A field update in `patchDocuments`: a new value, or removing the field. */
 export type FieldPatch = Value | { $unset: true };
 
-export * from "./data-source-deployment.ts";
+import type { DeploymentStateFeatures } from "./data-source-state.ts";
 
-export interface DashboardDataSource extends DeploymentFeatures {
+export * from "./data-source-deployment.ts";
+export * from "./data-source-state.ts";
+
+export interface DashboardDataSource extends DeploymentFeatures, DeploymentStateFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;
@@ -375,7 +422,21 @@ export interface DashboardDataSource extends DeploymentFeatures {
    * when `runFunctions` is granted (a read-only credential runs queries only). Unknown path: `not_found`;
    * not allowed: `unauthorized`. The run is logged like any other execution.
    */
-  runFunction?(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun>;
+  runFunction?(path: string, args: Record<string, Value>, opts?: RunOptions): Promise<FunctionRun>;
+
+  /**
+   * Keeps a query subscribed, as Convex's runner does (STUDY-12 §10, R1): `onResult` gets its run
+   * (asynchronously, never inside the call), then a new one each time the result may have changed. Same
+   * permissions and errors as `runFunction`, delivered to `onError`; a mutation or an action is
+   * `invalid_request`. Optional; without it, the runner runs a query once.
+   */
+  watchFunction?(
+    path: string,
+    args: Record<string, Value>,
+    onResult: (run: FunctionRun) => void,
+    onError: (error: DataSourceError) => void,
+    opts?: Pick<RunOptions, "identity">,
+  ): Unsubscribe;
 
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;
   /** Live tail: entries created after the call, in id order, matching the filter. Never synchronously. */

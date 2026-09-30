@@ -12,6 +12,7 @@ import {
   FileBox,
   FunctionSquare,
   History,
+  Menu,
   Play,
   ScrollText,
   Settings,
@@ -21,6 +22,7 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
+import { PausedBanner } from "./paused-banner.tsx";
 
 // the runner is fetched when it first opens (it brings the code editor and the result views)
 const FunctionRunner = lazy(() => import("../runner/runner.tsx").then((m) => ({ default: m.FunctionRunner })));
@@ -39,6 +41,9 @@ export function Shell() {
   const main = useRef<HTMLElement>(null);
   const router = useRouter();
   const runner = useRunnerState();
+  // below md the screens' list is a menu (UI-01 §17.4): a disclosure that closes on a pick or on Escape
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   useEffect(
     () =>
@@ -64,8 +69,34 @@ export function Shell() {
           aria-label="Dashboard"
           className="shrink-0 border-b border-sidebar-border bg-sidebar text-sidebar-foreground md:w-52 md:border-r md:border-b-0"
         >
-          <div className="flex h-12 items-center px-4 font-semibold tracking-tight">bunvex</div>
-          <ul className="flex gap-0.5 overflow-x-auto px-2 pb-2 md:flex-col md:gap-1 md:overflow-visible">
+          <div className="flex h-12 items-center justify-between px-4 font-semibold tracking-tight">
+            bunvex
+            <Button
+              ref={menuButton}
+              variant="ghost"
+              size="sm"
+              className="md:hidden"
+              aria-expanded={menuOpen}
+              aria-controls="dashboard-screens"
+              onClick={() => setMenuOpen((o) => !o)}
+            >
+              <Menu aria-hidden="true" />
+              Menu
+            </Button>
+          </div>
+          <ul
+            id="dashboard-screens"
+            className={cn("flex-col gap-1 px-2 pb-2 md:flex", menuOpen ? "flex" : "hidden")}
+            onClick={(e) => {
+              if ((e.target as Element).closest("a")) setMenuOpen(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && menuOpen) {
+                setMenuOpen(false);
+                menuButton.current?.focus();
+              }
+            }}
+          >
             <li>
               <DashLink link={{ to: "/", activeOptions: { exact: true } }} className={NAV_LINK}>
                 <Activity className={ICON} aria-hidden="true" />
@@ -137,6 +168,7 @@ export function Shell() {
               {headerActions}
             </div>
           </header>
+          <PausedBanner />
           {/* with the runner docked below, the screen keeps room to scroll past it */}
           <main
             id="main"

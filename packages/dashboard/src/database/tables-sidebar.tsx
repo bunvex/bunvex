@@ -53,7 +53,7 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
   const shown = sorted.filter((t) => t.name.toLowerCase().includes(query.trim().toLowerCase()));
   return (
     <>
-      <div className="flex items-center gap-2 border-b px-4 py-2 md:hidden">
+      <div className="flex items-center gap-2 border-b px-4 py-2 lg:hidden">
         <span id={pickerLabel} className="text-sm text-muted-foreground">
           Table
         </span>
@@ -76,7 +76,7 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
       </div>
       <nav
         aria-label="Tables"
-        className="relative hidden shrink-0 flex-col border-r md:flex"
+        className="relative hidden shrink-0 flex-col border-r lg:flex"
         style={{ width: dragging ?? width }}
       >
         <h2 className="sr-only">Tables</h2>

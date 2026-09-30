@@ -105,6 +105,7 @@ const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/sc
 const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
+const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
 const EnvironmentVariablesScreen = lazyRouteComponent(
   () => import("./settings/screen.tsx"),
   "EnvironmentVariablesScreen",
@@ -183,13 +184,19 @@ export const historyRoute = createRoute({
   component: HistoryScreen,
 });
 
-/** `/settings` opens its only page so far, the environment variables (UI-01 §14.4). */
+/** `/settings` opens General, its first page, as Convex's (UI-01 §17.1). */
 export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings",
   beforeLoad: () => {
-    throw redirect({ to: "/settings/environment-variables", replace: true });
+    throw redirect({ to: "/settings/general", replace: true });
   },
+});
+
+export const generalSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/general",
+  component: GeneralSettingsScreen,
 });
 
 export const envVarsRoute = createRoute({
@@ -233,6 +240,7 @@ export const routeTree = rootRoute.addChildren([
   cronsRoute,
   historyRoute,
   settingsRoute,
+  generalSettingsRoute,
   envVarsRoute,
 ]);
 
