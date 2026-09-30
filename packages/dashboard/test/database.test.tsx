@@ -100,6 +100,13 @@ describe("the Database screen", () => {
     expect((await screen.findAllByRole("alert")).some((a) => /backfilling/.test(a.textContent ?? ""))).toBe(true);
   });
 
+  test("an unknown panel in the URL is dropped: no panel opens", async () => {
+    const { history } = mount("/database/users?panel=bogus");
+    await heading("users");
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(history.location.search).toBe("");
+  });
+
   test("a link whose filter cannot be read opens unfiltered, and says so", async () => {
     mount("/database/tasks?filter=not-a-filter");
     await heading("tasks");

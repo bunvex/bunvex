@@ -39,16 +39,20 @@ export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "i
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** The Functions screen's URL state: the open function (`module:name`), as in Convex. */
-export type FunctionsSearch = { function?: string };
+/** The open function, and its log filters (as the Logs screen's `type` and `q`). */
+export type FunctionsSearch = { function?: string; type?: string; q?: string };
 
 export function validateFunctionsSearch(input: Record<string, unknown>): FunctionsSearch {
   const fn = str(input.function);
-  return fn ? { function: fn } : {};
+  const { type, q } = validateLogsSearch(input);
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  return { function: fn, type, q };
 }
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
 export function validateTableSearch(input: Record<string, unknown>): TableSearch {
-  const out: TableSearch = {};
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  const out: TableSearch = { filter: undefined, doc: undefined, panel: undefined };
   const filter = str(input.filter);
   const doc = str(input.doc);
   if (filter) out.filter = filter;
