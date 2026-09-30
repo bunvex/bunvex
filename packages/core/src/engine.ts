@@ -142,7 +142,7 @@ export class Engine {
     body: TxBody<T>,
   ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
     const snapshot = this.committer.visibleTs;
-    const now = wallClock();
+    const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     try {
       const value = await runDeterministic("query", now, () => body(tx));
