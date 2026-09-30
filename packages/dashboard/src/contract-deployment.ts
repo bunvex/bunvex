@@ -3,6 +3,8 @@
 // runs only when the caller opts in.
 import { expect } from "bun:test";
 import {
+  type AuditEvent,
+  type AuditEventQuery,
   type DashboardDataSource,
   DataSourceError,
   type FileQuery,
@@ -18,6 +20,8 @@ export type DeploymentContractOptions = {
   files?: { write: boolean };
   /** Lets the suite add, change and delete a variable named BUNVEX_CONTRACT_SUITE. */
   environmentVariables?: { write: boolean };
+  /** A table the suite may add a document to, to check that the write is recorded in the audit log. */
+  history?: { table: string };
 };
 
 type Ctx = {
@@ -68,6 +72,21 @@ async function allFiles(
 async function sha256(blob: Blob): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
   return btoa(String.fromCharCode(...digest));
+}
+
+async function allEvents(
+  src: DashboardDataSource,
+  q: Omit<AuditEventQuery, "numItems" | "cursor"> = {},
+): Promise<AuditEvent[]> {
+  const out: AuditEvent[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 1000; i++) {
+    const p: Page<AuditEvent> = await src.listAuditEvents!({ ...q, numItems: 4, cursor });
+    out.push(...p.page);
+    if (p.isDone) return out;
+    cursor = p.continueCursor;
+  }
+  throw new Error("pagination did not finish");
 }
 
 export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }: Ctx) {
@@ -225,5 +244,49 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         { name: "BUNVEX_NEVER_SET", value: null },
       ]);
       expect(await get()).toBeUndefined();
+    });
+
+  // ---------------------------------------------------------------- the audit log
+  test("audit events (when offered and allowed): newest first, bounded by time, one action on request", async () => {
+    const src = await make();
+    if (!src.listAuditEvents) return;
+    if (!(await src.getCapabilities()).operations.includes("viewAuditLog")) return;
+    const events = await allEvents(src);
+    expect(new Set(events.map((e) => e.id)).size).toBe(events.length);
+    for (let i = 1; i < events.length; i++) expect(events[i]!.time).toBeLessThanOrEqual(events[i - 1]!.time);
+    const action = events[0]?.action;
+    if (action !== undefined) {
+      const only = await allEvents(src, { actions: [action] });
+      expect(only.map((e) => e.id)).toEqual(events.filter((e) => e.action === action).map((e) => e.id));
+    }
+    if (events.length >= 3) {
+      const from = events.at(-2)!.time;
+      const to = events[1]!.time;
+      const inside = await allEvents(src, { from, to });
+      expect(inside.map((e) => e.id)).toEqual(events.filter((e) => e.time >= from && e.time <= to).map((e) => e.id));
+    }
+  });
+
+  const history = opts.history;
+  if (history)
+    test(`the audit log records a write (opt-in, ${history.table})`, async () => {
+      const src = await make();
+      if (!src.listAuditEvents || !src.insertDocuments)
+        throw new Error("history was enabled but the source cannot list audit events or insert documents");
+      let heard = 0;
+      const off = src.watchAuditEvents?.(
+        () => heard++,
+        () => {},
+      );
+      await src.insertDocuments(history.table, [{ label: "audited" }]);
+      const [latest] = (await src.listAuditEvents({ numItems: 1, cursor: null })).page;
+      expect(latest?.action).toBe("add_documents");
+      expect(latest?.metadata.table).toBe(history.table);
+      if (off) {
+        const deadline = performance.now() + watchTimeoutMs;
+        while (heard === 0 && performance.now() < deadline) await sleep(5);
+        off();
+        expect(heard).toBeGreaterThan(0);
+      }
     });
 }

@@ -2,7 +2,7 @@
 // and cron jobs, file storage, environment variables, the audit log. Every method is optional — a source
 // offers a feature by having its methods (detected with `typeof`), so older sources stay valid — and the
 // shapes follow Convex's system tables. Re-exported by `data-source.ts`, the contract's module.
-import type { CallOptions, DataSourceError, Page, PageRequest, Unsubscribe, Value } from "./data-source.ts";
+import type { CallOptions, DataSourceError, Json, Page, PageRequest, Unsubscribe, Value } from "./data-source.ts";
 
 // ------------------------------------------------------------------ scheduled functions and crons
 
@@ -84,6 +84,24 @@ export type EnvironmentVariable = { name: string; value: string };
 /** One change in a batch: a value sets (adds or replaces) the variable, `null` deletes it. */
 export type EnvironmentVariableChange = { name: string; value: string | null };
 
+// ------------------------------------------------------------------ the audit log
+
+/** Something done to the deployment (Convex's `_deployment_audit_log`). */
+export type AuditEvent = {
+  id: string;
+  /** Wall-clock ms. */
+  time: number;
+  /** Convex's action names: `add_documents`, `delete_files`, `update_environment_variable`, `push_config`, … */
+  action: string;
+  /** Who did it, as the source names them ("admin key", a team member); null when unknown. */
+  author: string | null;
+  /** The action's details, e.g. `{ table: "tasks", count: 3 }`. */
+  metadata: { [key: string]: Json };
+};
+
+/** Newest first; `from` / `to` bound the time (ms, inclusive); `actions` keeps only those. */
+export type AuditEventQuery = PageRequest & { from?: number; to?: number; actions?: string[] };
+
 // ------------------------------------------------------------------ the optional methods
 
 export interface DeploymentFeatures {
@@ -123,4 +141,9 @@ export interface DeploymentFeatures {
    * Deleting an unknown name is allowed. A rename is a delete and a set in one batch.
    */
   updateEnvironmentVariables?(changes: EnvironmentVariableChange[], opts?: CallOptions): Promise<void>;
+
+  // The audit log: read with `viewAuditLog`. The source records the events; the dashboard only reads them.
+  listAuditEvents?(query: AuditEventQuery, opts?: CallOptions): Promise<Page<AuditEvent>>;
+  /** Tells the caller new events were recorded. Never synchronously. */
+  watchAuditEvents?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
 }

@@ -272,6 +272,19 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("History: a change made in Settings is recorded", async () => {
+    const { page, errors, close } = await open("/settings/environment-variables");
+    await page.getByRole("button", { name: "Delete LOG_LEVEL" }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    await page.getByRole("link", { name: "History" }).click();
+    await heading(page, "History");
+    const first = page.getByRole("grid", { name: "Audit log" }).getByRole("row").nth(1);
+    await first.getByText("Deleted environment variable LOG_LEVEL").waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -284,6 +297,7 @@ describe("the dashboard in a browser", () => {
         ["/schedules/crons?cron=summarize+tasks", "Schedules"],
         ["/files", "Files"],
         ["/settings/environment-variables", "Settings"],
+        ["/history", "History"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

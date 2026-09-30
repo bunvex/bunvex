@@ -16,6 +16,7 @@ import { formatTime } from "../database/values.ts";
 import { type FilesSearch, filesRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
+import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -37,13 +38,6 @@ export function formatBytes(n: number): string {
 }
 
 const files = (n: number) => `${formatCount(n)} ${n === 1 ? "file" : "files"}`;
-
-/** A `YYYY-MM-DD` day in the viewer's zone, as a time bound: its first or its last millisecond. */
-function dayBound(day: string | undefined, end: boolean): number | undefined {
-  if (!day) return undefined;
-  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
-  return end ? new Date(y, m - 1, d + 1).getTime() - 1 : new Date(y, m - 1, d).getTime();
-}
 
 export function FilesScreen() {
   const { source } = useQueryScope();
@@ -258,24 +252,6 @@ function Files() {
           onClose={() => setSearch({ file: undefined })}
         />
       )}
-    </div>
-  );
-}
-
-function DayInput(props: { label: string; value: string | undefined; onChange: (v: string | undefined) => void }) {
-  const id = useId();
-  return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-sm text-muted-foreground">
-        {props.label}
-      </label>
-      <Input
-        id={id}
-        type="date"
-        className="h-8 w-40"
-        value={props.value ?? ""}
-        onChange={(e) => props.onChange(e.target.value || undefined)}
-      />
     </div>
   );
 }

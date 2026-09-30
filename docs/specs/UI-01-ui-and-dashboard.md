@@ -1048,3 +1048,22 @@ STUDY-12 §8. The owner asked for it on 30 Sep 2026, contract and mock first.
   with bad and duplicate names and a quote warning, delete and undo and discard, rename, a pasted `.env`, a
   refused batch, credentials without write, read-only, without view, a source without them, axe); the
   contract suite on the mock; an e2e case and axe with colour contrast in both themes.
+
+### 14.5 History
+
+- **Contract**, optional: `listAuditEvents({ numItems, cursor, from?, to?, actions? })` — newest first
+  (`AuditEvent`: id, time, Convex's action name, author, JSON metadata); `watchAuditEvents(onChange, onError)`.
+  Needs `viewAuditLog`, as Convex's `ViewAuditLog`. The source records events; the dashboard only reads them.
+- **Contract suite**: the reads (order, time range, one action) whenever offered and allowed; with
+  `history: { table }` it inserts a document there and expects an `add_documents` event.
+- **Mock** (`mock/audit.ts`): nine past events (deploys, an index build, variables, documents) and, from then
+  on, what its writes do: `add_documents`, `update_documents`, `delete_documents`, `clear_tables`,
+  `cancel_scheduled_function`, `cancel_all_scheduled_functions`, `generate_upload_url`, `delete_files`,
+  `create_` / `update_` / `delete_environment_variable`. Author "admin key" (STUDY-12 H1).
+- **Screen** (`/history`): each event in words ("Added 2 documents to imports", `history/describe.ts`), its
+  time and author; one action and a day range in the URL (`?action=&from=&to=`); an event's details
+  (`?event=`) with its metadata as a literal. Live on `watchAuditEvents`. Without `viewAuditLog` the log is
+  not fetched.
+- Tests: the words for each action; the screen (order, action filter, day range, live recording of writes,
+  details, without the operation, a source without it, axe); the contract suite on the mock; an e2e case (a
+  change made in Settings shows up in History) and axe with colour contrast in both themes.
