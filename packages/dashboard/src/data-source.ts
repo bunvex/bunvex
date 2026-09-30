@@ -51,6 +51,8 @@ export type DeploymentInfo = {
   persistence: string;
   /** The deployment's client URL, if the host wants it shown. */
   url?: string;
+  /** Where its HTTP actions are served (Convex's "site" URL, `CONVEX_SITE_URL`), if the host wants it shown. */
+  httpActionsUrl?: string;
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
@@ -63,7 +65,10 @@ export type Operation =
   // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
   | "viewEnvironmentVariables"
   | "writeEnvironmentVariables"
-  | "viewAuditLog";
+  | "viewAuditLog"
+  // UI-01 §17.2: Convex's PauseDeployment, UnpauseDeployment
+  | "pauseDeployment"
+  | "resumeDeployment";
 export const OPERATIONS: readonly Operation[] = [
   "viewData",
   "writeData",
@@ -73,6 +78,8 @@ export const OPERATIONS: readonly Operation[] = [
   "viewEnvironmentVariables",
   "writeEnvironmentVariables",
   "viewAuditLog",
+  "pauseDeployment",
+  "resumeDeployment",
 ];
 
 export type Capabilities = {
@@ -313,9 +320,12 @@ import type { DeploymentFeatures } from "./data-source-deployment.ts";
 /** A field update in `patchDocuments`: a new value, or removing the field. */
 export type FieldPatch = Value | { $unset: true };
 
-export * from "./data-source-deployment.ts";
+import type { DeploymentStateFeatures } from "./data-source-state.ts";
 
-export interface DashboardDataSource extends DeploymentFeatures {
+export * from "./data-source-deployment.ts";
+export * from "./data-source-state.ts";
+
+export interface DashboardDataSource extends DeploymentFeatures, DeploymentStateFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;
