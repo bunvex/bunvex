@@ -950,6 +950,27 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 - Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", custom test
   queries. (Argument validation came with §15.1.)
 
+## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
+
+### 14.1 Each screen is its own chunk
+
+- The routes load their screens with TanStack Router's `lazyRouteComponent`: Health, Database, Functions
+  and Logs are fetched when their route is first matched, in parallel with the route's loader. The function
+  runner is a `React.lazy` panel, fetched when it first opens. The screens import `router.tsx` for their
+  routes' hooks; loading them lazily also removes that import cycle.
+- Measured with `vite build` (entry chunk) and in Chrome (JS fetched until the screen's heading shows):
+
+  | | before | after |
+  |---|---|---|
+  | entry chunk | 739.8 kB (236.1 kB gzip) | 335.9 kB (109.2 kB gzip) |
+  | first load of `/` | 722 kB in 1 file | 375 kB in 7 files |
+  | first load of `/logs` | 722 kB in 1 file | 535 kB in 10 files |
+  | first load of `/database/users` | 3 923 kB in 2 files | 3 655 kB in 12 files |
+
+  The Database screen stays heavy on purpose: it preloads Monaco (§12.5.7).
+- Guarded by an e2e test: the entry stays under 380 kB and holds no screen's own text; importing a screen
+  or the runner eagerly again fails it.
+
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
 ### 15.1 Validators on functions (STUDY-12 §8, V1)
@@ -982,19 +1003,3 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 - Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
   arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
   test makes `scrollIntoView` return a Promise.
-
-### 15.2 The saved schema (STUDY-12 §8)
-
-- **Contract**: `SchemaInfo.tables[].validator?: ValidatorJson` (was untyped JSON), without system
-  fields. The mock declares types for `messages`, `tasks` and `users` (not enforced); the contract suite
-  checks the form.
-- **`database/schema-code.ts`**: `schemaCode(schema, tables)` — the `bunvex/schema.ts` that declares the
-  schema, as Convex's `displaySchema` prints it (prettier's two layouts, with or without
-  `{ schemaValidation: false }`), and each table's line range.
-- **Schema panel**: the table's status in one sentence, then **Saved schema** — the file, the table's
-  lines tinted (`--info`) and scrolled to, "Lines a to b declare t." for screen readers, Copy. A table
-  outside the schema, or no schema at all, says so.
-- Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
-  arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
-  test makes `scrollIntoView` return a Promise.
-

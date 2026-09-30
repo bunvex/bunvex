@@ -1,5 +1,6 @@
-// The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the WebSocket
-// sync protocol, both speaking @bunvex/protocol v0. One process: the committer is single by design.
+// The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape), the sync protocol
+// v1 at `/api/{version}/sync` (sync.ts, STUDY-23) and, until it is deleted, the v0 WebSocket at `/ws`. One
+// process: the committer is single by design.
 import {
   type Engine,
   type FormatError,
@@ -14,16 +15,18 @@ import type { Server, ServerWebSocket } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
+import { MAX_PENDING_MUTATIONS, SyncHub, SyncSession } from "./sync.ts";
+
+export { MAX_PENDING_MUTATIONS };
 
 /**
  * One connection's state. `mutations` is the tail of its mutation queue: as in Convex's sync worker
  * (`mutation_futures … buffered(1)`, crates/sync/src/worker.rs), a connection's mutations run one at a
  * time, in the order they arrived (STUDY-22).
  */
-type WsData = { keys: Set<string>; mutations: Promise<void>; pendingMutations: number; closed: boolean };
-
-/** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
-export const MAX_PENDING_MUTATIONS = 1000;
+type V0Data = { keys: Set<string>; mutations: Promise<void>; pendingMutations: number; closed: boolean };
+/** A socket's state: a v1 sync session, or a v0 connection. */
+type WsData = { session: SyncSession } | ({ session?: undefined } & V0Data);
 /** Close code for "try again later" (RFC 6455 1013), which Convex uses for rate-limit errors. */
 const CLOSE_TRY_AGAIN_LATER = 1013;
 
@@ -110,8 +113,10 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
+  const sync = new SyncHub({ engine, functions, redact, formatError, fromWire });
+
   /** Run one WebSocket mutation and send its `res` frame. Never throws. */
-  const runWsMutation = async (ws: ServerWebSocket<WsData>, id: number, path: string, args: unknown) => {
+  const runWsMutation = async (ws: ServerWebSocket<V0Data>, id: number, path: string, args: unknown) => {
     const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
     if (ws.data.closed) return;
     const lines = linesField("l", r.logLines, redact);
@@ -130,7 +135,12 @@ export function createServer(opts: ServerOptions) {
     websocket: {
       maxPayloadLength: 8 * 1024 * 1024,
       idleTimeout: 960,
-      async message(ws, raw) {
+      open(ws) {
+        ws.data.session?.open(ws as ServerWebSocket<{ session: SyncSession }>);
+      },
+      async message(sock, raw) {
+        if (sock.data.session) return sock.data.session.message(String(raw));
+        const ws = sock as ServerWebSocket<V0Data>;
         let m: ClientMessage;
         try {
           m = JSON.parse(String(raw));
@@ -185,13 +195,20 @@ export function createServer(opts: ServerOptions) {
           });
         }
       },
-      close(ws) {
+      close(sock) {
+        if (sock.data.session) return sock.data.session.close();
+        const ws = sock as ServerWebSocket<V0Data>;
         ws.data.closed = true;
         for (const k of ws.data.keys) subs.unsubscribe(k);
       },
     },
     async fetch(req, srv) {
       const url = new URL(req.url);
+      if (/^\/api\/[^/]+\/sync$/.test(url.pathname)) {
+        const data: WsData = { session: new SyncSession(sync) };
+        if (srv.upgrade(req, { data })) return undefined as never;
+        return new Response("upgrade failed", { status: 400 });
+      }
       if (url.pathname === "/ws") {
         const data: WsData = { keys: new Set(), mutations: Promise.resolve(), pendingMutations: 0, closed: false };
         if (srv.upgrade(req, { data })) return undefined as never;
@@ -208,6 +225,8 @@ export function createServer(opts: ServerOptions) {
           conflicts: c.conflicts,
           subs: subs.size,
           ...subs.stats,
+          syncSessions: sync.sessions.size,
+          sync: sync.stats,
         });
       }
       const route = /^\/api\/(query|mutation|action)$/.exec(url.pathname);
@@ -234,5 +253,13 @@ export function createServer(opts: ServerOptions) {
       );
     },
   });
-  return { server, subscriptions: subs, stop: () => server?.stop(true) };
+  return {
+    server,
+    subscriptions: subs,
+    sync,
+    stop: () => {
+      sync.stop();
+      server?.stop(true);
+    },
+  };
 }
