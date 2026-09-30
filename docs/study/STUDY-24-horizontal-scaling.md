@@ -4,7 +4,7 @@
   passes (Convex claims, lease and fencing, commit stream, follower reads and remote mutations, multi-core
   on one machine, singletons and failover, prior art), four of them with throwaway experiments on the real
   engine and drivers (Postgres 17, MySQL 8.4; MongoDB and PgBouncer not available). Decisions H1–H12 (§6)
-  await the owner, except H5 and H8 (decided 2026-09-30).
+  await the owner, except H5, H7 and H8 (decided 2026-09-30).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend, plus
   [How we horizontally scaled function execution](https://stack.convex.dev/horizontally-scaling-functions)
   and [Self-hosted: develop and deploy](https://stack.convex.dev/self-hosted-develop-and-deploy)
@@ -326,7 +326,7 @@ flush to the follower knowing the ts and write set:
   - Past the cap, disconnect it. It catches up by the by-ts read: subscribe first, buffer, then fill.
 - **Follower `visibleTs` is the highest contiguous ts received.** Under pipelined commit, ts 3 can become
   durable before ts 2, and a naive poller then skipped ts 2 forever. Reproduced.
-- **MongoDB:** log reads are bounded by the commit marker.
+- **MongoDB** (owner's choice, 2026-09-30: **a transaction per flush on a replica set**): log reads are bounded by the commit marker.
 - **Fan-out cost at the leader** is O(followers), never O(clients).
 - **For the spike,** polling every 20 ms is enough.
 
@@ -576,7 +576,7 @@ mutations, half actions.
 | H4 | Commit stream: leader push + by-ts catch-up on `indexes`; no NOTIFY, logical replication or external bus | Measured (§4.3); self-hosting stays bunvex + DB | owner |
 | H5 | The lease expires (TTL on the DB clock) and has a graceful release; no stealing (Convex: newest wins at once, no expiry) | Replicas must not preempt each other; release keeps deploys instant | **Decided (owner, 2026-09-30): as proposed.** A second process fails with `LeaseHeldError` (or waits, `lease.waitMs`); default TTL 5 s. PERSIST-01 C7, #62 |
 | H6 | Scheduler loop on the leader; action execution anywhere after an owner-tagged claim | No herding; at-most-once kept | owner |
-| H7 | Memory and SQLite stay single-node, protected by a file lock | Their data is in one process or file | owner |
+| H7 | Memory and SQLite stay single-node, protected by a file lock | Their data is in one process or file | **Decided (owner, 2026-09-30): yes** — an exclusive OS lock (#70) |
 | H8 | Fix S1–S3 now, before any scaling work | Silent corruption today on every driver | **Decided (owner, 2026-09-30): yes, Postgres first** (#62); MySQL, MongoDB, SQLite and memory follow |
 | H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | owner |
 | H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | owner |
