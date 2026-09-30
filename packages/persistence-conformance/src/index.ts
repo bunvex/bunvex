@@ -633,6 +633,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       let bad = 0;
       let worst = 0;
       let insideFlush = 0;
+      let round0ok = false;
       for (let round = 0; round < 3; round++) {
         await mod.open(true).then((s) => s.close());
         const child = spawn(process.execPath, [childPath, opts.driverModule], {
@@ -704,6 +705,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
           at > M &&
           new Set([...counts, live]).size === 1 &&
           took <= CHILD_TTL_MS + IDLE_TX_BOUND_MS + 2000;
+        if (round === 0) round0ok = ok;
         if (!ok) {
           bad++;
           log(
@@ -717,7 +719,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         `K13 a paused stale writer stops with LeaseLostError and lands nothing; takeover ≤ ${CHILD_TTL_MS + IDLE_TX_BOUND_MS + 2000} ms (worst ${worst} ms)`,
       );
       if (mod.writerInsideFlush)
-        check(insideFlush === 1, "K14 a writer paused inside its flush is taken over within the bound (K13 round 0)");
+        check(
+          insideFlush === 1 && round0ok,
+          "K14 a writer paused inside its flush is taken over within the bound (K13 round 0)",
+        );
     }
   }
 

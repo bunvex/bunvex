@@ -80,8 +80,8 @@ change after the fact, two catalogs and two instance secrets). C7 enforces it.
 
 A driver implements C7 by implementing the `Lease` interface (`acquireLease`, `renewLease`,
 `releaseLease`). v2 is optional per driver: a driver without it behaves as in v1, and the engine then has
-no protection (the driver's docs say so). First-party status: **postgres**, **sqlite** and **memory** implement C7 (mysql: #67);
-mongodb follows.
+no protection (the driver's docs say so). First-party status: **postgres**, **mysql**, **sqlite** and **memory**
+implement C7; mongodb follows (#84).
 
 - **The lease** is one record in the store: `epoch` (strictly increasing), `holder` (an opaque string
   naming the process), `expires_at`, and `max_ts` (the durable prefix, see below).

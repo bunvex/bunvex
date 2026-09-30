@@ -48,3 +48,15 @@ export function moveColumn(order: readonly string[], id: string, by: -1 | 1): st
   [out[i], out[j]] = [out[j]!, out[i]!];
   return out;
 }
+
+/**
+ * `id` moved to just before `beforeId` (`null`: to the end) in the full order — hidden columns keep their
+ * places. Dropping a column onto itself or its own right neighbour changes nothing.
+ */
+export function moveColumnBefore(order: readonly string[], id: string, beforeId: string | null): string[] {
+  if (id === beforeId || !order.includes(id)) return [...order];
+  const rest = order.filter((c) => c !== id);
+  const at = beforeId === null ? rest.length : rest.indexOf(beforeId);
+  if (at < 0) return [...order];
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
+}

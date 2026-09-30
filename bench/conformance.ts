@@ -19,7 +19,7 @@ for (const name of drivers) {
     kills: Number(process.env.KILLS ?? 8),
     checks: process.env.CHECKS?.split(",") as Check[] | undefined,
     // The first-party drivers that implement PERSIST-01 C7 (single writer); the others follow.
-    requireLease: ["memory", "sqlite", "postgres"].includes(name),
+    requireLease: ["memory", "sqlite", "postgres", "mysql"].includes(name),
   });
   failures += r.failures;
 }

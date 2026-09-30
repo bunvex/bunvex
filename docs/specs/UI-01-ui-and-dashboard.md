@@ -913,7 +913,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   drilldown).
 - **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
   that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
-- Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.
+- Built since (STUDY-12 L6, §10): the call tree (§15.6), deployment events (§16.4), usage and identity (§16.5).
 
 ### 13.2 The Functions screen
 
@@ -947,7 +947,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   runner is open, the screen keeps room to scroll past it.
 - Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
   credential runs queries only.
-- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", custom test
+- Not yet (STUDY-12 L6): custom test
   queries. (Argument validation came with §15.1.)
 
 ## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
@@ -1162,4 +1162,119 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   execution is marked "this line". `logs/call-tree.ts` builds it from the loaded lines (a caller not
   loaded: its call stands at the top; no outcome yet: running). The **Outcome** is now the line's own
   execution's, not another call's in the same request.
+
+
+## 16. Amendment — the runner and the logs, second pass (30 Sep 2026)
+
+### 16.1 A query stays subscribed (STUDY-12 §10.1, R1)
+
+- **Contract**: optional `watchFunction(path, args, onResult, onError)`: the query's `FunctionRun`
+  (asynchronously), then a new one whenever its result may have changed; `runFunction`'s permissions and
+  errors, to `onError`; a mutation or an action is `invalid_request`. **Contract suite** (with `run`): the
+  first run arrives, never inside the call; a mutation is refused.
+- **Mock**: the query runs again when its module's table changes (`tasks:list` when `tasks` does), each run
+  logged like any other.
+- **Runner**: a query, when the source can watch it, has no Run button: it is subscribed with the current
+  arguments while they are valid ("Subscribed: the result updates as the data changes."), shows the last
+  result until the next, and pauses when they are not ("The result is paused until the arguments are
+  fixed."). Without `watchFunction` a query runs once with Run, as before.
+
+### 16.2 Run history (STUDY-12 §10.2, R2)
+
+- A mutation's or an action's last **25** runs, newest first, in this browser per deployment and function
+  (`bunvex:run-history:<scope>:<path>`, `runner/history.ts`); the same arguments twice in a row are one
+  entry. **Previous arguments** / **Next arguments** beside the editor fill it with them. A query keeps none
+  — watched, it follows its arguments; run once (without `watchFunction`), it still keeps none, as Convex's
+  queries.
+
+### 16.3 Acting as a user (STUDY-12 §10.3, R3)
+
+- **Contract**: an `actAsUser` operation (Convex's `ActAsUser`); `UserIdentity` (`subject`, `issuer`, any
+  claims); `RunOptions.identity` on `runFunction` and, as `opts`, on `watchFunction`. Without the operation,
+  an identity is `unauthorized`. **Mock**: the run's first line says `authenticated as <name or subject>
+  (<issuer>)`, as a function reading `ctx.auth.getUserIdentity()` would.
+- **Runner**: **Act as a user** (disabled, with the reason, without `actAsUser`) opens a **User identity**
+  editor, checked as Convex's `parseImpersonatedUser`: `subject` and `issuer` required, the OpenID claims
+  typed, `customClaims` flattened (`runner/identity.ts`). It is one setting for the page, as in Convex,
+  starting from Convex's `{ subject: "fake_id", issuer: "fake_issuer" }`. An invalid identity blocks Run and
+  pauses a watched query; a run keeps its identity in the history, and Previous / Next bring it back.
+
+### 16.4 The deployment's events among the log lines (STUDY-12 §10.4, L8)
+
+- On the Logs screen (not a function's logs), the audit log's events (§14.5) from the oldest loaded line on
+  are placed among the lines by time (`logs/events.ts`, as Convex's `interleaveLogs.ts`): level **event**,
+  the author where a line has its function, the event in words (History's `describeEvent`). The log filters
+  leave them, as in Convex. They refresh on `watchAuditEvents`. Enter on one opens it on the History screen.
+- Only when the source has `listAuditEvents` and the credential `viewAuditLog`.
+
+### 16.5 Usage and identity in a line's details (STUDY-12 §10.5, L9)
+
+- **Contract**: an execution's last line may carry `usage` (`memoryMb`, database, file and returned bytes) and
+  `identity` — who started the request: `admin`, `user`, `acting_as_user`, `system`, `unknown` (Convex's
+  `identityType`). **Contract suite**: when given, they are well-formed.
+- **Details**: **Started by** (Convex's words, with what they mean) and **Resources used** — compute (memory
+  for the time), database read / written, files read / written, returned — summed over the request's loaded
+  executions (memory: the most one used), saying so when there are several (`logs/usage.ts`).
+- **Mock**: every execution has both, made up from its kind, duration and place (not the random stream, so
+  the fixture is unchanged); the runner's runs are an admin's, or an admin's acting as a user.
+
+## 17. Amendment — Settings → General, narrow screens, the design system (30 Sep 2026)
+
+### 17.1 Settings → General (STUDY-12 §11)
+
+- `/settings` now opens **General**, the first page, as Convex's; the Settings frame (`settings/layout.tsx`)
+  lists General and Environment variables.
+- **Deployment**: name, version, persistence, the **client URL** and the **HTTP actions URL**, each with a
+  copy button; a URL the source does not give is left out. The contract's `DeploymentInfo` gains optional
+  `httpActionsUrl` (Convex's site URL); the mock's is `http://127.0.0.1:3211`, next to its client URL on
+  3210, as a self-hosted Convex backend.
+
+### 17.2 Pausing the deployment (STUDY-12 §11)
+
+- **Contract** (`data-source-state.ts`, optional): `getDeploymentState()` → `{ state: "running" | "paused" }`,
+  `pauseDeployment()`, `resumeDeployment()` — Convex's `POST /api/pause_deployment` / `unpause_deployment`;
+  both idempotent. Operations `pauseDeployment` / `resumeDeployment` (Convex's `PauseDeployment`,
+  `UnpauseDeployment`). **Contract suite**: the state is well-formed; opt-in `pause: { toggle, query? }`
+  pauses, checks the state and that `query` is refused, and always resumes.
+- **Settings → General → Pause deployment**, as Convex's: "This deployment is currently running / paused",
+  what pausing or resuming does, one button (destructive to pause) behind a confirmation naming the
+  deployment, disabled with a reason for a credential without the operation; not shown for a source
+  without the methods.
+- **Every screen** shows a banner while paused, linking to Settings (`shell/paused-banner.tsx`), as Convex's
+  dashboard layout.
+- **Mock**: while paused, `runFunction` is refused, its live writes stop, due scheduled runs wait and cron
+  runs are skipped; pausing and resuming are recorded as `pause_deployment` / `unpause_deployment` events.
+
+### 17.3 Dragging a column header (STUDY-12 D10)
+
+- A header of a `DataTable` with `onColumnStateChange` can be **dragged** to move its column, as Convex's
+  (`Table/ColumnHeader.tsx`, `utils/useColumnDragAndDrop.ts`, which uses dnd-kit): a press becomes a drag
+  after 4 px; while dragging, the column is dimmed and a bar marks the edge it will land at (the left edge
+  of the column it goes before, or the last one's right edge); the release saves the order through
+  `columnState` (`moveColumnBefore`, hidden columns keep their places); Escape or a cancelled pointer
+  leaves it. The resize handle and anything interactive in a header keep their own drag.
+- Native pointer events, no new dependency. The **Columns** panel stays: it is the keyboard and screen-
+  reader way (the owner's call).
+
+### 17.4 Narrow screens
+
+Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrolls sideways but a grid.
+- Below `md` the screens' list is behind **Menu** in the shell: a disclosure (`aria-expanded`,
+  `aria-controls`) that closes when a screen is picked, or on Escape (the focus goes back to Menu).
+- Below `lg`, the second columns become a row above the content: the table list becomes the **Table**
+  picker, the Functions tree sits above the function, and the Settings pages above the page — a 768 px
+  screen no longer holds the dashboard's sidebar, a list and the content side by side.
+- Button rows wrap (a table's actions, a function's path and buttons, a URL and its copy button).
+- An e2e case at 390 px checks that no screen scrolls sideways and that Menu works.
+
+### 17.5 The design system's page
+
+- `apps/dashboard/design-system.html` (`src/design-system.tsx`): `@bunvex/ui`'s tokens (the surface /
+  foreground pairs, lines and chart colours) and components (type, buttons, badges, form controls, card,
+  tabs, data table, JSON view, sparkline, skeleton), each rendered in a **light and a dark panel side by
+  side** (the `.dark` class works on any subtree), for whoever builds screens.
+- A second page of the private dev host, not of `apps/site`: the site is the public bunvex.dev (SITE-01,
+  users' documentation), and this is a tool for contributors. It is a separate Vite entry, so it adds
+  nothing to the dashboard's first load.
+- An e2e case loads it and runs axe, colour contrast included, over both themes at once.
 
