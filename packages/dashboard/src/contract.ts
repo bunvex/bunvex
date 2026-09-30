@@ -20,6 +20,7 @@ import {
   type Value,
 } from "./data-source.ts";
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
+import { isValidatorJson } from "./validators.ts";
 
 export type ContractOptions = {
   /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
@@ -32,7 +33,12 @@ export type ContractOptions = {
    * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
    * which returns without throwing.
    */
-  run?: { query: string; args?: Record<string, Value> };
+  run?: {
+    query: string;
+    args?: Record<string, Value>;
+    /** Arguments that do not fit the query's declared arguments validator (enables that test; STUDY-12 V1). */
+    misfitArgs?: Record<string, Value>;
+  };
 };
 
 async function expectError(p: Promise<unknown>, code: DataSourceErrorCode, clause?: string) {
@@ -312,6 +318,9 @@ export function describeDataSourceContract(
         expect(f.path).toMatch(/^[^:]+:[^:]+$/);
         expect(["query", "mutation", "action"]).toContain(f.kind);
         expect(["public", "internal"]).toContain(f.visibility);
+        // declared validators come in Convex's JSON form (STUDY-12 V1)
+        if (f.args !== undefined) expect(isValidatorJson(f.args)).toBe(true);
+        if (f.returns !== undefined) expect(isValidatorJson(f.returns)).toBe(true);
       }
     });
 
@@ -434,6 +443,17 @@ export function describeDataSourceContract(
         const src = await runner();
         await expectError(src.runFunction("no_such_module:nothing", {}), "not_found");
       });
+
+      const misfit = run.misfitArgs;
+      if (misfit)
+        test("runFunction: arguments that do not fit the declared validator fail the run, not the call", async () => {
+          const src = await runner();
+          const fn = (await src.listFunctions()).find((f) => f.path === run.query);
+          expect(fn?.args).toBeDefined();
+          const r = await src.runFunction(run.query, misfit);
+          expect(r.value).toBeUndefined();
+          expect(r.error?.message).toMatch(/ArgumentValidationError/);
+        });
     }
 
     // -------------------------------------------------------------- writes (opt-in)

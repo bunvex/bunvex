@@ -192,27 +192,43 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
     }
   };
 
-  // underline the error, with its message on hover
+  // underline the error, with its message on hover: alone, from where it is to the end of its line; with more
+  // errors, each one on the word it starts at (so one does not cover the next)
   useEffect(() => {
     const editor = editorRef.current;
     const model = editor?.getModel();
     if (!model) return;
     const e = props.error;
     if (!e) return monaco.editor.setModelMarkers(model, "bunvex", []);
-    const start = model.getPositionAt(Math.min(e.offset ?? 0, Math.max(0, model.getValueLength() - 1)));
-    const end = model.getPositionAt(model.getValueLength());
-    const sameLine = end.lineNumber === start.lineNumber;
-    monaco.editor.setModelMarkers(model, "bunvex", [
-      {
+    const at = (offset: number) => model.getPositionAt(Math.min(offset, Math.max(0, model.getValueLength() - 1)));
+    const several = (props.moreErrors?.length ?? 0) > 0;
+    const marker = (message: string, offset: number) => {
+      const start = at(offset);
+      // a quoted value has no word at its quote: take the one after it, and the closing quote
+      const word =
+        model.getWordAtPosition(start) ??
+        model.getWordAtPosition({ lineNumber: start.lineNumber, column: start.column + 1 });
+      const wordEnd = word ? word.endColumn + (word.startColumn > start.column ? 1 : 0) : 0;
+      const end = model.getPositionAt(model.getValueLength());
+      const endColumn = several
+        ? Math.max(wordEnd, start.column + 1)
+        : end.lineNumber === start.lineNumber
+          ? end.column
+          : model.getLineMaxColumn(start.lineNumber);
+      return {
         severity: monaco.MarkerSeverity.Error,
-        message: e.message,
+        message,
         startLineNumber: start.lineNumber,
         startColumn: start.column,
         endLineNumber: start.lineNumber,
-        endColumn: sameLine ? end.column : model.getLineMaxColumn(start.lineNumber),
-      },
+        endColumn,
+      };
+    };
+    monaco.editor.setModelMarkers(model, "bunvex", [
+      marker(e.message, e.offset ?? 0),
+      ...(props.moreErrors ?? []).map((m) => marker(m.message, m.offset)),
     ]);
-  }, [props.error]);
+  }, [props.error, props.moreErrors]);
 
   const single = !props.multiline;
   return (
