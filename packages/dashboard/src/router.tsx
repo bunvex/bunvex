@@ -20,6 +20,7 @@ import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery
 import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
 import { DatabaseScreen } from "./database/screen.tsx";
+import { FunctionsScreen } from "./functions/screen.tsx";
 import { validateLogsSearch } from "./logs/log-filter.ts";
 import { LogsScreen } from "./logs/screen.tsx";
 import { LOG_PAGE } from "./logs/use-logs.ts";
@@ -36,6 +37,14 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "indexes" | "add" | "columns" };
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
+
+/** The Functions screen's URL state: the open function (`module:name`), as in Convex. */
+export type FunctionsSearch = { function?: string };
+
+export function validateFunctionsSearch(input: Record<string, unknown>): FunctionsSearch {
+  const fn = str(input.function);
+  return fn ? { function: fn } : {};
+}
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
 export function validateTableSearch(input: Record<string, unknown>): TableSearch {
@@ -97,8 +106,9 @@ export const tableRoute = createRoute({
 export const functionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "functions",
+  validateSearch: validateFunctionsSearch,
   loader: ({ context: { queryClient, scope } }) => queryClient.ensureQueryData(functionsQuery(scope)),
-  component: () => <NotBuiltYet title="Functions" />,
+  component: FunctionsScreen,
 });
 
 export const logsRoute = createRoute({

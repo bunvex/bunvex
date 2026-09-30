@@ -891,3 +891,16 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 - **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
   that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
 - Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.
+
+### 13.2 The Functions screen
+
+- **`/functions?function=<module:name>`** (`src/functions/`), the URL as in Convex. A sidebar holds the
+  modules as a **tree** (`buildFunctionTree`): folders from the module path, then files, each
+  alphabetical, with the functions as links (kind letter, name, "internal"). Files and folders collapse,
+  and **Search functions** narrows the tree, opening every branch.
+- The open function: its name, "Query in tasks" / "Internal action in users", and a copyable path. Below
+  that are **its logs**: the Logs list (§13.1) fed by `listLogs` / `watchLogs` with the source's function
+  filter. Its type and text filters are kept per function, as in Convex, and there is no function picker.
+- **No Statistics tab** (STUDY-12 L1, decided): the server has no app metrics yet. No Run button until
+  §13.3.
+- Nothing open: a hint. An unknown function in the URL is named. No functions: says so.

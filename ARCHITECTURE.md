@@ -98,7 +98,8 @@ bunvex/
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
 │   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
-│   │   └── screens                  health ✅ (engine counters) · functions                        D
+│   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
+│   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M
