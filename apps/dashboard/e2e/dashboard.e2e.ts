@@ -70,17 +70,27 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
-  test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", () => {
+  test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
     expect(entry.length).toBe(1);
-    const file = Bun.file(`${import.meta.dir}/../dist/assets/${entry[0]}`);
-    // 740 kB before route splitting, ~336 kB after
-    expect(file.size).toBeLessThan(380_000);
     // no screen's own text in the entry: a screen imported eagerly again fails this
-    const code = readFileSync(file.name!, "utf8");
-    for (const text of ["Documents in ", "Log lines", "Search functions", "Run a function"])
-      expect(code).not.toContain(text);
+    const code = readFileSync(`${import.meta.dir}/../dist/assets/${entry[0]}`, "utf8");
+    expect(
+      ["Documents in ", "Log lines", "Search functions", "Run a function"].filter((t) => code.includes(t)),
+    ).toEqual([]);
+    // what Health's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB after
+    const { page, close } = await open("/");
+    await heading(page, "Health");
+    const kb = await page.evaluate(
+      () =>
+        performance
+          .getEntriesByType("resource")
+          .filter((e) => e.name.endsWith(".js"))
+          .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
+    );
+    expect(kb).toBeLessThan(600);
+    await close();
   });
 
   test("plain paths: a deep link opens, the knobs leave the address, reload and back keep the route", async () => {
