@@ -52,9 +52,12 @@ const list = (s: string | undefined) => (s === undefined ? "all" : s === NONE ? 
 const joined = (v: string[]) => (v.length === 0 ? NONE : v.join(","));
 const nonEmpty = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
-/** Invalid values are dropped, not rejected: a hand-edited URL still opens the screen. */
+/**
+ * Invalid values are dropped, not rejected: a hand-edited URL still opens the screen. Every key is returned,
+ * `undefined` when invalid, because the router keeps a raw param the validator leaves out.
+ */
 export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
-  const out: LogsSearch = {};
+  const out: LogsSearch = { function: undefined, type: undefined, q: undefined };
   const fn = nonEmpty(input.function);
   const type = nonEmpty(input.type);
   const types =

@@ -10,9 +10,9 @@ import { useId, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
-import { LogsView, useLogView } from "../logs/screen.tsx";
+import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
 import { useLogLines } from "../logs/use-logs.ts";
-import { DashLink, functionsRoute } from "../router.tsx";
+import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { buildFunctionTree, describeFunction, type FunctionNode, matchFunctions, splitPath } from "./tree.ts";
 
 const ITEM =
@@ -126,7 +126,16 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
 
 function FunctionView({ fn }: { fn: FunctionInfo }) {
   const scope = useQueryScope();
-  const [view, setView] = useLogView(`bunvex:function-logs:${scope.scope}:${fn.path}`);
+  // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
+  // the list is only this function's, so there is no function filter
+  const search = functionsRoute.useSearch();
+  const navigate = functionsRoute.useNavigate();
+  const [view, setView] = useLogViewInUrl(
+    `bunvex:function-logs:${scope.scope}:${fn.path}`,
+    { type: search.type, q: search.q },
+    ({ type, q }, replace) =>
+      navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q }), replace }),
+  );
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
   const { module, name } = splitPath(fn.path);

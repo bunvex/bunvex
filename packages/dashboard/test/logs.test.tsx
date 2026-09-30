@@ -135,6 +135,13 @@ describe("the Logs screen", () => {
     await waitFor(() => expect(params()).toEqual({ type: "failure" })); // the kept view goes into the address
   });
 
+  test("an unknown type in the URL is dropped, from the screen and the address", async () => {
+    mount(mockSource(), "/logs?type=loud");
+    await opened();
+    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    expect(params()).toEqual({});
+  });
+
   test("picking a type is a step Back undoes; typing replaces the address", async () => {
     mount();
     await opened();

@@ -2,7 +2,7 @@
 // the client by function, type and text (in the URL, and kept in this browser per deployment), with a line's
 // details beside the list.
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
 import { type LogEntry, toDataSourceError } from "../data-source.ts";
@@ -12,6 +12,7 @@ import { ErrorState } from "../shell/error-state.tsx";
 import { LogDetails } from "./log-details.tsx";
 import {
   isFiltered,
+  type LogsSearch,
   type LogView,
   matchesLogView,
   readLogView,
@@ -23,17 +24,31 @@ import { LogList } from "./log-list.tsx";
 import { LogToolbar } from "./log-toolbar.tsx";
 import { type LogLines, useLogLines } from "./use-logs.ts";
 
-/** A view kept in this browser under `key`. */
-export function useLogView(key: string): [LogView, (v: LogView) => void] {
-  const [view, setView] = useState(() => readLogView(key));
-  const update = useCallback(
-    (v: LogView) => {
-      setView(v);
-      writeLogView(key, v);
-    },
-    [key],
-  );
-  return [view, update];
+/**
+ * A view in the URL and kept in this browser under `key` (STUDY-12 L7): the URL's view wins and is kept;
+ * with none in the URL, the kept view applies and goes into the address. `navigate` writes the view's
+ * search params, replacing the entry when only the text changed (typing), adding one otherwise.
+ */
+export function useLogViewInUrl(
+  key: string,
+  search: LogsSearch,
+  navigate: (search: LogsSearch, replace: boolean) => void,
+): [LogView, (v: LogView) => void] {
+  const fromUrl = viewFromSearch(search);
+  const [saved] = useState(() => readLogView(key));
+  const view = fromUrl ?? saved;
+  // on arrival only (a new key is a new screen: give it a React key); later changes go through setView
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once, when the view opens
+  useEffect(() => {
+    if (fromUrl) writeLogView(key, fromUrl);
+    else if (isFiltered(saved)) navigate(searchFromView(saved), true);
+  }, []);
+  const setView = (v: LogView) => {
+    writeLogView(key, v);
+    // typing in the text box replaces the address; picking functions or types is a step Back undoes
+    navigate(searchFromView(v), v.functions === view.functions && v.types === view.types);
+  };
+  return [view, setView];
 }
 
 /** The toolbar, the list and the details: the Logs screen, and a function's logs on the Functions screen. */
@@ -100,25 +115,10 @@ export function LogsView(props: {
 export function LogsScreen() {
   const scope = useQueryScope();
   const { data: functions = [] } = useQuery(functionsQuery(scope));
-  const key = `bunvex:logs:${scope.scope}`;
-  const search = logsRoute.useSearch();
   const navigate = logsRoute.useNavigate();
-  // the URL's view wins; opened without one, the screen starts from the view last used in this browser
-  const fromUrl = viewFromSearch(search);
-  const [saved] = useState(() => readLogView(key));
-  const view = fromUrl ?? saved;
-  // on arrival only: later changes go through setView
-  // biome-ignore lint/correctness/useExhaustiveDependencies: run once, when the screen opens
-  useEffect(() => {
-    if (fromUrl) writeLogView(key, fromUrl);
-    else if (isFiltered(saved)) void navigate({ search: searchFromView(saved), replace: true });
-  }, []);
-  const setView = (v: LogView) => {
-    writeLogView(key, v);
-    // typing in the text box replaces the address; picking functions or types is a step Back undoes
-    const typing = v.functions === view.functions && v.types === view.types;
-    void navigate({ search: searchFromView(v), replace: typing });
-  };
+  const [view, setView] = useLogViewInUrl(`bunvex:logs:${scope.scope}`, logsRoute.useSearch(), (search, replace) =>
+    navigate({ search, replace }),
+  );
   const logs = useLogLines();
   return (
     // full-bleed inside <main>: the details panel runs to its edges

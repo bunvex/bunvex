@@ -900,7 +900,9 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   and **Search functions** narrows the tree, opening every branch.
 - The open function: its name, "Query in tasks" / "Internal action in users", and a copyable path. Below
   that are **its logs**: the Logs list (§13.1) fed by `listLogs` / `watchLogs` with the source's function
-  filter. Its type and text filters are kept per function, as in Convex, and there is no function picker.
+  filter. Its type and text filters are in the URL (`?function=<path>&type=&q=`) and kept in
+  this browser per function (STUDY-12 L7, as the Logs screen: a link opens filtered; a function opened
+  without filters starts from its own kept view); there is no function picker.
 - **No Statistics tab** (STUDY-12 L1, decided): the server has no app metrics yet. No Run button until
   §13.3.
 - Nothing open: a hint. An unknown function in the URL is named. No functions: says so.

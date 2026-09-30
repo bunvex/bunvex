@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Dashboard, type FunctionInfo } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { buildFunctionTree, describeFunction, splitPath } from "../src/functions/tree.ts";
 import { expectAccessible } from "./axe.ts";
@@ -102,5 +102,48 @@ describe("the Functions screen", () => {
     await userEvent.setup().type(screen.getByRole("searchbox", { name: "Filter logs" }), "ran");
     await waitFor(() => expect(localStorage.getItem("bunvex:function-logs:default:tasks:list")).toContain("ran"));
     expect(localStorage.getItem("bunvex:logs:default")).toBeNull();
+  });
+
+  test("its log filters are in the URL too: a link opens filtered, each function restores its own", async () => {
+    const source = mockSource();
+    const { history } = mount("/functions?function=tasks:list&type=failure&q=ran", source);
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
+    expect((screen.getByRole("searchbox", { name: "Filter logs" }) as HTMLInputElement).value).toBe("ran");
+    // another function opens with its own (none), then tasks:list comes back with the kept view in the URL
+    act(() => history.push("/functions?function=tasks:create"));
+    await screen.findByRole("heading", { level: 1, name: "create" });
+    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    cleanup();
+    const again = mount("/functions?function=tasks:list", source);
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    await waitFor(() =>
+      expect(Object.fromEntries(new URLSearchParams(again.history.location.search))).toEqual({
+        function: "tasks:list",
+        type: "failure",
+        q: "ran",
+      }),
+    );
+  });
+
+  test("an unknown type in the URL is dropped", async () => {
+    const { history } = mount("/functions?function=tasks:list&type=loud");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    expect(history.location.search).toBe("?function=tasks%3Alist");
+  });
+
+  test("picking a type keeps the open function in the URL; Back undoes it", async () => {
+    const { history } = mount("/functions?function=tasks:list");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Types: All types" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
+    await user.keyboard("{Escape}");
+    const params = () => Object.fromEntries(new URLSearchParams(history.location.search));
+    await waitFor(() => expect(params()).toEqual({ function: "tasks:list", type: "none" }));
+    act(() => history.back());
+    await waitFor(() => expect(params()).toEqual({ function: "tasks:list" }));
+    await screen.findByRole("button", { name: "Types: All types" });
   });
 });
