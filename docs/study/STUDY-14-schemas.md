@@ -1,6 +1,6 @@
 # STUDY-14 — Schemas: `defineSchema`, `defineTable`, document validation
 
-- **Status:** implemented (#29); implicit table creation comes in the next PR
+- **Status:** implemented (#29 schemas, #33 implicit table creation)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-13](STUDY-13-validators.md), [STUDY-04](STUDY-04-table-and-index-metadata.md)
 
@@ -44,7 +44,7 @@
 |---|---|---|---|
 | D1 | Existing documents are not re-checked when the schema changes | That check belongs to the deploy/push flow (parity gap) | gap |
 | D2 | No `searchIndex`, `vectorIndex` or `staged` yet | Search features are phase 4 | gap |
-| D3 | Tables not in the schema can't be written yet | Implicit table creation comes in the next PR | in progress |
+| D3 | ~~Tables not in the schema can't be written yet~~ Fixed in #33: a write creates the table, as `TableModel::insert_table_metadata` does; reads of a missing table return nothing and depend on `_tables` | — | done |
 
 ## 5. Tests
 

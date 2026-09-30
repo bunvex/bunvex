@@ -16,14 +16,17 @@ import {
   isSimpleObject,
   toJsonValue,
   type Value,
+  v,
 } from "@bunvex/values";
 import BTree from "sorted-btree";
-import type { Catalog } from "./catalog.ts";
+import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
+import { checkIdentifier, type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
+
+const ANY = v.any();
 
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
@@ -157,8 +160,57 @@ export class Tx {
   private readonly day: number;
 
   private tableDef(name: string) {
-    if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
-    return this.catalog.table(name);
+    const t = this.findTable(name);
+    if (!t) throw new Error(`unknown table ${name}`);
+    return t;
+  }
+
+  /** A table visible to this transaction (the catalog, or one it created), or undefined. */
+  private findTable(name: string): TableDef | undefined {
+    if (name.startsWith("_") && !this.system && this.systemDepth === 0)
+      throw new Error(`System table ${name} is not accessible here.`);
+    return this.catalog.tables.get(name) ?? this.createdTables.get(name)?.def;
+  }
+
+  /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
+  readonly createdTables = new Map<
+    string,
+    { def: TableDef; meta: Omit<TableMeta, "_id">; indexes: Omit<IndexMeta, "_id">[] }
+  >();
+  private systemDepth = 0;
+
+  /**
+   * A read of a table that does not exist yet: nothing, but the read depends on `_tables`, so a cached
+   * query or a subscription re-runs when the table is created.
+   */
+  private readMissingTable() {
+    const byCreation = this.catalog.table(TABLES_TABLE).indexes.get("by_creation_time")!;
+    this.recordInterval({ index: byCreation.id, lo: FULL.lo, hi: FULL.hi });
+  }
+
+  /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
+  private async createTable(name: string): Promise<TableDef> {
+    checkIdentifier("table", name);
+    if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
+    this.systemDepth++;
+    try {
+      const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
+      const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
+      const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
+      const meta = plan.insertTables[0];
+      for (const t of plan.insertTables) await this.insert(TABLES_TABLE, t);
+      for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
+      const def = new Catalog().add(
+        name,
+        meta.tablet,
+        meta.number,
+        plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+      );
+      this.createdTables.set(name, { def, meta, indexes: plan.insertIndexes });
+      return def;
+    } finally {
+      this.systemDepth--;
+    }
   }
 
   private recordInterval(i: Interval) {
@@ -209,7 +261,11 @@ export class Tx {
   }
 
   private async read(table: string, id: string, method: string): Promise<Doc | null> {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
+    if (!t) {
+      this.readMissingTable();
+      return null;
+    }
     if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
@@ -222,7 +278,9 @@ export class Tx {
   }
 
   query(table: string) {
-    const t = this.tableDef(table);
+    const found = this.findTable(table);
+    if (!found) return this.missingTableQuery();
+    const t = found;
     let ix = t.indexes.get("by_creation_time")!;
     let range: Range = FULL;
     let desc = false;
@@ -286,6 +344,19 @@ export class Tx {
     return q;
   }
 
+  /** The query of a table that does not exist: the same surface, no rows. */
+  private missingTableQuery() {
+    this.readMissingTable();
+    const q = {
+      withIndex: (_name: string, _f?: (b: IndexRangeBuilder) => IndexRangeBuilder) => q,
+      order: (_dir: "asc" | "desc") => q,
+      take: async (_n: number): Promise<Doc[]> => [],
+      first: async (): Promise<Doc | null> => null,
+      collect: async (): Promise<Doc[]> => [],
+    };
+    return q;
+  }
+
   /**
    * Merge a snapshot range with this transaction's pending entries for the same range. The snapshot was
    * fetched with `limit + removals` rows: each pending removal hides at most one of them, so the first
@@ -341,7 +412,8 @@ export class Tx {
   }
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
-    const t = this.tableDef(table);
+    if (!this.writable) throw new Error("queries cannot write");
+    const t = this.findTable(table) ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
     const internal = new Uint8Array(16);
@@ -361,9 +433,9 @@ export class Tx {
   }
 
   async patch(table: string, id: string, fields: Record<string, unknown>) {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
-    if (!cur) throw new Error(`patch: ${table}/${id} not found`);
+    if (!cur || !t) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
     const next: Record<string, unknown> = { ...cur };
@@ -374,9 +446,9 @@ export class Tx {
   }
 
   async delete(table: string, id: string) {
-    const t = this.tableDef(table);
+    const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
-    if (!cur) return;
+    if (!cur || !t) return;
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
   }
 

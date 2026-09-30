@@ -197,6 +197,16 @@ export class Engine {
       const { docs, idx } = tx.toWrites();
       try {
         await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx });
+        // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
+        // durable; a transaction that raced to create the same table conflicted on _tables and retries).
+        for (const [name, c] of tx.createdTables)
+          if (!this.catalog.tables.has(name))
+            this.catalog.add(
+              name,
+              c.meta.tablet,
+              c.meta.number,
+              c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+            );
         return value;
       } catch (e) {
         if (!(e instanceof ConflictError) || attempt >= maxRetries) throw e;
