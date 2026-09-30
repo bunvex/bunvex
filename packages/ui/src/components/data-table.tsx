@@ -692,7 +692,8 @@ function DataTable<TData extends RowData>({
                             flashing,
                           )}
                           onFocus={(e) => {
-                            if (e.target === e.currentTarget && !isFocus) setFocus({ rowId: row.id, col });
+                            // the first Tab into the grid lands on the default cell: it becomes the picked one
+                            if (e.target === e.currentTarget && !selected) setFocus({ rowId: row.id, col });
                           }}
                           onMouseDown={() => {
                             if (isEditing) return;
