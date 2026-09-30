@@ -39,6 +39,7 @@ import { validateValue } from "../validators.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
+import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 
@@ -318,7 +319,12 @@ export class MockDataSource implements DashboardDataSource {
   getSchema(opts?: CallOptions): Promise<SchemaInfo> {
     return this.call(opts?.signal, () => ({
       enforced: false,
-      tables: [...this.tables.values()].filter((t) => t.declared).map((t) => ({ name: t.name })),
+      tables: [...this.tables.values()]
+        .filter((t) => t.declared)
+        .map((t) => {
+          const validator = MOCK_DOCUMENT_TYPES[t.name];
+          return validator ? { name: t.name, validator: structuredClone(validator) } : { name: t.name };
+        }),
     }));
   }
 

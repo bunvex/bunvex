@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { encodeFilter } from "../src/database/filter-url.ts";
 import { expectAccessible } from "./axe.ts";
@@ -144,6 +144,33 @@ describe("the Database screen", () => {
     const panel = await screen.findByRole("complementary", { name: "Indexes of tasks" });
     expect(panel.textContent).toContain("by_done_priority");
     expect(panel.textContent).toMatch(/backfilling.*documents indexed/);
+  });
+
+  test("the schema panel shows the saved schema as code, this table's lines marked", async () => {
+    // as in recent browsers, scrolling returns a Promise (an effect that returned it broke the screen)
+    const scroll = mock(() => Promise.resolve());
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+    mount("/database/tasks?panel=schema");
+    await heading("tasks");
+    const panel = await screen.findByRole("complementary", { name: "Schema of tasks" });
+    expect(panel.textContent).toContain("tasks has a declared type, but documents are not validated against it.");
+    const saved = within(panel).getByRole("region", { name: "Saved schema" });
+    const marked = [...saved.querySelectorAll("[data-table-line]")].map((l) => l.textContent);
+    expect(marked[0]).toBe("    tasks: defineTable({");
+    expect(marked.at(-1)).toBe(
+      '    }).index("by_owner", ["owner"]).index("by_done_priority", ["done", "priority"]).index("by_text", ["text"]),',
+    );
+    expect(saved.querySelector("pre")?.textContent).toContain("{ schemaValidation: false }");
+    expect(within(saved).getByText(/^Lines \d+ to \d+ declare tasks\.$/)).toBeDefined();
+    expect(within(saved).getByRole("button", { name: "Copy the schema" })).toBeDefined();
+    expect(scroll).toHaveBeenCalled();
+    await expectAccessible();
+    cleanup();
+    mount("/database/imports?panel=schema"); // not declared: the schema, nothing marked
+    const other = await screen.findByRole("complementary", { name: "Schema of imports" });
+    expect(within(other).getByRole("region", { name: "Saved schema" }).querySelector("[data-table-line]")).toBeNull();
+    Element.prototype.scrollIntoView = original;
   });
 
   test("live: a document written elsewhere appears at the top, and the count follows", async () => {
