@@ -1,0 +1,23 @@
+{
+  "name": "@bunvex/sync-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests of the sync protocol: @bunvex/client, and the official convex client as the protocol oracle, against a real bunvex server. Never published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/core": "workspace:*",
+    "@bunvex/protocol": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/sync-e2e"
+  },
+  "devDependencies": {
+    "convex": "^1.46.0"
+  }
+}

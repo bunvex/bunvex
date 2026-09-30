@@ -7,7 +7,7 @@ item. It is the project's to-do list at the scale of the whole product.
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 25 | 36 | ~170 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 43 | 18 | ~103 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 80 | 16 | ~68 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 3 | 20 | ~209 |
 
 These counts were taken on 2026-09-29, with #6 (catalog) and #7 (ids) counted as done; client-sync was

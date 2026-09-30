@@ -28,17 +28,17 @@ idempotency or reconnect logic.
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). v0 `/ws` remains until the client moves. |
-| Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | missing | No client. |
+| Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | done (STUDY-26) | `/api/<client version>/sync`. |
 | Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | missing | No client-version negotiation. |
 | JSON text frames, one message per frame, discriminated by `type` | `browser/sync/protocol.ts` | done (STUDY-23) | v1 frames are Convex's (`@bunvex/protocol` `v1`). |
 | u64 timestamps encoded as base64 little-endian strings (`EncodedTS`) | `browser/sync/protocol.ts` (`u64ToLong`/`longToU64`) | done (STUDY-23) | `encodeU64`/`decodeU64`. The ts is bunvex's commit counter (P7). |
 | Function args sent as a one-element array of Convex-encoded JSON (`args: [convexToJson(args)]`) | `browser/sync/protocol.ts`, `browser/sync/client.ts` | done (STUDY-23) | `$integer`/`$float`/`$bytes` decoded by the server; args canonicalized for the execution key. |
 | Canonical function path (`module:fn`, `.js` stripped, default export → `:default`) | `browser/sync/udf_path_utils.ts` | done (STUDY-23) | `canonicalizeUdfPath` on Add, Mutation and Action. |
 | `componentPath` on Add/Mutation/Action (admin-only for non-root components) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | No components. |
-| Large transitions split into `TransitionChunk` (5 MB parts; `partNumber`/`totalParts`/`transitionId`) and put back together in order on the client | `crates/local_backend/src/subs/mod.rs` (`maybe_split_transition`), `browser/sync/web_socket_manager.ts` | missing | bunvex caps frames at `maxPayloadLength: 8 MiB`, so a bigger result fails. |
+| Large transitions split into `TransitionChunk` (5 MB parts; `partNumber`/`totalParts`/`transitionId`) and put back together in order on the client | `crates/local_backend/src/subs/mod.rs` (`maybe_split_transition`), `browser/sync/web_socket_manager.ts` | partial (STUDY-26) | The client reassembles chunks in order; the server does not split yet (STUDY-23 P8). |
 | Server application-level `Ping` message (keeps idle sockets alive; client ignores it) | `crates/sync/src/worker.rs` (`HEARTBEAT_INTERVAL` 15 s) | done (STUDY-23) | After 15 s without a frame; one hub-wide timer checks every second. |
 | WS-level ping every 5 s; client considered dead after 120 s of no pong | `crates/local_backend/src/subs/mod.rs` | partial | Bun sends pings by default; timeouts differ, and none is tuned. |
-| Client inactivity watchdog: reconnect if nothing arrives from the server for 60 s | `browser/sync/web_socket_manager.ts` (`serverInactivityThreshold`) | missing | No client. |
+| Client inactivity watchdog: reconnect if nothing arrives from the server for 60 s | `browser/sync/web_socket_manager.ts` (`serverInactivityThreshold`) | done (STUDY-26) |  |
 | Per-message size metrics / large-transition warnings (>20 MB or >20 s transit) | `browser/sync/web_socket_manager.ts` (`reportLargeTransition`) | missing | — |
 | Close frames with codes (Normal / Again / Error) and a ≤123-byte reason used by the client to classify backoff | `crates/errors/src/lib.rs` (`close_frame`), `browser/sync/web_socket_manager.ts` | partial (STUDY-23) | 1011 `InternalServerError`, 1013 with the error code (OCC, `TooManyConcurrentMutations`, `TooManyInflightActionsForSingleClient`); client errors get a `FatalError` and a plain close. |
 
@@ -80,20 +80,20 @@ idempotency or reconnect logic.
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | done (STUDY-23) | v1: one transition per connection at `T = visibleTs`. v0 still tears. |
-| Transitions are gapless: `startVersion` must equal the client's current version, or the client throws | `browser/sync/remote_query_set.ts` | done (STUDY-23) | Server side; the client check comes with `@bunvex/client`. |
+| Transitions are gapless: `startVersion` must equal the client's current version, or the client throws | `browser/sync/remote_query_set.ts` | done (STUDY-23, STUDY-26) | The client throws `Invalid start version: …`, as Convex. |
 | Server version never goes backwards (`advance_version` asserts it) | `crates/sync/src/state.rs` | done (STUDY-23) | `T` is `visibleTs`, monotonic. |
 | Query-set versioning: server rejects a `ModifyQuerySet` whose `baseVersion` doesn't match (`BaseVersionMismatch`) | `crates/sync/src/state.rs` (`modify_query_set`) | done (STUDY-23) | `FatalError` "Base version … passed up doesn't match the current version …". |
 | A query set change is answered by a Transition whose `endVersion.querySet` covers it (the client can tell when a new subscription is loaded) | `crates/sync/src/worker.rs` | done (STUDY-23) |  |
-| Read-your-writes: a mutation's promise resolves only after a Transition with `endVersion.ts >= mutation ts` has been applied, so the UI already shows the write | `browser/sync/request_manager.ts` (`removeCompleted`), `browser/sync/client.ts` | partial (STUDY-23) | Server side done: `MutationResponse.ts` is the commit ts and a transition at ≥ it follows. The client's wait comes with `@bunvex/client`. |
+| Read-your-writes: a mutation's promise resolves only after a Transition with `endVersion.ts >= mutation ts` has been applied, so the UI already shows the write | `browser/sync/request_manager.ts` (`removeCompleted`), `browser/sync/client.ts` | done (STUDY-23, STUDY-26) | `RequestManager.removeCompleted(ts)`; checked with 20 sequential mutations, and with the official client against bunvex. |
 | Server schedules a query update after every mutation/action completes so a covering Transition always follows | `crates/sync/src/worker.rs` (`schedule_update` after `mutation_futures`) | done (STUDY-23) | Even when nothing changed: an empty transition at the new ts. |
-| Failed mutations resolve immediately (no side effects to wait for) | `browser/sync/request_manager.ts` | done | The error `res` is sent immediately (trivially true). |
+| Failed mutations resolve immediately (no side effects to wait for) | `browser/sync/request_manager.ts` | done (STUDY-26) |  |
 | Mutations from one connection run serially, in the order they were sent | `crates/sync/src/worker.rs` (`mutation_futures … buffered(1)`) | done (STUDY-22) | A per-connection queue. A 1001st pending mutation closes the connection with 1013 `TooManyConcurrentMutations` (`OPERATION_QUEUE_BUFFER_SIZE`). Queued mutations of a closed connection never start. |
 | Actions run concurrently and are decoupled from the transition ordering | `crates/sync/src/worker.rs` (`action_futures: FuturesUnordered`) | done (STUDY-23) |  |
 | Result dedupe: re-executed query with an identical result (hash of value + log lines) produces no modification | `crates/sync/src/state.rs` (`complete_fetch`, `hash_result`) | done (STUDY-23) | v1 hashes the result and its log lines, as Convex. |
 | Subscription invalidation by read set vs committed writes | `crates/database` subscriptions, `crates/sync/src/state.rs` (`next_invalidated_query`) | done | `onCommit` → `overlaps(writes, reads)`; a running Sub is marked dirty and reruns. |
 | Cheap "refresh": an unchanged subscription just extends its validity to the new ts instead of rerunning | `crates/sync/src/worker.rs` (`extend_validity`) | done (STUDY-23) | `Committer.changedBetween(reads, from, to)` over the write log; a result valid at one ts is reused at a later one. |
 | Linearizability across backends: `Connect.maxObservedTimestamp` > server's latest ts → error (client saw a future the server doesn't know) | `crates/sync/src/worker.rs` (`Connect` handler) | done (STUDY-23) | The connection closes with 1011, as Convex's internal error. |
-| Client tracks `maxObservedTimestamp` from Transitions and MutationResponses | `browser/sync/client.ts` (`observedTimestamp`) | missing | — |
+| Client tracks `maxObservedTimestamp` from Transitions and MutationResponses | `browser/sync/client.ts` (`observedTimestamp`) | done (STUDY-26) | `getMaxObservedTimestamp()` is a bigint (C5). |
 | Backpressure / single-flight: at most N (=2) unsent Transitions queued per client; later updates coalesce into the next one | `crates/sync/src/worker.rs` (`SingleFlightSender`, `SYNC_MAX_SEND_TRANSITION_COUNT`) | partial (STUDY-23) | One transition computed at a time per connection, later triggers coalesced; no cap on unsent frames yet. |
 | Query reruns in parallel with bounded concurrency (20) and retry with backoff on retriable errors | `crates/sync/src/worker.rs` (`UPDATE_QUERY_CONCURRENCY`, `SYNC_WORKER_QUERY_RETRY_*`) | partial | Reruns run in parallel, unbounded, with no retry. |
 | Temporarily-unavailable features (search index bootstrapping) → skip, then retry later | `crates/sync/src/worker.rs` | missing | Not applicable until search exists. |
@@ -103,8 +103,8 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Session id (UUID v4) generated once per client and sent in `Connect` | `browser/sync/session.ts`, `browser/sync/client.ts` | partial (STUDY-23) | The server keys idempotency by it; the client side comes with `@bunvex/client`. |
-| Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | partial | bunvex's `mut.id` is supplied by the client and only echoed back. |
+| Session id (UUID v4) generated once per client and sent in `Connect` | `browser/sync/session.ts`, `browser/sync/client.ts` | done (STUDY-26) |  |
+| Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | done (STUDY-26) |  |
 | Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | done (STUDY-23) | A replay answers the recorded result and log lines. Its ts is the snapshot that saw the record, ≥ the original (P13, open). |
 | Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | done (STUDY-23) | Same transaction as the writes; cleanup by `_creationTime`, 64 per transaction, ≤ 256/s, `MAX_SESSION_CLEANUP_DURATION_HOURS`. |
 | Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | v0 closes on mutations only; v1 on both. |
@@ -115,20 +115,20 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Socket state machine: disconnected / connecting / ready / stopped / terminated, with a paused sub-state | `browser/sync/web_socket_manager.ts` | missing | No client. |
-| On reopen: send Connect, drop the remote query set, re-send the full query set as `ModifyQuerySet` base 0 → 1, re-send auth, re-send all in-flight mutations (including completed-but-unreflected ones) | `browser/sync/client.ts` (`onOpen`), `browser/sync/local_state.ts` (`restart`), `browser/sync/request_manager.ts` (`restart`) | missing | Needs server idempotency (§5) to be safe. |
-| In-flight actions fail on reconnect ("Connection lost while action was in flight"), never resent | `browser/sync/request_manager.ts` | missing | — |
-| Messages sent while disconnected are queued (`NotSent`) and flushed on open/resume | `browser/sync/request_manager.ts`, `browser/sync/web_socket_manager.ts` | missing | — |
-| Exponential backoff with jitter: 100 ms initial for client-side causes, 1 s for unknown server close, 1–3 s for classified server errors (Overloaded, TooManyConcurrentRequests, CommitterFullError, …), capped at 16 s | `browser/sync/web_socket_manager.ts` (`nextBackoff`, `serverDisconnectErrors`) | missing | — |
-| Backoff resets only once the client has "synced past the last reconnect" (all re-sent queries answered, auth confirmed, old requests done) | `browser/sync/client.ts` (`hasSyncedPastLastReconnect`), `browser/sync/local_state.ts` | missing | — |
-| Close codes 1000/1001/1005/4040 treated as normal (4040 = not-found during a push, retried) | `browser/sync/web_socket_manager.ts` | missing | — |
-| Browser `online` event → reconnect immediately, cancelling a pending backoff | `browser/sync/web_socket_manager.ts` (`tryReconnectImmediately`) | missing | — |
+| Socket state machine: disconnected / connecting / ready / stopped / terminated, with a paused sub-state | `browser/sync/web_socket_manager.ts` | done (STUDY-26) |  |
+| On reopen: send Connect, drop the remote query set, re-send the full query set as `ModifyQuerySet` base 0 → 1, re-send auth, re-send all in-flight mutations (including completed-but-unreflected ones) | `browser/sync/client.ts` (`onOpen`), `browser/sync/local_state.ts` (`restart`), `browser/sync/request_manager.ts` (`restart`) | done (STUDY-26) |  |
+| In-flight actions fail on reconnect ("Connection lost while action was in flight"), never resent | `browser/sync/request_manager.ts` | done (STUDY-26) |  |
+| Messages sent while disconnected are queued (`NotSent`) and flushed on open/resume | `browser/sync/request_manager.ts`, `browser/sync/web_socket_manager.ts` | done (STUDY-26) |  |
+| Exponential backoff with jitter: 100 ms initial for client-side causes, 1 s for unknown server close, 1–3 s for classified server errors (Overloaded, TooManyConcurrentRequests, CommitterFullError, …), capped at 16 s | `browser/sync/web_socket_manager.ts` (`nextBackoff`, `serverDisconnectErrors`) | done (STUDY-26) |  |
+| Backoff resets only once the client has "synced past the last reconnect" (all re-sent queries answered, auth confirmed, old requests done) | `browser/sync/client.ts` (`hasSyncedPastLastReconnect`), `browser/sync/local_state.ts` | done (STUDY-26) |  |
+| Close codes 1000/1001/1005/4040 treated as normal (4040 = not-found during a push, retried) | `browser/sync/web_socket_manager.ts` | done (STUDY-26) |  |
+| Browser `online` event → reconnect immediately, cancelling a pending backoff | `browser/sync/web_socket_manager.ts` (`tryReconnectImmediately`) | done (STUDY-26) |  |
 | Server-side reconnect rate limiter weighted by query-set size (avoid thundering herd after an outage) | `crates/sync/src/subscription_reconnect.rs` | missing | Useful once there are many clients. |
-| `ConnectionState` {isWebSocketConnected, hasEverConnected, connectionCount, connectionRetries, hasInflightRequests, timeOfOldestInflightRequest, inflightMutations, inflightActions} | `browser/sync/client.ts` | missing | — |
-| `subscribeToConnectionState(cb)` (published once per microtask, only on change) | `browser/sync/client.ts` | missing | — |
-| `onServerDisconnectError` callback for abnormal close reasons | `browser/sync/client.ts` | missing | — |
-| "Unsaved changes" `beforeunload` prompt while mutations are in flight (default on in browsers) | `browser/sync/client.ts` | missing | — |
-| `close()`: terminate the socket, stop auth refresh, never reconnect | `browser/sync/client.ts` | missing | — |
+| `ConnectionState` {isWebSocketConnected, hasEverConnected, connectionCount, connectionRetries, hasInflightRequests, timeOfOldestInflightRequest, inflightMutations, inflightActions} | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `subscribeToConnectionState(cb)` (published once per microtask, only on change) | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `onServerDisconnectError` callback for abnormal close reasons | `browser/sync/client.ts` | done (STUDY-26) |  |
+| "Unsaved changes" `beforeunload` prompt while mutations are in flight (default on in browsers) | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `close()`: terminate the socket, stop auth refresh, never reconnect | `browser/sync/client.ts` | done (STUDY-26) |  |
 | Server cleans up a connection's subscriptions on close | `crates/sync/src/worker.rs` | partial | Done on `close`, but duplicate `sub` of the same key from one socket increments `refs` twice while `ws.data.keys` (a Set) removes it once, so refs leak. |
 
 ### 7. Auth (client and sync side)
@@ -153,12 +153,12 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `mutation(name, args, {optimisticUpdate})`: a synchronous `(localStore, args) => void` applied right away | `browser/sync/client.ts` (`enqueueMutation`), `browser/sync/optimistic_updates.ts` | missing | — |
-| `OptimisticLocalStore.getQuery / getAllQueries / setQuery` (setting `undefined` = show loading) | `browser/sync/optimistic_updates.ts`, `browser/sync/optimistic_updates_impl.ts` | missing | — |
-| Every server transition: rebuild results from server data, then replay all still-pending optimistic updates in order | `browser/sync/optimistic_updates_impl.ts` (`ingestQueryResultsFromServer`) | missing | — |
-| Optimistic update dropped exactly when its mutation is reflected (ts reached) or failed, so there is no flicker | `browser/sync/client.ts` (`notifyOnQueryResultChanges`), `browser/sync/request_manager.ts` | missing | Depends on the §4 read-your-writes item. |
-| Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | missing | — |
-| `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | missing | — |
+| `mutation(name, args, {optimisticUpdate})`: a synchronous `(localStore, args) => void` applied right away | `browser/sync/client.ts` (`enqueueMutation`), `browser/sync/optimistic_updates.ts` | done (STUDY-26) |  |
+| `OptimisticLocalStore.getQuery / getAllQueries / setQuery` (setting `undefined` = show loading) | `browser/sync/optimistic_updates.ts`, `browser/sync/optimistic_updates_impl.ts` | done (STUDY-26) |  |
+| Every server transition: rebuild results from server data, then replay all still-pending optimistic updates in order | `browser/sync/optimistic_updates_impl.ts` (`ingestQueryResultsFromServer`) | done (STUDY-26) |  |
+| Optimistic update dropped exactly when its mutation is reflected (ts reached) or failed, so there is no flicker | `browser/sync/client.ts` (`notifyOnQueryResultChanges`), `browser/sync/request_manager.ts` | done (STUDY-26) |  |
+| Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | done (STUDY-26) |  |
 | React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | missing | — |
 | Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | missing | — |
 
@@ -180,14 +180,14 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `subscribe(name, args, {journal?})` → `{queryToken, unsubscribe}`; ref-counted per (path, args) on the client, so N subscribers share one server query | `browser/sync/client.ts`, `browser/sync/local_state.ts` | missing | Server-side sharing exists; the client side doesn't. |
-| Query token = canonical JSON of {udfPath, args} | `browser/sync/udf_path_utils.ts` | partial | `subscriptionKey` exists in `@bunvex/protocol` (path + NUL + `JSON.stringify(args)`); it depends on key order, not canonical. |
-| `addOnTransitionHandler(fn)` with `{queries[{token, modification}], reflectedMutations, timestamp}` | `browser/sync/client.ts` | missing | — |
-| `localQueryResult / localQueryResultByToken / hasLocalQueryResultByToken / localQueryLogs / queryJournal` | `browser/sync/client.ts` | missing | — |
-| `mutation(name, args, opts)` / `action(name, args)` returning values, throwing `ConvexError` with `.data` when `errorData` is present, otherwise `Error` with a "[CONVEX M(name)] … Called by client" message | `browser/sync/client.ts`, `browser/logging.ts` | missing | Server also lacks `errorData`. |
-| `ConvexClient` (framework-free): `onUpdate(query, args, cb, onError)` returning a callable Unsubscribe with `getCurrentValue()` / `getQueryLogs()`; one-shot `query()` via subscribe-then-unsubscribe; `mutation`; `action`; `close`; `disabled` option for SSR | `browser/simple_client.ts` | missing | — |
-| Callbacks for one transition run together after it is applied (no partially applied state visible) | `browser/simple_client.ts`, `react/client.ts` (`transition`) | missing | — |
-| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | missing | Bun and browsers have a global `WebSocket`. |
+| `subscribe(name, args, {journal?})` → `{queryToken, unsubscribe}`; ref-counted per (path, args) on the client, so N subscribers share one server query | `browser/sync/client.ts`, `browser/sync/local_state.ts` | done (STUDY-26) |  |
+| Query token = canonical JSON of {udfPath, args} | `browser/sync/udf_path_utils.ts` | done (STUDY-26) |  |
+| `addOnTransitionHandler(fn)` with `{queries[{token, modification}], reflectedMutations, timestamp}` | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `localQueryResult / localQueryResultByToken / hasLocalQueryResultByToken / localQueryLogs / queryJournal` | `browser/sync/client.ts` | done (STUDY-26) |  |
+| `mutation(name, args, opts)` / `action(name, args)` returning values, throwing `ConvexError` with `.data` when `errorData` is present, otherwise `Error` with a "[CONVEX M(name)] … Called by client" message | `browser/sync/client.ts`, `browser/logging.ts` | done (STUDY-26) | As `BaseBunvexClient` / `BunvexClient` (C1); errors are `BunvexError` with `.data`, `[BUNVEX M(path)] …` (C2). |
+| `ConvexClient` (framework-free): `onUpdate(query, args, cb, onError)` returning a callable Unsubscribe with `getCurrentValue()` / `getQueryLogs()`; one-shot `query()` via subscribe-then-unsubscribe; `mutation`; `action`; `close`; `disabled` option for SSR | `browser/simple_client.ts` | done (STUDY-26) |  |
+| Callbacks for one transition run together after it is applied (no partially applied state visible) | `browser/simple_client.ts`, `react/client.ts` (`transition`) | done (STUDY-26) |  |
+| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | partial (STUDY-26) | The option exists; Bun and browsers have a global WebSocket, so no `setDefaultWebSocketConstructor` yet. |
 
 ### 11. React bindings
 
@@ -245,11 +245,11 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Server `console.log` lines returned with every query/mutation/action result and printed in the browser as `[CONVEX Q(name)] [LEVEL] …` | `browser/logging.ts`, `browser/sync/remote_query_set.ts`, `browser/sync/request_manager.ts` | partial | The server returns them over HTTP and with WebSocket mutation results (STUDY-20); there is no client to print them. |
-| `Logger` interface {log, warn, error, logVerbose}; `logger: false` silences; `verbose` option | `browser/logging.ts`, `browser/sync/client.ts` | missing | — |
-| `ConvexError` data passed to the client as `errorData` and re-thrown with `.data` | `browser/logging.ts` (`forwardData`), `browser/sync/remote_query_set.ts` | partial | The server sends `errorData` (STUDY-20); there is no client yet to rethrow a `BunvexError`. |
-| `[CONVEX FATAL ERROR]` on `FatalError` | `browser/logging.ts` | missing | — |
-| Optional debug telemetry (`reportDebugInfoToConvex`: marks, long-disconnect event to `/api/debug_event`) | `browser/sync/client.ts`, `browser/sync/metrics.ts` | missing | Low priority. |
+| Server `console.log` lines returned with every query/mutation/action result and printed in the browser as `[CONVEX Q(name)] [LEVEL] …` | `browser/logging.ts`, `browser/sync/remote_query_set.ts`, `browser/sync/request_manager.ts` | done (STUDY-26) | Printed as `[BUNVEX Q(name)] [LEVEL] …` (C2). |
+| `Logger` interface {log, warn, error, logVerbose}; `logger: false` silences; `verbose` option | `browser/logging.ts`, `browser/sync/client.ts` | done (STUDY-26) |  |
+| `ConvexError` data passed to the client as `errorData` and re-thrown with `.data` | `browser/logging.ts` (`forwardData`), `browser/sync/remote_query_set.ts` | done (STUDY-26) | As `BunvexError.data`. |
+| `[CONVEX FATAL ERROR]` on `FatalError` | `browser/logging.ts` | done (STUDY-26) | As `[BUNVEX FATAL ERROR]`; the client terminates. |
+| Optional debug telemetry (`reportDebugInfoToConvex`: marks, long-disconnect event to `/api/debug_event`) | `browser/sync/client.ts`, `browser/sync/metrics.ts` | missing | Omitted by design until there is an endpoint (STUDY-26 C4). |
 | Error message redaction for non-dev deployments (`RedactedJsError`, `RedactedLogLines`) | `crates/sync/src/worker.rs` | done (STUDY-20) | `REDACT_LOGS_TO_CLIENT` / `redactLogsToClient`, on HTTP and WebSocket. |
 
 ### 16. Limits and sizes relevant to clients
@@ -266,8 +266,8 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | missing | bunvex never needs the `.convex.cloud` check; a plain absolute-URL check is enough. |
+| Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
 | Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | missing | Choose `BUNVEX_URL`-style names. |
-| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | missing | — |
-| `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | missing | `baseClient` is also the test seam. |
+| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but the auth options (with `@bunvex/auth`) and `reportDebugInfoToConvex` (C4). |
+| `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | partial (STUDY-26) | `disabled` done; `baseClient` comes with the React client. |
 | Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex` re-exports `server` and `values` only; `browser`/`react`/`nextjs` re-exports are planned but empty. |
