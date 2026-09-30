@@ -8,6 +8,13 @@ import { compareKeys } from "../keyenc.ts";
 export type IndexRow = { key: Uint8Array; deleted: boolean; id: string | null };
 /** A page request: rows with lo ≤ key < hi and ts ≤ snapshot, in scan order, at most n. */
 export type PageRequest = { lo: Uint8Array; hi: Uint8Array; n: number };
+/**
+ * A page: rows in scan order. `exhausted` says the range has no more rows. A plain array means
+ * "exhausted iff it has fewer than n rows". A driver that filters rows after reading them (split long
+ * keys) returns `exhausted` explicitly; it may then return an empty page that is not the end, and must
+ * make progress on the next request.
+ */
+export type Page = IndexRow[] | { rows: IndexRow[]; exhausted: boolean };
 
 const MAX_PAGE = 4096;
 
@@ -16,13 +23,15 @@ function* latestLive(
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): Generator<PageRequest, string[], IndexRow[]> {
+): Generator<PageRequest, string[], Page> {
   const out: string[] = [];
   if (limit <= 0) return out;
   let n = Math.min(Math.max(limit * 2, 8), MAX_PAGE);
   let last: Uint8Array | null = null;
   for (;;) {
-    const rows = yield { lo, hi, n };
+    const page = yield { lo, hi, n };
+    const rows = Array.isArray(page) ? page : page.rows;
+    const exhausted = Array.isArray(page) ? page.length < n : page.exhausted;
     for (const r of rows) {
       if (last && compareKeys(last, r.key) === 0) continue; // an older version of a decided key
       last = r.key;
@@ -31,10 +40,13 @@ function* latestLive(
         if (out.length >= limit) return out;
       }
     }
-    if (rows.length < n || !last) return out;
-    // Continue strictly past the last key seen: its remaining rows are older versions.
-    if (desc) hi = last;
-    else lo = successor(last);
+    if (exhausted) return out;
+    // Continue strictly past the last key seen: its remaining rows are older versions. (With no row in
+    // this page, the same request is repeated: the driver guarantees progress.)
+    if (last) {
+      if (desc) hi = last;
+      else lo = successor(last);
+    }
     n = Math.min(n * 2, MAX_PAGE);
   }
 }
@@ -47,7 +59,7 @@ function successor(k: Uint8Array): Uint8Array {
 }
 
 export function scanLatestSync(
-  fetch: (p: PageRequest) => IndexRow[],
+  fetch: (p: PageRequest) => Page,
   lo: Uint8Array,
   hi: Uint8Array,
   limit: number,
@@ -60,7 +72,7 @@ export function scanLatestSync(
 }
 
 export async function scanLatest(
-  fetch: (p: PageRequest) => Promise<IndexRow[]>,
+  fetch: (p: PageRequest) => Promise<Page>,
   lo: Uint8Array,
   hi: Uint8Array,
   limit: number,

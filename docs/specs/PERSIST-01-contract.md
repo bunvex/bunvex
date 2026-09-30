@@ -38,6 +38,9 @@ For a snapshot `T`:
   versions never count toward the limit. A driver that reads rows in `(key, ts desc)` order must page
   until it has `limit` live ids or the range is exhausted; `scanLatest`/`scanLatestSync` in
   `@bunvex/core/persistence` do this. `limit ≤ 0` returns nothing.
+- Keys have **no length limit**. A store whose indexed columns are limited stores a key as Convex does:
+  `key_prefix` (the first 2500 bytes), `key_suffix` and `key_suffix_hash`. It restores the true order among
+  keys that share a full-length prefix (`splitKey` / `splitPages` in `@bunvex/core/persistence`).
 - Rows with `ts > T` MUST NOT influence the answer, even if they are already stored (the committer
   applies a group before it is durable; readers at an older snapshot must not see it).
 - A snapshot older than the newest one still answers from the versions it saw (history is kept until
@@ -79,6 +82,7 @@ rebuilds it from its log, ignoring a torn trailing record.
 | K6 | crash atomicity (process crash) | a child process commits continuously and is SIGKILLed at random moments, N times; after each kill the store reopens with `maxTs ≥` the last acknowledged commit, every commit `≤ maxTs` is complete (doc + all its index entries), none above it is visible, and writing resumes at `maxTs + 1` |
 | K7 | torn tail (log-based drivers) | half a record appended to the log: it is cut off on open, and a commit written after recovery survives the next reopen |
 | K8 | exact limits | a range whose ends are full of deleted keys and whose live keys have hundreds of versions: for limits 0–100, asc and desc, whole and partial ranges, at several snapshots, `scan` (and `scanDocs`) return exactly the reference model's first `limit` live entries |
+| K9 | long keys | incompressible keys up to 6 KB, many sharing their first 2500+ bytes, plus keys around the 2500-byte boundary, with versions and deletes: scans over whole and partial ranges (bounds that are themselves long keys), both directions, several limits and snapshots, equal the reference model |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

@@ -45,4 +45,5 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
-export { type IndexRow, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
+export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
+export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
