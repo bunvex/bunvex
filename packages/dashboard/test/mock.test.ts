@@ -16,6 +16,7 @@ describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(sm
   writes: { table: "imports", clear: true },
   run: { query: "tasks:list", args: { limit: 2 } },
   schedules: { cancel: true },
+  files: { write: true },
 });
 
 describe("MockDataSource, running functions", () => {

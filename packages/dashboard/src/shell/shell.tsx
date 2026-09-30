@@ -5,7 +5,7 @@ import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouter } from "@tanstack/react-router";
-import { Activity, CalendarClock, Database, FunctionSquare, Play, ScrollText } from "lucide-react";
+import { Activity, CalendarClock, Database, FileBox, FunctionSquare, Play, ScrollText } from "lucide-react";
 import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
@@ -72,6 +72,12 @@ export function Shell() {
               <DashLink link={{ to: "/functions" }} className={NAV_LINK}>
                 <FunctionSquare className={ICON} aria-hidden="true" />
                 Functions
+              </DashLink>
+            </li>
+            <li>
+              <DashLink link={{ to: "/files" }} className={NAV_LINK}>
+                <FileBox className={ICON} aria-hidden="true" />
+                Files
               </DashLink>
             </li>
             <li>

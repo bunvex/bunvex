@@ -1002,3 +1002,23 @@ STUDY-12 §8. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Tests: the cron helpers; the screen (order, picker in the URL, details, cancel one and all, a running run,
   read-only and no-`writeData` credentials, the crons and their runs, a source without them, axe); the
   contract suite on the mock; an e2e case and axe with colour contrast in both themes.
+
+### 14.3 Files
+
+- **Contract**, optional: `listFiles({ numItems, cursor, order?, from?, to? })` — newest first by default
+  (`StoredFile`: storage id, creation time, base64 SHA-256, size, content type or null, a URL);
+  `countFiles()`; `getFile(id)` (null when absent); `uploadFile(blob)` → the new storage id (the content type
+  is the blob's); `deleteFiles(ids)` (unknown ids ignored); `watchFiles(onChange, onError)`. Reading needs
+  `viewData`; uploading and deleting `writeData`, as Convex.
+- **Contract suite**: the reads (both orders, a time range, the count, `getFile`) whenever offered; upload
+  and delete only with `files: { write: true }` (it checks size, type and SHA-256 of what it stored).
+- **Mock** (`mock/files.ts`): six SVG avatars, a text, a JSON, a CSV, a PDF-like and two binaries (one with
+  no type), over the last 30 days; object URLs, so previews and downloads work in a browser.
+- **Screen** (`/files`): the total ("12 files stored"), **Upload files** (several at once), a lookup by
+  storage id (opens its details), the order and a day range in the URL (`?order=asc&from=&to=`, days in
+  the viewer's zone), the grid (storage id, size, content type, uploaded) with row selection and **Delete N**
+  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1
+  keeps text previews an open proposal), size, type, SHA-256, time, **Download**, **Delete**.
+- Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
+  lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
+  e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
