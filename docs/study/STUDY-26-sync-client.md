@@ -188,6 +188,9 @@ inference (ARCH-01 open decision 1), plugs in without changing the client.
 
 ## 4. Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): C1–C2 under DV-03/DV-04, C3–C5 and C7 as
+DV-90–DV-93, C6 under Gaps.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | C1 | Public names say bunvex: `BaseBunvexClient`, `BunvexClient` (later `BunvexReactClient`, `BunvexProvider`, `BunvexHttpClient`), and the option `skipDeploymentUrlCheck` | Owner's rule: no "convex" in public names | follows the rule |
@@ -280,6 +283,8 @@ Tests run against a real server in `packages/sync-e2e/react`, in their own proce
 
 ### 7.3 Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): R1 under DV-03, R2 as DV-95, R3 under Gaps.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
@@ -341,6 +346,8 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 - `insertAtTop`.
 
 ### 8.3 Divergences
+
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96, P2 under Gaps.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
