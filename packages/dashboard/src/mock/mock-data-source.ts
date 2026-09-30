@@ -15,6 +15,7 @@ import {
   type FieldPatch,
   type FilterExpression,
   type FunctionInfo,
+  type FunctionRun,
   type LogEntry,
   type LogFilter,
   type LogQuery,
@@ -461,12 +462,66 @@ export class MockDataSource implements DashboardDataSource {
     const fresh: LogEntry[] = [];
     for (let i = this.rnd.int(1, 3); i > 0; i--)
       fresh.push(...makeExecution(this.rnd, this.logs.length + fresh.length + 1, this.now()));
+    this.log(fresh);
+    return fresh;
+  }
+
+  private log(fresh: LogEntry[]) {
     this.logs.push(...fresh);
     for (const w of this.logWatchers) {
       const mine = fresh.filter((e) => logMatches(e, w.filter));
       if (mine.length > 0) w.deliver(mine);
     }
-    return fresh;
+  }
+
+  // ---------------------------------------------------------------- running functions
+
+  /**
+   * Runs a mock function: `<table>:list` returns the table's newest documents (`limit`, default 10),
+   * `<table>:get` the document `id` (or null), `tasks:byOwner` the tasks of `owner`; everything else returns
+   * null, and nothing changes data. Mock only: `throw: "message"` in the arguments makes it throw.
+   */
+  runFunction(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun> {
+    return this.call(opts?.signal, () => {
+      const fn = this.functions.find((f) => f.path === path);
+      if (!fn) throw new DataSourceError("not_found", `no function "${path}"`);
+      const c = this.opts.capabilities;
+      if (!c.operations.includes("runFunctions"))
+        throw new DataSourceError("unauthorized", "this credential cannot run functions");
+      if (c.readOnly && fn.kind !== "query")
+        throw new DataSourceError("unauthorized", `a read-only credential cannot run a ${fn.kind}`);
+      const error = typeof args.throw === "string" ? args.throw : undefined;
+      const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error });
+      this.log(lines);
+      const run: FunctionRun = {
+        logLines: lines.map((l) => ({ level: l.level, message: l.message })),
+        durationMs: lines.at(-1)?.execution?.durationMs ?? 0,
+      };
+      if (error !== undefined) run.error = { message: `Uncaught Error: ${error}` };
+      else run.value = this.mockValue(path, args);
+      return run;
+    });
+  }
+
+  private mockValue(path: string, args: Record<string, Value>): Value {
+    const [module, name] = path.split(":") as [string, string];
+    const docs = this.tables.get(module)?.documents;
+    if (!docs) return null;
+    const newest = () => [...docs].sort((a, b) => b._creationTime - a._creationTime);
+    const copy = (d: Document) => structuredClone(d) as Value;
+    if (name === "list")
+      return newest()
+        .slice(0, typeof args.limit === "number" ? args.limit : 10)
+        .map(copy);
+    if (name === "get") {
+      const d = docs.find((x) => x._id === args.id);
+      return d ? copy(d) : null;
+    }
+    if (name === "byOwner")
+      return newest()
+        .filter((d) => d.owner === args.owner)
+        .map(copy);
+    return null;
   }
 }
 

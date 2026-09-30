@@ -99,6 +99,7 @@ bunvex/
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
 │   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
 │   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
+│   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
 │   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli
