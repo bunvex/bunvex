@@ -31,6 +31,8 @@ test("events in words", () => {
   const e = (action: string, metadata: Record<string, never> | Record<string, unknown>) =>
     describeEvent({ id: "1", time: 0, action, author: null, metadata: metadata as never });
   expect(e("add_documents", { table: "tasks", count: 3 })).toBe("Added 3 documents to tasks");
+  expect(e("pause_deployment", {})).toBe("Paused the deployment");
+  expect(e("unpause_deployment", {})).toBe("Resumed the deployment");
   expect(e("delete_documents", { table: "tasks", count: 1 })).toBe("Deleted 1 document from tasks");
   expect(e("clear_tables", { tables: ["messages"], count: 3 })).toBe("Cleared messages (3 documents)");
   expect(e("delete_environment_variable", { variable_name: "LOG_LEVEL" })).toBe(

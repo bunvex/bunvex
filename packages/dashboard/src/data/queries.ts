@@ -37,6 +37,15 @@ export const deploymentQuery = ({ source, scope }: QueryScope) =>
     staleTime: 60_000,
   });
 
+/** UI-01 §17.2: running or paused; only for a source that offers pausing. */
+export const deploymentStateQuery = ({ source, scope }: QueryScope) =>
+  queryOptions({
+    queryKey: [...dashboardKeys.all(scope), "deployment-state"] as const,
+    queryFn: ({ signal }) => source.getDeploymentState!({ signal }),
+    enabled: typeof source.getDeploymentState === "function",
+    staleTime: 10_000,
+  });
+
 export const capabilitiesQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: dashboardKeys.capabilities(scope),
