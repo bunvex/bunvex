@@ -212,6 +212,20 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
+    const { page, errors, close } = await open("/schedules");
+    await heading(page, "Schedules");
+    await page.waitForURL(`${ORIGIN}/schedules/functions`);
+    await page.getByRole("grid", { name: "Scheduled functions" }).getByRole("row").nth(3).waitFor();
+    await page.getByRole("link", { name: "Cron jobs" }).click();
+    await page.getByRole("gridcell", { name: "summarize tasks" }).click();
+    const panel = page.getByRole("complementary", { name: "summarize tasks" });
+    await panel.getByRole("listitem").first().waitFor();
+    expect(await panel.getByRole("listitem").count()).toBe(5);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -220,6 +234,8 @@ describe("the dashboard in a browser", () => {
         ["/database/users", "users"],
         ["/database/users?panel=schema", "users"],
         ["/database/users?panel=add", "users"],
+        ["/schedules/functions", "Schedules"],
+        ["/schedules/crons?cron=summarize+tasks", "Schedules"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

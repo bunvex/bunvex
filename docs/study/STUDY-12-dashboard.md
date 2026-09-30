@@ -355,3 +355,76 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
 | L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", argument validation, run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), later — a query runs once for now |
+
+## 8. Schedules, Files, Environment variables and History (added 30 Sep 2026)
+
+The owner asked for these four screens on 30 Sep 2026, each built as **optional** contract methods (detected
+with `typeof`, as the writes and `runFunction`) with the mock implementing them before the server does.
+
+### 8.1 How Convex does it
+
+Sources: `npm-packages/dashboard-common/src/features/{schedules,files,settings,history}`, the system
+functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tables in
+`npm-packages/system-udfs/convex/schema.ts` and `tableDefs/deploymentAuditLogTable.ts`, the routes in
+`npm-packages/dashboard-self-hosted/src/pages/`.
+
+- **Navigation** (`layouts/DeploymentDashboardLayout.tsx`): Files, Schedules, History and Settings are always
+  in the sidebar. Schedules opens `/schedules/functions`, with a second page `/schedules/crons`; Settings has
+  its own pages, among them `/settings/environment-variables` (the self-hosted build has it too). What a
+  credential may not do is disabled with a tooltip ("You do not have permission…"), not hidden.
+- **Scheduled functions** (`paginatedScheduledJobs.ts`, `ScheduledFunctionsList*.tsx`,
+  `ScheduledFunctionsContentToolbar.tsx`): the `_scheduled_jobs` still to run (`nextTs` set), **nearest first**,
+  paginated, optionally for one function (`udfPath`, a picker "Filter scheduled runs by function"). A row: id
+  (copy), the scheduled time, the function, the state (`pending` or `inProgress`), and a menu — **View
+  Arguments** and **Cancel** (a confirmation; disabled while it runs or without `WriteData`). **Cancel all**
+  (optionally for the picked function) goes to `/api/cancel_all_jobs`, one to `/api/cancel_job`. Live, with
+  a pause ("Go Live") when updates come too fast. Finished runs are not listed (they are in Logs).
+- **Cron jobs** (`listCronJobs.ts`, `listCronJobRuns.ts`, `crons/CronsTable.tsx`): each `_cron_jobs` entry
+  with its schedule (`interval` seconds, `hourly`, `daily`, `weekly`, `monthly` in UTC, or a `cron`
+  expression), function and arguments, its last run (`_cron_job_logs`: time, status `success` / `err` /
+  `canceled`, execution time, log lines) and next run; the columns Name, Schedule, Function, Args and a menu
+  with the run history.
+- **Files** (`fileStorageV2.ts`, `FileStorage*.tsx`, `Uploader.tsx`, `PreviewImage.tsx`,
+  `DeleteFilesButton.tsx`): `_storage` newest first (or oldest), paginated, with a date range and a lookup by
+  storage id; a row has the id (copy), size, content type, the creation time, a preview for **images**,
+  **Download** and **Delete** (a confirmation); several can be selected and deleted together. **Upload**
+  generates an upload URL (`generate_upload_url`, audited) and POSTs the file to it; it needs `WriteData`.
+  The header shows the total number of files.
+- **Environment variables** (`settings/components/EnvironmentVariables.tsx`, `listEnvironmentVariables.ts`,
+  `settings/lib/api.ts`): name and value rows; values **hidden** ("•••") with Show / Hide and "Copy Name and
+  Value"; add, edit and delete are gathered in a form and saved **together** by one
+  `/api/update_environment_variables` call with `changes: [{ name, value | null }]`. Names: 1–256
+  characters, `^[a-zA-Z_]+[a-zA-Z0-9_]*$`; values up to 8 KiB (the backend also caps 512 variables and
+  512 KiB in all: `crates/common/src/knobs.rs` `ENV_VAR_LIMIT`, `ENV_VAR_TOTAL_SIZE_LIMIT`). Pasting a `.env`
+  file adds its lines; a value wrapped in quotes gets a warning. "Copy All" copies them as `.env` lines.
+- **History** (`history/components/HistoryView.tsx`, `paginatedDeploymentEvents.ts`): the
+  `_deployment_audit_log`, newest first, paginated, filtered by a date range (and, in the cloud, by team
+  member and action). An event has an `action` (`add_documents`, `update_documents`, `delete_documents`,
+  `clear_tables`, `create_table`, `delete_files`, `generate_upload_url`, `create_environment_variable`,
+  `update_environment_variable`, `delete_environment_variable`, `cancel_scheduled_function`,
+  `cancel_all_scheduled_functions`, `push_config`, `build_indexes`, …), the author and its `metadata`. It
+  needs `ViewAuditLog`. Running a function is not an audited action.
+
+### 8.2 How bunvex does it
+
+- **The contract** (`@bunvex/dashboard/data-source`, UI-01 §14): optional methods per feature —
+  `listScheduledFunctions` / `cancelScheduledFunction` / `cancelAllScheduledFunctions` /
+  `watchScheduledFunctions`, `listCronJobs`; `listFiles` / `getFile` / `uploadFile` / `deleteFiles`;
+  `listEnvironmentVariables` / `updateEnvironmentVariables` (one all-or-nothing batch, Convex's shape);
+  `listAuditEvents`. New operations: `viewEnvironmentVariables`, `writeEnvironmentVariables`,
+  `viewAuditLog` (Convex's `ViewEnvironmentVariables`, `WriteEnvironmentVariables`, `ViewAuditLog`);
+  schedules and files use `viewData` / `writeData`, as Convex.
+- **The mock** implements all of it; the contract suite checks each feature when the caller opts in.
+- **The screens** follow Convex's pages and routes: `/schedules/functions`, `/schedules/crons`, `/files`,
+  `/settings/environment-variables` (`/settings` opens it), `/history`. The sidebar always lists them, as
+  Convex's; on a source without the methods, the screen says the deployment does not offer it yet.
+
+### 8.3 Divergences
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| S1 | Scheduled functions and cron runs refresh on a `watch…` signal (refetch), not a reactive query | the same approach as the documents (D3) | follows D3 (decided) |
+| S2 | No component picker | bunvex has no components yet | follow-up |
+| F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **open** — build it, or keep images only like Convex? |
+| H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | follows the data |
+| H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |

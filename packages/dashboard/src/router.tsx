@@ -59,6 +59,17 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
   return out;
 }
 
+/** Scheduled functions (UI-01 §14.2): the function they are narrowed to, and the run whose details are open. */
+export type ScheduledSearch = { function?: string; run?: string };
+export function validateScheduledSearch(input: Record<string, unknown>): ScheduledSearch {
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  return { function: str(input.function), run: str(input.run) };
+}
+
+/** Cron jobs: the job whose details are open. */
+export type CronsSearch = { cron?: string };
+export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch => ({ cron: str(input.cron) });
+
 // ------------------------------------------------------------------ routes
 
 // Each screen is its own chunk, fetched when its route is first matched (while its loader runs), so the
@@ -68,6 +79,8 @@ const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Ove
 const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
 const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
+const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
+const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
 
 export const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   component: Shell,
@@ -129,7 +142,39 @@ export const logsRoute = createRoute({
   component: LogsScreen,
 });
 
-export const routeTree = rootRoute.addChildren([healthRoute, databaseRoute, tableRoute, functionsRoute, logsRoute]);
+/** `/schedules` opens the scheduled functions, as Convex's sidebar does. */
+export const schedulesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "schedules",
+  beforeLoad: () => {
+    throw redirect({ to: "/schedules/functions", replace: true });
+  },
+});
+
+export const scheduledRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "schedules/functions",
+  validateSearch: validateScheduledSearch,
+  component: ScheduledFunctionsScreen,
+});
+
+export const cronsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "schedules/crons",
+  validateSearch: validateCronsSearch,
+  component: CronJobsScreen,
+});
+
+export const routeTree = rootRoute.addChildren([
+  healthRoute,
+  databaseRoute,
+  tableRoute,
+  functionsRoute,
+  logsRoute,
+  schedulesRoute,
+  scheduledRoute,
+  cronsRoute,
+]);
 
 // ------------------------------------------------------------------ the router
 

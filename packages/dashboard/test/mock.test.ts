@@ -15,6 +15,7 @@ describeDataSourceContract("MockDataSource with latency", () => new MockDataSour
 describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(small), {
   writes: { table: "imports", clear: true },
   run: { query: "tasks:list", args: { limit: 2 } },
+  schedules: { cancel: true },
 });
 
 describe("MockDataSource, running functions", () => {
