@@ -38,12 +38,16 @@ const CONFIRM_DELETE_FROM_CELL_MENU = true;
 
 export function DatabaseScreen(): ReactNode {
   const { table } = tableRoute.useParams();
-  const { data: tables } = useSuspenseQuery(tablesQuery(useQueryScope()));
+  const scope = useQueryScope();
+  const { data: tables } = useSuspenseQuery(tablesQuery(scope));
+  const { data: caps } = useQuery(capabilitiesQuery(scope));
   const info = tables.find((t) => t.name === table);
+  const canCreate =
+    !!caps && !caps.readOnly && caps.operations.includes("writeData") && typeof scope.source.createTable === "function";
   return (
     // full-bleed inside <main>: the sidebar and the panel run to its edges
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 md:flex-row">
-      <TablesSidebar tables={tables} current={table} />
+      <TablesSidebar tables={tables} current={table} canCreate={canCreate} />
       {info ? (
         <TableView key={info.name} info={info} />
       ) : (

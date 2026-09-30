@@ -54,8 +54,26 @@ export type DeploymentInfo = {
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
-export type Operation = "viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions";
-export const OPERATIONS: readonly Operation[] = ["viewData", "writeData", "viewLogs", "viewMetrics", "runFunctions"];
+export type Operation =
+  | "viewData"
+  | "writeData"
+  | "viewLogs"
+  | "viewMetrics"
+  | "runFunctions"
+  // UI-01 §14: Convex's ViewEnvironmentVariables, WriteEnvironmentVariables, ViewAuditLog
+  | "viewEnvironmentVariables"
+  | "writeEnvironmentVariables"
+  | "viewAuditLog";
+export const OPERATIONS: readonly Operation[] = [
+  "viewData",
+  "writeData",
+  "viewLogs",
+  "viewMetrics",
+  "runFunctions",
+  "viewEnvironmentVariables",
+  "writeEnvironmentVariables",
+  "viewAuditLog",
+];
 
 export type Capabilities = {
   operations: Operation[];
@@ -330,6 +348,13 @@ export interface DashboardDataSource extends DeploymentFeatures {
   deleteDocuments?(table: string, ids: string[], opts?: CallOptions): Promise<void>;
   /** Deletes every document of the table (the source may do it in several transactions). */
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
+
+  /**
+   * Creates an empty table (STUDY-12 D11), not in the schema until declared there. A name that is taken, or
+   * not an identifier (letters, digits, `_`; not starting with a digit or `_`; at most 64): `invalid_request`.
+   * Convex's dashboard does it with a mutation that inserts a document and deletes it.
+   */
+  createTable?(name: string, opts?: CallOptions): Promise<void>;
 
   /**
    * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what

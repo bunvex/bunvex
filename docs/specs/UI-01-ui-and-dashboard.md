@@ -1025,6 +1025,30 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
   e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
 
+### 14.4 Settings: environment variables
+
+- **Contract**, optional: `listEnvironmentVariables()` — by name; `updateEnvironmentVariables(changes)` — a
+  batch of `{ name, value | null }` (null deletes), applied whole or not at all, as Convex's
+  `update_environment_variables`; a rename is a delete and a set. New operations, Convex's:
+  `viewEnvironmentVariables`, `writeEnvironmentVariables` (and `viewAuditLog`, for §14.5).
+- **Rules** (`settings/env-vars.ts`, used by the screen and enforced by the mock): names
+  `^[a-zA-Z_]+[a-zA-Z0-9_]*$` up to 256 characters, values up to 8 KiB, at most 512 variables and 512 KiB in
+  all; warnings (not errors) for quotes around a value and spaces at its ends; reading a pasted `.env` file
+  (comments, `export`, quotes, `\n` in double quotes) and writing one.
+- **Contract suite**: the read whenever offered and allowed; the batch semantics (all or nothing, the limits,
+  deleting an unknown name) only with `environmentVariables: { write: true }`.
+- **Screen**: `/settings` opens `/settings/environment-variables`, under a Settings heading with its own
+  navigation (one page so far). Values are **hidden** until shown (a toggle per variable), **Copy** one as
+  `NAME=value` or **Copy all as .env**. With `writeEnvironmentVariables`: **Edit** (name and value, so a
+  rename), **Delete** (marked, **Undo**), **Add a variable**; a `.env` file pasted into an empty name box
+  becomes a row per line. The changes wait in a bar ("2 unsaved changes") with **Discard** and **Save**; Save
+  is blocked while a name or value is invalid (said under the field) or a name is used twice. A refused
+  batch keeps the changes, with the reason. Without `viewEnvironmentVariables` the values are not fetched.
+- Tests: the rules; the batch a set of rows makes; the screen (hidden values, edit and save, a new variable
+  with bad and duplicate names and a quote warning, delete and undo and discard, rename, a pasted `.env`, a
+  refused batch, credentials without write, read-only, without view, a source without them, axe); the
+  contract suite on the mock; an e2e case and axe with colour contrast in both themes.
+
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
 ### 15.1 Validators on functions (STUDY-12 §8, V1)
@@ -1073,6 +1097,20 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   `CONFIRM_DELETE_FROM_CELL_MENU` (`database/screen.tsx`): `false` deletes at once, as Convex does outside
   production; it becomes a check of the deployment's kind once deployments have one.
 - Read-only: Delete document disabled, like the edit items.
+
+### 15.4 Creating a table (STUDY-12 D11)
+
+- **Contract**: optional `createTable(name)` — an empty table outside the schema; a taken name or one
+  that is not an identifier is `invalid_request`. The mock implements it; the contract suite (writes,
+  opt-in) checks both.
+- **Table list**: "Create table" at its foot (where the credential can write and the source can),
+  turning into a name box as in Convex: the name is checked as it is typed (`table-name.ts`, Convex's
+  rules: letters, digits and `_`, not starting with a digit or `_`, at most 64; not taken), Create (or
+  Enter) makes the table and opens it, Cancel or Escape puts the button back with the focus on it; a
+  refusal from the source is an alert under the box.
+- Not yet: a deployment with no tables at all shows the `/database` message without the list, so no
+  Create table there (the route component is in `router.tsx`, left alone while route splitting is under
+  way elsewhere).
 
 ### 15.6 The functions a request called (STUDY-12 L6)
 

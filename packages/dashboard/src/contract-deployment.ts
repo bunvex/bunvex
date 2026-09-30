@@ -16,6 +16,8 @@ export type DeploymentContractOptions = {
   schedules?: { cancel: boolean };
   /** Lets the suite upload a small text file and delete it again. */
   files?: { write: boolean };
+  /** Lets the suite add, change and delete a variable named BUNVEX_CONTRACT_SUITE. */
+  environmentVariables?: { write: boolean };
 };
 
 type Ctx = {
@@ -185,5 +187,43 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         off();
         expect(heard).toBeGreaterThan(0);
       }
+    });
+
+  // ---------------------------------------------------------------- environment variables
+  test("environment variables (when offered and allowed): by name, with valid names", async () => {
+    const src = await make();
+    if (!src.listEnvironmentVariables) return;
+    if (!(await src.getCapabilities()).operations.includes("viewEnvironmentVariables")) return;
+    const vars = await src.listEnvironmentVariables();
+    const names = vars.map((v) => v.name);
+    expect(names).toEqual([...names].sort());
+    for (const n of names) expect(n).toMatch(/^[a-zA-Z_]+[a-zA-Z0-9_]*$/);
+  });
+
+  if (opts.environmentVariables?.write)
+    test("changing environment variables (opt-in): a batch applies whole or not at all", async () => {
+      const src = await make();
+      if (!src.listEnvironmentVariables || !src.updateEnvironmentVariables)
+        throw new Error("environmentVariables.write was enabled but the source cannot change them");
+      const name = "BUNVEX_CONTRACT_SUITE";
+      const get = async () => (await src.listEnvironmentVariables!()).find((v) => v.name === name)?.value;
+      await src.updateEnvironmentVariables([{ name, value: "one" }]);
+      expect(await get()).toBe("one");
+      const names = (await src.listEnvironmentVariables()).map((v) => v.name);
+      expect(names).toEqual([...names].sort()); // still by name with a new one
+      await expectCode(
+        src.updateEnvironmentVariables([
+          { name, value: "two" },
+          { name: "1_BAD NAME", value: "x" },
+        ]),
+        "invalid_request",
+      );
+      expect(await get()).toBe("one"); // nothing of the failed batch applied
+      await expectCode(src.updateEnvironmentVariables([{ name, value: "x".repeat(8 * 1024 + 1) }]), "invalid_request");
+      await src.updateEnvironmentVariables([
+        { name, value: null },
+        { name: "BUNVEX_NEVER_SET", value: null },
+      ]);
+      expect(await get()).toBeUndefined();
     });
 }

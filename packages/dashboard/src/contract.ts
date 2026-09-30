@@ -536,6 +536,19 @@ export function describeDataSourceContract(
       expect(counts.length).toBeGreaterThan(0);
     });
 
+    test("createTable (when present) makes an empty table outside the schema; a taken or bad name is refused", async () => {
+      const src = await make();
+      if (!src.createTable) return;
+      const name = `contract_${Date.now().toString(36)}`;
+      await src.createTable(name);
+      const made = (await src.listTables()).find((t) => t.name === name);
+      expect(made).toMatchObject({ name, declared: false });
+      expect(made?.documentCount ?? 0).toBe(0);
+      await expectError(src.createTable(name), "invalid_request");
+      await expectError(src.createTable("_system"), "invalid_request");
+      await expectError(src.createTable("9lives"), "invalid_request");
+    });
+
     test(`writes are all or nothing, and say what is wrong (${table})`, async () => {
       const src = await writer();
       const before = await all((cursor) => src.listDocuments({ table, numItems: 100, cursor }));
