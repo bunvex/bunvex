@@ -1,8 +1,9 @@
 // One connection's mutations run one at a time, in the order they were sent, as in Convex's sync worker
 // (STUDY-22); different connections still run concurrently.
 import { afterEach, expect, test } from "bun:test";
-import { Engine, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { v } from "@bunvex/values";
 import { Functions, mutation } from "../src/functions.ts";
 import { createServer, MAX_PENDING_MUTATIONS } from "../src/server.ts";
 
@@ -16,7 +17,7 @@ async function setup() {
   const events: string[] = [];
   const gates = new Map<string, Promise<void>>();
   const engine = await new Engine(
-    new Schema().table("items", {}),
+    defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const functions = new Functions(engine).register("m", {
