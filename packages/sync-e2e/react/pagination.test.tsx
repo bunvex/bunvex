@@ -89,6 +89,31 @@ describe("usePaginatedQuery", () => {
     await waitFor(() => expect(bodies(box.r)).toEqual([...desc("x", 10), ...desc("m", 3)]), { timeout: 3000 });
   });
 
+  test("a cursor the query no longer accepts (InvalidCursor) restarts the pagination from the first page", async () => {
+    const { client, mount } = await setup(6);
+    const box: { r?: UsePaginatedQueryResult<{ body: string }> } = {};
+    function Pages() {
+      box.r = usePaginatedQuery(api.messages.flippable, {}, { initialNumItems: 2 });
+      return null;
+    }
+    const warn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (m: string) => warnings.push(m);
+    try {
+      mount(<Pages />);
+      await waitFor(() => expect(box.r?.status).toBe("CanLoadMore"));
+      act(() => box.r!.loadMore(2));
+      await waitFor(() => expect(bodies(box.r)).toEqual(desc("m", 6).slice(0, 4)));
+      // The query now reads in the other order: page 2's cursor belongs to the old query.
+      await act(() => client.mutation(api.messages.flip, {}));
+      await waitFor(() => expect(bodies(box.r)).toEqual(["m0", "m1"]));
+      expect(box.r?.status).toBe("CanLoadMore");
+      expect(warnings.join("\n")).toContain("resetting pagination state: ");
+    } finally {
+      console.warn = warn;
+    }
+  });
+
   test('"skip" loads nothing', async () => {
     const { mount } = await setup(2);
     const { box, Pages } = probe("skip", 3);

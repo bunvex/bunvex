@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7, R2–R3 and H2–H4 as recommended (owner, 2026-09-30); P1–P2 open
+- **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -344,8 +344,8 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| P1 | `InvalidCursor` is recognized by its message only. Convex also checks a system error's `data.paginationError`. | bunvex sends no such system-error data; the message is how its cursor errors read (`InvalidCursor: …`) | **recommend** |
-| P2 | `onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later | `usePaginatedQuery` does not use them, in Convex either | **recommend** later |
+| P1 | The server's `InvalidCursor` for a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}` (Convex: `isConvexSystemError`); the client recognizes it by that data or by its message, as Convex's | Owner's naming rule for the key; it closes STUDY-17 D4. The official client still recognizes it by the message | **accepted**: option (a) |
+| P2 | `onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later | `usePaginatedQuery` does not use them, in Convex either | **accepted** later |
 
 ## 9. The HTTP client (`BunvexHttpClient`)
 

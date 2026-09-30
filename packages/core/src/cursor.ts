@@ -3,6 +3,7 @@
 // crates/keybroker). bunvex's is the same content, base64url-encoded and signed with HMAC-SHA256 under the
 // instance secret: opaque to clients, and a cursor of another query or instance is refused.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { BunvexError } from "@bunvex/values";
 
 export type CursorPosition = { after: Uint8Array } | "end";
 
@@ -32,6 +33,20 @@ export function encodeCursor(secret: string, pos: CursorPosition, fingerprint: s
 
 const parseError = () => new Error("InvalidCursor: Failed to parse cursor");
 
+/**
+ * A cursor of another query (the data under a paginated query changed its shape): an app error with data, as
+ * Convex's `invalid_cursor()` (crates/database/src/query/mod.rs), so a function may catch it and a client
+ * recognizes it and restarts the pagination. Convex's key `isConvexSystemError` is `isBunvexSystemError` here
+ * (STUDY-26 P1). A cursor that does not parse stays a plain error, as Convex's keybroker's.
+ */
+export const INVALID_CURSOR_DATA = { isBunvexSystemError: true, paginationError: "InvalidCursor" } as const;
+function differentQueryError() {
+  const e = new BunvexError<{ isBunvexSystemError: boolean; paginationError: string }>({ ...INVALID_CURSOR_DATA });
+  e.message =
+    "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.";
+  return e;
+}
+
 export function decodeCursor(secret: string, cursor: string, fingerprint: string): CursorPosition {
   const [bodyB64, sigB64, ...rest] = cursor.split(".");
   if (!bodyB64 || !sigB64 || rest.length) throw parseError();
@@ -40,10 +55,7 @@ export function decodeCursor(secret: string, cursor: string, fingerprint: string
   const want = sign(secret, body);
   if (sig.length !== want.length || !timingSafeEqual(sig, want)) throw parseError();
   const [pos, fp] = body.split(".");
-  if (fp !== fingerprint)
-    throw new Error(
-      "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.",
-    );
+  if (fp !== fingerprint) throw differentQueryError();
   if (pos === "e") return "end";
   if (!pos?.startsWith("a")) throw parseError();
   return { after: unb64(pos.slice(1)) };

@@ -9,7 +9,7 @@ export type Harness = Awaited<ReturnType<typeof startServer>>;
 
 export async function startServer() {
   const engine = await new Engine(
-    defineSchema({ messages: defineTable(v.any()), counters: defineTable(v.any()) }),
+    defineSchema({ messages: defineTable(v.any()), counters: defineTable(v.any()), settings: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const runs: string[] = [];
@@ -36,6 +36,18 @@ export async function startServer() {
         .order("desc")
         .paginate(tight ? { ...paginationOpts, maximumRowsRead: 8 } : paginationOpts),
     ),
+    // Its order follows a setting: flipping it changes the query under every page, so a later page's cursor
+    // no longer matches (InvalidCursor) and the client must start over.
+    flippable: query(async ({ db }, { paginationOpts }: { paginationOpts: PaginationOptions }) => {
+      const flipped = (await db.query("settings").first())?.flipped === true;
+      return db
+        .query("messages")
+        .order(flipped ? "asc" : "desc")
+        .paginate(paginationOpts);
+    }),
+    flip: mutation(async ({ db }) => {
+      await db.insert("settings", { flipped: true });
+    }),
     sendMany: mutation(async ({ db }, { prefix, n }: { prefix: string; n: number }) => {
       for (let i = 0; i < n; i++) await db.insert("messages", { body: `${prefix}${i}` });
     }),
