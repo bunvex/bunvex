@@ -141,7 +141,7 @@ export function makeExecution(
   rnd: Random,
   seq: number,
   time: number,
-  run?: { fn: FunctionInfo; error?: string },
+  run?: { fn: FunctionInfo; error?: string; identity?: { subject: string; issuer: string; name?: unknown } },
   within?: { requestId: string; parentExecutionId: string },
 ): LogEntry[] {
   const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
@@ -150,6 +150,11 @@ export function makeExecution(
   const failed = run ? run.error !== undefined : rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
   const durationMs = fn.kind === "action" ? rnd.int(20, 900) : rnd.int(0, 40);
   const lines: { level: LogLevel; message: string }[] = [];
+  // what ctx.auth.getUserIdentity() gave the function, when run as a user
+  if (run?.identity) {
+    const who = typeof run.identity.name === "string" ? run.identity.name : run.identity.subject;
+    lines.push({ level: "info", message: `authenticated as ${who} (${run.identity.issuer})` });
+  }
   if (rnd.chance(0.3)) lines.push({ level: "debug", message: `args ${JSON.stringify({ limit: rnd.int(1, 50) })}` });
   if (rnd.chance(0.4)) lines.push({ level: "info", message: `${rnd.pick(VERBS).toLowerCase()} ${rnd.pick(THINGS)}` });
   if (rnd.chance(0.1)) lines.push({ level: "warn", message: "retrying after an OCC conflict" });

@@ -524,7 +524,10 @@ through them, filling the editor. Only mutations and actions have it: a query fo
 `FunctionTester.tsx`: an **Act as a user** checkbox (allowed with the `ActAsUser` operation) opens an editor
 for the identity — `subject` and `issuer` required, the OpenID claims optional (`name`, `email`, …), and
 `customClaims` (`parseImpersonatedUser`). Runs and subscriptions then carry it (the client's admin auth with an
-acting identity); the history keeps the identity with the arguments. **Status: planned**, as Convex.
+acting identity); the history keeps the identity with the arguments. bunvex: an `actAsUser` operation,
+`RunOptions.identity` on `runFunction` and `watchFunction`, the same checks (`runner/identity.ts`), one setting
+for the whole page with Convex's default `{ subject: "fake_id", issuer: "fake_issuer" }`, kept in the history.
+**Status: built**, as Convex.
 
 ### 10.4 Deployment events in the log list (L8)
 
