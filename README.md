@@ -57,7 +57,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Relationship to Convex
 
 bunvex is an independent implementation written from scratch. Its design was informed by studying the
-public architecture of Convex; no Convex source code is included. It is not affiliated with Convex, Inc.
+public architecture of Convex; no Convex source code is included. It is not affiliated with or endorsed
+by Convex, Inc. "Convex" is a trademark of Convex, Inc., used here only to describe compatibility.
+
+Contributors study Convex's source to match its behaviour, and cite the files they read
+([docs/study/](docs/study/README.md)). Nothing is copied from it.
 
 ## License
 

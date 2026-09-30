@@ -6,3 +6,6 @@ This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 bunvex is an independent implementation written from scratch. Its design was informed by studying the
 public architecture of Convex (https://github.com/get-convex/convex-backend); no Convex source code is
 included.
+
+bunvex is not affiliated with or endorsed by Convex, Inc. "Convex" is a trademark of Convex, Inc., used
+only to describe compatibility.
