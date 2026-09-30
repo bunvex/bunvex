@@ -1,6 +1,8 @@
 # STUDY-23 — Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth
 
-- **Status:** draft — study only, no code. Every decision in §6 awaits the owner.
+- **Status:** accepted — every decision in §6 taken as recommended (owner, 2026-09-30). Implementation
+  follows in steps: messages and versions → transitions and read-your-writes → sessions and idempotency →
+  reconnect → `@bunvex/client` / `@bunvex/react`.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-08](STUDY-08-cache-and-subscriptions.md): cache and subscriptions (D5 read-your-writes, D6
@@ -316,7 +318,7 @@ first.
 - Performance: fan-out of one hot query to N connections, comparing per-key pub/sub (v0) with
   per-connection transitions (v1). Reported in the PR.
 
-## 6. Decisions for the owner
+## 6. Decisions (accepted as recommended, owner, 2026-09-30)
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|

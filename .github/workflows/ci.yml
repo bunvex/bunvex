@@ -28,6 +28,25 @@ jobs:
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - run: bun run test
       - run: bun run build:dashboard
+      - run: bun run build:site
+
+  # The dashboard in a real browser (UI-01 §12.5.10): Monaco, layout, contrast, reduced motion — what the
+  # DOM tests cannot see. Not a required check (yet): the owner decides once it has proved stable.
+  e2e:
+    name: e2e · dashboard in Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: install Chromium (the version playwright-core 1.63.0 drives)
+        working-directory: apps/dashboard
+        run: bun x playwright-core install --with-deps chromium
+      - run: bun run e2e
+        env:
+          E2E_BROWSER: chromium
 
   # One job per external store, in parallel; `conformance` below keeps the required check's name.
   conformance-postgres:

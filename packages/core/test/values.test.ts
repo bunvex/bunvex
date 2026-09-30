@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, Schema } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine() {
-  const schema = new Schema().table("items", { by_v: ["v"], by_nested: ["meta.rank"] });
+  const schema = defineSchema({ items: defineTable(v.any()).index("by_v", ["v"]).index("by_nested", ["meta.rank"]) });
   return new Engine(schema, await MemoryPersistence.open(null, { durable: false })).init();
 }
 
-describe("Convex values in documents and indexes (STUDY-12)", () => {
+describe("Convex values in documents and indexes (STUDY-18)", () => {
   test("every value type round-trips through storage exactly", async () => {
     const e = await engine();
     const id = await e.mutation((db) =>

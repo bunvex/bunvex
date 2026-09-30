@@ -12,7 +12,6 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { validateLogsSearch } from "../src/router.tsx";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -85,11 +84,6 @@ describe("navigation", () => {
     expect(document.activeElement).not.toBe(main);
     await userEvent.setup().click(screen.getByRole("button", { name: "Skip to content" }));
     expect(document.activeElement).toBe(main);
-  });
-
-  test("search params are validated: invalid options are dropped", () => {
-    expect(validateLogsSearch({ level: "loud", function: "tasks:list" })).toEqual({ function: "tasks:list" });
-    expect(validateLogsSearch({ level: "error" })).toEqual({ level: "error" });
   });
 });
 

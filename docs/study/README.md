@@ -47,8 +47,17 @@ to a spec.
 | [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | draft (retroactive): divergences await the owner |
 | [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | draft (retroactive): divergences await the owner |
 | [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | draft (retroactive): divergences await the owner |
-| [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | draft: D1–D4 decided, D5–D10 await the owner |
-| [STUDY-23](STUDY-23-sync-protocol-v1.md) | Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | draft (study only): P1–P12 await the owner |
+| [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | accepted: D9 now matches Convex; the others kept (#16) |
+| [STUDY-13](STUDY-13-validators.md) | Validators (`v.*`) and args / returns validation | implemented (#24, #25) |
+| [STUDY-14](STUDY-14-schemas.md) | Schemas: `defineSchema`, `defineTable`, document validation, implicit tables | implemented (#29, #33) |
+| [STUDY-15](STUDY-15-query-filter.md) | `.filter()` and the filter builder | implemented (#37) |
+| [STUDY-16](STUDY-16-query-chaining.md) | Query chaining, `unique()`, `fullTableScan()`, async iteration | implemented (#40) |
+| [STUDY-17](STUDY-17-paginate.md) | `.paginate()`, cursors, reactive page boundaries, the instance secret | implemented (#42) |
+| [STUDY-18](STUDY-18-value-model.md) | The value model: types, order, index keys, JSON | implemented (#15, #21) |
+| [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 await the owner |
+| [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1–D3 await the owner |
+| [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 awaits the owner |
+| [STUDY-23](STUDY-23-sync-protocol-v1.md) | Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | accepted: P1–P12 as recommended (owner, 2026-09-30); implementation in steps |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

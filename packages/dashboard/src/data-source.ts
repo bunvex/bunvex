@@ -205,6 +205,21 @@ export type LogEntry = {
   execution?: { status: "success" | "failure"; durationMs: number };
 };
 
+/**
+ * What running a function from the dashboard gave (STUDY-12 §7): its value, or the error it threw, with the
+ * lines it logged. A function that throws is a result, not a rejected call; `runFunction` rejects only when
+ * the call could not be made (no such function, not allowed, unavailable).
+ */
+export type FunctionRun = {
+  /** Its return value (`undefined` comes back as `null`). Absent when it threw. */
+  value?: Value;
+  /** When it threw: the message, and a ConvexError's data. */
+  error?: { message: string; data?: Value };
+  /** Oldest first. */
+  logLines: { level: LogLevel; message: string }[];
+  durationMs: number;
+};
+
 export type LogFilter = { function?: string; levels?: LogLevel[] };
 
 /** Newest first; the cursor walks back in time. */
@@ -275,6 +290,12 @@ export interface DashboardDataSource {
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
 
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]>;
+  /**
+   * Runs a function once, as the dashboard's function runner does: present when the source can; allowed
+   * when `runFunctions` is granted (a read-only credential runs queries only). Unknown path: `not_found`;
+   * not allowed: `unauthorized`. The run is logged like any other execution.
+   */
+  runFunction?(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun>;
 
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;
   /** Live tail: entries created after the call, in id order, matching the filter. Never synchronously. */

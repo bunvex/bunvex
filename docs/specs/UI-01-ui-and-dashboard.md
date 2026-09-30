@@ -458,7 +458,7 @@ Virtual. Versions checked on npm and the current docs (context7) the same day:
 
 | package | version | where | for |
 |---|---|---|---|
-| `@tanstack/react-router` | 1.170 | dashboard (and the app, for `createHashHistory`) | routes, search params, loaders |
+| `@tanstack/react-router` | 1.170 | dashboard | routes, search params, loaders |
 | `@tanstack/react-query` | 5.104 | dashboard | the cache every read goes through |
 | `@tanstack/react-router-devtools`, `@tanstack/react-query-devtools` | 1.167, 5.104 | dashboard, lazy | `<Dashboard devtools>`; the app turns them on in development (a 0.3 kB no-op chunk in production) |
 | `@tanstack/react-table` | **9.2** (a new major: `useTable`, required `features`, `table.FlexRender`) | ui | `DataTable` |
@@ -488,7 +488,8 @@ are removed — the router owns the URL.
 ### 11.2 Routing
 
 - **The router lives in the package; the host picks the history.** `<Dashboard history={…} basepath={…}>`:
-  `createHashHistory()` in `apps/dashboard` (a static host needs no rewrites), the browser history under a
+  the browser history in `apps/dashboard` (plain paths, as Convex's dashboard; ~~`createHashHistory()`~~
+  until 30 Sep 2026, when the owner dropped the `/#/` addresses), the browser history under a
   `basepath` in a control plane (`/projects/p1/dashboard`), `createMemoryHistory()` in tests.
 - Routes: `/`, `/tables`, `/tables/$table?index&order`, `/tables/$table/$id`, `/functions`,
   `/logs?function&level`. Search params are validated by hand (`validateDocumentsSearch`,
@@ -767,8 +768,11 @@ which Convex's does not.
   is gone with the selection: the dialog does not restore focus (`finalFocus={false}`) and the screen asks
   the grid for it (`DataTable focusRequest`). Checked in a browser: Base UI hides the page behind a modal
   with `aria-hidden` and traps the focus (no `inert`), so axe is run on the dialog while it is open.
-- Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
-  search when the screen writes its own; harmless, to be fixed with the app's history setup.
+- ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
+  search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
+  host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
+  the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
+  the query with the route's own search, so only their three keys are taken out.
 
 ### 12.5.6 Columns and room for the table
 
@@ -789,6 +793,87 @@ which Convex's does not.
   resizable one.
 - Checked in a browser at 1 400 and 1 600 px, and by dragging both handles (the widths are saved).
 
+### 12.5.7 Values as JavaScript literals, in a code editor
+
+STUDY-12 D9 was decided "match Convex" (30 Sep 2026): the syntax of our own (a bare word is text,
+comma lists) is gone.
+
+- **`literal.ts`** (dashboard): a hand-written parser and formatter for JavaScript literals — never
+  evaluated. Objects with bare or quoted keys, arrays, strings in either quote, numbers, `10n` for an int64
+  (range-checked), `Bytes("base64")`, `true`/`false`/`null`, comments and trailing commas. `undefined`
+  means "no field": it removes a field in a patch, drops a key in an object and is refused in a list;
+  `NaN`/`Infinity` are refused. Every error carries the offset where it is. JSON is a subset.
+- **`CodeEditor`** (`@bunvex/ui/components/code-editor`): Monaco (`monaco-editor` 0.57 through
+  `@monaco-editor/react`, **bundled, no CDN**, its worker built by Vite) loaded on demand, with a plain
+  input/textarea that has the same keys until it loads and in tests (`setCodeEditorImplementation("plain")`).
+  One line (Enter submits, Escape cancels, Tab leaves the field or calls `onTab`) or several (Ctrl+Enter or
+  Cmd+Enter submits). A Monarch language `bunvex-literal`, light and dark themes built from the design
+  tokens (redefined when the theme changes), the error underlined from its offset. Only the editor
+  contributions a value box needs are imported. Monaco is ~3.2 MB, in its own chunk, fetched when the
+  Database screen mounts (`preloadCodeEditor`), not with the app.
+- **Where**: every filter value (index equals, range bounds, clause values; a list without brackets is read
+  as one), a cell (one line for a scalar; a multi-line popover for an object or a list, opening leftwards
+  near the grid's edge), **Add documents**, and a new **Edit** on the document panel — the fields without
+  `_id`/`_creationTime`, saved whole with `replaceDocument` (shown when the source has it and the
+  credential can write).
+- Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
+  in a cell, the object popover at the right edge, no request leaves localhost.
+
+### 12.5.8 A cell's context menu and shortcuts
+
+As in Convex (STUDY-12 §1.4.1).
+
+- **`DataTable`**: `grid.cellMenu({ row, columnId, edit })` returns the items of a cell's context menu
+  (DropdownMenu items); the grid opens it on a right-click (at the pointer), Shift+F10, the Menu key or
+  Ctrl/Cmd+Enter (at the cell), and gives the focus back to the cell when it closes. `grid.onCellKey`
+  lets the caller take keys on a focused cell before the grid's own. `DropdownMenuContent` takes an
+  `anchor` (a virtual element here). Base UI closes a trigger-less menu when its submenu opens ("a
+  sibling opened"); the grid ignores that reason.
+- **Database**: **Filter by `<field>`** ▸ the operators that make sense for the value (as Convex's
+  `showFilter`), added to the applied filter at once; **Copy `<field>`** (Ctrl/Cmd+C: text as it is,
+  anything else as a literal); **Edit `<field>`** (Enter); **View document** (Shift+Space); **Copy
+  document** (Ctrl/Cmd+Shift+C); **Edit document** (Shift+Enter: the side panel opens in its editor).
+  Edit items are disabled without the grant. A copy is announced ("Copied email.").
+- The side panel's document view is keyed by the id, so another document never opens in the last one's
+  editor.
+
+### 12.5.9 Accessibility pass (slice 7)
+
+- **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each
+  side panel, a table not in the schema, an unknown table, Functions, Logs. Colour contrast, which the
+  test DOM cannot compute, was run with axe in Chrome on the same states in both themes: one failure, a
+  select's placeholder on its dark hover surface (4.29:1). Dark `--muted-foreground` went from
+  `oklch(0.72 0 0)` to `oklch(0.74 0 0)` (4.66:1), and the token test gained that pair
+  (`input/50@card`, dark only).
+- **Keyboard walk-through** (same file): skip link → main, sidebar → Database, table list → a table, one
+  tab stop into the grid, Enter on `_id` opens the document, Escape closes it and returns the focus to
+  the same cell. It found a bug: the first Tab into the grid focused the default cell without marking it
+  current, so no focus ring showed (WCAG 2.4.7); fixed in `DataTable`.
+- **Reduced motion**: the global rule in `globals.css` (animations and transitions to 0.01 ms) is now
+  under test; the grid's highlight already falls back to a steady tint (STUDY-12 D6).
+- READMEs for `@bunvex/ui`, `@bunvex/dashboard` and `apps/dashboard`.
+
+### 12.5.10 Smoke tests in a real browser
+
+The owner decided (29 Sep 2026): Playwright, with a CI job that is not a required check until it has
+proved stable.
+
+- `apps/dashboard/e2e/dashboard.e2e.ts`, run by `bun run e2e` (root or `apps/dashboard`): builds the app,
+  serves it with `vite preview`, and drives Chromium through `playwright-core` (pinned, 1.63.0) —
+  the system Chrome locally, Playwright's Chromium in CI (`E2E_BROWSER=chromium`, job **e2e ·
+  dashboard in Chromium**).
+- What it covers, which the DOM tests cannot: Monaco loads from the app with no request elsewhere and
+  its worker is bundled; a cell edited in Monaco (Enter saves, Tab saves and moves right, Escape leaves
+  it); the object editor stays inside the grid; a document typed fast and saved with Ctrl+Enter is saved
+  exactly; the theme toggle switches Monaco's theme too; reduced motion cuts transitions; axe with
+  colour contrast on the main screens in both themes.
+- It found a bug on its first run: `CodeEditor` controlled Monaco through `value`, and typing faster than
+  React re-rendered lost keystrokes — a document was saved truncated. Fixed in #22 (Monaco holds the
+  text; `value` is written back only when it changes from outside; Enter / Tab / Ctrl+Enter render the
+  last keystroke before calling the handler).
+- Selecting everything and typing a quote wraps the selection in quotes (Monaco's `autoSurround`), as in
+  Convex's editor, which keeps Monaco's defaults; kept.
+
 ### 12.6 Decisions (29 Sep 2026)
 
 1. The screen is named **Database**, at **`/database/$table`**.
@@ -797,3 +882,70 @@ which Convex's does not.
    work like Convex's data grid — move between cells with the keyboard, Enter to edit, Enter to save and keep
    going — so in-place editing joined slice 6 (§12.5.3); then the owner asked to finish the Database screen in
    the same pull request, so inserting, deleting and clearing joined it too (§12.5.5).
+
+## 13. Amendment — Logs, Functions and the function runner (30 Sep 2026)
+
+After STUDY-12 §7. The owner decided on 29 Sep 2026: Functions without metrics for now (L1), log filters on
+the client as in Convex (L2), and an optional `runFunction` in the contract with a Run panel (L3).
+
+### 13.1 The Logs screen
+
+- **`/logs`** (`src/logs/`): every function's log lines, newest first, one row per line: time (with ms),
+  the request id's first four characters, the execution's outcome and duration on its last line, level,
+  the function (its kind's letter and path) and the message; errors and failed executions in the
+  destructive colour.
+- **Lines** (`useLogLines`): the newest `listLogs` page (200 lines; the route loader fetches it), then
+  whatever `watchLogs` delivers, merged by id, at most 10 000 (as Convex). Older pages load at the end of
+  the list (STUDY-12 L4, decided: keep the paging). **Pause** holds new lines and counts them ("Resume (3 new)"); resuming shows
+  them. **Clear** hides every loaded line; "Show N cleared" brings them back.
+- **Filters on the client** (`log-filter.ts`): functions and types (success, failure, debug, info, warn,
+  error — a line passes on its level, or on its execution's outcome) as multi-selects, and a text box
+  (200 ms after the last keystroke) matching the function path, the message or a request id. **In the URL
+  and in this browser** (STUDY-12 L7, the owner's call): `?function=a:b,c:d&type=failure,error&q=text`
+  (comma lists; `none` for an empty choice), validated by hand like the table's search; every change is
+  also kept per deployment scope (`bunvex:logs:<scope>`), and the screen opened without filters starts
+  from that view and writes it into the address. Picking functions or types is a history step (Back
+  undoes it); typing replaces the address.
+- **Details** (`LogDetails`, in the shared `shell/panel.tsx`): the activated line — function, request id
+  (copy), the execution's outcome and duration, the message, and every loaded line of the same request —
+  with **Filter by this request**. The list is the data grid: arrows move between lines, a click or Enter
+  opens the details, and while they are open they follow the current line (Convex's Up / Down in its
+  drilldown).
+- **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
+  that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
+- Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.
+
+### 13.2 The Functions screen
+
+- **`/functions?function=<module:name>`** (`src/functions/`), the URL as in Convex. A sidebar holds the
+  modules as a **tree** (`buildFunctionTree`): folders from the module path, then files, each
+  alphabetical, with the functions as links (kind letter, name, "internal"). Files and folders collapse,
+  and **Search functions** narrows the tree, opening every branch.
+- The open function: its name, "Query in tasks" / "Internal action in users", and a copyable path. Below
+  that are **its logs**: the Logs list (§13.1) fed by `listLogs` / `watchLogs` with the source's function
+  filter. Its type and text filters are in the URL (`?function=<path>&type=&q=`) and kept in
+  this browser per function (STUDY-12 L7, as the Logs screen: a link opens filtered; a function opened
+  without filters starts from its own kept view); there is no function picker.
+- **No Statistics tab** (STUDY-12 L1, decided): the server has no app metrics yet. No Run button until
+  §13.3.
+- Nothing open: a hint. An unknown function in the URL is named. No functions: says so.
+
+### 13.3 The function runner
+
+- **Contract**: an optional `runFunction(path, args)` → `FunctionRun` (`value`, or `error: { message,
+  data? }` when the function threw, its `logLines`, `durationMs`). A function that throws is a result, not
+  a rejected call. The call rejects only when it cannot be made: `not_found` (no such function),
+  `unauthorized` (no `runFunctions`, or a read-only credential running a mutation or an action), or
+  `unavailable`. The run is logged like any other execution. The mock runs `<table>:list`, `<table>:get`
+  and `tasks:byOwner` over its tables, returns `null` otherwise and changes no data; as a mock-only hook,
+  `throw: "…"` makes a run throw. The contract suite covers it when opted in (`run: { query, args }`).
+- **The panel** (`src/runner/`): docked at the bottom of every screen, as in Convex, and opened by **Run
+  functions** in the header, **Run** on the Functions screen, or **Ctrl+`** anywhere. It has a function
+  picker; **arguments** as a JavaScript literal in the code editor, with a draft kept per function while
+  the page is open; **Run query / mutation / action**, or Ctrl+Enter; then the result as a literal, or the
+  error, with the duration and the lines the run logged. A refused call is shown as an alert. While the
+  runner is open, the screen keeps room to scroll past it.
+- Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
+  credential runs queries only.
+- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", argument
+  validation against the function's validator, custom test queries.

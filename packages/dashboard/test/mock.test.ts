@@ -14,6 +14,34 @@ describeDataSourceContract("MockDataSource with latency", () => new MockDataSour
 // a fresh source per test, so the writes may fill and empty a table
 describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(small), {
   writes: { table: "imports", clear: true },
+  run: { query: "tasks:list", args: { limit: 2 } },
+});
+
+describe("MockDataSource, running functions", () => {
+  test("a query returns data; a mutation returns null and changes nothing; `throw` makes it throw", async () => {
+    const src = new MockDataSource(small);
+    const list = await src.runFunction("tasks:list", { limit: 3 });
+    expect((list.value as unknown[]).length).toBe(3);
+    const before = (await src.listTables()).map((t) => t.documentCount);
+    expect((await src.runFunction("tasks:create", { text: "x" })).value).toBeNull();
+    expect((await src.listTables()).map((t) => t.documentCount)).toEqual(before);
+    const thrown = await src.runFunction("users:get", { throw: "boom" });
+    expect(thrown).toMatchObject({ error: { message: "Uncaught Error: boom" } });
+    expect(thrown.value).toBeUndefined();
+    const [last] = (await src.listLogs({ numItems: 1, cursor: null })).page;
+    expect(last).toMatchObject({ function: { path: "users:get" }, execution: { status: "failure" } });
+  });
+
+  test("a read-only credential runs queries only; without runFunctions, nothing", async () => {
+    const ro = new MockDataSource({
+      ...small,
+      capabilities: { operations: ["viewData", "runFunctions"], readOnly: true },
+    });
+    expect((await ro.runFunction("users:get", {})).error).toBeUndefined();
+    await expect(ro.runFunction("tasks:create", {})).rejects.toMatchObject({ code: "unauthorized" });
+    const none = new MockDataSource({ ...small, capabilities: { operations: ["viewData"], readOnly: false } });
+    await expect(none.runFunction("users:get", {})).rejects.toMatchObject({ code: "unauthorized" });
+  });
 });
 
 describe("MockDataSource", () => {

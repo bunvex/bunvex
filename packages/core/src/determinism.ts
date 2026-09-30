@@ -1,6 +1,7 @@
 // Deterministic execution for queries and mutations, as Convex does in its isolate: inside a transaction
-// body, `Date.now()` / `new Date()` are frozen at the transaction's start, `Math.random()` comes from a PRNG
-// seeded per execution, and `fetch` / `crypto.getRandomValues` throw. A result is then a function of what
+// body, `Date.now()` / `new Date()` are frozen at the transaction's start, `performance.now()` is fixed in
+// queries and counts up from that start in mutations, `Math.random()` comes from a PRNG seeded per
+// execution, and `fetch` / `crypto.getRandomValues` throw. A result is then a function of what
 // the transaction read, which the query cache and subscriptions rely on. Every execution (every mutation
 // retry included) gets a fresh time and seed, as in Convex. Actions run outside and see the real globals.
 //
@@ -13,7 +14,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export type ExecutionKind = "query" | "mutation";
-type Execution = { kind: ExecutionKind; now: number; random: () => number };
+type Execution = {
+  kind: ExecutionKind;
+  now: number;
+  random: () => number;
+  /** `performance.now()` at the start: the execution's start time relative to `performance.timeOrigin`. */
+  perfStart: number;
+  /** The real monotonic clock at the start, to count a mutation's elapsed time from. */
+  monotonicStart: number;
+};
 
 const executions = new AsyncLocalStorage<Execution>();
 
@@ -30,6 +39,12 @@ export const wallClock = (): number => realNow();
 
 const realPerformanceNow = performance.now.bind(performance);
 const origin = performance.timeOrigin;
+
+/**
+ * Round down to 0.1 ms, as Convex's `secs_as_dom_high_res_ms` (crates/isolate/src/ops/time.rs) does to
+ * blunt timing side channels.
+ */
+const toTenthMs = (ms: number) => Math.floor(ms * 10) / 10;
 /**
  * The wall clock in FRACTIONAL milliseconds (sub-ms precision), as Convex takes a transaction's first
  * `_creationTime` from a nanosecond clock (`CreationTime::for_transaction`); `Date.now()` inside the
@@ -95,6 +110,15 @@ export function installDeterminism() {
     if (e) throw notAllowed("setInterval()", e.kind);
     return realSetInterval(...args);
   }, realSetInterval) as typeof setInterval;
+  // Convex (`performance_now_fixed` / `performance_now_incrementing`, crates/isolate/src/environment/udf):
+  // a query sees one fixed instant, its start, so its result stays a function of what it read; a mutation
+  // sees its start plus the real time elapsed since, so it can still time its own work.
+  performance.now = () => {
+    const e = executions.getStore();
+    if (!e) return realPerformanceNow();
+    const elapsed = e.kind === "mutation" ? realPerformanceNow() - e.monotonicStart : 0;
+    return toTenthMs(e.perfStart + elapsed);
+  };
   crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
     const e = executions.getStore();
     if (e) throw notAllowed("crypto.getRandomValues()", e.kind);
@@ -110,7 +134,14 @@ export function runDeterministic<T>(kind: ExecutionKind, now: number, fn: () => 
     if (!rng) rng = seededRandom(realGetRandomValues(new Uint32Array(4)));
     return rng();
   };
-  return executions.run({ kind, now: Math.floor(now), random }, fn);
+  const execution: Execution = {
+    kind,
+    now: Math.floor(now),
+    random,
+    perfStart: now - origin,
+    monotonicStart: realPerformanceNow(),
+  };
+  return executions.run(execution, fn);
 }
 
 /** Run engine work (a persistence call) outside the current execution: real globals, no restrictions. */

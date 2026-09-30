@@ -7,7 +7,11 @@
 // Home/End, Ctrl+Home/End and PageUp/PageDown move between cells, scrolling the virtual list along; Enter
 // (or a double-click) edits a cell through the caller's editor, or activates a cell that cannot be edited.
 // The focused cell is remembered by its row's id, so it stays on the same row when rows arrive above it.
+// A cell's context menu (`grid.cellMenu`) opens on a right-click, Shift+F10, the Menu key or Ctrl/Cmd+Enter;
+// the caller can add its own shortcuts on a cell (`grid.onCellKey`).
+
 import { Checkbox } from "@bunvex/ui/components/checkbox";
+import { DropdownMenu, DropdownMenuContent } from "@bunvex/ui/components/dropdown-menu";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
 import { cellKey, diffSnapshots, type Snapshot, snapshotOf } from "@bunvex/ui/lib/change-tracking";
 import { type ColumnState, clampWidth, MAX_WIDTH, MIN_WIDTH, mergeColumnOrder } from "@bunvex/ui/lib/column-state";
@@ -63,6 +67,17 @@ export type DataGridOptions<TData> = {
   renderEditor?: (edit: { row: TData; columnId: string; done: (outcome: EditOutcome) => void }) => ReactNode;
   /** Enter on a cell that cannot be edited (e.g. open the row's details). */
   onCellActivate?: (row: TData, columnId: string) => void;
+  /** A click on a cell that cannot be edited activates it too, not only a double-click (a list of lines). */
+  activateOnClick?: boolean;
+  /** The current cell moved to another row or column (arrows, a click) — e.g. an open details panel follows. */
+  onCellFocus?: (row: TData, columnId: string) => void;
+  /**
+   * The items of a cell's context menu (DropdownMenu items). `edit` starts editing the cell (when it can
+   * be edited). Without it, there is no context menu.
+   */
+  cellMenu?: (cell: { row: TData; columnId: string; edit: () => void }) => ReactNode;
+  /** A key on a cell (not in an editor), before the grid's own keys; return true when it was handled. */
+  onCellKey?: (e: KeyboardEvent<HTMLElement>, cell: { row: TData; columnId: string }) => boolean;
 };
 
 type DataTableProps<TData extends RowData> = {
@@ -393,6 +408,13 @@ function DataTable<TData extends RowData>({
   const focusRow = found >= 0 ? found : Math.min(lastRowIndex.current, rows.length - 1);
   if (found >= 0) lastRowIndex.current = found;
   const focusCol = Math.min(focus?.col ?? 0, columnIds.length - 1);
+  const onCellFocus = useRef(grid?.onCellFocus);
+  onCellFocus.current = grid?.onCellFocus;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a move of the current cell reports
+  useEffect(() => {
+    const row = focus ? rows.find((r) => r.id === focus.rowId) : undefined;
+    if (row && focus) onCellFocus.current?.(row.original, columnIds[focus.col] ?? "");
+  }, [focus?.rowId, focus?.col]);
 
   /** Scrolls a row into the view (below the sticky header), setting scrollTop directly. */
   const reveal = (index: number) => {
@@ -468,8 +490,36 @@ function DataTable<TData extends RowData>({
     if (outcome === "right") moveTo(focusRow, focusCol + 1);
   };
 
+  // the context menu: at the pointer, or (from the keyboard) at the cell's corner
+  const [menu, setMenu] = useState<{ rowId: string; col: number; x: number; y: number } | null>(null);
+  const openMenu = (rowIndex: number, col: number, at?: { x: number; y: number }) => {
+    const row = rows[rowIndex];
+    if (!row || !grid?.cellMenu || columnIds[col] === SELECT_COLUMN) return false;
+    const r = scroller.current?.querySelector(`[data-cell="${rowIndex}:${col}"]`)?.getBoundingClientRect();
+    setFocus({ rowId: row.id, col });
+    setMenu({ rowId: row.id, col, ...(at ?? { x: r?.left ?? 0, y: r?.bottom ?? 0 }) });
+    return true;
+  };
+  const menuRow = menu ? rows.find((r) => r.id === menu.rowId) : undefined;
+
   const onGridKey = (e: KeyboardEvent<HTMLElement>, rowIndex: number, col: number) => {
     if (e.target !== e.currentTarget) return; // keys inside an editor are the editor's
+    const current = rows[rowIndex];
+    if (
+      (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey) || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) &&
+      openMenu(rowIndex, col)
+    ) {
+      e.preventDefault();
+      return;
+    }
+    if (
+      current &&
+      columnIds[col] !== SELECT_COLUMN &&
+      grid?.onCellKey?.(e, { row: current.original, columnId: columnIds[col]! })
+    ) {
+      e.preventDefault();
+      return;
+    }
     if (columnIds[col] === SELECT_COLUMN && (e.key === " " || e.key === "Enter")) {
       e.preventDefault();
       const row = rows[rowIndex];
@@ -653,14 +703,23 @@ function DataTable<TData extends RowData>({
                             flashing,
                           )}
                           onFocus={(e) => {
-                            if (e.target === e.currentTarget && !isFocus) setFocus({ rowId: row.id, col });
+                            // the first Tab into the grid lands on the default cell: it becomes the picked one
+                            if (e.target === e.currentTarget && !selected) setFocus({ rowId: row.id, col });
                           }}
                           onMouseDown={() => {
                             if (isEditing) return;
                             if (editing) setEditing(false); // clicking another cell leaves the edit, unsaved
                             setFocus({ rowId: row.id, col });
                           }}
+                          onClick={() => {
+                            if (grid.activateOnClick && !isEditing && !grid.canEdit?.(row.original, cell.column.id))
+                              grid.onCellActivate?.(row.original, cell.column.id);
+                          }}
                           onDoubleClick={() => !isEditing && startEdit(item.index, col)}
+                          onContextMenu={(e) => {
+                            if (isEditing) return; // an editor's own menu (copy, paste)
+                            if (openMenu(item.index, col, { x: e.clientX, y: e.clientY })) e.preventDefault();
+                          }}
                           onKeyDown={(e) => onGridKey(e, item.index, col)}
                         >
                           {isEditing && grid.renderEditor ? (
@@ -683,6 +742,38 @@ function DataTable<TData extends RowData>({
         </tbody>
       </table>
       {footer && <div className="border-t px-3 py-2 text-sm text-muted-foreground">{footer}</div>}
+      {grid?.cellMenu && (
+        <DropdownMenu
+          open={menu !== null && menuRow !== undefined}
+          onOpenChange={(open, details) => {
+            // Base UI reports a submenu opening as "a sibling opened" to a menu without a trigger
+            if (open || details.reason === "sibling-open") return;
+            setMenu(null);
+            wantsFocus.current = true; // back to the cell (unless an item started an edit)
+          }}
+        >
+          {menu && menuRow && (
+            <DropdownMenuContent
+              aria-label={`Actions on ${columnIds[menu.col]}`}
+              className="w-auto min-w-48"
+              side="bottom"
+              align="start"
+              sideOffset={0}
+              finalFocus={false}
+              anchor={{ getBoundingClientRect: () => DOMRect.fromRect({ x: menu.x, y: menu.y, width: 0, height: 0 }) }}
+            >
+              {grid.cellMenu({
+                row: menuRow.original,
+                columnId: columnIds[menu.col]!,
+                edit: () => {
+                  const i = rows.findIndex((r) => r.id === menu.rowId);
+                  if (i >= 0) startEdit(i, menu.col);
+                },
+              })}
+            </DropdownMenuContent>
+          )}
+        </DropdownMenu>
+      )}
       {highlight?.announce && (
         <div role="status" aria-live="polite" className="sr-only">
           {announcement}

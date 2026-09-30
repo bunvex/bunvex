@@ -28,9 +28,10 @@ bunvex/
 ├── packages/
 │   │
 │   ├── values/                      @bunvex/values
-│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
+│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      ✅
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
-│   │   └── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
+│   │   ├── types                    Value, JSON form, sort keys (STUDY-18) ✅ · Infer<> N
+│   │   └── errors                   BunvexError (Convex's ConvexError) with `data` (STUDY-20)  ✅
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
@@ -40,7 +41,7 @@ bunvex/
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M
-│   │   ├── engine                   snapshots, mutation retries, query cache by read-set      ✅
+│   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── indexing                 backfill a new index over existing data                   M
@@ -63,13 +64,15 @@ bunvex/
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·
 │   │   │                            validation N · determinism ✅ (in core) · sandbox D
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
+│   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
+│   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
 │   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
-│   │   ├── logs                     console.log from functions                                M
+│   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    M
@@ -97,7 +100,10 @@ bunvex/
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
-│   │   └── screens                  health ✅ (engine counters) · functions, logs                 D
+│   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
+│   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
+│   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
+│   │   └── screens                  health ✅ (engine counters)                                    ✅
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M
@@ -115,7 +121,7 @@ bunvex/
 │
 ├── apps/
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard (mock data for now) 🟡
-│   └── docs/                        documentation site for USERS                               D
+│   └── site/                        bunvex.dev (SITE-01): landing now, user docs later; TanStack Start 🟡
 │
 ├── examples/
 │   ├── todo/                        the minimal example                                        M
@@ -170,11 +176,12 @@ These are enforced in CI, not only written down.
 ```
 values ◄── core ◄── persistence          protocol ◄── server ──► core, values, auth, file-storage
                                                               (+ persistence: optional, loaded by name)
-                ◄── persistence-conformance            client ──► protocol, values
+                ◄── persistence-conformance (──► values) client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
 cli ──► server, core                                      bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)
+ui ◄── apps/site
 ```
 
 - `core` knows no external database, no HTTP and no WebSocket.

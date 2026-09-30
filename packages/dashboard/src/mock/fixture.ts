@@ -130,11 +130,19 @@ function makeTables(rnd: Random, now: number, counts: FixtureOptions["documents"
 /** A log id: a zero-padded sequence number, so string order is creation order. */
 export const logId = (n: number) => n.toString().padStart(12, "0");
 
-/** The lines one function execution writes. `seq` is the next log sequence number. */
-export function makeExecution(rnd: Random, seq: number, time: number): LogEntry[] {
-  const fn = rnd.pick(MOCK_FUNCTIONS);
+/**
+ * The lines one function execution writes. `seq` is the next log sequence number. `run` picks the function
+ * and says whether it throws (a run from the dashboard); otherwise both are random.
+ */
+export function makeExecution(
+  rnd: Random,
+  seq: number,
+  time: number,
+  run?: { fn: FunctionInfo; error?: string },
+): LogEntry[] {
+  const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
   const requestId = rnd.id().slice(0, 16);
-  const failed = rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
+  const failed = run ? run.error !== undefined : rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
   const durationMs = fn.kind === "action" ? rnd.int(20, 900) : rnd.int(0, 40);
   const lines: { level: LogLevel; message: string }[] = [];
   if (rnd.chance(0.3)) lines.push({ level: "debug", message: `args ${JSON.stringify({ limit: rnd.int(1, 50) })}` });
@@ -144,7 +152,7 @@ export function makeExecution(rnd: Random, seq: number, time: number): LogEntry[
     failed
       ? {
           level: "error",
-          message: `Uncaught Error: ${rnd.pick(["document not found", "invalid argument", "timeout"])}`,
+          message: `Uncaught Error: ${run?.error ?? rnd.pick(["document not found", "invalid argument", "timeout"])}`,
         }
       : { level: "info", message: fn.kind === "query" ? "query ran" : `${fn.kind} committed` },
   );

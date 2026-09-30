@@ -28,6 +28,11 @@ export type ContractOptions = {
   timeoutMs?: number;
   /** Enables the write tests on this table; `clear: true` also lets the suite empty it. */
   writes?: { table: string; clear?: boolean };
+  /**
+   * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
+   * which returns without throwing.
+   */
+  run?: { query: string; args?: Record<string, Value> };
 };
 
 async function expectError(p: Promise<unknown>, code: DataSourceErrorCode, clause?: string) {
@@ -394,6 +399,42 @@ export function describeDataSourceContract(
       off();
       expect((error as DataSourceError | null)?.code).toBe("not_found");
     });
+
+    // -------------------------------------------------------------- running functions (opt-in)
+    const run = opts.run;
+    if (run) {
+      const runner = async () => {
+        const src = await make();
+        if (!src.runFunction) throw new Error("run was enabled but the source has no runFunction");
+        if (!(await src.getCapabilities()).operations.includes("runFunctions"))
+          throw new Error("run was enabled but the source does not grant runFunctions");
+        return src as DashboardDataSource & Required<Pick<DashboardDataSource, "runFunction">>;
+      };
+
+      test(`runFunction: a query returns its value and its log lines, and is logged (${run.query})`, async () => {
+        const src = await runner();
+        const logged: LogEntry[] = [];
+        const off = src.watchLogs(
+          { function: run.query },
+          (e) => logged.push(...e),
+          () => {},
+        );
+        const r = await src.runFunction(run.query, run.args ?? {});
+        expect(r.error).toBeUndefined();
+        expect(r.value).not.toBeUndefined();
+        expect(Array.isArray(r.logLines)).toBe(true);
+        expect(r.durationMs).toBeGreaterThanOrEqual(0);
+        const deadline = performance.now() + watchTimeoutMs;
+        while (!logged.some((e) => e.execution) && performance.now() < deadline) await sleep(5);
+        off();
+        expect(logged.some((e) => e.execution?.status === "success")).toBe(true);
+      });
+
+      test("runFunction: an unknown function is not_found", async () => {
+        const src = await runner();
+        await expectError(src.runFunction("no_such_module:nothing", {}), "not_found");
+      });
+    }
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;

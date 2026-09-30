@@ -1,4 +1,4 @@
-// Convex values (STUDY-12): the types a document, an argument or a result may hold, and their JSON form.
+// Convex values (STUDY-18): the types a document, an argument or a result may hold, and their JSON form.
 //
 //   null · bigint (Int64) · number (Float64, NaN/±Infinity/−0 included) · boolean · string ·
 //   ArrayBuffer (Bytes) · Value[] · { [field]: Value }
@@ -210,16 +210,45 @@ function copy(value: unknown, original: unknown, context: string): Value {
     return value;
   if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
   if (value instanceof ArrayBuffer) return value.slice(0);
-  if (Array.isArray(value)) return value.map((v, i) => copy(v, original, `${context}[${i}]`));
+  if (Array.isArray(value)) {
+    if (value.length > MAX_ARRAY_LEN)
+      throw new Error(`Array length is too long (${value.length} > maximum length ${MAX_ARRAY_LEN})`);
+    return value.map((v, i) => copy(v, original, `${context}[${i}]`));
+  }
   if (!isSimpleObject(value)) return toJson(value, original, context) as never; // throws Convex's message
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined);
+  if (keys.length > MAX_OBJECT_FIELDS)
+    throw new Error(`Object has too many fields (${keys.length} > maximum number ${MAX_OBJECT_FIELDS})`);
   const out: Record<string, Value> = {};
-  for (const k of Object.keys(value).sort()) {
-    const v = value[k];
-    if (v === undefined) continue;
+  for (const k of keys.sort()) {
     validateObjectField(k);
-    out[k] = copy(v, original, `${context}.${k}`);
+    out[k] = copy(value[k], original, `${context}.${k}`);
   }
   return out;
+}
+
+const MAX_ARRAY_LEN = 8192;
+const MAX_OBJECT_FIELDS = 1024;
+const utf8len = (s: string) => Buffer.byteLength(s, "utf8");
+
+/** Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. */
+export function valueSize(v: Value): number {
+  if (v === null || typeof v === "boolean") return 1;
+  if (typeof v === "number" || typeof v === "bigint") return 9;
+  if (typeof v === "string") return utf8len(v) + 2;
+  if (v instanceof ArrayBuffer) return v.byteLength + 2;
+  if (Array.isArray(v)) return v.reduce<number>((n, e) => n + valueSize(e), 2);
+  let n = 2;
+  for (const [k, e] of Object.entries(v)) if (e !== undefined) n += utf8len(k) + 1 + valueSize(e);
+  return n;
+}
+
+/** How deeply arrays and objects nest: a scalar is 0, `[1]` is 1, `{a: [1]}` is 2. */
+export function valueNesting(v: Value): number {
+  if (Array.isArray(v)) return 1 + v.reduce<number>((m, e) => Math.max(m, valueNesting(e)), 0);
+  if (v !== null && typeof v === "object" && !(v instanceof ArrayBuffer))
+    return 1 + Object.values(v).reduce<number>((m, e) => Math.max(m, e === undefined ? 0 : valueNesting(e)), 0);
+  return 0;
 }
 
 /**

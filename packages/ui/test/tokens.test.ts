@@ -16,8 +16,9 @@ const dark = new Map([...light, ...tokens(".dark")]);
 
 const TEXT = 4.5;
 const UI = 3;
-// [foreground, background, minimum]; a background "x/NN" is token x at NN % over --background.
-const PAIRS: [string, string, number][] = [
+// [foreground, background, minimum, only in this theme?]; a background "x/NN" is token x at NN % over
+// --background, "x/NN@y" over --y.
+const PAIRS: [string, string, number, ("light" | "dark")?][] = [
   ["foreground", "background", TEXT],
   ["card-foreground", "card", TEXT],
   ["popover-foreground", "popover", TEXT],
@@ -48,6 +49,8 @@ const PAIRS: [string, string, number][] = [
   // a cell's text while it flashes after a live change
   ["foreground", "highlight", TEXT],
   ["muted-foreground", "highlight", TEXT],
+  // a placeholder in a hovered select on a card (the filter bar): dark:hover:bg-input/50
+  ["muted-foreground", "input/50@card", TEXT, "dark"],
   ["ring", "background", UI],
   ["ring", "card", UI],
   ["sidebar-ring", "sidebar", UI],
@@ -56,10 +59,11 @@ const PAIRS: [string, string, number][] = [
 ];
 
 function colour(theme: Map<string, string>, spec: string): Rgba {
-  const [name, pct] = spec.split("/") as [string, string | undefined];
+  const [token, under = "background"] = spec.split("@") as [string, string | undefined];
+  const [name, pct] = token.split("/") as [string, string | undefined];
   const value = theme.get(name);
   if (!value) throw new Error(`no token --${name}`);
-  const background = parseOklch(theme.get("background")!);
+  const background = parseOklch(theme.get(under)!);
   const c = parseOklch(value);
   return over(pct === undefined ? c : withAlpha(c, Number(pct) / 100), background);
 }
@@ -69,9 +73,19 @@ for (const [theme, values] of [
   ["dark", dark],
 ] as const)
   describe(`${theme} theme`, () => {
-    for (const [fg, bg, min] of PAIRS)
+    for (const [fg, bg, min] of PAIRS.filter((p) => p[3] === undefined || p[3] === theme))
       test(`--${fg} on --${bg} ≥ ${min}:1`, () => {
         const ratio = contrast(colour(values, fg), colour(values, bg));
         expect(Math.round(ratio * 100) / 100).toBeGreaterThanOrEqual(min);
       });
   });
+
+describe("reduced motion", () => {
+  test("the stylesheet stops every animation and transition when the reader asks for less motion", () => {
+    const at = css.indexOf("@media (prefers-reduced-motion: reduce)");
+    expect(at).toBeGreaterThan(0);
+    const block = css.slice(at, css.indexOf("}", css.indexOf("{", css.indexOf("{", at) + 1)));
+    for (const rule of ["animation-duration: 0.01ms !important", "transition-duration: 0.01ms !important"])
+      expect(block).toContain(rule);
+  });
+});

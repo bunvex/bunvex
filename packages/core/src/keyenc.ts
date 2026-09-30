@@ -1,4 +1,4 @@
-// C1 — order-preserving key encoding: Convex's sort keys (@bunvex/values `valuesToKey`, STUDY-12). The byte
+// C1 — order-preserving key encoding: Convex's sort keys (@bunvex/values `valuesToKey`, STUDY-18). The byte
 // order of encode(a) vs encode(b) equals Convex's value order, so an index is a sorted set of byte strings.
 // A tuple is the concatenation of its values' keys; `undefined` (a missing field) sorts below `null`.
 import { type Value, valuesToKey } from "@bunvex/values";

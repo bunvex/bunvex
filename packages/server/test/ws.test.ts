@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
-import { Engine, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { v } from "@bunvex/values";
 import { Functions, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
 test("one socket subscribing twice to the same query holds one reference (B14)", async () => {
   const engine = await new Engine(
-    new Schema().table("items", {}),
+    defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const functions = new Functions(engine).register("m", { list: query(({ db }) => db.query("items").collect()) });
@@ -28,10 +29,10 @@ test("one socket subscribing twice to the same query holds one reference (B14)",
   stop();
 });
 
-test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STUDY-12)", async () => {
+test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STUDY-18)", async () => {
   const { mutation } = await import("../src/functions.ts");
   const engine = await new Engine(
-    new Schema().table("items", {}),
+    defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const functions = new Functions(engine).register("m", {
