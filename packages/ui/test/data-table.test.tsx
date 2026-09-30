@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { DataTable, dataTableColumns } from "@bunvex/ui/components/data-table";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expectAccessible } from "./axe.ts";
 
@@ -12,25 +12,6 @@ const columns = col.columns([
   col.accessor("name", { header: "Name" }),
   col.accessor("n", { header: "Number", cell: (c) => <span className="tabular-nums">{c.getValue()}</span> }),
 ]);
-
-// happy-dom has no layout, so every offsetHeight is 0 and the virtualizer would render no row: give the
-// table's scroll container the size a browser would (360 × 800 px), for this file only.
-const VIEWPORT = { offsetHeight: 360, offsetWidth: 800 };
-const saved = Object.keys(VIEWPORT).map((k) => [k, Object.getOwnPropertyDescriptor(HTMLElement.prototype, k)] as const);
-beforeAll(() => {
-  for (const [key, size] of Object.entries(VIEWPORT)) {
-    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)?.get;
-    Object.defineProperty(HTMLElement.prototype, key, {
-      configurable: true,
-      get(this: HTMLElement) {
-        return this.dataset.slot === "data-table" ? size : (original?.call(this) ?? 0);
-      },
-    });
-  }
-});
-afterAll(() => {
-  for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor);
-});
 
 describe("DataTable", () => {
   test("is a labelled table with headers, rendering only the rows in view", async () => {
@@ -72,8 +53,44 @@ describe("DataTable", () => {
     expect(onActivate).toHaveBeenLastCalledWith({ id: "r2", name: "row 2", n: 2 });
   });
 
+  test("a new resetKey scrolls back to the top", () => {
+    const { container, rerender } = render(<DataTable label="t" columns={columns} data={rows(500)} resetKey="a" />);
+    const scroller = container.querySelector<HTMLElement>("[data-slot=data-table]")!;
+    scroller.scrollTop = 4000;
+    rerender(<DataTable label="t" columns={columns} data={rows(500)} resetKey="a" />);
+    expect(scroller.scrollTop).toBe(4000);
+    rerender(<DataTable label="t" columns={columns} data={rows(500)} resetKey="b" />);
+    expect(scroller.scrollTop).toBe(0);
+  });
+
   test("an empty table says so", () => {
     render(<DataTable label="t" columns={columns} data={[]} empty="No documents in this table yet." />);
     expect(screen.getByText("No documents in this table yet.")).toBeDefined();
+  });
+});
+
+describe("DataTable, live lists", () => {
+  test("rows inserted above the view keep the top row in place; without anchoring they push it down", () => {
+    const base = rows(300);
+    const fresh = Array.from({ length: 5 }, (_, i) => ({ id: `new${i}`, name: `new ${i}`, n: -i }));
+    for (const anchor of [true, false]) {
+      const { container, rerender, unmount } = render(
+        <DataTable label="t" columns={columns} data={base} getRowId={(r) => r.id} anchorTopRow={anchor} />,
+      );
+      const scroller = container.querySelector<HTMLElement>("[data-slot=data-table]")!;
+      scroller.scrollTop = 36 * 100 + 10; // row 100 at the top, 10 px into it
+      fireEvent.scroll(scroller);
+      rerender(
+        <DataTable
+          label="t"
+          columns={columns}
+          data={[...fresh, ...base]}
+          getRowId={(r) => r.id}
+          anchorTopRow={anchor}
+        />,
+      );
+      expect([anchor, scroller.scrollTop]).toEqual([anchor, anchor ? 36 * 105 + 10 : 36 * 100 + 10]);
+      unmount();
+    }
   });
 });

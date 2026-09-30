@@ -95,8 +95,9 @@ bunvex/
 │   │                                light/dark themes, shadcn/ui on Base UI; no bunvex dependency 🟡
 │   ├── dashboard/                   @bunvex/dashboard  the dashboard screens (UI-01), fed by an
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
-│   │   ├── mock                     MockDataSource, and the contract suite any source must pass
-│   │   └── screens                  overview, tables/documents, functions, logs                  🟡
+│   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
+│   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
+│   │   └── screens                  health ✅ (engine counters) · functions, logs                 D
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M

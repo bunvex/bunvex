@@ -47,6 +47,7 @@ to a spec.
 | [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | draft (retroactive): divergences await the owner |
 | [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | draft (retroactive): divergences await the owner |
 | [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | draft (retroactive): divergences await the owner |
+| [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | draft: D1–D4 decided, D5–D10 await the owner |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserHistory, type RouterHistory, RouterProvider } from "@tanstack/react-router";
 import { lazy, type ReactNode, Suspense, useState } from "react";
 import { QueryScopeContext } from "./context.tsx";
-import type { DashboardDataSource } from "./data-source.ts";
+import { type DashboardDataSource, toDataSourceError } from "./data-source.ts";
 import { createDashboardRouter } from "./router.tsx";
 import { HeaderActionsContext } from "./shell/shell.tsx";
 
@@ -28,8 +28,16 @@ export type DashboardProps = {
 
 const Devtools = lazy(() => import("./devtools.tsx"));
 
+/** Retries only what may succeed on a second try: an unavailable deployment, once. */
 export const createDashboardQueryClient = () =>
-  new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } });
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 5_000,
+        retry: (failures, error) => failures < 1 && toDataSourceError(error).code === "unavailable",
+      },
+    },
+  });
 
 export function Dashboard({
   dataSource,

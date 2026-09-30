@@ -4,10 +4,17 @@ import { DataSourceError, type LogEntry } from "@bunvex/dashboard/data-source";
 import { createFixture, MockDataSource } from "@bunvex/dashboard/mock";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
+const ASC = { clauses: [], order: "asc" as const };
 const fast = { seed: 7, now: NOW, statsIntervalMs: 5, logIntervalMs: 5 };
+// the contract walks every page of every table many times: keep the tables small
+const small = { ...fast, documents: { tasks: 80, messages: 30, users: 12, imports: 12 }, executions: 60 };
 
-describeDataSourceContract("MockDataSource", () => new MockDataSource(fast));
-describeDataSourceContract("MockDataSource with latency", () => new MockDataSource({ ...fast, latencyMs: 2 }));
+describeDataSourceContract("MockDataSource", () => new MockDataSource(small));
+describeDataSourceContract("MockDataSource with latency", () => new MockDataSource({ ...small, latencyMs: 2 }));
+// a fresh source per test, so the writes may fill and empty a table
+describeDataSourceContract("MockDataSource, writes", () => new MockDataSource(small), {
+  writes: { table: "imports", clear: true },
+});
 
 describe("MockDataSource", () => {
   test("the same seed and time give the same data; another seed does not", () => {
@@ -19,12 +26,12 @@ describe("MockDataSource", () => {
 
   test("a cursor stays valid across inserts: no duplicate, no loss (it is a key, not an offset)", async () => {
     const src = new MockDataSource({ ...fast, documents: { tasks: 10 } });
-    const p1 = await src.listDocuments({ table: "tasks", order: "asc", numItems: 4, cursor: null });
+    const p1 = await src.listDocuments({ table: "tasks", filter: ASC, numItems: 4, cursor: null });
     const added = src.insertDocument("tasks", { text: "late", done: false });
     const rest = [];
     let cursor: string | null = p1.continueCursor;
     for (;;) {
-      const p = await src.listDocuments({ table: "tasks", order: "asc", numItems: 4, cursor });
+      const p = await src.listDocuments({ table: "tasks", filter: ASC, numItems: 4, cursor });
       rest.push(...p.page);
       if (p.isDone) break;
       cursor = p.continueCursor;
@@ -36,10 +43,10 @@ describe("MockDataSource", () => {
 
   test("a finished walk's cursor picks up documents inserted later", async () => {
     const src = new MockDataSource({ ...fast, documents: { tasks: 3 } });
-    const p = await src.listDocuments({ table: "tasks", order: "asc", numItems: 10, cursor: null });
+    const p = await src.listDocuments({ table: "tasks", filter: ASC, numItems: 10, cursor: null });
     expect(p.isDone).toBe(true);
     const added = src.insertDocument("tasks", { text: "new" });
-    const next = await src.listDocuments({ table: "tasks", order: "asc", numItems: 10, cursor: p.continueCursor });
+    const next = await src.listDocuments({ table: "tasks", filter: ASC, numItems: 10, cursor: p.continueCursor });
     expect(next.page.map((d) => d._id)).toEqual([added._id]);
   });
 
@@ -96,5 +103,43 @@ describe("MockDataSource", () => {
     off();
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
     expect(seen.at(-1)!).toBeGreaterThan(seen[0]!);
+  });
+
+  test("a read-only credential cannot write, and nothing changes", async () => {
+    const src = new MockDataSource({
+      ...fast,
+      capabilities: { operations: ["viewData", "writeData"], readOnly: true },
+    });
+    const before = (await src.listTables()).find((t) => t.name === "users")!.documentCount;
+    const e = await src.insertDocuments("users", [{ name: "x" }]).catch((err: unknown) => err);
+    expect((e as DataSourceError).code).toBe("unauthorized");
+    const noWrite = new MockDataSource({ ...fast, capabilities: { operations: ["viewData"], readOnly: false } });
+    const e2 = await noWrite.deleteDocuments("users", ["x"]).catch((err: unknown) => err);
+    expect((e2 as DataSourceError).code).toBe("unauthorized");
+    expect((await src.listTables()).find((t) => t.name === "users")!.documentCount).toBe(before);
+  });
+
+  test("liveWritesMs keeps the tasks table changing while someone watches it", async () => {
+    const src = new MockDataSource({ ...fast, documents: { tasks: 5 }, liveWritesMs: 5 });
+    const counts: (number | undefined)[] = [];
+    const off = src.watchTable(
+      "tasks",
+      (c) => counts.push(c.count),
+      () => {},
+    );
+    while (counts.length < 4) await new Promise((r) => setTimeout(r, 5));
+    off();
+    const seen = counts.length;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(counts.length).toBe(seen); // stopped with the last watcher
+    expect(counts.every((n) => typeof n === "number")).toBe(true);
+  });
+
+  test("int64 and bytes values survive the round trip", async () => {
+    const src = new MockDataSource(fast);
+    const [user] = (await src.listDocuments({ table: "users", numItems: 1, cursor: null })).page;
+    expect(Object.keys(user!.credits as object)).toEqual(["$integer"]);
+    const imports = await src.listDocuments({ table: "imports", numItems: 50, cursor: null });
+    expect(imports.page.some((d) => d.checksum && "$bytes" in (d.checksum as object))).toBe(true);
   });
 });

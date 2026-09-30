@@ -45,6 +45,9 @@ const PAIRS: [string, string, number][] = [
   ["sidebar-primary-foreground", "sidebar-primary", TEXT],
   ["sidebar-accent-foreground", "sidebar-accent", TEXT],
   ["muted-foreground", "sidebar", TEXT],
+  // a cell's text while it flashes after a live change
+  ["foreground", "highlight", TEXT],
+  ["muted-foreground", "highlight", TEXT],
   ["ring", "background", UI],
   ["ring", "card", UI],
   ["sidebar-ring", "sidebar", UI],
