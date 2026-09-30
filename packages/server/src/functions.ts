@@ -152,6 +152,13 @@ export class Functions {
     return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args));
   }
 
+  /** A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Never cached. */
+  async runQueryAtJson(name: string, args: unknown, ts: number): Promise<string> {
+    const r = await this.engine.queryTracked(this.queryBody(name, args, true), {}, ts);
+    if (!r.ok) throw r.error;
+    return stringifyValue(r.value);
+  }
+
   async runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     return (await this.runMutationWithTs(name, args, fromClient)).value;
   }

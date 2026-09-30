@@ -89,7 +89,7 @@ bunvex/
 │   │   ├── local-state              a client's subscriptions advance together                 ✅
 │   │   ├── optimistic               optimistic updates                                        ✅
 │   │   ├── pagination               paginated queries (usePaginatedQuery, STUDY-26 §8)        ✅
-│   │   └── http                     plain HTTP client                                         M
+│   │   └── http                     plain HTTP client (BunvexHttpClient, STUDY-26 §9)         ✅
 │   │
 │   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  ✅
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D

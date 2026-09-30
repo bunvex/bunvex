@@ -347,3 +347,46 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 | P1 | `InvalidCursor` is recognized by its message only. Convex also checks a system error's `data.paginationError`. | bunvex sends no such system-error data; the message is how its cursor errors read (`InvalidCursor: …`) | **recommend** |
 | P2 | `onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later | `usePaginatedQuery` does not use them, in Convex either | **recommend** later |
 
+## 9. The HTTP client (`BunvexHttpClient`)
+
+### 9.1 How Convex does it (`browser/http_client.ts`, `crates/local_backend/src/public_api.rs`)
+
+- **Calls.**
+  - `query`, `mutation` and `action` `POST /api/{query,mutation,action}` with
+    `{path, format: "convex_encoded_json", args: [args]}`.
+  - Headers:
+    - `Content-Type: application/json`;
+    - `Convex-Client: npm-<version>`;
+    - `Authorization: Bearer <jwt>`, or `Convex <admin key>[:<base64 identity>]` for admin.
+- **Responses.**
+  - A success reads `value`, printing the `logLines` unless `setDebug(false)`.
+  - A function error (HTTP 200, or 560 on the hosted service) throws `ConvexError(errorMessage)` with
+    `.data` when there is `errorData`, else `Error(errorMessage)`. The message has no product prefix.
+  - Any other non-OK status throws the response text.
+- **Mutations** from one client run one at a time, in call order, unless `{skipQueue: true}`.
+- **`consistentQuery`** fetches `POST /api/query_ts` once, `{ts}` as base64 u64, then runs every such query
+  with `POST /api/query_at_ts {path, args, ts}`, so they all read one snapshot.
+- **Other options:**
+  - `setFetch` (global), the constructor's `fetch`, and `setFetchOptions({cache})`;
+  - `url`, and `backendUrl()` (deprecated);
+  - `function(name, componentPath, args)` calls `/api/function`, for components.
+
+### 9.2 How bunvex does it
+
+- **`BunvexHttpClient`** has all of the above except `function`.
+- **The server gains `POST /api/query_ts`**, which answers the visible ts encoded as the sync protocol
+  does (µs × 1000, base64 u64).
+- **It also gains `POST /api/query_at_ts`,** which runs the query at that snapshot, uncached. A ts ahead
+  of the server's is a 400 `InvalidTimestamp`.
+- **The official `ConvexHttpClient`** works against bunvex: query, mutation, `consistentQuery`, and errors
+  with `data`.
+
+### 9.3 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| H1 | The client header is `Bunvex-Client: npm-<version>`, and no `format` field is sent (Convex: `Convex-Client`, `format: "convex_encoded_json"`) | Owner's naming rule; the server ignores both and always answers encoded JSON | follows the rule |
+| H2 | Admin auth is sent as `Authorization: Bunvex <key>` (Convex: `Convex <key>`) | Same rule. The server verifies no admin key yet, so the scheme is decided now for when it does | **recommend** |
+| H3 | No `function(name, componentPath, args)` / `/api/function` | Components are phase 4 | **recommend** later |
+| H4 | `query_at_ts` with a ts ahead of the server's answers 400 `InvalidTimestamp` | Convex's behavior there comes from its database layer; bunvex has only one node, so its own clients never send one | **recommend** |
+

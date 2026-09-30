@@ -24,6 +24,15 @@ export {
   type Transition,
 } from "./base-client.ts";
 export type { FunctionFailure, FunctionResult, FunctionSuccess } from "./function-result.ts";
+export {
+  BunvexHttpClient,
+  type FetchOptions,
+  type HttpMutationOptions,
+  STATUS_CODE_BAD_REQUEST,
+  STATUS_CODE_OK,
+  STATUS_CODE_UDF_FAILED,
+  setFetch,
+} from "./http-client.ts";
 export type { Logger } from "./logging.ts";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./optimistic-updates.ts";
 export {
