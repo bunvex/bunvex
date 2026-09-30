@@ -5,8 +5,20 @@ import mysql from "mysql2/promise";
 export async function open(fresh: boolean) {
   if (fresh) {
     const c = await mysql.createConnection(process.env.MYSQL_URL!);
-    await c.query(`drop table if exists documents, indexes`);
+    await c.query(`drop table if exists documents, indexes, bunvex_lease`);
     await c.end();
   }
   return MysqlPersistence.open(process.env.MYSQL_URL!);
+}
+
+/** K14: another session holds a lock on the lease row, i.e. a writer is inside a flush. */
+export async function writerInsideFlush() {
+  const c = await mysql.createConnection(process.env.MYSQL_URL!);
+  const [rows] = (await c.query(
+    `select count(*) as n from performance_schema.data_locks
+     where object_name = 'bunvex_lease' and lock_type = 'RECORD' and lock_status = 'GRANTED'
+       and thread_id <> ps_current_thread_id()`,
+  )) as any;
+  await c.end();
+  return Number(rows[0].n) > 0;
 }
