@@ -58,7 +58,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       return s;
     };
     const entries = Array.from({ length: 1500 }, (_, i) => ({
-      key: encodeKey([vals(), vals(), new TextEncoder().encode(`id${i}`)]),
+      key: encodeKey([vals(), vals(), `id${i}`]),
       id: `id${i}`,
     }));
     st.apply(

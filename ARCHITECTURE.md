@@ -30,7 +30,7 @@ bunvex/
 │   ├── values/                      @bunvex/values
 │   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
-│   │   └── types                    Value, Infer<>, types shared by client and server        N
+│   │   └── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅

@@ -4,6 +4,7 @@ export { valuesToKey } from "./sorting.ts";
 export {
   compareValues,
   convexToJson,
+  copyValue,
   isSimpleObject,
   isSpecialFloat,
   type JSONValue,

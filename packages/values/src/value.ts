@@ -206,3 +206,28 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
     }
   }
 }
+
+function copy(value: unknown, original: unknown, context: string): Value {
+  if (value === null || typeof value === "number" || typeof value === "boolean" || typeof value === "string")
+    return value;
+  if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
+  if (value instanceof ArrayBuffer) return value.slice(0);
+  if (Array.isArray(value)) return value.map((v, i) => copy(v, original, `${context}[${i}]`));
+  if (!isSimpleObject(value)) return toJson(value, original, context) as never; // throws Convex's message
+  const out: Record<string, Value> = {};
+  for (const k of Object.keys(value).sort()) {
+    const v = value[k];
+    if (v === undefined) continue;
+    validateObjectField(k);
+    out[k] = copy(v, original, `${context}.${k}`);
+  }
+  return out;
+}
+
+/**
+ * A validated deep copy of a value, as a `jsonToConvex(convexToJson(v))` round trip would give (same
+ * checks and messages, fields sorted, undefined fields dropped) without building the JSON.
+ */
+export function copyValue(value: Value): Value {
+  return copy(value, value, "");
+}

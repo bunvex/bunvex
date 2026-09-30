@@ -43,12 +43,12 @@ wrong.
 | B3 | An exception thrown by `persistence.apply` wedges the committer forever | STUDY-06 D2 |
 | B4 | Long index keys fail the flush: MySQL `varbinary(512)`, Postgres btree ~2.7 KB. Convex splits keys into prefix + sha256 | STUDY-09 D3 |
 | B5 | `withIndex` ignores field names: wrong or out-of-order fields silently return every row | STUDY-05 D2/D5, STUDY-07 D3 |
-| B6 | Missing fields are indexed as `null`, where Convex indexes them as `undefined`; `eq(f, undefined)` throws | STUDY-05 D4 |
-| B7 | NaN, ±Infinity, −0, `undefined` in arrays and `Date` are changed by `JSON.stringify`, so the stored document and its index keys disagree | STUDY-10 D1 |
+| B6 | **Fixed in #20.** Missing fields are indexed as `null`, where Convex indexes them as `undefined`; `eq(f, undefined)` throws | STUDY-05 D4 |
+| B7 | **Fixed in #20.** NaN, ±Infinity, −0, `undefined` in arrays and `Date` are changed by `JSON.stringify`, so the stored document and its index keys disagree | STUDY-10 D1 |
 | B8 | Subscriptions can get stuck after an error: no re-send when the value returns to its pre-error value; never re-run if the first run throws | STUDY-08 D1/D2 |
 | B9 | Values are not copied at the call: mutating an object after `insert`, or a `get` result, changes what is stored | STUDY-10 D3 |
 | B10 | The query cache hands out results by reference: a caller mutating a result corrupts it for others | STUDY-08 D3 |
-| B11 | Objects, arrays and bytes are not encodable in index keys (all objects encode equal) | STUDY-05 D6 |
+| B11 | **Fixed in #20.** Objects, arrays and bytes are not encodable in index keys (all objects encode equal) | STUDY-05 D6 |
 | B12 | `collect()` is silently capped at 8192 rows; `take(0)` or a negative `take` misbehaves on the memory driver | STUDY-07 D1/D2 |
 | B13 | Once `ctx.auth` exists, cache and subscription keys would serve one user's results to another (latent) | STUDY-08 D6 |
 | B14 | One socket subscribing twice to the same key leaks a reference count | client-sync.md |

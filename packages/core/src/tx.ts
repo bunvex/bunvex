@@ -6,7 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
-import { decodeId, encodeId } from "@bunvex/values";
+import { convexToJson, copyValue, decodeId, encodeId, isSimpleObject, jsonToConvex, type Value } from "@bunvex/values";
 import BTree from "sorted-btree";
 import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
@@ -99,9 +99,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
         `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}\nFor more information see https://docs.convex.dev/using/indexes.`,
       );
   });
-  // The trailing `_id` of a non-by_id index is stored as its UTF-8 bytes (schema.ts indexKey).
-  const keyValue = (f: string, v: KeyValue): KeyValue =>
-    f === "_id" && ix.name !== "by_id" && typeof v === "string" ? utf8.encode(v) : v;
+  const keyValue = (_f: string, v: KeyValue): KeyValue => v;
   const prefixVals = eqFields.map((f) => keyValue(f, eqs.get(f)!));
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
@@ -117,7 +115,6 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   }
   return { lo, hi };
 }
-const utf8 = new TextEncoder();
 
 /** Convex's per-transaction read limits (crates/common/src/knobs.rs). System transactions are exempt. */
 export const TRANSACTION_MAX_READ_SIZE_ROWS = 32_000;
@@ -211,7 +208,7 @@ export class Tx {
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
     if (json) this.recordDoc(json);
-    return json ? (JSON.parse(json) as Doc) : null;
+    return json ? decodeDoc(json) : null;
   }
 
   query(table: string) {
@@ -227,7 +224,7 @@ export class Tx {
           p.scanDocs!(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc),
         );
         for (const j of rows) this.recordDoc(j);
-        return rows.map((j) => JSON.parse(j) as Doc);
+        return rows.map(decodeDoc);
       }
       const ids = await outsideExecution(() =>
         this.persistence.scan(ix.id, range.lo, range.hi, this.snapshot, limit, desc),
@@ -237,7 +234,7 @@ export class Tx {
         const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
         if (json) {
           this.recordDoc(json);
-          out.push(JSON.parse(json) as Doc);
+          out.push(decodeDoc(json));
         }
       }
       return out;
@@ -334,8 +331,11 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    // Copied at the call: mutating `fields` afterwards must not change what is written (Convex serializes).
-    this.stage(t, id, null, { ...structuredClone(fields), _id: id, _creationTime: creationTime } as Doc);
+    // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
+    // mutating `fields` afterwards cannot change what is written.
+    const doc = { ...copyFields(fields, "insert"), _id: id, _creationTime: creationTime };
+    checkSystemFields(doc, fields, id, creationTime);
+    this.stage(t, id, null, sortFields(doc));
     return id;
   }
 
@@ -344,7 +344,12 @@ export class Tx {
     const cur = await this.read(table, id, "db.patch");
     if (!cur) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
-    this.stage(t, id, old, { ...cur, ...structuredClone(fields), _id: id, _creationTime: cur._creationTime });
+    // Convex's shallow merge: a field set to `undefined` is removed.
+    const next: Record<string, unknown> = { ...cur };
+    for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
+    Object.assign(next, copyFields(fields, "patch"));
+    checkSystemFields(next, fields, id, cur._creationTime);
+    this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
   }
 
   async delete(table: string, id: string) {
@@ -359,7 +364,7 @@ export class Tx {
     const docs: DocWrite[] = [];
     const idx: IndexWrite[] = [];
     for (const [id, w] of this.writes) {
-      docs.push({ table: w.table.id, id, json: w.next ? JSON.stringify(w.next) : null });
+      docs.push({ table: w.table.id, id, json: w.next ? encodeDoc(w.next) : null });
       for (const ix of w.table.indexes.values()) {
         const oldK = w.old ? indexKey(ix, w.old) : null;
         const newK = w.next ? indexKey(ix, w.next) : null;
@@ -386,3 +391,42 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
   for (const [, d] of pend) if (d === null) n++;
   return n;
 }
+
+/** A validated deep copy of a write's fields (Convex serializes values at the call). */
+function copyFields(fields: Record<string, unknown>, method: string): Record<string, unknown> {
+  if (!isSimpleObject(fields))
+    throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
+  return copyValue(fields as Value) as Record<string, unknown>;
+}
+
+/**
+ * As Convex's `ResolvedDocument::new`: `_id` / `_creationTime` in a written value must equal the document's,
+ * and no other top-level field may start with an underscore.
+ */
+function checkSystemFields(
+  doc: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  id: string,
+  creationTime: number,
+) {
+  if ("_id" in fields && fields._id !== undefined && fields._id !== id)
+    throw new Error(`Provided document ID "${id}" doesn't match '_id' field ${JSON.stringify(fields._id)}`);
+  if ("_creationTime" in fields && fields._creationTime !== undefined && fields._creationTime !== creationTime)
+    throw new Error(
+      `Provided creation time ${creationTime} doesn't match '_creationTime' field in ${JSON.stringify(fields)}`,
+    );
+  for (const k of Object.keys(doc))
+    if (k.startsWith("_") && k !== "_id" && k !== "_creationTime")
+      throw new Error(`Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`);
+}
+
+/** Documents keep their fields sorted by name, as Convex objects do. */
+function sortFields(doc: Record<string, unknown>): Doc {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(doc).sort()) out[k] = doc[k];
+  return out as Doc;
+}
+
+/** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
+export const encodeDoc = (doc: Doc): string => JSON.stringify(convexToJson(doc as unknown as Value));
+export const decodeDoc = (json: string): Doc => jsonToConvex(JSON.parse(json)) as unknown as Doc;

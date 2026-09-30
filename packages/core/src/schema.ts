@@ -50,14 +50,22 @@ export class Schema {
   }
 }
 
-const utf8 = new TextEncoder();
-/** An index key: the indexed field values, then the _id (unique, and Convex's tiebreaker). */
-export function indexKey(ix: IndexDef, doc: Doc): Uint8Array {
-  const vals: KeyValue[] = [];
-  for (const f of ix.fields) {
-    const v = doc[f];
-    vals.push(v === undefined ? null : (v as KeyValue));
+/** A field's value at a dotted path (`a.b`), or undefined when any step is missing. */
+export function fieldValue(doc: Doc, path: string): KeyValue {
+  let v: unknown = doc;
+  for (const part of path.split(".")) {
+    if (v === null || typeof v !== "object" || Array.isArray(v) || v instanceof ArrayBuffer) return undefined;
+    v = (v as Record<string, unknown>)[part];
   }
-  if (ix.name !== "by_id") vals.push(utf8.encode(doc._id));
+  return v as KeyValue;
+}
+
+/**
+ * An index key, as Convex's `IndexKey::to_bytes`: the indexed values (a missing field is `undefined`, below
+ * `null`), then the `_id` as a string value — unique, and the final tiebreaker.
+ */
+export function indexKey(ix: IndexDef, doc: Doc): Uint8Array {
+  const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
+  vals.push(doc._id);
   return encodeKey(vals);
 }
