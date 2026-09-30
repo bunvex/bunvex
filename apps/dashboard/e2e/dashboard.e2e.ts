@@ -73,6 +73,24 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
+  test("the design system's page: every specimen in both themes, no axe violation (contrast included)", async () => {
+    const { page, errors, close } = await open("/design-system.html");
+    await page.getByRole("heading", { level: 1, name: "bunvex design system" }).waitFor();
+    for (const title of ["Colors", "Buttons", "Form controls", "Data"])
+      for (const theme of ["light", "dark"])
+        await page.getByRole("region", { name: `${title}, ${theme}`, exact: true }).waitFor();
+    await page.addScriptTag({ content: AXE });
+    const violations = await page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+      const axe = (window as any).axe;
+      const r = await axe.run(document, { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+    });
+    expect(violations).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("a phone's width: no screen scrolls sideways; the screens are behind Menu", async () => {
     const phone = { viewport: { width: 390, height: 800 } };
     const { page, errors, close } = await open("/", phone);
