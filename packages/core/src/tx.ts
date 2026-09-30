@@ -17,6 +17,8 @@ import {
   toJsonValue,
   type Value,
   v,
+  valueNesting,
+  valueSize,
 } from "@bunvex/values";
 import BTree from "sorted-btree";
 import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
@@ -127,6 +129,24 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     hi = upper.incl ? prefixEnd(k) : k;
   }
   return { lo, hi };
+}
+
+/** Convex's document and write limits (crates/common/src/document.rs, knobs.rs). */
+export const MAX_USER_SIZE = 1 << 20; // 1 MiB, the size of the whole document (system fields included)
+export const MAX_DOCUMENT_NESTING = 16;
+export const TRANSACTION_MAX_NUM_USER_WRITES = 16_000;
+export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
+
+/** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
+function formatBytes(n: number): string {
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let i = 0;
+  let x = n;
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024;
+    i++;
+  }
+  return `${i === 0 ? x : Number(x.toFixed(2))} ${units[i]}`;
 }
 
 /** Convex's per-transaction read limits (crates/common/src/knobs.rs). System transactions are exempt. */
@@ -381,11 +401,38 @@ export class Tx {
     return rows.slice(0, limit).map(([, d]) => d);
   }
 
+  private docsWritten = 0;
+  private bytesWritten = 0;
+
+  /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
+  private checkWriteLimits(next: Doc | null) {
+    if (next) {
+      const v = next as unknown as Value;
+      const nesting = valueNesting(v);
+      if (nesting > MAX_DOCUMENT_NESTING)
+        throw new Error(
+          `Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`,
+        );
+      const size = valueSize(v);
+      if (size > MAX_USER_SIZE)
+        throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
+      this.bytesWritten += size;
+    }
+    this.docsWritten++;
+    if (this.docsWritten > TRANSACTION_MAX_NUM_USER_WRITES)
+      throw new Error(`Too many writes in a single function execution (limit: ${TRANSACTION_MAX_NUM_USER_WRITES})`);
+    if (this.bytesWritten > TRANSACTION_MAX_USER_WRITE_SIZE_BYTES)
+      throw new Error(
+        `Too many bytes written in a single function execution (limit: ${formatBytes(TRANSACTION_MAX_USER_WRITE_SIZE_BYTES)})`,
+      );
+  }
+
   /** Validators of the declared tables' documents; set by the engine for mutations (STUDY-14). */
   docValidators: Map<string, GenericValidator> | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     if (!this.writable) throw new Error("queries cannot write");
+    if (!t.name.startsWith("_")) this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
     if (dv) {
       const msg = checkValue(dv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
@@ -435,7 +482,7 @@ export class Tx {
   async patch(table: string, id: string, fields: Record<string, unknown>) {
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
-    if (!cur || !t) throw new Error(`patch: ${table}/${id} not found`);
+    if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
     const next: Record<string, unknown> = { ...cur };
@@ -445,10 +492,25 @@ export class Tx {
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
   }
 
+  /** Convex's `db.replace`: every non-system field is replaced; `_id` / `_creationTime` are kept. */
+  async replace(table: string, id: string, value: Record<string, unknown>) {
+    const t = this.findTable(table);
+    const cur = await this.read(table, id, "db.replace");
+    if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
+    const old = this.writes.get(id)?.old ?? cur;
+    const next: Record<string, unknown> = {
+      ...copyFields(value, "replace"),
+      _id: id,
+      _creationTime: cur._creationTime,
+    };
+    checkSystemFields(next, value, id, cur._creationTime);
+    this.stage(t, id, old, sortFields(next));
+  }
+
   async delete(table: string, id: string) {
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
-    if (!cur || !t) return;
+    if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
   }
 

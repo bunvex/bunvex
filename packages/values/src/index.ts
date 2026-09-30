@@ -37,4 +37,6 @@ export {
   toJsonValue,
   type Value,
   validateObjectField,
+  valueNesting,
+  valueSize,
 } from "./value.ts";
