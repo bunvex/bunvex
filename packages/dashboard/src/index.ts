@@ -6,5 +6,5 @@ export {
   createDashboardRouter,
   type DashboardRouter,
   type DashboardRouterContext,
-  type LogsSearch,
+  type FunctionsSearch,
 } from "./router.tsx";

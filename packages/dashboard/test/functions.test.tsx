@@ -1,0 +1,106 @@
+import { beforeEach, describe, expect, test } from "bun:test";
+import { Dashboard, type FunctionInfo } from "@bunvex/dashboard";
+import { MockDataSource } from "@bunvex/dashboard/mock";
+import { createMemoryHistory } from "@tanstack/react-router";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { buildFunctionTree, describeFunction, splitPath } from "../src/functions/tree.ts";
+import { expectAccessible } from "./axe.ts";
+
+const NOW = Date.UTC(2026, 8, 29, 12);
+const mockSource = () => new MockDataSource({ seed: 7, now: NOW, executions: 60, logIntervalMs: 3_600_000 });
+
+function mount(path = "/functions", source = mockSource()) {
+  const history = createMemoryHistory({ initialEntries: [path] });
+  render(<Dashboard dataSource={source} history={history} />);
+  return { history, source };
+}
+const nav = () => screen.getByRole("navigation", { name: "Functions" });
+
+beforeEach(() => localStorage.clear());
+
+const fn = (path: string, kind: FunctionInfo["kind"] = "query"): FunctionInfo => ({
+  path,
+  kind,
+  visibility: "public",
+});
+
+describe("the function tree", () => {
+  test("folders from module paths, before files; everything alphabetical", () => {
+    const tree = buildFunctionTree([
+      fn("tasks:list"),
+      fn("admin/users:get"),
+      fn("admin/audit/log:read"),
+      fn("tasks:add"),
+    ]);
+    expect(tree.map((n) => n.name)).toEqual(["admin", "tasks"]);
+    const admin = tree[0]!;
+    if (admin.kind !== "folder") throw new Error("admin is a folder");
+    expect(admin.children.map((n) => `${n.kind} ${n.name}`)).toEqual(["folder audit", "file users"]);
+    const tasks = tree[1]!;
+    if (tasks.kind !== "file") throw new Error("tasks is a file");
+    expect(tasks.functions.map((f) => f.path)).toEqual(["tasks:add", "tasks:list"]);
+  });
+
+  test("paths and descriptions", () => {
+    expect(splitPath("a/b:c")).toEqual({ module: "a/b", name: "c" });
+    expect(splitPath("a/b")).toEqual({ module: "a/b", name: "default" });
+    expect(describeFunction({ path: "x:y", kind: "mutation", visibility: "internal" })).toBe("Internal mutation");
+    expect(describeFunction(fn("x:y", "action"))).toBe("Action");
+  });
+});
+
+describe("the Functions screen", () => {
+  test("the modules as a tree; nothing open says what to do", async () => {
+    mount();
+    await screen.findByRole("heading", { level: 1, name: "Functions" });
+    expect(screen.getByText("Pick a function on the left to see its details and its logs.")).toBeDefined();
+    const files = within(nav()).getAllByRole("button");
+    expect(files.map((b) => b.textContent)).toEqual(["messages", "tasks", "users"]);
+    expect(within(nav()).getAllByRole("link").length).toBe(11);
+    await userEvent.setup().click(files[1]!);
+    expect(files[1]!.getAttribute("aria-expanded")).toBe("false");
+    expect(within(nav()).getAllByRole("link").length).toBe(6);
+    await expectAccessible();
+  });
+
+  test("a function opens in the URL with its kind, path and only its logs", async () => {
+    const { history } = mount();
+    await screen.findByRole("heading", { level: 1, name: "Functions" });
+    await userEvent.setup().click(within(nav()).getByRole("link", { name: /syncFromAuth/ }));
+    await screen.findByRole("heading", { level: 1, name: "syncFromAuth" });
+    expect(history.location.search).toContain("function=users%3AsyncFromAuth");
+    expect(screen.getByText(/Internal action in/)).toBeDefined();
+    const grid = screen.getByRole("grid", { name: "Log lines of users:syncFromAuth" });
+    await waitFor(() => expect(within(grid).getAllByRole("row").length).toBeGreaterThan(1));
+    const fns = within(grid)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => within(r).getAllByRole("gridcell")[4]!.textContent);
+    expect(new Set(fns)).toEqual(new Set(["Ausers:syncFromAuth"]));
+    expect(screen.queryByRole("button", { name: /^Functions:/ })).toBeNull(); // one function: no picker
+    await expectAccessible();
+  });
+
+  test("search narrows the tree; an unknown function in the URL says so", async () => {
+    mount("/functions?function=nope:gone");
+    await screen.findByText("There is no function nope:gone. Pick one on the left.");
+    const user = userEvent.setup();
+    await user.click(within(nav()).getByRole("button", { name: "tasks" })); // collapsed: searching opens it
+    await user.type(screen.getByRole("searchbox", { name: "Search functions" }), "LIST");
+    const links = within(nav()).getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))).toEqual([
+      "/functions?function=messages%3Alist",
+      "/functions?function=tasks%3Alist",
+    ]);
+    expect(within(nav()).getAllByRole("link", { name: "list , query" }).length).toBe(2);
+  });
+
+  test("a function's log filters are its own", async () => {
+    mount("/functions?function=tasks:list");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    await userEvent.setup().type(screen.getByRole("searchbox", { name: "Filter logs" }), "ran");
+    await waitFor(() => expect(localStorage.getItem("bunvex:function-logs:default:tasks:list")).toContain("ran"));
+    expect(localStorage.getItem("bunvex:logs:default")).toBeNull();
+  });
+});

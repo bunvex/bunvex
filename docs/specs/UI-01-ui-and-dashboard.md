@@ -859,3 +859,48 @@ As in Convex (STUDY-12 §1.4.1).
    work like Convex's data grid — move between cells with the keyboard, Enter to edit, Enter to save and keep
    going — so in-place editing joined slice 6 (§12.5.3); then the owner asked to finish the Database screen in
    the same pull request, so inserting, deleting and clearing joined it too (§12.5.5).
+
+## 13. Amendment — Logs, Functions and the function runner (30 Sep 2026)
+
+After STUDY-12 §7. The owner decided on 29 Sep 2026: Functions without metrics for now (L1), log filters on
+the client as in Convex (L2), and an optional `runFunction` in the contract with a Run panel (L3).
+
+### 13.1 The Logs screen
+
+- **`/logs`** (`src/logs/`): every function's log lines, newest first, one row per line: time (with ms),
+  the request id's first four characters, the execution's outcome and duration on its last line, level,
+  the function (its kind's letter and path) and the message; errors and failed executions in the
+  destructive colour.
+- **Lines** (`useLogLines`): the newest `listLogs` page (200 lines; the route loader fetches it), then
+  whatever `watchLogs` delivers, merged by id, at most 10 000 (as Convex). Older pages load at the end of
+  the list (STUDY-12 L4, decided: keep the paging). **Pause** holds new lines and counts them ("Resume (3 new)"); resuming shows
+  them. **Clear** hides every loaded line; "Show N cleared" brings them back.
+- **Filters on the client** (`log-filter.ts`): functions and types (success, failure, debug, info, warn,
+  error — a line passes on its level, or on its execution's outcome) as multi-selects, and a text box
+  (200 ms after the last keystroke) matching the function path, the message or a request id. **In the URL
+  and in this browser** (STUDY-12 L7, the owner's call): `?function=a:b,c:d&type=failure,error&q=text`
+  (comma lists; `none` for an empty choice), validated by hand like the table's search; every change is
+  also kept per deployment scope (`bunvex:logs:<scope>`), and the screen opened without filters starts
+  from that view and writes it into the address. Picking functions or types is a history step (Back
+  undoes it); typing replaces the address.
+- **Details** (`LogDetails`, in the shared `shell/panel.tsx`): the activated line — function, request id
+  (copy), the execution's outcome and duration, the message, and every loaded line of the same request —
+  with **Filter by this request**. The list is the data grid: arrows move between lines, a click or Enter
+  opens the details, and while they are open they follow the current line (Convex's Up / Down in its
+  drilldown).
+- **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
+  that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
+- Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.
+
+### 13.2 The Functions screen
+
+- **`/functions?function=<module:name>`** (`src/functions/`), the URL as in Convex. A sidebar holds the
+  modules as a **tree** (`buildFunctionTree`): folders from the module path, then files, each
+  alphabetical, with the functions as links (kind letter, name, "internal"). Files and folders collapse,
+  and **Search functions** narrows the tree, opening every branch.
+- The open function: its name, "Query in tasks" / "Internal action in users", and a copyable path. Below
+  that are **its logs**: the Logs list (§13.1) fed by `listLogs` / `watchLogs` with the source's function
+  filter. Its type and text filters are kept per function, as in Convex, and there is no function picker.
+- **No Statistics tab** (STUDY-12 L1, decided): the server has no app metrics yet. No Run button until
+  §13.3.
+- Nothing open: a hint. An unknown function in the URL is named. No functions: says so.
