@@ -1,6 +1,6 @@
 # STUDY-13 — Validators (`v.*`) and argument / return validation
 
-- **Status:** implemented (this PR: validators; the next PR wires `args` / `returns` into functions)
+- **Status:** implemented (#24 validators; the next PR wires `args` / `returns` into functions)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-12](STUDY-12-value-model.md) (values), STUDY-14 (schemas, next)
 
