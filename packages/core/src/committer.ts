@@ -89,6 +89,21 @@ export class Committer {
     private logWindow = 20_000,
   ) {}
 
+  /**
+   * Whether a durable commit in `(from, to]` (`to` ≤ visibleTs) wrote into `reads`. When it did not, a query
+   * result read at either end is also the result at the other: its reads saw the same data (Convex's
+   * `extend_validity`). True when the write log no longer reaches back to `from`, as the absence of a
+   * conflict can then not be proven.
+   */
+  changedBetween(reads: Interval[], from: number, to: number): boolean {
+    if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
+    if (from >= to) return false;
+    if (this.log.length === 0 || this.log[0].ts > from + 1) return true;
+    for (let i = this.log.length - 1; i >= 0 && this.log[i].ts > from; i--)
+      if (this.log[i].ts <= to && overlaps(this.log[i].writes, reads)) return true;
+    return false;
+  }
+
   /** Subscribe to durable commits (the query cache and subscriptions). */
   onCommit(fn: (entries: LogEntry[]) => void) {
     this.listeners.push(fn);
