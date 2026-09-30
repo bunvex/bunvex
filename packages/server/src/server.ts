@@ -261,5 +261,12 @@ export function createServer(opts: ServerOptions) {
       sync.stop();
       server?.stop(true);
     },
+    /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
+     *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
+    shutdown: async () => {
+      sync.stop();
+      server?.stop(true);
+      await engine.close();
+    },
   };
 }

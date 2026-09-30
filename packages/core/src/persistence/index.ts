@@ -32,6 +32,46 @@ export interface Persistence {
   close(): void | Promise<void>;
 }
 
+/** What `acquireLease` found: the lease is now ours (`epoch`), or another process holds it. */
+export type LeaseAcquire = { epoch: number } | { heldBy: string; expiresInMs: number };
+
+/**
+ * PERSIST-01 C7, single writer: one lease record in the store, taken only when free, released or expired
+ * (on the store's clock), and checked by every `flush()` in the same atomic write as the group (the fence).
+ * Optional per driver; the engine uses it when the driver has it.
+ */
+export interface Lease {
+  acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire>;
+  /** Extend the lease by its TTL; throws `LeaseLostError` if another holder has taken it. */
+  renewLease(): Promise<void>;
+  /** Free the lease if it is still ours (a clean shutdown hands over at once). */
+  releaseLease(): Promise<void>;
+}
+
+export const hasLease = (p: Persistence): p is Persistence & Lease =>
+  typeof (p as Partial<Lease>).acquireLease === "function";
+
+/** Another process took the store's lease: this one must stop writing (its flushes are fenced). */
+export class LeaseLostError extends Error {
+  constructor(message = "the store's lease was taken by another process; this one can no longer write") {
+    super(message);
+    this.name = "LeaseLostError";
+  }
+}
+
+/** The store is held by another live process (PERSIST-01 C7): only one process may write a store. */
+export class LeaseHeldError extends Error {
+  constructor(
+    readonly heldBy: string,
+    readonly expiresInMs: number,
+  ) {
+    super(
+      `another bunvex process (${heldBy}) holds this store's lease; it expires in ${Math.ceil(expiresInMs / 1000)} s if that process is gone`,
+    );
+    this.name = "LeaseHeldError";
+  }
+}
+
 /** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). */
 export interface ScanDocs {
   scanDocs(

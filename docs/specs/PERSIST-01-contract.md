@@ -1,7 +1,7 @@
 # PERSIST-01 — the persistence contract
 
 > v1, 29 Sep 2026 (written as STORAGE-01; renamed by ARCH-01 D2 — "storage" is the FILE API, as in
-> Convex). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -70,6 +70,47 @@ rebuilds it from its log, ignoring a torn trailing record.
 - `scanDocs(table, index, lo, hi, T, limit, desc)` (interface `ScanDocs`): the documents (JSON) for what `scan` would return,
   in one round trip. Same semantics as `scan` + `get` for each id.
 
+## C7 — single writer (lease and fencing)
+
+C1–C5 assume **one** process writes a store. Nothing enforced it before v2, and two processes on one
+store corrupted it silently (STUDY-24 S1: duplicate timestamps, lost acknowledged updates, snapshots that
+change after the fact, two catalogs and two instance secrets). C7 enforces it.
+
+A driver implements C7 by implementing the `Lease` interface (`acquireLease`, `renewLease`,
+`releaseLease`). v2 is optional per driver: a driver without it behaves as in v1, and the engine then has
+no protection (the driver's docs say so). First-party status: **postgres** implements C7; mysql, mongodb,
+sqlite and memory follow in their own PRs.
+
+- **The lease** is one record in the store: `epoch` (strictly increasing), `holder` (an opaque string
+  naming the process), `expires_at`, and `max_ts` (the durable prefix, see below).
+- `acquireLease({holder, ttlMs})` takes the lease only if it is **free, released, or expired**, and then
+  increments `epoch` and sets `expires_at = now + ttlMs`, atomically. `now` is **the store's clock**, never
+  the caller's. It returns `{ epoch }`, or `{ heldBy, expiresInMs }` when the lease is live. A live lease
+  is never taken from its holder (unlike Convex's, where the newest process wins at once; STUDY-24 H5).
+- `renewLease()` sets `expires_at = now + ttlMs` if the epoch is still the caller's, and otherwise throws
+  `LeaseLostError`.
+- `releaseLease()` frees the lease if the epoch is still the caller's (a clean shutdown hands over at
+  once, instead of after a TTL).
+- **Fencing.** `flush()` MUST fail with `LeaseLostError`, leaving nothing of its group visible, if the
+  caller's epoch is no longer the current one. The check is part of the same atomic write as the group
+  (inside the transaction, or the same conditional write): a check followed by a separate write is not a
+  fence. Expiry alone is not safety; the epoch check is. A `flush()` on a C7 driver that holds no lease
+  throws.
+- **The durable prefix.** Every fenced flush sets `max_ts` to the group's highest ts in the same atomic
+  write. `maxTs()` returns it: O(1), and it counts **every** commit, including one that wrote only index
+  entries (STUDY-24 S2). On the first acquire of a store written before v2, `max_ts` is initialised from
+  the highest ts of the documents **and** the index entries.
+- **Order on open.** The engine acquires the lease **before** it reads `maxTs()`, and a driver runs any
+  recovery (log truncation, deleting rows above a commit marker) only under the lease.
+- **Liveness.** Opening a store must not wait on another process's open transaction (a paused process
+  must not wedge `open()`: STUDY-24 S3), and two concurrent opens of an empty store must not fail.
+
+The engine side (`@bunvex/core`): `init()` acquires the lease with `holder = host:pid:random` and the
+TTL (default 5 s). A live lease fails `init()` with `LeaseHeldError` (who holds it, when it expires),
+unless the engine was given a wait (`lease.waitMs`): it then retries until the lease is free or the wait
+runs out. The lease is renewed every TTL/3; `LeaseLostError`, or a renewal still failing when the TTL
+runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` releases it.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -83,9 +124,19 @@ rebuilds it from its log, ignoring a torn trailing record.
 | K7 | torn tail (log-based drivers) | half a record appended to the log: it is cut off on open, and a commit written after recovery survives the next reopen |
 | K8 | exact limits | a range whose ends are full of deleted keys and whose live keys have hundreds of versions: for limits 0–100, asc and desc, whole and partial ranges, at several snapshots, `scan` (and `scanDocs`) return exactly the reference model's first `limit` live entries |
 | K9 | long keys | incompressible keys up to 6 KB, many sharing their first 2500+ bytes, plus keys around the 2500-byte boundary, with versions and deletes: scans over whole and partial ranges (bounds that are themselves long keys), both directions, several limits and snapshots, equal the reference model |
+| K10 | lease is exclusive | a second `acquireLease` while the first is live returns `heldBy`; through the engine, a second engine on the same store fails `init()` with `LeaseHeldError` |
+| K11 | takeover after expiry | a holder that stops renewing is replaced within TTL + ε; the new epoch is greater |
+| K12 | stale flush refused | after a takeover, the old holder's `apply` + `flush` throws `LeaseLostError` and none of its rows is visible; the new holder's `maxTs` is unchanged |
+| K13 | stale writer in flight | a child commits continuously and is SIGSTOPped; the parent takes over, commits, and SIGCONTs it: the child stops with `LeaseLostError`, every commit above the takeover's `maxTs` is the parent's, and the takeover completed within TTL + the store's idle-transaction bound |
+| K15 | crash atomicity under the lease | K6 runs with the lease on: each reopen waits out the killed child's lease |
+| K16 | index-only commits | a commit with index entries and no documents is counted by `maxTs()` |
+| K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
+| K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
   that loses all its index entries leaves the index counts equal to each other.
+- K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
+  moment lands inside the flush often enough, and the takeover must still finish in time.
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.

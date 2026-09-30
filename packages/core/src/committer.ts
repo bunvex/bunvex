@@ -213,6 +213,16 @@ export class Committer {
     }
   }
 
+  /** Resolve once nothing is queued or being flushed (a clean shutdown lets the last group land). */
+  async idle() {
+    while (this.running || this.queue.length) await new Promise((r) => setTimeout(r, 1));
+  }
+
+  /** Stop the committer from outside, as a persistence failure does (a lost lease). Fail-stop. */
+  fail(cause: unknown) {
+    this.stop(cause);
+  }
+
   private stop(cause: unknown) {
     if (this.stopped) return;
     this.stopped = new CommitterStoppedError(cause);

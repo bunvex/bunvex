@@ -9,7 +9,14 @@ const config = persistenceConfigFromEnv();
 const engine = await new Engine(benchSchema, await openPersistence(config), {
   cacheMax: Number(process.env.CACHE_MAX ?? 1000),
   instanceSecret: process.env.INSTANCE_SECRET,
+  // PERSIST-01 C7: the store's lease (drivers that have one). LEASE_WAIT_MS > 0 waits for a held lease.
+  lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 5000), waitMs: Number(process.env.LEASE_WAIT_MS ?? 0) },
 }).init();
 const functions = new Functions(engine).register("bench", bench);
-createServer({ engine, functions, port: Number(process.env.PORT ?? 3210), label: config.kind });
+const app = createServer({ engine, functions, port: Number(process.env.PORT ?? 3210), label: config.kind });
+for (const signal of ["SIGINT", "SIGTERM"] as const)
+  process.once(signal, async () => {
+    await app.shutdown();
+    process.exit(0);
+  });
 console.log(`bunvex: persistence=${config.kind} durable=${config.durable} port=${process.env.PORT ?? 3210}`);

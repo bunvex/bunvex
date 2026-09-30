@@ -24,7 +24,17 @@ export {
 } from "./engine.ts";
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
-export type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
+export {
+  type DocWrite,
+  hasLease,
+  type IndexWrite,
+  type Lease,
+  type LeaseAcquire,
+  LeaseHeldError,
+  LeaseLostError,
+  type Persistence,
+  type ScanDocs,
+} from "./persistence/index.ts";
 export {
   type DeclaredTable,
   type Doc,

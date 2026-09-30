@@ -1,6 +1,8 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
+
+import { hostname } from "node:os";
 import { fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
 import {
   bootstrapCatalog,
@@ -23,7 +25,14 @@ import {
   runDeterministic,
 } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
-import type { IndexWrite, Persistence } from "./persistence/index.ts";
+import {
+  hasLease,
+  type IndexWrite,
+  type Lease,
+  LeaseHeldError,
+  LeaseLostError,
+  type Persistence,
+} from "./persistence/index.ts";
 import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 
@@ -91,6 +100,12 @@ export class Engine {
       occMaxBackoffMs?: number;
       /** Signs pagination cursors (STUDY-17); the deployment's secret, as Convex's INSTANCE_SECRET. */
       instanceSecret?: string;
+      /**
+       * The store's lease (PERSIST-01 C7), for drivers that have one. `ttlMs` (default 5000): how long the
+       * lease outlives this process if it dies. `waitMs` (default 0): how long `init()` waits for a lease
+       * another process holds before failing with `LeaseHeldError`.
+       */
+      lease?: { ttlMs?: number; waitMs?: number };
     } = {},
   ) {
     installDeterminism();
@@ -118,12 +133,60 @@ export class Engine {
    * catalog and reconcile it with the declared schema (STUDY-04). Must finish before serving requests.
    */
   async init() {
+    // The lease first (PERSIST-01 C7): maxTs is only meaningful once no other process can write.
+    if (hasLease(this.persistence)) await this.acquireLease(this.persistence);
     const m = (await this.persistence.maxTs?.()) ?? 0;
     this.committer.appliedTs = m;
     this.committer.visibleTs = m;
     await this.reconcileCatalog();
     await this.loadInstanceSecret();
     return this;
+  }
+
+  private lease: { store: Lease; timer: ReturnType<typeof setInterval> } | null = null;
+
+  private async acquireLease(store: Persistence & Lease) {
+    const ttlMs = this.opts.lease?.ttlMs ?? 5000;
+    const deadline = Date.now() + (this.opts.lease?.waitMs ?? 0);
+    const random = Buffer.from(outsideExecution(() => crypto.getRandomValues(new Uint8Array(4)))).toString("hex");
+    const holder = `${hostname()}:${process.pid}:${random}`;
+    for (;;) {
+      const r = await store.acquireLease({ holder, ttlMs });
+      if ("epoch" in r) break;
+      if (Date.now() >= deadline) throw new LeaseHeldError(r.heldBy, r.expiresInMs);
+      await new Promise((ok) => setTimeout(ok, Math.min(250, Math.max(10, deadline - Date.now()))));
+    }
+    // Renew every TTL/3. A lost lease, or renewals failing until the TTL runs out (the store may then give it
+    // to another process), stops the committer: fail-stop, as a failed flush.
+    let renewedAt = Date.now();
+    let renewing = false;
+    const timer = setInterval(async () => {
+      if (renewing || this.committer.stopped) return;
+      renewing = true;
+      try {
+        await store.renewLease();
+        renewedAt = Date.now();
+      } catch (e) {
+        if (e instanceof LeaseLostError) this.committer.fail(e);
+        else if (Date.now() - renewedAt >= ttlMs)
+          this.committer.fail(new LeaseLostError(`could not renew the store's lease within its TTL: ${e}`));
+      } finally {
+        renewing = false;
+      }
+    }, ttlMs / 3);
+    timer.unref?.();
+    this.lease = { store, timer };
+  }
+
+  /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
+  async close() {
+    await this.committer.idle();
+    if (this.lease) {
+      clearInterval(this.lease.timer);
+      if (!this.committer.stopped) await this.lease.store.releaseLease();
+      this.lease = null;
+    }
+    await this.persistence.close();
   }
 
   /**
