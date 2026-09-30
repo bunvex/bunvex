@@ -1,4 +1,4 @@
-// The Schedules screen (UI-01 §14.2, STUDY-12 §8): Convex's two pages under one heading — scheduled
+// The Schedules screen (UI-01 §14.2, STUDY-12 §9): Convex's two pages under one heading — scheduled
 // functions (`/schedules/functions`) and cron jobs (`/schedules/crons`).
 import { useQueryScope } from "../context.tsx";
 import { DashLink } from "../router.tsx";

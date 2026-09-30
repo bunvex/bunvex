@@ -1,4 +1,4 @@
-// The mock's scheduler (UI-01 §14, STUDY-12 §8): pending runs and cron jobs over a clock that starts at the
+// The mock's scheduler (UI-01 §14, STUDY-12 §9): pending runs and cron jobs over a clock that starts at the
 // fixture's `now`. While someone watches, due runs run (logged like any execution) and now and then a new
 // run is scheduled, as a live app would. Pure state; MockDataSource wraps it in its latency and gates.
 import {

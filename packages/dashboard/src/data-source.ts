@@ -177,6 +177,30 @@ export type DocumentQuery = PageRequest & {
   filter?: FilterExpression;
 };
 
+// ------------------------------------------------------------------ validators (STUDY-12 V1–V2)
+
+/**
+ * A validator in Convex's JSON form (what `v.*` validators serialize to, `Validator.json`): how functions'
+ * arguments and return values, and the schema's document types, reach the dashboard. A `literal`'s value is
+ * JSON, with an int64 as `{ $integer }` as elsewhere; `record` keys are `string`, `id` or a union of them.
+ */
+export type ValidatorJson =
+  | { type: "null" }
+  | { type: "number" }
+  | { type: "bigint" }
+  | { type: "boolean" }
+  | { type: "string" }
+  | { type: "bytes" }
+  | { type: "any" }
+  | { type: "literal"; value: Json | EncodedInt64 }
+  | { type: "id"; tableName: string }
+  | { type: "array"; value: ValidatorJson }
+  | { type: "record"; keys: ValidatorJson; values: { fieldType: ValidatorJson; optional: false } }
+  | { type: "object"; value: Record<string, ObjectFieldJson> }
+  | { type: "union"; value: ValidatorJson[] };
+
+export type ObjectFieldJson = { fieldType: ValidatorJson; optional: boolean };
+
 // ------------------------------------------------------------------ functions and logs
 
 export type FunctionKind = "query" | "mutation" | "action";
@@ -186,6 +210,10 @@ export type FunctionInfo = {
   path: string;
   kind: FunctionKind;
   visibility: "public" | "internal";
+  /** The declared arguments validator (STUDY-12 V1). Absent: none declared — any arguments are accepted. */
+  args?: ValidatorJson;
+  /** The declared return value validator. Absent: none declared. */
+  returns?: ValidatorJson;
 };
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

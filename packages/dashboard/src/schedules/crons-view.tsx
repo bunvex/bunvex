@@ -1,4 +1,4 @@
-// Cron jobs (UI-01 §14.2, STUDY-12 §8): each job with its schedule, function, last and next run; a job's
+// Cron jobs (UI-01 §14.2, STUDY-12 §9): each job with its schedule, function, last and next run; a job's
 // details beside the list, with its arguments and its recent runs (the source keeps a few, Convex 5).
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";

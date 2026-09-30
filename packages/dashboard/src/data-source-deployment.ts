@@ -1,4 +1,4 @@
-// The deployment's other features in the dashboard contract (UI-01 §14, STUDY-12 §8): scheduled functions
+// The deployment's other features in the dashboard contract (UI-01 §14, STUDY-12 §9): scheduled functions
 // and cron jobs, file storage, environment variables, the audit log. Every method is optional — a source
 // offers a feature by having its methods (detected with `typeof`), so older sources stay valid — and the
 // shapes follow Convex's system tables. Re-exported by `data-source.ts`, the contract's module.
