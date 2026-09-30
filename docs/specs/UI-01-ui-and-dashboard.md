@@ -947,7 +947,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   runner is open, the screen keeps room to scroll past it.
 - Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
   credential runs queries only.
-- Not yet (STUDY-12 L6): run history, "act as a user", custom test
+- Not yet (STUDY-12 L6): "act as a user", custom test
   queries. (Argument validation came with §15.1.)
 
 ## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
@@ -1178,3 +1178,11 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   arguments while they are valid ("Subscribed: the result updates as the data changes."), shows the last
   result until the next, and pauses when they are not ("The result is paused until the arguments are
   fixed."). Without `watchFunction` a query runs once with Run, as before.
+
+### 16.2 Run history (STUDY-12 §10.2, R2)
+
+- A mutation's or an action's last **25** runs, newest first, in this browser per deployment and function
+  (`bunvex:run-history:<scope>:<path>`, `runner/history.ts`); the same arguments twice in a row are one
+  entry. **Previous arguments** / **Next arguments** beside the editor fill it with them. A query keeps none
+  — watched, it follows its arguments; run once (without `watchFunction`), it still keeps none, as Convex's
+  queries.
