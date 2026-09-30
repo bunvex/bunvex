@@ -9,6 +9,7 @@ export {
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export { Engine, parseValue, stringifyValue, type TxBody } from "./engine.ts";
+export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 export {
