@@ -96,7 +96,8 @@ describe("the Logs screen", () => {
     expect(cells(rows()[0]!)[COL.message]).toBe(history[0]!.message);
     const times = rows().map((r) => cells(r)[COL.time]);
     expect([...times].sort().reverse()).toEqual(times);
-    const ends = history.filter((e) => e.execution);
+    // one request per mock execution; an action's calls are executions of their own, inside it
+    const ends = history.filter((e) => e.execution && !e.parentExecutionId);
     expect(rows().some((r) => /^(success|failure) \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
     expect(ends.length).toBe(12);
     await expectAccessible();
@@ -218,5 +219,30 @@ describe("the Logs screen", () => {
     await waitFor(() => expect(rows().length).toBeGreaterThan(0));
     await user.click(screen.getByRole("button", { name: /^Show \d+ cleared$/ }));
     await waitFor(() => expect(rows().length).toBeGreaterThan(count - 1));
+  });
+
+  test("a request that ran several functions shows them as a tree; the line's own execution is marked", async () => {
+    const source = mount();
+    await opened();
+    const history = (await source.listLogs({ numItems: 200, cursor: null })).page;
+    const child = history.find((e) => e.parentExecutionId && e.execution)!;
+    expect(child).toBeDefined();
+    // open the details of that child's last line
+    const user = userEvent.setup();
+    const at = rows().findIndex(
+      (r) => cells(r)[COL.message] === child.message && cells(r)[COL.request] === child.requestId!.slice(0, 4),
+    );
+    await user.click(within(rows()[at]!).getAllByRole("gridcell")[COL.message]!);
+    const calls = await screen.findByRole("region", { name: "Functions called" });
+    // the outcome is this execution's, not the request's other calls'
+    expect(screen.getByText(new RegExp(`^(Succeeded|Failed) in ${child.execution!.durationMs} ms$`))).toBeDefined();
+    const items = within(calls).getAllByRole("listitem");
+    const parent = history.find((e) => e.executionId === child.parentExecutionId)!;
+    expect(items[0]!.textContent).toContain(parent.function!.path);
+    const marked = calls.querySelector("[aria-current=true]")!;
+    expect(marked.textContent).toContain(child.function!.path);
+    expect(marked.textContent).toContain("this line");
+    expect(within(calls).getAllByText(/^(Succeeded|Failed|Running):$/).length).toBe(items.length);
+    await expectAccessible();
   });
 });
