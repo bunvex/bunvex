@@ -1,10 +1,10 @@
-// The dashboard host for development: mounts @bunvex/dashboard over the MockDataSource, routing on the
-// hash (a static host needs no rewrite rules), with the TanStack devtools in development.
+// The dashboard host for development: mounts @bunvex/dashboard over the MockDataSource, with plain paths
+// (`/database/users`, the browser history) and the TanStack devtools in development. A host serving the
+// build answers every path with index.html (Vite's dev server and `vite preview` do).
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { ThemeToggle } from "@bunvex/ui/components/theme-toggle";
 import { ThemeProvider } from "@bunvex/ui/theme";
-import { createHashHistory } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
@@ -22,12 +22,7 @@ const source = new MockDataSource({
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
-      <Dashboard
-        dataSource={source}
-        history={createHashHistory()}
-        headerActions={<ThemeToggle />}
-        devtools={import.meta.env.DEV}
-      />
+      <Dashboard dataSource={source} headerActions={<ThemeToggle />} devtools={import.meta.env.DEV} />
     </ThemeProvider>
   </StrictMode>,
 );

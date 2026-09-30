@@ -458,7 +458,7 @@ Virtual. Versions checked on npm and the current docs (context7) the same day:
 
 | package | version | where | for |
 |---|---|---|---|
-| `@tanstack/react-router` | 1.170 | dashboard (and the app, for `createHashHistory`) | routes, search params, loaders |
+| `@tanstack/react-router` | 1.170 | dashboard | routes, search params, loaders |
 | `@tanstack/react-query` | 5.104 | dashboard | the cache every read goes through |
 | `@tanstack/react-router-devtools`, `@tanstack/react-query-devtools` | 1.167, 5.104 | dashboard, lazy | `<Dashboard devtools>`; the app turns them on in development (a 0.3 kB no-op chunk in production) |
 | `@tanstack/react-table` | **9.2** (a new major: `useTable`, required `features`, `table.FlexRender`) | ui | `DataTable` |
@@ -488,7 +488,8 @@ are removed — the router owns the URL.
 ### 11.2 Routing
 
 - **The router lives in the package; the host picks the history.** `<Dashboard history={…} basepath={…}>`:
-  `createHashHistory()` in `apps/dashboard` (a static host needs no rewrites), the browser history under a
+  the browser history in `apps/dashboard` (plain paths, as Convex's dashboard; ~~`createHashHistory()`~~
+  until 30 Sep 2026, when the owner dropped the `/#/` addresses), the browser history under a
   `basepath` in a control plane (`/projects/p1/dashboard`), `createMemoryHistory()` in tests.
 - Routes: `/`, `/tables`, `/tables/$table?index&order`, `/tables/$table/$id`, `/functions`,
   `/logs?function&level`. Search params are validated by hand (`validateDocumentsSearch`,
@@ -770,7 +771,8 @@ which Convex's does not.
 - ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
   search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
   host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
-  the address (`apps/dashboard/src/knobs.ts`).
+  the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
+  the query with the route's own search, so only their three keys are taken out.
 
 ### 12.5.6 Columns and room for the table
 

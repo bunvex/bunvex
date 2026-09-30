@@ -12,7 +12,7 @@ import { HeaderActionsContext } from "./shell/shell.tsx";
 export type DashboardProps = {
   /** Read once, when the dashboard mounts; give the component a new `key` to switch sources. */
   dataSource: DashboardDataSource;
-  /** Default: the browser history. `createHashHistory()` for a static host, `createMemoryHistory()` in tests. */
+  /** Default: the browser history (plain paths). `createMemoryHistory()` in tests. */
   history?: RouterHistory;
   /** Where the dashboard lives in the host's URL space, e.g. "/projects/abc/dashboard". */
   basepath?: string;

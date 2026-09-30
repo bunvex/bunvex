@@ -15,20 +15,19 @@ import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { ThemeToggle } from "@bunvex/ui/components/theme-toggle";
 import { ThemeProvider } from "@bunvex/ui/theme";
-import { createHashHistory } from "@tanstack/react-router";
 
 <ThemeProvider>
   <Dashboard
     dataSource={new MockDataSource()}
-    history={createHashHistory()}
     headerActions={<ThemeToggle />}
     devtools={import.meta.env.DEV}
   />
 </ThemeProvider>;
 ```
 
-- **Routing** is TanStack Router, inside the package. The host picks the `history` (hash for a static
-  host, the browser's under a `basepath` inside a larger app, memory in tests).
+- **Routing** is TanStack Router, inside the package. It uses the browser history (plain paths, so
+  the host answers every path with the app); pass `basepath` inside a larger app, or another `history`
+  (memory in tests).
 - **Data** goes through TanStack Query. Pass `queryClient` (and a `scope` per deployment) to share your
   client; otherwise the dashboard creates its own.
 - **Styles**: the package ships no CSS. Import `@bunvex/ui/styles.css` in your stylesheet and add an

@@ -19,24 +19,37 @@ function env(href: string, stored: Record<string, string> = {}) {
 }
 
 describe("the dev host's mock knobs", () => {
-  test("read from the query, then taken out of the address so the hash route never sees them", () => {
-    const { env: e, replaced } = env("http://localhost:5173/?writes=0&latency=50#/database/users?panel=schema");
+  test("read from the query, then taken out of the address; the route's own search stays", () => {
+    const { env: e, replaced } = env("http://localhost:5173/database/users?writes=0&panel=schema&latency=50");
     const knobs = takeDevKnobs(e);
     expect(knobs.get("writes")).toBe("0");
     expect(knobs.get("latency")).toBe("50");
-    expect(replaced).toEqual(["/#/database/users?panel=schema"]);
+    expect(knobs.has("panel")).toBe(false);
+    expect(replaced).toEqual(["/database/users?panel=schema"]);
+  });
+
+  test("an address with only knobs keeps just its path", () => {
+    const { env: e, replaced } = env("http://localhost:5173/logs?fail=0.5");
+    expect(takeDevKnobs(e).get("fail")).toBe("0.5");
+    expect(replaced).toEqual(["/logs"]);
+  });
+
+  test("the route's search alone is not touched", () => {
+    const { env: e, replaced } = env("http://localhost:5173/database/users?panel=schema");
+    expect(takeDevKnobs(e).size).toBe(0);
+    expect(replaced).toEqual([]);
   });
 
   test("a reload without them keeps the tab's knobs", () => {
-    const first = env("http://localhost:5173/?fail=0.2#/");
+    const first = env("http://localhost:5173/?fail=0.2");
     takeDevKnobs(first.env);
-    const { env: e, replaced } = env("http://localhost:5173/#/logs", first.stored);
+    const { env: e, replaced } = env("http://localhost:5173/logs", first.stored);
     expect(takeDevKnobs(e).get("fail")).toBe("0.2");
     expect(replaced).toEqual([]);
   });
 
   test("without storage (a private window) they still apply once", () => {
-    const { env: e } = env("http://localhost:5173/?writes=100#/");
+    const { env: e } = env("http://localhost:5173/?writes=100");
     const broken = {
       getItem: () => {
         throw new Error("denied");
@@ -46,6 +59,6 @@ describe("the dev host's mock knobs", () => {
       },
     };
     expect(takeDevKnobs({ ...e, storage: broken }).get("writes")).toBe("100");
-    expect(takeDevKnobs({ ...env("http://localhost:5173/#/").env, storage: broken }).size).toBe(0);
+    expect(takeDevKnobs({ ...env("http://localhost:5173/").env, storage: broken }).size).toBe(0);
   });
 });
