@@ -44,7 +44,7 @@ Key bunvex facts behind the statuses:
 | Index range on `undefined` (missing field) | crates/common/src/query.rs, value/sorting.rs | missing | bunvex maps missing fields to `null`. Convex keeps `undefined` as its own value that sorts below `null`. |
 | Using `by_id` / `by_creation_time` system indexes in `withIndex` | system_fields.ts (`SystemIndexes`) | done | Both are created for every table. |
 | Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | done (#10) | |
-| `.fullTableScan()` | impl/query_impl.ts | missing | Only the implicit default (`by_creation_time`). |
+| `.fullTableScan()` | impl/query_impl.ts | done (#40) | |
 | `.order("asc" \| "desc")` | impl/query_impl.ts | partial | Works. It doesn't reject a second `.order()` or `.order()` on a search query. |
 | `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
 | Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
@@ -57,8 +57,8 @@ Key bunvex facts behind the statuses:
 | `.collect()` | impl/query_impl.ts | partial | bunvex silently stops at 8192 rows. Convex reads everything, up to the transaction read limits (32k rows / 16 MiB), and then throws. |
 | `.take(n)`, requiring a non-negative integer | impl/query_impl.ts | partial | Works, but `n` isn't validated. |
 | `.first()` | impl/query_impl.ts | done | |
-| `.unique()`: returns null or the only row, and throws if there are ≥2 | impl/query_impl.ts | missing | |
-| Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | missing | Needed for early exit without materialising the result. |
+| `.unique()`: returns null or the only row, and throws if there are ≥2 | impl/query_impl.ts | done (#40) | |
+| Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | missing | bunvex's query object is mutable and reusable. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | missing | |
 | `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
@@ -322,7 +322,7 @@ Key bunvex facts behind the statuses:
 | `throw new ConvexError(data)`, where the client receives `data` intact | values/errors.ts; impl/registration_impl.ts | missing | |
 | Non-ConvexError errors redacted in production ("Server Error") | crates/application | missing | Raw messages are returned. |
 | Typed error codes for limits (e.g. `ValueTooLargeError`, `TooManyWrites`) | crates/common/src/document.rs, database | missing | |
-| `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | missing | |
+| `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | done (#40) | |
 
 ### 19. Limits
 
