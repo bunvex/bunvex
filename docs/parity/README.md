@@ -64,7 +64,8 @@ wrong.
 4. **Queries:** `filter` and its builder, `unique`, `paginate` (cursors, `endCursor`, `maximumRowsRead`),
    async iteration, the transaction read/write limits, and a read-set narrowed to what `take` read.
 5. **Transactions:** Convex's OCC retry budget and error, the 1 s execution limit, and `db.vars.commitTs`.
-6. **Function results:** `ConvexError` data, error redaction, status codes, `logLines`.
+6. **Function results:** `ConvexError` data, error redaction, status codes, `logLines` (done in STUDY-20,
+   as `BunvexError`; cached query lines and subscription lines remain).
 7. **Schema:** `defineSchema`/`defineTable`, document validation, `schemaValidation`, staged indexes, and
    tables created on first insert.
 

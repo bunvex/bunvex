@@ -30,7 +30,8 @@ bunvex/
 │   ├── values/                      @bunvex/values
 │   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      ✅
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
-│   │   └── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
+│   │   ├── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
+│   │   └── errors                   BunvexError (Convex's ConvexError) with `data` (STUDY-20)  ✅
 │   │
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
@@ -63,13 +64,14 @@ bunvex/
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·
 │   │   │                            validation N · determinism ✅ (in core) · sandbox D
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
+│   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
 │   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
-│   │   ├── logs                     console.log from functions                                M
+│   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    M

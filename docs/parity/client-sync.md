@@ -61,10 +61,10 @@ idempotency or reconnect logic.
 | `Transition` {startVersion, endVersion, modifications[], clientClockSkew?, serverTs?} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` (`finish_update_queries`) | missing | bunvex sends one `upd` per subscription and has no transition envelope. |
 | `StateVersion` {querySet, ts, identity} | `browser/sync/protocol.ts`, `crates/sync/src/state.rs` | missing | — |
 | `QueryUpdated` {queryId, value, logLines, journal} | `browser/sync/protocol.ts` | partial | `upd` {k, v}: value only, no log lines, no journal. |
-| `QueryFailed` {queryId, errorMessage, errorData, logLines, journal} | `browser/sync/protocol.ts` | partial | `err` {k, e}: message only, no structured `errorData` (ConvexError). |
+| `QueryFailed` {queryId, errorMessage, errorData, logLines, journal} | `browser/sync/protocol.ts` | partial | `err` {k, e, d?}: Convex's message shape and `errorData` (STUDY-20); no log lines, no journal. |
 | `QueryRemoved` {queryId} (acknowledges a Remove inside the transition) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | missing | `unsub` is never acknowledged. |
-| `MutationResponse` success {requestId, result, ts, logLines} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | partial | `res` {id, v}: no commit `ts`, no log lines. |
-| `MutationResponse` failure {requestId, result: message, logLines, errorData?} | `browser/sync/protocol.ts` | partial | `res` {id, e}: message only. |
+| `MutationResponse` success {requestId, result, ts, logLines} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | partial | `res` {id, v, l?}: log lines since STUDY-20; no commit `ts`. |
+| `MutationResponse` failure {requestId, result: message, logLines, errorData?} | `browser/sync/protocol.ts` | partial | `res` {id, e, d?, l?}: message, data and lines as Convex (STUDY-20), in bunvex's v0 frame. |
 | `ActionResponse` success/failure {requestId, success, result, logLines, errorData?} | `browser/sync/protocol.ts` | missing | No actions over WS. |
 | `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | missing | — |
 | `FatalError` {error} sent before closing on a deterministic user error (BadRequest, Unauthenticated, …); the client logs it and terminates | `crates/local_backend/src/subs/mod.rs`, `browser/sync/client.ts` | missing | bunvex silently drops unparseable frames and never reports protocol errors. |
@@ -219,7 +219,7 @@ idempotency or reconnect logic.
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}`; ignores `format`; no Convex value encoding. |
-| Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; function errors use HTTP 560 (the client accepts 200/560, anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex returns the status/value shape, but uses HTTP 500 for function errors, has no `logLines`/`errorData`, and returns 404 JSON for unknown routes. |
+| Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; the client accepts HTTP 200 or 560 for a function error (anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-20) | Convex's open-source backend answers function errors with **200** (`Ok(Json(response))`); 560 appears only in the clients (`STATUS_CODE_UDF_FAILED`). bunvex answers 200, as the backend. |
 | `GET /api/query?path=&args=&format=` | `crates/local_backend/src/public_api.rs` | missing | — |
 | `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | — |
 | `consistentQuery`: `GET /api/query_ts` once, then `POST /api/query_at_ts {ts}` so many queries share one snapshot | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | missing | The engine could serve it (MVCC snapshots exist), but snapshots aren't exposed. |
@@ -242,12 +242,12 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Server `console.log` lines returned with every query/mutation/action result and printed in the browser as `[CONVEX Q(name)] [LEVEL] …` | `browser/logging.ts`, `browser/sync/remote_query_set.ts`, `browser/sync/request_manager.ts` | missing | Server-side function logs are also missing ("logs M"). |
+| Server `console.log` lines returned with every query/mutation/action result and printed in the browser as `[CONVEX Q(name)] [LEVEL] …` | `browser/logging.ts`, `browser/sync/remote_query_set.ts`, `browser/sync/request_manager.ts` | partial | The server returns them over HTTP and with WebSocket mutation results (STUDY-20); there is no client to print them. |
 | `Logger` interface {log, warn, error, logVerbose}; `logger: false` silences; `verbose` option | `browser/logging.ts`, `browser/sync/client.ts` | missing | — |
-| `ConvexError` data passed to the client as `errorData` and re-thrown with `.data` | `browser/logging.ts` (`forwardData`), `browser/sync/remote_query_set.ts` | missing | Needs `ConvexError` in values/server. |
+| `ConvexError` data passed to the client as `errorData` and re-thrown with `.data` | `browser/logging.ts` (`forwardData`), `browser/sync/remote_query_set.ts` | partial | The server sends `errorData` (STUDY-20); there is no client yet to rethrow a `BunvexError`. |
 | `[CONVEX FATAL ERROR]` on `FatalError` | `browser/logging.ts` | missing | — |
 | Optional debug telemetry (`reportDebugInfoToConvex`: marks, long-disconnect event to `/api/debug_event`) | `browser/sync/client.ts`, `browser/sync/metrics.ts` | missing | Low priority. |
-| Error message redaction for non-dev deployments (`RedactedJsError`, `RedactedLogLines`) | `crates/sync/src/worker.rs` | missing | — |
+| Error message redaction for non-dev deployments (`RedactedJsError`, `RedactedLogLines`) | `crates/sync/src/worker.rs` | done (STUDY-20) | `REDACT_LOGS_TO_CLIENT` / `redactLogsToClient`, on HTTP and WebSocket. |
 
 ### 16. Limits and sizes relevant to clients
 

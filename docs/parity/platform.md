@@ -302,8 +302,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| Capturing `console.*` from functions (up to 256 lines, 32 KiB per line; docs say 4 KiB) | `crates/isolate/environment/helpers`; `crates/common/log_lines.rs` | missing | ARCHITECTURE marks logs M. bunvex's `console.log` goes to the server's stdout. |
-| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | missing | |
+| Capturing `console.*` from functions (up to 256 lines, 32 KiB per line; docs say 4 KiB) | `crates/isolate/environment/helpers`; `crates/common/log_lines.rs` | done (STUDY-20) | Also still printed to the server's stdout. |
+| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | partial (STUDY-20) | HTTP `logLines` and WebSocket mutation `l`; subscriptions and cached query results carry none yet (STUDY-20 D2, D3). |
 | Function execution log (per call: type, path, duration, error, cache hit, usage) | `crates/application/function_log.rs` | missing | |
 | `GET /api/stream_function_logs?cursor=` and `/api/stream_udf_execution` | `crates/local_backend/logs.rs` | missing | |
 | Log sinks: Datadog, Axiom, Webhook, Sentry, PostHog, S3 export, local file (`--local-log-sink`) | `crates/log_streaming/sinks/*`; `crates/model/log_sinks` | missing | Event formats V1 and V2. Topics: console, function_execution, audit_log, scheduler_stats, and others. |
@@ -348,7 +348,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | bunvex has all three with `{path, args}` and `{status, value \| errorMessage}`. It has no `format`, no `logLines`, no `errorData`, no auth header, and returns 500 instead of Convex's status codes. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500. Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | missing | |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)

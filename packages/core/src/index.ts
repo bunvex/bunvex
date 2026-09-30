@@ -24,5 +24,5 @@ export {
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
-export { type Publish, Subscriptions } from "./subscriptions.ts";
+export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";
