@@ -1,6 +1,6 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
-- **Status:** draft. Divergences L1–L12 (§4) await the owner.
+- **Status:** draft. Divergences L1–L12 (§4) await the owner, except L9 and L10 (decided 2026-09-30).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -175,7 +175,7 @@ Throwaway runs, 30 Sep 2026:
 | L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
 | L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | owner |
 | L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | owner |
-| L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | owner |
+| L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70) |
 | L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** |
 | L11 | Shutdown | SIGINT only; committer aborted; lease not released; SIGTERM kills | Drain, release, close; SIGINT and SIGTERM (`bench/server`) | Deploys hand over at once; no in-flight commit is left in doubt | Keep; wire into the product CLI when it exists | owner |
 | L12 | Pools | 128; idle 90 s; MySQL lifetime 600 s | 16; driver defaults | Throughput under load; stale connections behind load balancers | Expose `POOL` (exists); add idle and lifetime settings; measure before changing defaults | owner |
