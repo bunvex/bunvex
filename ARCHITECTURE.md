@@ -28,7 +28,7 @@ bunvex/
 ├── packages/
 │   │
 │   ├── values/                      @bunvex/values
-│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      N
+│   │   ├── validators               v.string(), v.number(), v.id("tasks"), v.object()…      ✅
 │   │   ├── id                       Convex-format ids: table number + checksum (STUDY-01)    ✅
 │   │   └── types                    Value, JSON form, sort keys (STUDY-12) ✅ · Infer<> N
 │   │
