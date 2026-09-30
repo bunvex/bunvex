@@ -1198,3 +1198,31 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   typed, `customClaims` flattened (`runner/identity.ts`). It is one setting for the page, as in Convex,
   starting from Convex's `{ subject: "fake_id", issuer: "fake_issuer" }`. An invalid identity blocks Run and
   pauses a watched query; a run keeps its identity in the history, and Previous / Next bring it back.
+
+## 17. Amendment — Settings → General, narrow screens, the design system (30 Sep 2026)
+
+### 17.1 Settings → General (STUDY-12 §11)
+
+- `/settings` now opens **General**, the first page, as Convex's; the Settings frame (`settings/layout.tsx`)
+  lists General and Environment variables.
+- **Deployment**: name, version, persistence, the **client URL** and the **HTTP actions URL**, each with a
+  copy button; a URL the source does not give is left out. The contract's `DeploymentInfo` gains optional
+  `httpActionsUrl` (Convex's site URL); the mock's is `http://127.0.0.1:3211`, next to its client URL on
+  3210, as a self-hosted Convex backend.
+
+### 17.2 Pausing the deployment (STUDY-12 §11)
+
+- **Contract** (`data-source-state.ts`, optional): `getDeploymentState()` → `{ state: "running" | "paused" }`,
+  `pauseDeployment()`, `resumeDeployment()` — Convex's `POST /api/pause_deployment` / `unpause_deployment`;
+  both idempotent. Operations `pauseDeployment` / `resumeDeployment` (Convex's `PauseDeployment`,
+  `UnpauseDeployment`). **Contract suite**: the state is well-formed; opt-in `pause: { toggle, query? }`
+  pauses, checks the state and that `query` is refused, and always resumes.
+- **Settings → General → Pause deployment**, as Convex's: "This deployment is currently running / paused",
+  what pausing or resuming does, one button (destructive to pause) behind a confirmation naming the
+  deployment, disabled with a reason for a credential without the operation; not shown for a source
+  without the methods.
+- **Every screen** shows a banner while paused, linking to Settings (`shell/paused-banner.tsx`), as Convex's
+  dashboard layout.
+- **Mock**: while paused, `runFunction` is refused, its live writes stop, due scheduled runs wait and cron
+  runs are skipped; pausing and resuming are recorded as `pause_deployment` / `unpause_deployment` events.
+

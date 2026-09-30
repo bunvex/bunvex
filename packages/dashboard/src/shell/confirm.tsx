@@ -18,7 +18,9 @@ export function ConfirmButton(props: {
   label: ReactNode;
   disabled?: boolean;
   size?: "sm" | "default";
-  variant?: "destructive" | "outline";
+  variant?: "destructive" | "outline" | "default";
+  /** The dialog's confirming button; destructive unless the action is not (e.g. resuming). */
+  confirmVariant?: "destructive" | "default";
   title: string;
   description: ReactNode;
   /** The dialog's confirming button, e.g. "Cancel run". */
@@ -71,7 +73,7 @@ export function ConfirmButton(props: {
         )}
         <AlertDialogFooter>
           <AlertDialogCancel>{props.keep}</AlertDialogCancel>
-          <Button variant="destructive" disabled={busy} onClick={() => void run()}>
+          <Button variant={props.confirmVariant ?? "destructive"} disabled={busy} onClick={() => void run()}>
             {busy ? props.busy : props.confirm}
           </Button>
         </AlertDialogFooter>
