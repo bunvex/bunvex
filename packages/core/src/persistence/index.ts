@@ -44,3 +44,5 @@ export interface ScanDocs {
     desc: boolean,
   ): Promise<string[]>;
 }
+
+export { type IndexRow, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
