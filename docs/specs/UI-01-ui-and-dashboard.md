@@ -767,8 +767,10 @@ which Convex's does not.
   is gone with the selection: the dialog does not restore focus (`finalFocus={false}`) and the screen asks
   the grid for it (`DataTable focusRequest`). Checked in a browser: Base UI hides the page behind a modal
   with `aria-hidden` and traps the focus (no `inert`), so axe is run on the dialog while it is open.
-- Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
-  search when the screen writes its own; harmless, to be fixed with the app's history setup.
+- ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
+  search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
+  host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
+  the address (`apps/dashboard/src/knobs.ts`).
 
 ### 12.5.6 Columns and room for the table
 

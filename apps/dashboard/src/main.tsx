@@ -8,9 +8,10 @@ import { createHashHistory } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
+import { takeDevKnobs } from "./knobs.ts";
 
-// ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data.
-const params = new URLSearchParams(location.search);
+// ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data (knobs.ts).
+const params = takeDevKnobs({ location, history, storage: sessionStorage });
 const source = new MockDataSource({
   latencyMs: Number(params.get("latency") ?? 120),
   failRate: Number(params.get("fail") ?? 0),
