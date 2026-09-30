@@ -50,18 +50,22 @@ describe("arguments", () => {
 });
 
 describe("the function runner", () => {
-  test("Run on a function opens the runner on it; a query's value and log lines show, and the run is logged", async () => {
-    mount("/functions?function=tasks:list");
+  test("Run on a function opens the runner on it; a query is subscribed: its value and log lines show, it is logged, and it updates", async () => {
+    const source = mount("/functions?function=tasks:list");
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
     // the runner is its own chunk: it shows once loaded
     expect(within(await screen.findByRole("region", { name: "Run a function" })).getByText("Query")).toBeDefined();
+    // no Run button for a watched query: it follows its arguments, as in Convex
+    expect(within(runner()).queryByRole("button", { name: "Run query" })).toBeNull();
+    expect(within(runner()).getByText("Subscribed: the result updates as the data changes.")).toBeDefined();
     fireEvent.change(args(), { target: { value: "{ limit: 2 }" } });
-    await user.click(within(runner()).getByRole("button", { name: "Run query" }));
-    await within(runner()).findByText(/^Succeeded in \d+ ms$/);
-    const result = within(runner()).getByText(/_id: "/, { selector: "pre" }).textContent!;
-    expect(result.match(/_id:/g)?.length).toBe(2);
+    const result = () => within(runner()).getByText(/_id: "/, { selector: "pre" }).textContent!;
+    await waitFor(() => expect(result().match(/_id:/g)?.length).toBe(2));
+    expect(within(runner()).getByText(/^Succeeded in \d+ ms$/)).toBeDefined();
+    const [added] = await source.insertDocuments("tasks", [{ text: "live", done: false }]);
+    await waitFor(() => expect(result()).toContain(added!)); // the newest task, without running it again
     expect(within(runner()).getByRole("heading", { name: "Logs" })).toBeDefined();
     const grid = screen.getByRole("grid", { name: "Log lines of tasks:list" });
     await waitFor(() =>
@@ -90,8 +94,9 @@ describe("the function runner", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
     fireEvent.change(args(), { target: { value: "{ id: }" } });
-    expect(within(runner()).getByText(`Unexpected "}"`)).toBeDefined();
-    expect(within(runner()).getByRole("button", { name: "Run query" }).hasAttribute("disabled")).toBe(true);
+    expect(within(runner()).getByText(/^Unexpected "}"/).textContent).toContain(
+      "The result is paused until the arguments are fixed.",
+    );
   });
 
   test("a declared arguments validator gives the template and checks what is typed; Run waits for a fit", async () => {
@@ -100,18 +105,19 @@ describe("the function runner", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
     expect((args() as HTMLTextAreaElement).value).toBe('{\n  owner: "",\n}');
-    const run = () => within(runner()).getByRole("button", { name: "Run query" });
+    const paused = () => within(runner()).queryByText(/paused until the arguments are fixed/);
     for (const [text, message] of [
       ["{}", `Property 'owner' is missing but required: v.id("users")`],
       ["{ owner: 1 }", `owner: Type 'number' is not assignable to v.id("users")`],
       ["{ owner: 'x', extra: 1 }", `Property 'extra' does not exist in v.object({ owner: v.id("users") })`],
     ] as const) {
       fireEvent.change(args(), { target: { value: text } });
-      expect(within(runner()).getByText(message)).toBeDefined();
-      expect(run().hasAttribute("disabled")).toBe(true);
+      expect(within(runner()).getByText(message, { exact: false })).toBeDefined();
+      expect(paused()).not.toBeNull();
     }
     fireEvent.change(args(), { target: { value: "{ owner: 'x' }" } });
-    expect(run().hasAttribute("disabled")).toBe(false);
+    expect(paused()).toBeNull();
+    expect(within(runner()).getByText("Subscribed: the result updates as the data changes.")).toBeDefined();
   });
 
   test("the source checks the arguments too: a misfit is the run's error; a thrown error is the result", async () => {
@@ -139,11 +145,25 @@ describe("the function runner", () => {
     await user.click(screen.getByRole("button", { name: "Run" }));
     expect(within(runner()).getByText("A read-only credential runs queries only.")).toBeDefined();
     expect(within(runner()).getByRole("button", { name: "Run mutation" }).hasAttribute("disabled")).toBe(true);
-    source.runFunction = () => Promise.reject(new DataSourceError("unavailable", "connection refused"));
+    source.watchFunction = (_path, _args, _onResult, onError) => {
+      setTimeout(() => onError(new DataSourceError("unavailable", "connection refused")), 0);
+      return () => {};
+    };
     await user.click(within(runner()).getByRole("combobox"));
     await user.click(await screen.findByRole("option", { name: "tasks:list" }));
-    await user.click(within(runner()).getByRole("button", { name: "Run query" }));
     expect((await within(runner()).findByRole("alert")).textContent).toBe("connection refused");
+  });
+
+  test("without watchFunction, a query is run once with Run, as a mutation is", async () => {
+    const source = mockSource();
+    (source as { watchFunction?: unknown }).watchFunction = undefined;
+    mount("/functions?function=tasks:list", source);
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(within(runner()).queryByText(/^Subscribed/)).toBeNull();
+    await user.click(within(runner()).getByRole("button", { name: "Run query" }));
+    await within(runner()).findByText(/^Succeeded in \d+ ms$/);
   });
 
   test("no runner where the source cannot run functions, or the credential may not", async () => {

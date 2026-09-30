@@ -33,6 +33,7 @@ import {
   type SchemaInfo,
   type StoredFile,
   type TableInfo,
+  toDataSourceError,
   type Unsubscribe,
   type ValidatorJson,
   type Value,
@@ -630,6 +631,37 @@ export class MockDataSource implements DashboardDataSource {
       else run.value = this.mockValue(path, args);
       return run;
     });
+  }
+
+  watchFunction(
+    path: string,
+    args: Record<string, Value>,
+    onResult: (run: FunctionRun) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe {
+    let live = true;
+    const fail = (e: unknown) => live && onError(toDataSourceError(e));
+    const fn = this.functions.find((f) => f.path === path);
+    if (fn && fn.kind !== "query") {
+      setTimeout(
+        () => fail(new DataSourceError("invalid_request", `${path} is a ${fn.kind}: only a query is watched`)),
+        0,
+      );
+      return () => {
+        live = false;
+      };
+    }
+    // a query reads its module's table (tasks:list reads tasks): it runs again when that table changes
+    const rerun = () => {
+      if (live) this.runFunction(path, args).then((r) => live && onResult(r), fail);
+    };
+    rerun();
+    const table = path.split(":")[0]!;
+    const off = this.tables.has(table) ? this.watchTable(table, rerun, () => {}) : () => {};
+    return () => {
+      live = false;
+      off();
+    };
   }
 
   private mockValue(path: string, args: Record<string, Value>): Value {
