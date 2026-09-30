@@ -295,6 +295,13 @@ export class MockDataSource implements DashboardDataSource {
     });
   }
 
+  tableOfId(id: string, opts?: CallOptions): Promise<string | null> {
+    return this.call(opts?.signal, () => {
+      for (const t of this.tables.values()) if (t.documents.some((d) => d._id === id)) return t.name;
+      return null;
+    });
+  }
+
   watchTable(table: string, onChange: (c: { count?: number }) => void, onError: (e: DataSourceError) => void) {
     let live = true;
     const deliver = (c: { count?: number }) => live && onChange(c);

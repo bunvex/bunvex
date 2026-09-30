@@ -36,8 +36,33 @@ export function DeleteSelected(props: {
   onDone: (o: Outcome) => void;
   onClosed: () => void;
 }) {
-  const { source } = useQueryScope();
   const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+        Delete {formatCount(props.ids.length)}
+      </Button>
+      <DeleteDialog
+        {...props}
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) props.onClosed();
+        }}
+      />
+    </>
+  );
+}
+
+/** Asks before deleting documents (the selected ones, or one from a cell's menu), then deletes them in batches. */
+export function DeleteDialog(props: {
+  table: string;
+  ids: string[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: (o: Outcome) => void;
+}) {
+  const { source } = useQueryScope();
   const [busy, setBusy] = useState(false);
   const n = props.ids.length;
   const confirm = async () => {
@@ -50,20 +75,10 @@ export function DeleteSelected(props: {
       props.onDone({ ok: false, message: `Could not delete: ${toDataSourceError(e).message}` });
     }
     setBusy(false);
-    setOpen(false);
-    props.onClosed();
+    props.onOpenChange(false);
   };
   return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) props.onClosed();
-      }}
-    >
-      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
-        Delete {formatCount(n)}
-      </Button>
+    <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialogContent
         // the caller puts the focus back (the Delete button that opened the dialog may be gone)
         finalFocus={false}

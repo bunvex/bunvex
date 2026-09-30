@@ -320,6 +320,12 @@ export interface DashboardDataSource {
   /** Deletes every document of the table (the source may do it in several transactions). */
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
 
+  /**
+   * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what
+   * Convex's dashboard reads off the id with its table mapping. Optional; without it, ids are plain text.
+   */
+  tableOfId?(id: string, opts?: CallOptions): Promise<string | null>;
+
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]>;
   /**
    * Runs a function once, as the dashboard's function runner does: present when the source can; allowed

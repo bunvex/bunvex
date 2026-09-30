@@ -1,6 +1,7 @@
 // A cell's context menu and shortcuts, as in Convex's data browser (STUDY-12 §1.4, D11): filter by the
-// cell's value, copy it or the whole document, view or edit the document. The grid opens the menu on a
-// right-click, Shift+F10, the Menu key or Ctrl/Cmd+Enter; the shortcuts work on the focused cell.
+// cell's value, view it (or, for a document id, go to that document), copy it, edit it; view, copy, edit or
+// delete the document. The grid opens the menu on a right-click, Shift+F10, the Menu key or Ctrl/Cmd+Enter;
+// the shortcuts work on the focused cell.
 import {
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -9,7 +10,10 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@bunvex/ui/components/dropdown-menu";
+import { useQuery } from "@tanstack/react-query";
 import type { KeyboardEvent } from "react";
+import { useQueryScope } from "../context.tsx";
+import { referenceQuery } from "../data/queries.ts";
 import type { Document, FieldFilter, FieldOp, FilterExpression, Value } from "../data-source.ts";
 import { valueType } from "../filters.ts";
 import { OP_LABEL } from "./filter-model.ts";
@@ -20,10 +24,24 @@ export type CellActions = {
   /** Add a clause on this field to the applied filter. */
   filter: (clause: Omit<FieldFilter, "id" | "enabled">) => void;
   copy: (text: string, what: string) => void;
+  /** Show the cell's whole value, next to the cell. */
+  viewValue: () => void;
+  /** Open the document an id refers to. Absent when the source cannot tell an id's table. */
+  goToReference?: (id: string) => void;
   viewDocument: () => void;
   /** Absent when the document cannot be replaced (read-only, or the source cannot). */
   editDocument?: () => void;
+  /** Absent when documents cannot be deleted. */
+  deleteDocument?: () => void;
 };
+
+/** Text that could be a document id: Convex's form, 31–37 characters of lowercase base32. */
+export const looksLikeId = (v: Value | undefined): v is string =>
+  typeof v === "string" && /^[0-9a-hjkmnp-tv-z]{31,37}$/.test(v);
+
+/** A cell whose value may refer to another document (not the row's own `_id`). */
+const referenceIn = (field: string, v: Value | undefined, actions: CellActions) =>
+  field !== "_id" && actions.goToReference !== undefined && looksLikeId(v) ? v : undefined;
 
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD = MAC ? "⌘" : "Ctrl+";
@@ -68,6 +86,12 @@ export function CellMenuItems(props: {
   const { doc, field, actions } = props;
   const v = doc[field];
   const ops = filterOps(field, v);
+  // an id that names a document: "Go to reference" takes the place of "View" (as Convex does)
+  const refId = referenceIn(field, v, actions);
+  const { data: refTable } = useQuery({
+    ...referenceQuery(useQueryScope(), refId ?? ""),
+    enabled: refId !== undefined,
+  });
   return (
     <>
       {ops.length > 0 && (
@@ -89,6 +113,17 @@ export function CellMenuItems(props: {
             )}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+      )}
+      {refId !== undefined && refTable ? (
+        <DropdownMenuItem aria-keyshortcuts="Control+G Meta+G" onClick={() => actions.goToReference?.(refId)}>
+          Go to reference
+          <DropdownMenuShortcut aria-hidden="true">{MOD}G</DropdownMenuShortcut>
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuItem aria-keyshortcuts="Space" onClick={actions.viewValue}>
+          View <code className="font-mono">{field}</code>
+          <DropdownMenuShortcut aria-hidden="true">Space</DropdownMenuShortcut>
+        </DropdownMenuItem>
       )}
       <DropdownMenuItem aria-keyshortcuts="Control+C Meta+C" onClick={() => actions.copy(clipboardText(v), field)}>
         Copy <code className="font-mono">{field}</code>
@@ -114,6 +149,9 @@ export function CellMenuItems(props: {
         Edit document
         <DropdownMenuShortcut aria-hidden="true">⇧Enter</DropdownMenuShortcut>
       </DropdownMenuItem>
+      <DropdownMenuItem variant="destructive" disabled={!actions.deleteDocument} onClick={actions.deleteDocument}>
+        Delete document
+      </DropdownMenuItem>
     </>
   );
 }
@@ -130,6 +168,15 @@ export function cellShortcut(e: KeyboardEvent<HTMLElement>, doc: Document, field
   }
   if (e.key === " " && e.shiftKey && !mod) {
     actions.viewDocument();
+    return true;
+  }
+  if (e.key === " " && !e.shiftKey && !mod && !e.altKey) {
+    actions.viewValue();
+    return true;
+  }
+  const refId = referenceIn(field, doc[field], actions);
+  if (mod && key === "g" && !e.shiftKey && !e.altKey && refId !== undefined) {
+    actions.goToReference?.(refId);
     return true;
   }
   if (e.key === "Enter" && e.shiftKey && !mod && actions.editDocument) {
