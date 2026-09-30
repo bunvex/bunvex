@@ -35,11 +35,16 @@ const origin = performance.timeOrigin;
  * `_creationTime` from a nanosecond clock (`CreationTime::for_transaction`); `Date.now()` inside the
  * execution is its floor (`udf_unix_timestamp`).
  */
+let lastPrecise = 0;
 export const preciseClock = (): number => {
-  // performance.now() drifts from the wall clock by up to a millisecond: never fall behind Date.now().
-  const t = origin + realPerformanceNow();
+  // performance.now() drifts from the wall clock by up to a millisecond: never fall behind Date.now(), and
+  // never repeat a value, so two transactions never share a first _creationTime.
+  let t = origin + realPerformanceNow();
   const wall = realNow();
-  return t < wall ? wall : t;
+  if (t < wall) t = wall;
+  if (t <= lastPrecise) t = nextUp(lastPrecise);
+  lastPrecise = t;
+  return t;
 };
 
 function notAllowed(what: string, kind: ExecutionKind): Error {
