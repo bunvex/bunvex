@@ -1,6 +1,6 @@
 # STUDY-17 — `.paginate()`, cursors and reactive page boundaries
 
-- **Status:** implemented (#NN, draft: one decision pending, see §4)
+- **Status:** implemented (#42, draft: one decision pending, see §4)
 - **Convex source read:** commit `4577b9031`
   - `crates/isolate/src/environment/udf/async_syscall.rs` (`query_page`, `read_page_from_query`);
   - `crates/common/src/query.rs` (`Cursor`);
