@@ -39,6 +39,9 @@ export async function startServer() {
     sendMany: mutation(async ({ db }, { prefix, n }: { prefix: string; n: number }) => {
       for (let i = 0; i < n; i++) await db.insert("messages", { body: `${prefix}${i}` });
     }),
+    logged: mutation(() => {
+      console.log("hello from a mutation");
+    }),
     echo: action(async (_ctx, { x }: { x: unknown }) => {
       await gates.get("action");
       return x;

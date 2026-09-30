@@ -222,15 +222,15 @@ idempotency or reconnect logic.
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}`; ignores `format`; no Convex value encoding. |
-| Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; the client accepts HTTP 200 or 560 for a function error (anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-20) | Convex's open-source backend answers function errors with **200** (`Ok(Json(response))`); 560 appears only in the clients (`STATUS_CODE_UDF_FAILED`). bunvex answers 200, as the backend. |
+| Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; the client accepts HTTP 200 or 560 for a function error (anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-26) | `BunvexHttpClient`; the official `ConvexHttpClient` works against bunvex too. |
 | `GET /api/query?path=&args=&format=` | `crates/local_backend/src/public_api.rs` | missing | — |
-| `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | — |
-| `consistentQuery`: `GET /api/query_ts` once, then `POST /api/query_at_ts {ts}` so many queries share one snapshot | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | missing | The engine could serve it (MVCC snapshots exist), but snapshots aren't exposed. |
-| `Authorization: Bearer <jwt>` (user) / `Convex <admin key>` (admin) | `browser/http_client.ts` | missing | — |
-| `setAuth(token)`, `setAdminAuth(token, actingAs)`, `clearAuth()`, constructor `{auth, fetch, logger, skipConvexDeploymentUrlCheck}` | `browser/http_client.ts` | missing | No client. |
-| Mutation queue: HTTP mutations from one client run one at a time in call order unless `{skipQueue: true}` | `browser/http_client.ts` (`enqueueMutation`, `processMutationQueue`) | missing | — |
-| `setDebug` (print server log lines), `setFetchOptions({cache})`, custom `fetch` / global `setFetch` | `browser/http_client.ts` | missing | — |
-| `url` getter / deprecated `backendUrl()` | `browser/http_client.ts` | missing | — |
+| `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | With components (STUDY-26 H3). |
+| `consistentQuery`: `GET /api/query_ts` once, then `POST /api/query_at_ts {ts}` so many queries share one snapshot | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-26) | Server `POST /api/query_ts` and `/api/query_at_ts` added (base64 u64 ts); a future ts is a 400 `InvalidTimestamp`. |
+| `Authorization: Bearer <jwt>` (user) / `Convex <admin key>` (admin) | `browser/http_client.ts` | partial (STUDY-26) | Sent as `Bearer <jwt>` / `Bunvex <admin key>` (H2); the server verifies neither yet (`@bunvex/auth`). |
+| `setAuth(token)`, `setAdminAuth(token, actingAs)`, `clearAuth()`, constructor `{auth, fetch, logger, skipConvexDeploymentUrlCheck}` | `browser/http_client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
+| Mutation queue: HTTP mutations from one client run one at a time in call order unless `{skipQueue: true}` | `browser/http_client.ts` (`enqueueMutation`, `processMutationQueue`) | done (STUDY-26) |  |
+| `setDebug` (print server log lines), `setFetchOptions({cache})`, custom `fetch` / global `setFetch` | `browser/http_client.ts` | done (STUDY-26) |  |
+| `url` getter / deprecated `backendUrl()` | `browser/http_client.ts` | done (STUDY-26) |  |
 
 ### 14. Next.js / SSR
 
