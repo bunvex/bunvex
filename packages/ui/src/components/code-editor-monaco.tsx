@@ -23,6 +23,7 @@ import "monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMo
 import "monaco-editor/editor/contrib/wordOperations/browser/wordOperations";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
@@ -135,19 +136,54 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const latest = useRef(props);
   latest.current = props;
+  // Monaco holds the text; the caller's `value` follows it. Controlling it (`value=`) lost keystrokes:
+  // typing faster than React re-renders handed Monaco an older value, which replaced the newer text. So
+  // the text is written back only when `value` changes from outside — not when it is the echo of
+  // something typed, however late that echo arrives.
+  const echoes = useRef<string[]>([]);
+  const emit = (text: string) => {
+    echoes.current.push(text);
+    latest.current.onChange(text);
+  };
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const echo = echoes.current.indexOf(props.value);
+    if (echo >= 0) {
+      echoes.current.splice(0, echo + 1);
+      return;
+    }
+    echoes.current = [];
+    if (editor.getValue() !== props.value) editor.setValue(props.value);
+  }, [props.value]);
 
   const onMount: OnMount = (editor) => {
     editorRef.current = editor;
     const K = monaco.KeyCode;
     const noWidget = "!findWidgetVisible && !suggestWidgetVisible";
+    // a key right after typing can come before React has rendered the last keystroke: render it first,
+    // so the caller's handler reads the text as it is
+    const settled = (run: () => void) => () => {
+      const text = editor.getValue();
+      flushSync(() => emit(text));
+      run();
+    };
     editor.addCommand(K.Escape, () => latest.current.onCancel?.(), noWidget);
     if (latest.current.multiline) {
       // Cmd+Enter on a Mac, Ctrl+Enter everywhere (as the hints say, and as the plain field does)
-      editor.addCommand(monaco.KeyMod.CtrlCmd | K.Enter, () => latest.current.onSubmit?.());
-      editor.addCommand(monaco.KeyMod.WinCtrl | K.Enter, () => latest.current.onSubmit?.());
+      const submit = settled(() => latest.current.onSubmit?.());
+      editor.addCommand(monaco.KeyMod.CtrlCmd | K.Enter, submit);
+      editor.addCommand(monaco.KeyMod.WinCtrl | K.Enter, submit);
     } else {
-      editor.addCommand(K.Enter, () => latest.current.onSubmit?.());
-      if (latest.current.onTab) editor.addCommand(K.Tab, () => latest.current.onTab?.());
+      editor.addCommand(
+        K.Enter,
+        settled(() => latest.current.onSubmit?.()),
+      );
+      if (latest.current.onTab)
+        editor.addCommand(
+          K.Tab,
+          settled(() => latest.current.onTab?.()),
+        );
     }
     if (latest.current.autoFocus) {
       editor.focus();
@@ -191,8 +227,16 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
       style={single ? undefined : { height: props.height ?? 240 }}
     >
       <MonacoReact
-        value={props.value}
-        onChange={(v) => props.onChange(single ? (v ?? "").replace(/\r?\n/g, " ") : (v ?? ""))}
+        defaultValue={props.value}
+        onChange={(v) => {
+          const text = v ?? "";
+          // one line: a pasted line break becomes a space, in the editor too
+          if (single && /[\r\n]/.test(text)) {
+            editorRef.current?.setValue(text.replace(/\r?\n/g, " "));
+            return;
+          }
+          emit(text);
+        }}
         onMount={onMount}
         language={LANGUAGE}
         theme={theme}

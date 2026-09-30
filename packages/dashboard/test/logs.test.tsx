@@ -4,16 +4,28 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ALL_LOGS, matchesLogView, readLogView, writeLogView } from "../src/logs/log-filter.ts";
+import {
+  ALL_LOGS,
+  matchesLogView,
+  readLogView,
+  searchFromView,
+  validateLogsSearch,
+  viewFromSearch,
+  writeLogView,
+} from "../src/logs/log-filter.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
 const mockSource = () => new MockDataSource({ seed: 7, now: NOW, executions: 12, logIntervalMs: 3_600_000 });
 
-function mount(source = mockSource()) {
-  render(<Dashboard dataSource={source} history={createMemoryHistory({ initialEntries: ["/logs"] })} />);
+function mount(source = mockSource(), path = "/logs") {
+  const history = createMemoryHistory({ initialEntries: [path] });
+  render(<Dashboard dataSource={source} history={history} />);
+  lastHistory = history;
   return source;
 }
+let lastHistory: ReturnType<typeof createMemoryHistory>;
+const params = () => Object.fromEntries(new URLSearchParams(lastHistory.location.search));
 const grid = () => screen.getByRole("grid", { name: "Log lines" });
 const rows = () => within(grid()).getAllByRole("row").slice(1);
 const cells = (r: HTMLElement) =>
@@ -64,6 +76,16 @@ describe("which lines a view keeps", () => {
     writeLogView("k", ALL_LOGS); // the default is not stored
     expect(localStorage.getItem("k")).toBeNull();
   });
+
+  test("a view in the URL: comma lists, `none` for an empty choice, unknown types dropped", () => {
+    const v = { functions: ["tasks:list", "tasks:create"], types: ["failure" as const, "error" as const], text: "x" };
+    expect(searchFromView(v)).toEqual({ function: "tasks:list,tasks:create", type: "failure,error", q: "x" });
+    expect(viewFromSearch(validateLogsSearch(searchFromView(v)))).toEqual(v);
+    expect(searchFromView({ ...ALL_LOGS, types: [] })).toEqual({ type: "none" });
+    expect(viewFromSearch({ type: "none" })).toEqual({ ...ALL_LOGS, types: [] });
+    expect(validateLogsSearch({ type: "loud,warn", q: "", function: 3 })).toEqual({ type: "warn" });
+    expect(viewFromSearch({})).toBeNull();
+  });
 });
 
 describe("the Logs screen", () => {
@@ -99,6 +121,36 @@ describe("the Logs screen", () => {
     await user.click(resume);
     await waitFor(() => expect(cells(rows()[0]!)[COL.message]).toBe(fresh.at(-1)!.message));
     expect(screen.getByRole("button", { name: "Pause" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("a link with filters opens filtered, and becomes the view this browser keeps", async () => {
+    const source = mockSource();
+    mount(source, "/logs?type=failure");
+    await screen.findByRole("heading", { level: 1, name: "Logs" });
+    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
+    cleanup();
+    mount(source);
+    await screen.findByRole("heading", { level: 1, name: "Logs" });
+    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
+    await waitFor(() => expect(params()).toEqual({ type: "failure" })); // the kept view goes into the address
+  });
+
+  test("picking a type is a step Back undoes; typing replaces the address", async () => {
+    mount();
+    await opened();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Types: All types" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "failure" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(params()).toEqual({ type: "failure" }));
+    const steps = lastHistory.length;
+    await user.type(screen.getByRole("searchbox", { name: "Filter logs" }), "tasks");
+    await waitFor(() => expect(params()).toEqual({ type: "failure", q: "tasks" }));
+    expect(lastHistory.length).toBe(steps);
+    act(() => lastHistory.back());
+    await waitFor(() => expect(params()).toEqual({ type: "none" }));
+    await screen.findByRole("button", { name: "Types: 0 types" }); // the screen follows the address back
   });
 
   test("filters: types and text apply to the loaded lines and are kept in this browser", async () => {

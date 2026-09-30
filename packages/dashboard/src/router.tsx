@@ -21,6 +21,7 @@ import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
 import { DatabaseScreen } from "./database/screen.tsx";
 import { FunctionsScreen } from "./functions/screen.tsx";
+import { validateLogsSearch } from "./logs/log-filter.ts";
 import { LogsScreen } from "./logs/screen.tsx";
 import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
@@ -113,6 +114,7 @@ export const functionsRoute = createRoute({
 export const logsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "logs",
+  validateSearch: validateLogsSearch,
   // the newest page of every function's lines; filters apply on the client (STUDY-12 §7)
   loader: ({ context: { queryClient, scope } }) => queryClient.ensureInfiniteQueryData(logsQuery(scope, {}, LOG_PAGE)),
   component: LogsScreen,

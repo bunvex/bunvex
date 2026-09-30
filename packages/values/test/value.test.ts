@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { valuesToKey } from "../src/sorting.ts";
-import { compareValues, convexToJson, jsonToConvex, type Value } from "../src/value.ts";
+import { compareValues, fromJsonValue, toJsonValue, type Value } from "../src/value.ts";
 
 const bytes = (...b: number[]) => Uint8Array.from(b).buffer;
 const cmpBytes = (a: Uint8Array, b: Uint8Array) => {
@@ -106,7 +106,7 @@ describe("Convex value order (crates/value/src/sorting.rs)", () => {
   });
 });
 
-describe("JSON form (convexToJson / jsonToConvex)", () => {
+describe("JSON form (toJsonValue / fromJsonValue)", () => {
   test("special values round-trip exactly", () => {
     const v: Value = {
       big: 2n ** 62n,
@@ -117,11 +117,11 @@ describe("JSON form (convexToJson / jsonToConvex)", () => {
       bytes: bytes(0, 1, 255),
       nested: [{ x: [1, "s", null, true] }],
     };
-    const json = convexToJson(v);
+    const json = toJsonValue(v);
     expect(JSON.stringify(json)).toBe(
       '{"big":{"$integer":"AAAAAAAAAEA="},"bytes":{"$bytes":"AAH/"},"inf":{"$float":"AAAAAAAA8P8="},"nan":{"$float":"AAAAAAAA+H8="},"neg":{"$integer":"+/////////8="},"negZero":{"$float":"AAAAAAAAAIA="},"nested":[{"x":[1,"s",null,true]}]}',
     );
-    const back = jsonToConvex(JSON.parse(JSON.stringify(json))) as Record<string, Value>;
+    const back = fromJsonValue(JSON.parse(JSON.stringify(json))) as Record<string, Value>;
     expect(back.big).toBe(2n ** 62n);
     expect(Number.isNaN(back.nan)).toBe(true);
     expect(Object.is(back.negZero, -0)).toBe(true);
@@ -130,22 +130,20 @@ describe("JSON form (convexToJson / jsonToConvex)", () => {
   });
 
   test("undefined fields are dropped; undefined elsewhere is refused", () => {
-    expect(convexToJson({ a: 1, b: undefined } as never)).toEqual({ a: 1 });
-    expect(() => convexToJson([1, undefined] as never)).toThrow("undefined is not a valid Convex value");
+    expect(toJsonValue({ a: 1, b: undefined } as never)).toEqual({ a: 1 });
+    expect(() => toJsonValue([1, undefined] as never)).toThrow("undefined is not a valid value");
   });
 
   test("unsupported types and field names are refused with Convex's messages", () => {
-    expect(() => convexToJson({ d: new Date(0) } as never)).toThrow(
-      "is not a supported Convex type (present at path .d",
-    );
-    expect(() => convexToJson(new Map() as never)).toThrow("Map[] is not a supported Convex type.");
-    expect(() => convexToJson(new Set([1]) as never)).toThrow("Set[1] is not a supported Convex type.");
+    expect(() => toJsonValue({ d: new Date(0) } as never)).toThrow("is not a supported value type (present at path .d");
+    expect(() => toJsonValue(new Map() as never)).toThrow("Map[] is not a supported value type.");
+    expect(() => toJsonValue(new Set([1]) as never)).toThrow("Set[1] is not a supported value type.");
     class Point {
       x = 1;
     }
-    expect(() => convexToJson(new Point() as never)).toThrow('Point {"x":1} is not a supported Convex type.');
-    expect(() => convexToJson({ $x: 1 })).toThrow("Field name $x starts with a '$', which is reserved.");
-    expect(() => convexToJson({ é: 1 })).toThrow("Field names can only contain non-control ASCII characters");
-    expect(() => convexToJson(2n ** 63n)).toThrow("does not fit into a 64-bit signed integer");
+    expect(() => toJsonValue(new Point() as never)).toThrow('Point {"x":1} is not a supported value type.');
+    expect(() => toJsonValue({ $x: 1 })).toThrow("Field name $x starts with a '$', which is reserved.");
+    expect(() => toJsonValue({ é: 1 })).toThrow("Field names can only contain non-control ASCII characters");
+    expect(() => toJsonValue(2n ** 63n)).toThrow("does not fit into a 64-bit signed integer");
   });
 });

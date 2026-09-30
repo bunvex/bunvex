@@ -56,13 +56,16 @@ function writeInt(w: Writer, n: bigint) {
   for (let i = bytes - 1; i >= 0; i--) w.byte(Number((u >> BigInt(i * 8)) & 0xffn));
 }
 
+const f64bytes = new Uint8Array(f64.buffer);
 function writeFloat(w: Writer, x: number) {
+  // IEEE-754 total order, big-endian: flip every bit of a negative, only the sign bit of a positive.
   f64.setFloat64(0, x);
-  let bits = f64.getBigUint64(0);
-  bits = bits & (1n << 63n) ? ~bits & 0xffffffffffffffffn : bits | (1n << 63n);
-  f64.setBigUint64(0, bits);
   w.byte(FLOAT);
-  for (let i = 0; i < 8; i++) w.byte(f64.getUint8(i));
+  if (f64bytes[0] & 0x80) for (let i = 0; i < 8; i++) w.byte(~f64bytes[i] & 0xff);
+  else {
+    w.byte(f64bytes[0] | 0x80);
+    for (let i = 1; i < 8; i++) w.byte(f64bytes[i]);
+  }
 }
 
 function write(w: Writer, v: Value | undefined) {

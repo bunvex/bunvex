@@ -194,6 +194,27 @@ includes the caller's allowed operations. `GET /api/check_admin_key` → `{ succ
 7. Metrics: rates, cache hit rate, latency percentiles, top-k, per window.
 8. Later: files, schedules and crons, environment variables, audit log, pause, exports.
 
+### 1.4.1 The cell's context menu and shortcuts
+
+`dashboard-common/src/features/data/components/Table/TableContextMenu.tsx` builds the menu,
+`…/Table/DataCell/utils/cellActions.ts` (`useActionHotkeys`) the shortcuts, which only the focused cell
+listens to (`DataCell.tsx`), and `lib/useContextMenuTrigger.ts` opens it on a right-click (a long press
+closes it on release).
+
+- **Filter by `<column>`** ▸ equals, not equal, >, <, ≥, ≤, is type, is not type — trimmed by
+  `showFilter`: `null`/unset get only the type filters; `_id`, objects, arrays and booleans no order
+  filters; `_creationTime` no equality; `_id` and `_creationTime` no type filters. The clause is added to
+  the draft filter.
+- **View `<column>`** (Space) or **Go to reference** (Cmd+G, for an id or a file), **Copy `<column>`**
+  (Cmd+C: text as it is, anything else as a pretty literal), **Edit `<column>`** (Enter).
+- **View Document** (Shift+Space), **Copy Document** (Shift+Cmd+C), **Edit Document** (Shift+Enter),
+  **Delete Document**. Cmd+Enter opens the menu from the keyboard.
+
+bunvex builds the same menu and shortcuts, less View value, Go to reference and Delete document (D11). The
+grid opens it on a right-click, Shift+F10, the Menu key or Ctrl/Cmd+Enter (the platform's keys as well as
+Convex's). A filter is applied at once — bunvex's filter bar applies as you type (UI-01 §12.3) — rather
+than added as a draft. View document opens the side panel (D8); Edit document opens it in its editor.
+
 ## 2. What an app can observe
 
 The dashboard is a tool for the people running an app, not part of the app's contract. What a user of it
@@ -231,7 +252,7 @@ columns, add documents).
 | D8 | A link to a document is `?doc=<id>` (opens the side panel); Convex links a filter `_id eq <id>` | the document opens beside the list instead of replacing it | **decided: keep** (30 Sep 2026) |
 | D9 | ~~Values typed in a syntax of our own (`42`, `"text"`, `42n`, a bare word is text)~~ | — | **decided: match Convex** (30 Sep 2026): values are JavaScript literals (`{ name: "Ada", credits: 10n }`, `Bytes("…")`, `undefined` removes a field), edited in a Monaco editor where a value can be long — filter values, cells with objects or arrays, the whole document, adding documents. No longer a divergence. |
 | D10 | Columns are reordered from a **Columns** panel (keyboard-first); Convex drags headers (dnd-kit) | accessible first; header dragging can come later | **decided: keep** (30 Sep 2026) |
-| D11 | Not yet built: create table, generate schema, custom query, metrics per table, the context menu, "filter by this value", copy/view shortcuts per cell, `Shift+Enter` document editing | scope of the first PR | follow-up |
+| D11 | Not yet built: create table, generate schema, custom query, metrics per table; in the cell menu, **View value** (Space), **Go to reference** (Cmd+G, needs ids that name their table) and **Delete document**. The rest of the cell menu is built (§1.4.1) | scope | follow-up |
 | D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | follow-up |
 
 ## 5. Tests
@@ -330,6 +351,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **decided** (29 Sep 2026): build without metrics |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
-| L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **open** |
-| L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **open** |
-| L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", argument validation, run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up |
+| L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
+| L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
+| L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment; Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
+| L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", argument validation, run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), later — a query runs once for now |

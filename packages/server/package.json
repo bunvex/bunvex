@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@bunvex/core": "workspace:*",
-    "@bunvex/protocol": "workspace:*"
+    "@bunvex/protocol": "workspace:*",
+    "@bunvex/values": "workspace:*"
   },
   "peerDependencies": {
     "@bunvex/persistence": "workspace:*"
