@@ -13,7 +13,7 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
+import { Committer, type Conflict, ConflictError, type Interval, overlaps } from "./committer.ts";
 import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
@@ -25,6 +25,36 @@ export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue
 export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
+/**
+ * Convex's OCC retry budget (`crates/common/src/knobs.rs`): a conflicting mutation is re-run up to
+ * UDF_EXECUTOR_OCC_MAX_RETRIES = 4 times (5 executions), sleeping between runs with full-jitter exponential
+ * backoff from UDF_EXECUTOR_OCC_INITIAL_BACKOFF = 100 ms up to UDF_EXECUTOR_OCC_MAX_BACKOFF = 2 s
+ * (`Backoff::fail` in sync_types/src/backoff.rs: `min(initial * 2^failures, max) * random()`).
+ */
+export const OCC_MAX_RETRIES = 4;
+export const OCC_INITIAL_BACKOFF_MS = 100;
+export const OCC_MAX_BACKOFF_MS = 2000;
+
+/** The sleep before retry number `failures + 1`: full jitter over the capped exponential. */
+export const occBackoffMs = (failures: number, initialMs: number, maxMs: number, random = Math.random) =>
+  Math.min(initialMs * 2 ** failures, maxMs) * random();
+
+/**
+ * A mutation that still conflicted after the whole retry budget, as Convex's `ErrorMetadata::user_occ`
+ * (`crates/errors/src/lib.rs`): code `OptimisticConcurrencyControlFailure`, and a message naming the table
+ * that changed and, when known, which mutation changed which document (`occ_write_source_string` in
+ * `crates/database/src/database.rs`). The HTTP API answers it with 503, as Convex does.
+ */
+export class OccError extends Error {
+  readonly code = "OptimisticConcurrencyControlFailure";
+  constructor(
+    message: string,
+    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number },
+  ) {
+    super(message);
+  }
+}
+
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
 type CacheEntry = { json: string; reads: Interval[] };
 
@@ -38,7 +68,14 @@ export class Engine {
   constructor(
     readonly schema: Schema,
     readonly persistence: Persistence,
-    private opts: { cacheMax?: number; maxRetries?: number } = {},
+    private opts: {
+      cacheMax?: number;
+      /** Retries after an OCC conflict (default: Convex's 4). */
+      maxRetries?: number;
+      /** Backoff between retries, in ms (default: Convex's 100 ms doubling up to 2 s, full jitter). */
+      occInitialBackoffMs?: number;
+      occMaxBackoffMs?: number;
+    } = {},
   ) {
     installDeterminism();
     this.committer = new Committer(persistence);
@@ -175,25 +212,57 @@ export class Engine {
     }
   }
 
-  /** A read-write transaction, re-run on conflict up to `maxRetries` times. */
-  mutation<T>(body: TxBody<T>): Promise<T> {
-    return this.runMutation(body, false);
+  /**
+   * A read-write transaction, re-run on conflict with Convex's retry budget and backoff; an `OccError`
+   * once the budget is spent. `source` names the mutation (e.g. "messages:send") in the conflict errors of
+   * the transactions it beats.
+   */
+  mutation<T>(body: TxBody<T>, source?: string): Promise<T> {
+    return this.runMutation(body, false, source);
   }
 
-  private async runMutation<T>(body: TxBody<T>, system: boolean): Promise<T> {
-    const maxRetries = this.opts.maxRetries ?? 30;
-    for (let attempt = 0; ; attempt++) {
+  private async runMutation<T>(body: TxBody<T>, system: boolean, source?: string): Promise<T> {
+    const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
+    const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
+    const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
+    for (let failures = 0; ; ) {
       const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system);
       if (!tx.hasWrites) return value;
       const { docs, idx } = tx.toWrites();
       try {
-        await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx });
+        await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx, source });
         return value;
       } catch (e) {
-        if (!(e instanceof ConflictError) || attempt >= maxRetries) throw e;
+        if (!(e instanceof ConflictError)) throw e;
+        if (failures >= maxRetries) throw this.occError(e.conflict, source);
+        const sleep = occBackoffMs(failures, initialMs, maxMs);
+        failures++;
         this.stats.retries++;
-        await new Promise((r) => setTimeout(r, Math.min(2 ** attempt, 20) * Math.random()));
+        await new Promise((r) => setTimeout(r, sleep));
+        // As Convex: wait for the write we lost to, so the next snapshot contains it.
+        await this.committer.waitForVisible(e.conflict.writeTs);
       }
     }
+  }
+
+  /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
+  private occError(conflict: Conflict, source: string | undefined): OccError {
+    let table: string | undefined;
+    if (conflict.index !== undefined)
+      for (const t of this.catalog.tables.values())
+        for (const ix of t.indexes.values()) if (ix.id === conflict.index) table = t.name;
+    const documentId = conflict.id ?? undefined;
+    const writeSource = conflict.source;
+    // Convex names the document only when it knows which mutation changed it.
+    let changedBy = "";
+    if (writeSource !== undefined && documentId !== undefined) {
+      const who = writeSource === source ? "Another call to this mutation" : `A call to "${writeSource}"`;
+      changedBy = ` ${who} changed the document with ID "${documentId}".`;
+    }
+    const where = table === undefined ? "some table" : `the "${table}" table`;
+    return new OccError(
+      `Documents read from or written to ${where} changed while this mutation was being run and on every subsequent retry.${changedBy}`,
+      { table, documentId, writeSource, writeTs: conflict.writeTs },
+    );
   }
 }

@@ -98,7 +98,7 @@ Key bunvex facts behind the statuses:
 | `db.table(name)` scoped writer (`.insert` / `.patch` / `.replace` / `.delete`) | server/database.ts (`BaseTableWriter`) | missing | |
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | missing | New Convex feature. |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
-| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | partial | Retries up to 30 times with jittered backoff (Convex: 4). The conflict error isn't user-visible in Convex's shape. |
+| Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | done (STUDY-21) | 4 retries with 100 ms – 2 s full-jitter backoff. After them comes `OptimisticConcurrencyControlFailure` with Convex's message (without its docs link); HTTP 503. |
 | Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | missing | There are no document validators. |
 
 ### 5. Function builders and registration
@@ -345,7 +345,7 @@ Key bunvex facts behind the statuses:
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | missing | |
 | Search: 16 terms, ≤1024 results; vector: ≤256 results, 2–4096 dimensions, ≤64 filter length | crates/search/src/constants.rs; crates/vector/src/lib.rs | missing | |
 | `runQuery` / `runMutation` call depth ≤ 8 | knobs.rs (`MAX_REACTOR_CALL_DEPTH`) | missing | |
-| OCC retries for mutations (4 by default) | knobs.rs | partial | 30 in bunvex. The behaviour is equivalent, but the budget differs. |
+| OCC retries for mutations (4 by default) | knobs.rs | done (STUDY-21) | |
 
 ---
 

@@ -7,7 +7,8 @@ export const schema = new Schema()
   .table("items", { by_tenant_created: ["tenantId", "createdAt"] })
   .table("counters", { by_key: ["key"] });
 
-export const newEngine = (p: Persistence, maxRetries?: number) => new Engine(schema, p, { maxRetries }).init();
+export const newEngine = (p: Persistence, opts?: ConstructorParameters<typeof Engine>[2]) =>
+  new Engine(schema, p, opts).init();
 
 export const insertItem = (tenantId: string) => (db: Tx) =>
   db.insert("items", {

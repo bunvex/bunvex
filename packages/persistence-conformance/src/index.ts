@@ -11,7 +11,7 @@
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
-import { ConflictError, compareKeys, encodeKey, type KeyValue, type Persistence, type ScanDocs } from "@bunvex/core";
+import { compareKeys, encodeKey, type KeyValue, OccError, type Persistence, type ScanDocs } from "@bunvex/core";
 import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
@@ -258,7 +258,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
   // K3–K5 — through the engine.
   async function k3to5(st: Persistence) {
-    const e = await newEngine(st, 1000);
+    // K3 hunts lost updates, so it wants many commits under contention, not Convex's patient backoff
+    // (100 ms – 2 s): a large budget with millisecond sleeps.
+    const e = await newEngine(st, { maxRetries: 1000, occInitialBackoffMs: 1, occMaxBackoffMs: 20 });
     await e.mutation(seedCounters(4));
     let before = 0;
     for (const keys of [1, 4]) {
@@ -274,7 +276,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
               await e.mutation(increment(`k${(w + i) % keys}`));
               ok++;
             } catch (err) {
-              if (!(err instanceof ConflictError)) throw err;
+              if (!(err instanceof OccError)) throw err;
               gaveUp++;
             }
           }

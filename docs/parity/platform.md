@@ -369,7 +369,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Object fields / array length | 1024 / 8192 (`crates/value`) | missing | |
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
 | Page size / query operators / index key prefix | 1024 / 256 / 2500 bytes | missing | |
-| OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | partial | bunvex retries up to 30 times with its own backoff (`engine.ts`). Divergence? |
+| OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | done (STUDY-21) | Same budget and full-jitter backoff, plus the wait for the conflicting write. The knobs are `Engine` options. |
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
@@ -389,5 +389,5 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | missing | 224 |
 
 - The two done rows are system indexes and database selection.
-- The ten partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries, the self-hosted dashboard app and the data browser.
+- The ten partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

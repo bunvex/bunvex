@@ -70,7 +70,11 @@ export class Functions {
   runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     const f = this.fn(name, "mutation", fromClient);
     // perAttempt: a retried run's console lines replace the aborted attempt's (logs.ts).
-    return this.engine.mutation(perAttempt((db) => f.handler({ db }, args ?? {})));
+    // The name is the write source other mutations' OCC errors cite (STUDY-21).
+    return this.engine.mutation(
+      perAttempt((db) => f.handler({ db }, args ?? {})),
+      name,
+    );
   }
 
   runAction(name: string, args: unknown): Promise<unknown> {
