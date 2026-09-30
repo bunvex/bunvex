@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { Engine, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { action, Functions, internalMutation, internalQuery, mutation, query } from "../src/functions.ts";
 
 async function setup() {
   const engine = await new Engine(
-    new Schema().table("users", {}).table("posts", {}),
+    defineSchema({ users: defineTable(v.any()), posts: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   const fns = new Functions(engine).register("m", {

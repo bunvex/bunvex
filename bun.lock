@@ -127,6 +127,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/core": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
     },
     "packages/protocol": {

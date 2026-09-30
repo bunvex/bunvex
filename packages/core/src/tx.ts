@@ -6,7 +6,17 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
-import { copyValue, decodeId, encodeId, fromJsonValue, isSimpleObject, toJsonValue, type Value } from "@bunvex/values";
+import {
+  checkValue,
+  copyValue,
+  decodeId,
+  encodeId,
+  fromJsonValue,
+  type GenericValidator,
+  isSimpleObject,
+  toJsonValue,
+  type Value,
+} from "@bunvex/values";
 import BTree from "sorted-btree";
 import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
@@ -300,8 +310,19 @@ export class Tx {
     return rows.slice(0, limit).map(([, d]) => d);
   }
 
+  /** Validators of the declared tables' documents; set by the engine for mutations (STUDY-14). */
+  docValidators: Map<string, GenericValidator> | null = null;
+
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     if (!this.writable) throw new Error("queries cannot write");
+    const dv = next && this.docValidators?.get(t.name);
+    if (dv) {
+      const msg = checkValue(dv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+      if (msg)
+        throw new Error(
+          `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
+        );
+    }
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;

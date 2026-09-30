@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { nextUp, outsideExecution, seededRandom, wallClock } from "../src/determinism.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, Schema } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine() {
-  const schema = new Schema().table("items", {});
+  const schema = defineSchema({ items: defineTable(v.any()) });
   return new Engine(schema, await MemoryPersistence.open(null, { durable: false })).init();
 }
 // A slow engine-side step (like a persistence round trip), which runs outside the execution.
