@@ -528,14 +528,16 @@ export class SyncSession {
 
 const keyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}\u0000${NO_IDENTITY}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
-/** The last ts encoded: every session of a round sends the same one. */
 /**
  * A commit ts as Convex's clients see it: wall-clock nanoseconds in a u64. bunvex counts microseconds (a JS
  * number is exact only to 2^53; STUDY-06 D9), so the wire value is × 1000: same magnitude and order as
  * Convex's, at microsecond resolution.
  */
-const wireTs = (us: number) => BigInt(us) * 1000n;
+export const wireTs = (us: number) => BigInt(us) * 1000n;
+/** A wire ts back in bunvex's microseconds (rounded down: a snapshot at or before it). */
+export const fromWireTs = (ns: bigint) => Number(ns / 1000n);
 
+/** The last ts encoded: every session of a round sends the same one. */
 let lastTs: [bigint, string] = [0n, v1.encodeU64(0n)];
 const encodeTs = (ts: bigint) => {
   if (lastTs[0] !== ts) lastTs = [ts, v1.encodeU64(ts)];

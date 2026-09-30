@@ -85,13 +85,13 @@ bunvex/
 │   │   └── auth0                                                                               D
 │   │
 │   ├── client/                      @bunvex/client
-│   │   ├── sync                     WebSocket, reconnect, session                             🟡 → M
-│   │   ├── local-state              a client's subscriptions advance together                 N
-│   │   ├── optimistic               optimistic updates                                        M
-│   │   ├── pagination               paginated queries                                         M
-│   │   └── http                     plain HTTP client                                         M
+│   │   ├── sync                     WebSocket, reconnect, session (STUDY-26)                  ✅
+│   │   ├── local-state              a client's subscriptions advance together                 ✅
+│   │   ├── optimistic               optimistic updates                                        ✅
+│   │   ├── pagination               paginated queries (usePaginatedQuery, STUDY-26 §8)        ✅
+│   │   └── http                     plain HTTP client (BunvexHttpClient, STUDY-26 §9)         ✅
 │   │
-│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  M
+│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  ✅
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D
 │   │
 │   ├── ui/                          @bunvex/ui       design system (UI-01): Tailwind v4 tokens,
@@ -182,6 +182,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                                                               (+ persistence: optional, loaded by name)
                 ◄── persistence-conformance (──► values) client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
+                ◄── sync-e2e ──► client, react, server (tests only, never published)
 cli ──► server, core                                      bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)

@@ -12,5 +12,9 @@
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/client"
+  },
+  "dependencies": {
+    "@bunvex/protocol": "workspace:*",
+    "@bunvex/values": "workspace:*"
   }
 }

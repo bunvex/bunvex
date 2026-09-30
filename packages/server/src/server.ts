@@ -10,13 +10,13 @@ import {
   Subscriptions,
   stringifyValue,
 } from "@bunvex/core";
-import { type ClientMessage, subscriptionKey } from "@bunvex/protocol";
+import { type ClientMessage, subscriptionKey, v1 } from "@bunvex/protocol";
 import type { Server, ServerWebSocket } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
-import { MAX_PENDING_MUTATIONS, SyncHub, SyncSession } from "./sync.ts";
+import { fromWireTs, MAX_PENDING_MUTATIONS, SyncHub, SyncSession, wireTs } from "./sync.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -240,9 +240,13 @@ export function createServer(opts: ServerOptions) {
           sync: sync.stats,
         });
       }
-      const route = /^\/api\/(query|mutation|action)$/.exec(url.pathname);
+      // The latest ts, for a consistent series of HTTP queries (Convex's `/api/query_ts`): base64 u64, as the
+      // sync protocol encodes timestamps.
+      if (url.pathname === "/api/query_ts" && req.method === "POST")
+        return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
+      const route = /^\/api\/(query|mutation|action|query_at_ts)$/.exec(url.pathname);
       if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
-      let body: { path: string; args: unknown };
+      let body: { path: string; args: unknown; ts?: unknown };
       try {
         body = (await req.json()) as typeof body;
       } catch (e) {
@@ -250,10 +254,22 @@ export function createServer(opts: ServerOptions) {
       }
       if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
       const kind = route[1];
+      // A query at a ts `query_ts` gave (Convex's `/api/query_at_ts`): every such query reads one snapshot.
+      let at: number | undefined;
+      if (kind === "query_at_ts") {
+        try {
+          at = fromWireTs(v1.decodeU64(String(body.ts)));
+        } catch (e) {
+          return requestError(400, "BadJsonBody", `invalid field \`ts\`: ${(e as Error).message}`);
+        }
+        if (at > engine.committer.visibleTs)
+          return requestError(400, "InvalidTimestamp", "The timestamp is ahead of the latest known timestamp");
+      }
       return udfResponse(
         await collectLogs(async () => {
           const args = fromWire(body.args);
           if (kind === "query") return functions.runQueryJson(body.path, args);
+          if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!);
           const value =
             kind === "mutation"
               ? await functions.runMutation(body.path, args)

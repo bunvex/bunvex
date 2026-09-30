@@ -114,8 +114,24 @@ export type AuthError = {
 };
 export type FatalError = { type: "FatalError"; error: string };
 export type Ping = { type: "Ping" };
+/** One part of a Transition too large for one frame; the parts' `chunk`s joined are its JSON (P8: bunvex
+ *  servers do not split yet, clients reassemble). */
+export type TransitionChunk = {
+  type: "TransitionChunk";
+  chunk: string;
+  partNumber: number;
+  totalParts: number;
+  transitionId: string;
+};
 
-export type ServerMessage = Transition | MutationResponse | ActionResponse | AuthError | FatalError | Ping;
+export type ServerMessage =
+  | Transition
+  | TransitionChunk
+  | MutationResponse
+  | ActionResponse
+  | AuthError
+  | FatalError
+  | Ping;
 
 // ---------------------------------------------------------------- u64 timestamps
 
