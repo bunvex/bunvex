@@ -35,6 +35,7 @@ import {
   type Value,
 } from "../data-source.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
+import { validateValue } from "../validators.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
@@ -485,7 +486,7 @@ export class MockDataSource implements DashboardDataSource {
   // ---------------------------------------------------------------- functions
 
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]> {
-    return this.call(opts?.signal, () => this.functions.map((f) => ({ ...f })));
+    return this.call(opts?.signal, () => this.functions.map((f) => structuredClone(f)));
   }
 
   // ---------------------------------------------------------------- logs
@@ -552,14 +553,20 @@ export class MockDataSource implements DashboardDataSource {
         throw new DataSourceError("unauthorized", "this credential cannot run functions");
       if (c.readOnly && fn.kind !== "query")
         throw new DataSourceError("unauthorized", `a read-only credential cannot run a ${fn.kind}`);
-      const error = typeof args.throw === "string" ? args.throw : undefined;
+      // arguments that do not fit the declared validator fail the call, as a server's validation does
+      const invalid = fn.args ? validateValue(fn.args, args)[0] : undefined;
+      const error = invalid
+        ? `ArgumentValidationError: ${invalid.message}`
+        : typeof args.throw === "string"
+          ? `Uncaught Error: ${args.throw}`
+          : undefined;
       const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error });
       this.log(lines);
       const run: FunctionRun = {
         logLines: lines.map((l) => ({ level: l.level, message: l.message })),
         durationMs: lines.at(-1)?.execution?.durationMs ?? 0,
       };
-      if (error !== undefined) run.error = { message: `Uncaught Error: ${error}` };
+      if (error !== undefined) run.error = { message: error };
       else run.value = this.mockValue(path, args);
       return run;
     });

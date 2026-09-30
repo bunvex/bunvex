@@ -1,4 +1,4 @@
-// Settings → Environment variables (UI-01 §14.4, STUDY-12 §8), as Convex's page: values hidden until
+// Settings → Environment variables (UI-01 §14.4, STUDY-12 §9), as Convex's page: values hidden until
 // shown, copy one or all as `.env` lines; add, edit, rename and delete gathered as pending changes and
 // saved together (one all-or-nothing batch); a pasted `.env` file becomes new rows.
 import { Button } from "@bunvex/ui/components/button";

@@ -1,4 +1,4 @@
-// The mock's file storage (UI-01 §14.3, STUDY-12 §8): blobs with Convex's metadata (storage id, base64
+// The mock's file storage (UI-01 §14.3, STUDY-12 §9): blobs with Convex's metadata (storage id, base64
 // SHA-256, size, content type, creation time) and a URL the browser can load. A few images, texts and
 // binaries to start with. Pure state; MockDataSource wraps it in its latency and gates.
 import { DataSourceError, type FileQuery, type Page, type StoredFile, type Value } from "../data-source.ts";

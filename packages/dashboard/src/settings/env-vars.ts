@@ -1,4 +1,4 @@
-// Environment variables' rules (STUDY-12 §8, as Convex's): what a name may be, how large a value and the
+// Environment variables' rules (STUDY-12 §9, as Convex's): what a name may be, how large a value and the
 // whole set may be, and reading a pasted `.env` file. The Settings screen validates with them; the mock
 // enforces them.
 
