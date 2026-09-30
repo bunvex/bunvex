@@ -33,18 +33,24 @@ describe("parsing documents to add", () => {
     expect(parseDocuments("[]")).toEqual({ ok: false, error: "The list is empty." });
     expect(parseDocuments("[1]")).toEqual({
       ok: false,
-      error: 'The document is not an object: write { "field": value }.',
+      error: "The document is not an object: write { field: value }.",
     });
     expect(parseDocuments('[{}, {"_id": "x"}]')).toEqual({
       ok: false,
       error: 'Document 2: "_id" is a system field; the database sets it.',
     });
     expect(parseDocuments("{").ok).toBe(false);
+    // JavaScript literals, as in Convex: bare keys, quotes of either kind, 10n, trailing commas
+    expect(parseDocuments("{ name: 'Ada', credits: 10n, }")).toEqual({
+      ok: true,
+      documents: [{ name: "Ada", credits: { $integer: "CgAAAAAAAAA=" } }],
+    });
+    expect(parseDocuments("{ name: Ada }")).toMatchObject({ ok: false, offset: 8 });
   });
 });
 
 describe("adding, deleting, clearing", () => {
-  test("Add documents: JSON in a side panel, all added at once, then said", async () => {
+  test("Add documents: literals in a side panel, all added at once, then said", async () => {
     const { src } = mount("/database/users");
     await heading("users");
     const user = userEvent.setup();
@@ -52,7 +58,7 @@ describe("adding, deleting, clearing", () => {
     const panel = await screen.findByRole("complementary", { name: "Add documents to users" });
     const editor = within(panel).getByRole("textbox", { name: "Documents" });
     fireEvent.change(editor, { target: { value: '{"name": ' } });
-    expect(within(panel).getByText(/^Not valid JSON/)).toBeDefined();
+    expect(within(panel).getByText(/^Expected a value/)).toBeDefined();
     expect(within(panel).getByRole("button", { name: "Add document" }).hasAttribute("disabled")).toBe(true);
     fireEvent.change(editor, { target: { value: '[{"name": "Ada"}, {"name": "Alan", "admin": true}]' } });
     await expectAccessible();
@@ -134,5 +140,57 @@ describe("adding, deleting, clearing", () => {
     expect(screen.queryByRole("button", { name: "Add documents" })).toBeNull();
     expect(screen.queryByRole("button", { name: /More actions/ })).toBeNull();
     expect(within(screen.getByRole("grid")).queryAllByRole("checkbox")).toEqual([]);
+  });
+
+  test("Edit a document: its fields as a literal, saved whole; system fields stay", async () => {
+    const src = source();
+    const [doc] = (await src.listDocuments({ table: "users", numItems: 1, cursor: null })).page;
+    mount(`/database/users?doc=${doc!._id}`, src);
+    const panel = await screen.findByRole("complementary", { name: new RegExp(doc!._id) });
+    const user = userEvent.setup();
+    await user.click(await within(panel).findByRole("button", { name: "Edit" }));
+    const editor = within(panel).getByRole("textbox", { name: `Fields of ${doc!._id}` }) as HTMLTextAreaElement;
+    expect(editor.value).not.toContain("_id");
+    fireEvent.change(editor, { target: { value: "{ _id: 'x' }" } });
+    expect(within(panel).getByText('"_id" is a system field; it cannot be changed here.')).toBeDefined();
+    expect(within(panel).getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.change(editor, { target: { value: "{ name: 'Grace', credits: 3n }" } });
+    await expectAccessible();
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    await within(panel).findByText("Saved.");
+    expect(await src.getDocument("users", doc!._id)).toEqual({
+      _id: doc!._id,
+      _creationTime: doc!._creationTime,
+      name: "Grace",
+      credits: { $integer: "AwAAAAAAAAA=" },
+    });
+    expect(within(panel).getByRole("button", { name: "Edit" })).toBeDefined();
+  });
+
+  test("Escape leaves the document unchanged; a refused save keeps the editor with the reason", async () => {
+    const src = source();
+    const [doc] = (await src.listDocuments({ table: "users", numItems: 1, cursor: null })).page;
+    mount(`/database/users?doc=${doc!._id}`, src);
+    const panel = await screen.findByRole("complementary", { name: new RegExp(doc!._id) });
+    const user = userEvent.setup();
+    await user.click(await within(panel).findByRole("button", { name: "Edit" }));
+    fireEvent.change(within(panel).getByRole("textbox"), { target: { value: "{}" } });
+    await user.keyboard("{Escape}");
+    expect(within(panel).queryByRole("textbox")).toBeNull();
+    expect(await src.getDocument("users", doc!._id)).toEqual(doc!);
+    src.replaceDocument = () => Promise.reject(new Error("document too large"));
+    await user.click(within(panel).getByRole("button", { name: "Edit" }));
+    await user.click(within(panel).getByRole("button", { name: "Save" }));
+    expect((await within(panel).findByRole("alert")).textContent).toBe("document too large");
+    expect(within(panel).getByRole("textbox")).toBeDefined();
+  });
+
+  test("read-only: a document has no Edit", async () => {
+    const src = source({ capabilities: { operations: ["viewData"], readOnly: false } });
+    const [doc] = (await src.listDocuments({ table: "users", numItems: 1, cursor: null })).page;
+    mount(`/database/users?doc=${doc!._id}`, src);
+    const panel = await screen.findByRole("complementary", { name: new RegExp(doc!._id) });
+    await within(panel).findByRole("button", { name: "Copy" });
+    expect(within(panel).queryByRole("button", { name: "Edit" })).toBeNull();
   });
 });

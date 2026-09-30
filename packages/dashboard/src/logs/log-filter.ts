@@ -1,6 +1,8 @@
 // Which log lines a reader wants to see (STUDY-12 §7): filtered on the client over the loaded lines, as
-// Convex does — by function, by type (an execution's outcome, or a line's level) and by text. Kept in this
-// browser per deployment scope (and per function on the Functions screen).
+// Convex does — by function, by type (an execution's outcome, or a line's level) and by text. On the Logs
+// screen the view lives in the URL (`?function=a:b,c:d&type=failure,error&q=text`, so a link carries it)
+// and in this browser per deployment (the screen opened without filters starts from the last view, as
+// Convex's does); on the Functions screen, in this browser per function.
 import type { LogEntry, LogLevel } from "../data-source.ts";
 
 export type LogType = "success" | "failure" | LogLevel;
@@ -38,6 +40,54 @@ export function matchesLogView(e: LogEntry, v: LogView): boolean {
 }
 
 export const isFiltered = (v: LogView) => v.functions !== "all" || v.types !== "all" || v.text.trim() !== "";
+
+/**
+ * The Logs screen's search params. Lists are comma-separated (function paths and types have no commas);
+ * `none` is an empty choice (nothing shown), an absent param is every value.
+ */
+export type LogsSearch = { function?: string; type?: string; q?: string };
+
+const NONE = "none";
+const list = (s: string | undefined) => (s === undefined ? "all" : s === NONE ? [] : s.split(",").filter(Boolean));
+const joined = (v: string[]) => (v.length === 0 ? NONE : v.join(","));
+const nonEmpty = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
+
+/** Invalid values are dropped, not rejected: a hand-edited URL still opens the screen. */
+export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
+  const out: LogsSearch = {};
+  const fn = nonEmpty(input.function);
+  const type = nonEmpty(input.type);
+  const types =
+    type === NONE
+      ? NONE
+      : type
+          ?.split(",")
+          .filter((t) => LOG_TYPES.includes(t as LogType))
+          .join(",");
+  const q = nonEmpty(input.q);
+  if (fn) out.function = fn;
+  if (types) out.type = types;
+  if (q) out.q = q;
+  return out;
+}
+
+/** The view a URL asks for, or null when it asks for none (then the saved view applies). */
+export function viewFromSearch(s: LogsSearch): LogView | null {
+  if (!s.function && !s.type && !s.q) return null;
+  return {
+    functions: list(s.function),
+    types: list(s.type) as LogType[] | "all",
+    text: s.q ?? "",
+  };
+}
+
+export function searchFromView(v: LogView): LogsSearch {
+  const out: LogsSearch = {};
+  if (v.functions !== "all") out.function = joined(v.functions);
+  if (v.types !== "all") out.type = joined(v.types);
+  if (v.text.trim() !== "") out.q = v.text;
+  return out;
+}
 
 /** A saved view, or the default when there is none or it cannot be read. */
 export function readLogView(key: string): LogView {

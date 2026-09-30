@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, Schema } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
 
 async function engine() {
-  const schema = new Schema().table("items", { by_n: ["n"], by_ab: ["a", "b"] });
+  const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]).index("by_ab", ["a", "b"]) });
   return new Engine(schema, await MemoryPersistence.open(null, { durable: false })).init();
 }
 
@@ -117,10 +118,15 @@ describe("withIndex ranges follow Convex's rules", () => {
   });
 
   test("index fields follow Convex's rules", () => {
-    expect(() => new Schema().table("t", { by_x: ["_creationTime"] })).toThrow("reserved field");
-    expect(() => new Schema().table("t", { by_x: ["_id"] })).toThrow("reserved field");
-    expect(() => new Schema().table("t", { by_x: ["a._secret"] })).toThrow("reserved field");
-    expect(() => new Schema().table("t", { by_x: ["a", "a"] })).toThrow("duplicate fields");
-    expect(() => new Schema().table("t", { by_x: Array.from({ length: 17 }, (_, i) => `f${i}`) })).toThrow("16");
+    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["_creationTime"]) })).toThrow("reserved field");
+    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["_id"]) })).toThrow("reserved field");
+    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["a._secret"]) })).toThrow("reserved field");
+    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["a", "a"]) })).toThrow("duplicate fields");
+    expect(() =>
+      defineTable(v.any()).index(
+        "by_x",
+        Array.from({ length: 17 }, (_, i) => `f${i}`),
+      ),
+    ).toThrow("16");
   });
 });

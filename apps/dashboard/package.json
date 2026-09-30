@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "bun --bun vite",
     "build": "bun --bun vite build",
-    "preview": "bun --bun vite preview"
+    "preview": "bun --bun vite preview",
+    "test": "bun test"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

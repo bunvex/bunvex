@@ -1,37 +1,100 @@
-// The function runtime: query / mutation / action definitions, the registry that names them
-// ("module:fn"), internal functions, and the calls the transports make. Transactions themselves run in
+// The function runtime: query / mutation / action definitions (a handler, or `{ args, returns, handler }`
+// with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
+// and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
-import type { Engine, Tx } from "@bunvex/core";
+import { type Engine, stringifyValue, type Tx } from "@bunvex/core";
+import {
+  checkValue,
+  displayValue,
+  type GenericValidator,
+  type Infer,
+  isSimpleObject,
+  type ObjectType,
+  type PropertyValidators,
+  type Value,
+  v,
+} from "@bunvex/values";
+
+/** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
+const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
 
 export type QueryCtx = { db: Tx };
 export type MutationCtx = { db: Tx };
 export type ActionCtx = {
-  runQuery: (name: string, args: unknown) => Promise<unknown>;
-  runMutation: (name: string, args: unknown) => Promise<unknown>;
+  runQuery: (name: string, args?: unknown) => Promise<unknown>;
+  runMutation: (name: string, args?: unknown) => Promise<unknown>;
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: argument validation (values) is an ARCHITECTURE.md "N" item
-type Args = any;
-export type FunctionDef =
-  | { kind: "query"; internal?: boolean; handler: (ctx: QueryCtx, args: Args) => unknown }
-  | { kind: "mutation"; internal?: boolean; handler: (ctx: MutationCtx, args: Args) => unknown }
-  | { kind: "action"; internal?: boolean; handler: (ctx: ActionCtx, args: Args) => unknown };
+/** `args`: an object of field validators or a validator (Convex's `asObjectValidator`). */
+export type ArgsValidator = PropertyValidators | GenericValidator;
+// biome-ignore lint/suspicious/noExplicitAny: without an `args` validator the arguments are any object
+type AnyArgs = Record<string, any>;
+export type ArgsOf<A> = A extends { isValidator: true }
+  ? Infer<A & GenericValidator>
+  : A extends PropertyValidators
+    ? ObjectType<A>
+    : AnyArgs;
 
-export const query = (handler: (ctx: QueryCtx, args: Args) => unknown, internal = false): FunctionDef => ({
-  kind: "query",
-  handler,
-  internal,
-});
-export const mutation = (handler: (ctx: MutationCtx, args: Args) => unknown, internal = false): FunctionDef => ({
-  kind: "mutation",
-  handler,
-  internal,
-});
-export const action = (handler: (ctx: ActionCtx, args: Args) => unknown, internal = false): FunctionDef => ({
-  kind: "action",
-  handler,
-  internal,
-});
+export type Visibility = "public" | "internal";
+type Handler<Ctx> = (ctx: Ctx, args: AnyArgs) => unknown;
+export type FunctionDef =
+  | {
+      kind: "query";
+      visibility: Visibility;
+      handler: Handler<QueryCtx>;
+      args?: GenericValidator;
+      returns?: GenericValidator;
+    }
+  | {
+      kind: "mutation";
+      visibility: Visibility;
+      handler: Handler<MutationCtx>;
+      args?: GenericValidator;
+      returns?: GenericValidator;
+    }
+  | {
+      kind: "action";
+      visibility: Visibility;
+      handler: Handler<ActionCtx>;
+      args?: GenericValidator;
+      returns?: GenericValidator;
+    };
+
+const asObjectValidator = (a: ArgsValidator): GenericValidator =>
+  (a as GenericValidator).isValidator ? (a as GenericValidator) : v.object(a as PropertyValidators);
+
+function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
+  if (typeof def === "function") return { kind, visibility, handler: def } as FunctionDef;
+  const d = def as { args?: ArgsValidator; returns?: GenericValidator; handler: unknown };
+  if (typeof d?.handler !== "function")
+    throw new Error(`${kind}(): expected a function or { args?, returns?, handler }`);
+  return {
+    kind,
+    visibility,
+    handler: d.handler,
+    args: d.args === undefined ? undefined : asObjectValidator(d.args),
+    returns: d.returns,
+  } as FunctionDef;
+}
+
+/** A builder, as Convex's: `{ args, returns, handler }` (types from the validators) or a bare handler. */
+export type Builder<Ctx> = {
+  <A extends ArgsValidator = AnyArgs, R = unknown>(def: {
+    args?: A;
+    returns?: GenericValidator;
+    handler: (ctx: Ctx, args: ArgsOf<A>) => R;
+  }): FunctionDef;
+  <Args extends AnyArgs = AnyArgs, R = unknown>(handler: (ctx: Ctx, args: Args) => R): FunctionDef;
+};
+const builder = <Ctx>(kind: FunctionDef["kind"], visibility: Visibility) =>
+  ((def: unknown) => define(kind, visibility, def)) as Builder<Ctx>;
+
+export const query = builder<QueryCtx>("query", "public");
+export const internalQuery = builder<QueryCtx>("query", "internal");
+export const mutation = builder<MutationCtx>("mutation", "public");
+export const internalMutation = builder<MutationCtx>("mutation", "internal");
+export const action = builder<ActionCtx>("action", "public");
+export const internalAction = builder<ActionCtx>("action", "internal");
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
@@ -45,35 +108,61 @@ export class Functions {
 
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean) {
     const f = this.fns.get(name);
-    if (!f || f.kind !== kind || (fromClient && f.internal)) throw new Error(`function not found: ${name}`);
+    if (!f || f.kind !== kind || (fromClient && f.visibility === "internal"))
+      throw new Error(`function not found: ${name}`);
     return f as Extract<FunctionDef, { kind: K }>;
+  }
+
+  /** An id's table, for `v.id` (the engine's catalog). */
+  private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
+
+  /** Arguments are an object, checked against `args` when the function declares it (Convex's rules). */
+  private checkArgs(f: FunctionDef, args: unknown): AnyArgs {
+    const a = args ?? {};
+    if (!isSimpleObject(a))
+      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    if (f.args) {
+      const msg = checkValue(f.args, a as Value, this.tableOf);
+      if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    }
+    return a as AnyArgs;
+  }
+
+  /** The result, checked against `returns` when declared (`undefined` is null, as in Convex). */
+  private checkReturns(f: FunctionDef, value: unknown) {
+    if (f.returns) {
+      const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
+      if (msg) throw new Error(`ReturnsValidationError: ${msg}`);
+    }
+    return value;
   }
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true) {
     const f = this.fn(name, "query", fromClient);
-    return (db: Tx) => f.handler({ db }, args ?? {});
+    return async (db: Tx) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)));
   }
 
-  runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
-    return this.engine.query(this.queryBody(name, args, fromClient), `${name}\u0000${JSON.stringify(args ?? {})}`);
+  async runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
+    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args));
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored). */
-  runQueryJson(name: string, args: unknown): Promise<string> {
-    return this.engine.queryJson(this.queryBody(name, args, true), `${name}\u0000${JSON.stringify(args ?? {})}`);
+  async runQueryJson(name: string, args: unknown): Promise<string> {
+    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args));
   }
 
-  runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
+  async runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     const f = this.fn(name, "mutation", fromClient);
-    return this.engine.mutation((db) => f.handler({ db }, args ?? {}));
+    return this.engine.mutation(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args))));
   }
 
-  runAction(name: string, args: unknown): Promise<unknown> {
+  async runAction(name: string, args: unknown): Promise<unknown> {
     const f = this.fn(name, "action", true);
     const ctx: ActionCtx = {
       runQuery: (n, a) => this.runQuery(n, a, false),
       runMutation: (n, a) => this.runMutation(n, a, false),
     };
-    return Promise.resolve(f.handler(ctx, args ?? {}));
+    const a = this.checkArgs(f, args);
+    return Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r));
   }
 }

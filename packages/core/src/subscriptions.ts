@@ -6,7 +6,7 @@
 // a Sub that is RUNNING when a commit arrives (its read-set is unknown or about to be replaced) is marked
 // dirty and re-runs once it finishes.
 import { type Interval, type LogEntry, overlaps } from "./committer.ts";
-import type { Engine, TxBody } from "./engine.ts";
+import { type Engine, stringifyValue, type TxBody } from "./engine.ts";
 
 type Sub = {
   key: string;
@@ -62,9 +62,7 @@ export class Subscriptions {
       // errors like any result). Errors and values share `last`, so a value that comes back after an
       // error is published again.
       s.reads = r.reads;
-      const msg = r.ok
-        ? { value: JSON.stringify(r.value ?? null) }
-        : { error: String((r.error as Error)?.message ?? r.error) };
+      const msg = r.ok ? { value: stringifyValue(r.value) } : { error: String((r.error as Error)?.message ?? r.error) };
       const last = "value" in msg ? `v${msg.value}` : `e${msg.error}`;
       if (last !== s.last) {
         s.last = last;

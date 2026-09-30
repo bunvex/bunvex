@@ -1,10 +1,15 @@
 // Package @bunvex/server — the function runtime, the transports (HTTP + WebSocket sync) and configuration.
-export { Schema } from "@bunvex/core";
+export { defineSchema, defineTable } from "@bunvex/core";
 export {
   type ActionCtx,
+  type ArgsOf,
+  type ArgsValidator,
   action,
   type FunctionDef,
   Functions,
+  internalAction,
+  internalMutation,
+  internalQuery,
   type MutationCtx,
   mutation,
   type QueryCtx,

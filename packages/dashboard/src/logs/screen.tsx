@@ -1,15 +1,24 @@
 // The Logs screen (STUDY-12 §7, UI-01 §12.5.7): every function's log lines, live, newest first, filtered on
-// the client by function, type and text (kept in this browser per deployment), with a line's details beside
-// the list.
+// the client by function, type and text (in the URL, and kept in this browser per deployment), with a line's
+// details beside the list.
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
 import { type LogEntry, toDataSourceError } from "../data-source.ts";
+import { logsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { LogDetails } from "./log-details.tsx";
-import { isFiltered, type LogView, matchesLogView, readLogView, writeLogView } from "./log-filter.ts";
+import {
+  isFiltered,
+  type LogView,
+  matchesLogView,
+  readLogView,
+  searchFromView,
+  viewFromSearch,
+  writeLogView,
+} from "./log-filter.ts";
 import { LogList } from "./log-list.tsx";
 import { LogToolbar } from "./log-toolbar.tsx";
 import { type LogLines, useLogLines } from "./use-logs.ts";
@@ -91,7 +100,25 @@ export function LogsView(props: {
 export function LogsScreen() {
   const scope = useQueryScope();
   const { data: functions = [] } = useQuery(functionsQuery(scope));
-  const [view, setView] = useLogView(`bunvex:logs:${scope.scope}`);
+  const key = `bunvex:logs:${scope.scope}`;
+  const search = logsRoute.useSearch();
+  const navigate = logsRoute.useNavigate();
+  // the URL's view wins; opened without one, the screen starts from the view last used in this browser
+  const fromUrl = viewFromSearch(search);
+  const [saved] = useState(() => readLogView(key));
+  const view = fromUrl ?? saved;
+  // on arrival only: later changes go through setView
+  // biome-ignore lint/correctness/useExhaustiveDependencies: run once, when the screen opens
+  useEffect(() => {
+    if (fromUrl) writeLogView(key, fromUrl);
+    else if (isFiltered(saved)) void navigate({ search: searchFromView(saved), replace: true });
+  }, []);
+  const setView = (v: LogView) => {
+    writeLogView(key, v);
+    // typing in the text box replaces the address; picking functions or types is a step Back undoes
+    const typing = v.functions === view.functions && v.types === view.types;
+    void navigate({ search: searchFromView(v), replace: typing });
+  };
   const logs = useLogLines();
   return (
     // full-bleed inside <main>: the details panel runs to its edges

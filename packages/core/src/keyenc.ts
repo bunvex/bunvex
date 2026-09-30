@@ -1,56 +1,12 @@
-// C1 — order-preserving key encoding. The byte order of encode(a) vs encode(b) equals the value order,
-// so an index is just a sorted set of byte strings (the shape Convex's `indexes.key BLOB` has).
-//
-// Tags: null < false < true < number < string < bytes(id). Tuples are the concatenation of their
-// elements; strings are 0x00-escaped and 0x00-terminated so a prefix never sorts after a longer string.
+// C1 — order-preserving key encoding: Convex's sort keys (@bunvex/values `valuesToKey`, STUDY-12). The byte
+// order of encode(a) vs encode(b) equals Convex's value order, so an index is a sorted set of byte strings.
+// A tuple is the concatenation of its values' keys; `undefined` (a missing field) sorts below `null`.
+import { type Value, valuesToKey } from "@bunvex/values";
 
-const T_NULL = 0x01;
-const T_FALSE = 0x02;
-const T_TRUE = 0x03;
-const T_NUM = 0x04;
-const T_STR = 0x05;
-const T_BYTES = 0x06;
-
-export type KeyValue = null | boolean | number | string | Uint8Array;
-
-const f64 = new Float64Array(1);
-const f64b = new Uint8Array(f64.buffer);
-const enc = new TextEncoder();
-
-function pushNumber(out: number[], n: number) {
-  f64[0] = n === 0 ? 0 : n; // -0 → 0
-  // little-endian platform: reverse to big-endian, then make the IEEE order unsigned-comparable
-  const neg = (f64b[7] & 0x80) !== 0;
-  for (let i = 7; i >= 0; i--) out.push(neg ? ~f64b[i] & 0xff : i === 7 ? f64b[i] ^ 0x80 : f64b[i]);
-}
-
-function pushEscaped(out: number[], bytes: Uint8Array) {
-  for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i];
-    if (b === 0x00) out.push(0x00, 0xff);
-    else out.push(b);
-  }
-  out.push(0x00);
-}
+export type KeyValue = Value | undefined;
 
 export function encodeKey(values: readonly KeyValue[]): Uint8Array {
-  const out: number[] = [];
-  for (const v of values) {
-    if (v === null) out.push(T_NULL);
-    else if (v === false) out.push(T_FALSE);
-    else if (v === true) out.push(T_TRUE);
-    else if (typeof v === "number") {
-      out.push(T_NUM);
-      pushNumber(out, v);
-    } else if (typeof v === "string") {
-      out.push(T_STR);
-      pushEscaped(out, enc.encode(v));
-    } else {
-      out.push(T_BYTES);
-      pushEscaped(out, v);
-    }
-  }
-  return Uint8Array.from(out);
+  return valuesToKey(values as KeyValue[]);
 }
 
 /** memcmp order. */
