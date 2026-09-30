@@ -26,9 +26,18 @@ const BIGINT = /-?(?:0|[1-9][0-9]*)n/y;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 
+/** Where a value (and, for an object's property, its key) starts, by its path from the top. */
+export type LiteralPlace = { value: number; key?: number };
+
 class Parser {
   i = 0;
+  /** Filled only when asked for (`parseLiteralLocated`): the place of every value, by its path. */
+  places: Map<string, LiteralPlace> | null = null;
   constructor(readonly s: string) {}
+
+  place(path: (string | number)[], value: number, key?: number) {
+    this.places?.set(JSON.stringify(path), key === undefined ? { value } : { value, key });
+  }
 
   fail(message: string, at = this.i): never {
     throw new Fail(message, at);
@@ -65,13 +74,14 @@ class Parser {
     this.i++;
   }
 
-  value(top = false): Literal {
+  value(top = false, path: (string | number)[] = [], keyAt?: number): Literal {
     this.skip();
     const s = this.s;
     const c = s[this.i];
     if (c === undefined) this.fail("Expected a value");
-    if (c === "{") return this.object();
-    if (c === "[") return this.array();
+    this.place(path, this.i, keyAt);
+    if (c === "{") return this.object(path);
+    if (c === "[") return this.array(path);
     if (c === '"' || c === "'") return this.string();
     const start = this.i;
     const big = this.match(BIGINT);
@@ -151,7 +161,7 @@ class Parser {
     return out;
   }
 
-  object(): Value {
+  object(path: (string | number)[] = []): Value {
     this.i++; // {
     const out: Record<string, Value> = {};
     for (;;) {
@@ -168,7 +178,7 @@ class Parser {
           : (this.match(IDENT) ?? this.fail(c === undefined ? 'Expected "}" before the end' : "Expected a field name"));
       if (key in out) this.fail(`"${key}" appears twice`, at);
       this.expect(":");
-      const v = this.value();
+      const v = this.value(false, [...path, key], at);
       if (v !== UNSET) out[key] = v; // { a: undefined } is {}: the field is not there
       this.skip();
       if (this.s[this.i] === ",") this.i++;
@@ -177,7 +187,7 @@ class Parser {
     }
   }
 
-  array(): Value {
+  array(path: (string | number)[] = []): Value {
     this.i++; // [
     const out: Value[] = [];
     for (;;) {
@@ -187,7 +197,7 @@ class Parser {
         return out;
       }
       const at = this.i;
-      const v = this.value();
+      const v = this.value(false, [...path, out.length]);
       if (v === UNSET) this.fail("undefined cannot be in a list", at);
       out.push(v);
       this.skip();
@@ -200,16 +210,32 @@ class Parser {
 
 /** One value, and nothing after it. */
 export function parseLiteral(text: string): ParseResult {
+  const { place: _, ...result } = parse(text, false);
+  return result;
+}
+
+/**
+ * `parseLiteral`, and where each value is: `place(path)` gives the offset of the value at `path` (and of its
+ * key, for an object's property) — to point at a problem a validator finds in it.
+ */
+export const parseLiteralLocated = (text: string) => parse(text, true);
+
+function parse(
+  text: string,
+  located: boolean,
+): ParseResult & { place: (path: (string | number)[]) => LiteralPlace | undefined } {
   const p = new Parser(text);
+  if (located) p.places = new Map();
+  const place = (path: (string | number)[]) => p.places?.get(JSON.stringify(path));
   try {
     p.skip();
-    if (p.i >= text.length) return { ok: false, error: "Type a value", offset: 0 };
+    if (p.i >= text.length) return { ok: false, error: "Type a value", offset: 0, place };
     const value = p.value(true);
     p.skip();
     if (p.i < text.length) p.fail("Unexpected text after the value");
-    return { ok: true, value };
+    return { ok: true, value, place };
   } catch (e) {
-    if (e instanceof Fail) return { ok: false, error: e.message, offset: e.offset };
+    if (e instanceof Fail) return { ok: false, error: e.message, offset: e.offset, place };
     throw e;
   }
 }

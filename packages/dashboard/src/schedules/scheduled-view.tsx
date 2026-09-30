@@ -1,4 +1,4 @@
-// Scheduled functions (UI-01 §14.2, STUDY-12 §8): the runs waiting in the scheduler, nearest first, for
+// Scheduled functions (UI-01 §14.2, STUDY-12 §9): the runs waiting in the scheduler, nearest first, for
 // every function or one; a run's details beside the list, where it can be canceled; Cancel all.
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";

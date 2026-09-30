@@ -947,8 +947,8 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   runner is open, the screen keeps room to scroll past it.
 - Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
   credential runs queries only.
-- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", argument
-  validation against the function's validator, custom test queries.
+- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", custom test
+  queries. (Argument validation came with §15.1.)
 
 ## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
 
@@ -975,7 +975,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 
 ### 14.2 Schedules
 
-STUDY-12 §8. The owner asked for it on 30 Sep 2026, contract and mock first.
+STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 
 - **Contract** (`data-source-deployment.ts`, re-exported by `@bunvex/dashboard/data-source`), all optional:
   `listScheduledFunctions({ numItems, cursor, function? })` — the runs still to happen, nearest first
@@ -1024,3 +1024,21 @@ STUDY-12 §8. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
   lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
   e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
+
+## 15. Amendment — deepening the screens (30 Sep 2026)
+
+### 15.1 Validators on functions (STUDY-12 §8, V1)
+
+- **Contract**: `FunctionInfo.args` / `returns?: ValidatorJson` — Convex's JSON form of `v.*` validators
+  (the owner's call: the dashboard never imports `@bunvex/values`); absent means none declared.
+- **`src/validators.ts`**: `displayValidator` (the `v.*` code, one line or one field per line past 72
+  columns), `defaultValueFor` (the template, as Convex's runner), `validateValue` (every misfit, with its
+  path and whether to point at the key or the value), `isValidatorJson`.
+- **Functions screen**: "Arguments" and "Returns", the validators as code (a focusable box when it
+  scrolls), or "None declared".
+- **Runner**: the arguments start from the template; they are checked as they are typed; every misfit is
+  underlined (`CodeEditor.moreErrors`; with several, each covers its word), the first is said below the
+  box, and Run waits for a fit. `parseLiteralLocated` gives each value's (and key's) offset by path.
+- **Mock**: validators for most functions (`mock/function-validators.ts`); `runFunction` fails a misfit
+  with `ArgumentValidationError: …` as a server would. **Contract suite**: declared validators are
+  well-formed; `run.misfitArgs` (opt-in) fails the run, not the call.

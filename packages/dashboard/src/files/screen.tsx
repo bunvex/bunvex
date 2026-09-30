@@ -1,4 +1,4 @@
-// The Files screen (UI-01 §14.3, STUDY-12 §8): the deployment's stored files, newest first (or oldest),
+// The Files screen (UI-01 §14.3, STUDY-12 §9): the deployment's stored files, newest first (or oldest),
 // between two dates, with a lookup by storage id; upload, select and delete; a file's details beside the
 // list — a preview for images, as Convex, its metadata, Download and Delete.
 import { Button, buttonVariants } from "@bunvex/ui/components/button";

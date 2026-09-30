@@ -96,6 +96,20 @@ describe("the Functions screen", () => {
     expect(within(nav()).getAllByRole("link", { name: "list , query" }).length).toBe(2);
   });
 
+  test("a function shows its declared validators as code, or says it declares none", async () => {
+    mount("/functions?function=tasks:byOwner");
+    await screen.findByRole("heading", { level: 1, name: "byOwner" });
+    const args = screen.getByRole("region", { name: "Arguments validator" });
+    expect(args.querySelector("pre")?.textContent).toBe('v.object({ owner: v.id("users") })');
+    const returns = screen.getByRole("region", { name: "Returns validator" }).querySelector("pre")?.textContent;
+    expect(returns).toStartWith("v.array(v.object({\n");
+    await expectAccessible();
+    cleanup();
+    mount("/functions?function=tasks:summarize");
+    await screen.findByRole("heading", { level: 1, name: "summarize" });
+    expect(screen.getByText("None declared: any arguments are accepted.")).toBeDefined();
+  });
+
   test("a function's log filters are its own", async () => {
     mount("/functions?function=tasks:list");
     await screen.findByRole("heading", { level: 1, name: "list" });

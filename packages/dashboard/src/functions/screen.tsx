@@ -15,6 +15,7 @@ import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
 import { useLogLines } from "../logs/use-logs.ts";
 import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { useRunner } from "../runner/context.tsx";
+import { displayValidator } from "../validators.ts";
 import { buildFunctionTree, describeFunction, type FunctionNode, matchFunctions, splitPath } from "./tree.ts";
 
 const ITEM =
@@ -126,6 +127,31 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   );
 }
 
+/** The declared arguments and return validators, as the `v.*` code (STUDY-12 V1). */
+function FunctionValidators({ fn }: { fn: FunctionInfo }) {
+  const shown = [
+    { title: "Arguments", v: fn.args, none: "None declared: any arguments are accepted." },
+    { title: "Returns", v: fn.returns, none: "None declared." },
+  ];
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {shown.map(({ title, v, none }) => (
+        <section key={title} aria-label={`${title} validator`} className="min-w-0">
+          <h2 className="mb-1 text-sm font-medium">{title}</h2>
+          {v ? (
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
+            <pre tabIndex={0} className="max-h-40 overflow-auto border bg-muted/40 p-2 font-mono text-xs">
+              {displayValidator(v)}
+            </pre>
+          ) : (
+            <p className="text-sm text-muted-foreground">{none}</p>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function FunctionView({ fn }: { fn: FunctionInfo }) {
   const scope = useQueryScope();
   // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
@@ -167,6 +193,7 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
               )}
             </span>
           </div>
+          <FunctionValidators fn={fn} />
           <h2 className="text-sm font-medium">Logs</h2>
         </>
       }
