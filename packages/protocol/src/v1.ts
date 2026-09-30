@@ -73,7 +73,8 @@ export type StateModification =
       queryId: QueryId;
       errorMessage: string;
       logLines: LogLines;
-      errorData: JSONValue;
+      /** A `BunvexError`'s data; absent otherwise. */
+      errorData?: JSONValue;
       journal: QueryJournal;
     }
   | { type: "QueryRemoved"; queryId: QueryId };
