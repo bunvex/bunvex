@@ -162,26 +162,26 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `v.id(table)` | values/validator.ts | missing | `@bunvex/values` is empty. |
-| `v.null()` | values/validator.ts | missing | |
-| `v.number()` / `v.float64()` | values/validator.ts | missing | |
-| `v.bigint()` / `v.int64()` | values/validator.ts | missing | |
-| `v.boolean()` | values/validator.ts | missing | |
-| `v.string()` | values/validator.ts | missing | |
-| `v.bytes()` (ArrayBuffer) | values/validator.ts | missing | |
-| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | missing | |
-| `v.array(el)` | values/validator.ts | missing | |
-| `v.object(fields)`, rejecting unknown fields | values/validator.ts | missing | |
-| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | missing | |
-| `v.union(...members)` | values/validator.ts | missing | |
-| `v.any()` | values/validator.ts | missing | |
-| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | missing | |
-| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | missing | |
+| `v.id(table)` | values/validator.ts | done (#24) | Checks the id names the table (catalog lookup). |
+| `v.null()` | values/validator.ts | done (#24) | |
+| `v.number()` / `v.float64()` | values/validator.ts | done (#24) | |
+| `v.bigint()` / `v.int64()` | values/validator.ts | done (#24) | |
+| `v.boolean()` | values/validator.ts | done (#24) | |
+| `v.string()` | values/validator.ts | done (#24) | |
+| `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | |
+| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | done (#24) | |
+| `v.array(el)` | values/validator.ts | done (#24) | |
+| `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
+| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | |
+| `v.union(...members)` | values/validator.ts | done (#24) | |
+| `v.any()` | values/validator.ts | done (#24) | |
+| `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | done (#24) | |
+| `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | done (#24) | |
 | `v.commitTs()` | values/validator.ts (`VCommitTs`) | missing | New. |
-| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | missing | |
-| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | missing | |
-| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | missing | |
-| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | missing | |
+| VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | done (#24) | |
+| Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | done (#24) | bunvex marker is `isValidator` (no "convex" in names). |
+| `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | done (#24) | asObjectValidator not yet. |
+| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24) | |
 | Value `null` | values/value.ts | done | JSON. |
 | Value `boolean` | values/value.ts | done | |
 | Value `string` | values/value.ts | done | |
@@ -189,9 +189,9 @@ Key bunvex facts behind the statuses:
 | Value `bigint` (int64, range-checked) | values/value.ts | missing | `JSON.stringify` throws on bigint. |
 | Value `ArrayBuffer` (bytes) | values/value.ts | missing | Serialises to `{}`. |
 | Value arrays and plain objects | values/value.ts | partial | Stored fine. Not index-keyable: keyenc has no array/object tags, and objects fall into the bytes branch. |
-| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | partial | Dropped by JSON with no error. `undefined` in arrays becomes `null` silently. |
+| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | missing | |
-| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | missing | Plain JSON only. |
+| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | missing | Errors reach the client as `String(message)` only. |

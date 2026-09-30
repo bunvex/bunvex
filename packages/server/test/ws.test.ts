@@ -27,3 +27,33 @@ test("one socket subscribing twice to the same query holds one reference (B14)",
   ws.close();
   stop();
 });
+
+test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STUDY-12)", async () => {
+  const { mutation } = await import("../src/functions.ts");
+  const engine = await new Engine(
+    new Schema().table("items", {}),
+    await MemoryPersistence.open(null, { durable: false }),
+  ).init();
+  const functions = new Functions(engine).register("m", {
+    add: mutation(async ({ db }, { n }: { n: bigint }) => {
+      await db.insert("items", { n });
+      return n * 2n;
+    }),
+    all: query(({ db }) => db.query("items").collect()),
+  });
+  const { server, stop } = createServer({ engine, functions, port: 0 });
+  const call = async (kind: string, path: string, args: unknown) =>
+    (
+      await fetch(`http://127.0.0.1:${server!.port}/api/${kind}`, {
+        method: "POST",
+        body: JSON.stringify({ path, args }),
+      })
+    ).json();
+  const big = { $integer: Buffer.from(new BigInt64Array([2n ** 40n]).buffer).toString("base64") };
+  const r = (await call("mutation", "m:add", { n: big })) as any;
+  expect(r.status).toBe("success");
+  expect(r.value).toEqual({ $integer: Buffer.from(new BigInt64Array([2n ** 41n]).buffer).toString("base64") });
+  const all = (await call("query", "m:all", {})) as any;
+  expect(all.value[0].n).toEqual(big);
+  stop();
+});

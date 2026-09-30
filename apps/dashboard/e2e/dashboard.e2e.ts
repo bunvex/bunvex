@@ -9,8 +9,9 @@ import { type Browser, chromium, type Page } from "playwright-core";
 
 const PORT = 4179;
 const ORIGIN = `http://localhost:${PORT}`;
-// no live writes and no delay from the mock: a stable page
-const APP = `${ORIGIN}/?writes=0&latency=0#`;
+// no live writes and no delay from the mock: a stable page (the host takes these out of the address)
+const KNOBS = "writes=0&latency=0";
+const url = (path: string) => `${ORIGIN}${path}${path.includes("?") ? "&" : "?"}${KNOBS}`;
 const AXE = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
 let server: ReturnType<typeof Bun.spawn>;
@@ -52,7 +53,7 @@ async function open(path: string, opts: { colorScheme?: "light" | "dark"; reduce
       external.push(r.url());
   });
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(APP + path);
+  await page.goto(url(path));
   return { page, external, errors, close: () => context.close() };
 }
 
@@ -69,6 +70,23 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
+  test("plain paths: a deep link opens, the knobs leave the address, reload and back keep the route", async () => {
+    const { page, errors, close } = await open("/database/users?panel=schema");
+    await heading(page, "users");
+    expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe("/database/users?panel=schema");
+    expect(new URL(page.url()).hash).toBe("");
+    await page.getByRole("complementary").waitFor();
+    await page.reload();
+    await heading(page, "users");
+    await page.getByRole("link", { name: "Logs" }).first().click();
+    await page.waitForURL(`${ORIGIN}/logs`);
+    await page.goBack();
+    await heading(page, "users");
+    expect(page.url()).toBe(`${ORIGIN}/database/users?panel=schema`);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Monaco loads from the app itself, with nothing fetched elsewhere; its worker is bundled", async () => {
     const { page, external, errors, close } = await open("/database/tasks");
     await heading(page, "tasks");

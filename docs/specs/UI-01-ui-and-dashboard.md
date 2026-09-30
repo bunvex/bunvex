@@ -458,7 +458,7 @@ Virtual. Versions checked on npm and the current docs (context7) the same day:
 
 | package | version | where | for |
 |---|---|---|---|
-| `@tanstack/react-router` | 1.170 | dashboard (and the app, for `createHashHistory`) | routes, search params, loaders |
+| `@tanstack/react-router` | 1.170 | dashboard | routes, search params, loaders |
 | `@tanstack/react-query` | 5.104 | dashboard | the cache every read goes through |
 | `@tanstack/react-router-devtools`, `@tanstack/react-query-devtools` | 1.167, 5.104 | dashboard, lazy | `<Dashboard devtools>`; the app turns them on in development (a 0.3 kB no-op chunk in production) |
 | `@tanstack/react-table` | **9.2** (a new major: `useTable`, required `features`, `table.FlexRender`) | ui | `DataTable` |
@@ -488,7 +488,8 @@ are removed — the router owns the URL.
 ### 11.2 Routing
 
 - **The router lives in the package; the host picks the history.** `<Dashboard history={…} basepath={…}>`:
-  `createHashHistory()` in `apps/dashboard` (a static host needs no rewrites), the browser history under a
+  the browser history in `apps/dashboard` (plain paths, as Convex's dashboard; ~~`createHashHistory()`~~
+  until 30 Sep 2026, when the owner dropped the `/#/` addresses), the browser history under a
   `basepath` in a control plane (`/projects/p1/dashboard`), `createMemoryHistory()` in tests.
 - Routes: `/`, `/tables`, `/tables/$table?index&order`, `/tables/$table/$id`, `/functions`,
   `/logs?function&level`. Search params are validated by hand (`validateDocumentsSearch`,
@@ -767,8 +768,11 @@ which Convex's does not.
   is gone with the selection: the dialog does not restore focus (`finalFocus={false}`) and the screen asks
   the grid for it (`DataTable focusRequest`). Checked in a browser: Base UI hides the page behind a modal
   with `aria-hidden` and traps the focus (no `inert`), so axe is run on the dialog while it is open.
-- Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
-  search when the screen writes its own; harmless, to be fixed with the app's history setup.
+- ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
+  search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
+  host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
+  the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
+  the query with the route's own search, so only their three keys are taken out.
 
 ### 12.5.6 Columns and room for the table
 
@@ -814,6 +818,22 @@ comma lists) is gone.
   credential can write).
 - Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
   in a cell, the object popover at the right edge, no request leaves localhost.
+
+### 12.5.9 Accessibility pass (slice 7)
+
+- **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each
+  side panel, a table not in the schema, an unknown table, Functions, Logs. Colour contrast, which the
+  test DOM cannot compute, was run with axe in Chrome on the same states in both themes: one failure, a
+  select's placeholder on its dark hover surface (4.29:1). Dark `--muted-foreground` went from
+  `oklch(0.72 0 0)` to `oklch(0.74 0 0)` (4.66:1), and the token test gained that pair
+  (`input/50@card`, dark only).
+- **Keyboard walk-through** (same file): skip link → main, sidebar → Database, table list → a table, one
+  tab stop into the grid, Enter on `_id` opens the document, Escape closes it and returns the focus to
+  the same cell. It found a bug: the first Tab into the grid focused the default cell without marking it
+  current, so no focus ring showed (WCAG 2.4.7); fixed in `DataTable`.
+- **Reduced motion**: the global rule in `globals.css` (animations and transitions to 0.01 ms) is now
+  under test; the grid's highlight already falls back to a steady tint (STUDY-12 D6).
+- READMEs for `@bunvex/ui`, `@bunvex/dashboard` and `apps/dashboard`.
 
 ### 12.5.10 Smoke tests in a real browser
 
