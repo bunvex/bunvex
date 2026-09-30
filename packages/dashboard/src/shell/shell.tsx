@@ -21,6 +21,7 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
+import { PausedBanner } from "./paused-banner.tsx";
 
 // the runner is fetched when it first opens (it brings the code editor and the result views)
 const FunctionRunner = lazy(() => import("../runner/runner.tsx").then((m) => ({ default: m.FunctionRunner })));
@@ -137,6 +138,7 @@ export function Shell() {
               {headerActions}
             </div>
           </header>
+          <PausedBanner />
           {/* with the runner docked below, the screen keeps room to scroll past it */}
           <main
             id="main"

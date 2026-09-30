@@ -13,6 +13,7 @@ import {
   type DashboardDataSource,
   DataSourceError,
   type DeploymentInfo,
+  type DeploymentState,
   type DeploymentStats,
   type Document,
   type DocumentQuery,
@@ -141,6 +142,8 @@ export class MockDataSource implements DashboardDataSource {
   private logTimer: ReturnType<typeof setInterval> | null = null;
   private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
   private liveTimer: ReturnType<typeof setInterval> | null = null;
+  /** UI-01 §17.2: a paused deployment refuses new calls; its scheduler waits and skips crons. */
+  private paused = false;
   /** Scheduled functions and cron jobs (UI-01 §14). Not part of the contract: tests drive it directly. */
   readonly scheduler: MockScheduler;
   /** File storage (UI-01 §14). Not part of the contract: tests read blobs from it. */
@@ -167,6 +170,7 @@ export class MockDataSource implements DashboardDataSource {
       {
         rnd: this.rnd,
         functions: this.functions,
+        paused: () => this.paused,
         run: (fn, time) => {
           const lines = makeExecution(this.rnd, this.logs.length + 1, time, {
             fn,
@@ -279,6 +283,29 @@ export class MockDataSource implements DashboardDataSource {
   private now = () => Date.now();
 
   // ---------------------------------------------------------------- deployment
+
+  // pausing (UI-01 §17.2, data-source-state.ts)
+  getDeploymentState(opts?: CallOptions): Promise<DeploymentState> {
+    return this.call(opts?.signal, () => ({ state: this.paused ? "paused" : "running" }));
+  }
+
+  pauseDeployment(opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => this.setPaused(true, "pauseDeployment"));
+  }
+
+  resumeDeployment(opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => this.setPaused(false, "resumeDeployment"));
+  }
+
+  private setPaused(paused: boolean, op: "pauseDeployment" | "resumeDeployment") {
+    const c = this.opts.capabilities;
+    if (c.readOnly || !c.operations.includes(op))
+      throw new DataSourceError("unauthorized", `this credential cannot ${paused ? "pause" : "resume"} the deployment`);
+    if (this.paused === paused) return;
+    this.paused = paused;
+    // Convex's deployment events
+    this.record(paused ? "pause_deployment" : "unpause_deployment", {});
+  }
 
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo> {
     return this.call(opts?.signal, () => ({ ...this.deployment }));
@@ -421,6 +448,7 @@ export class MockDataSource implements DashboardDataSource {
 
   /** What `liveWritesMs` does: a new task most of the time, sometimes a deleted one. */
   private liveWrite() {
+    if (this.paused) return; // no function runs while paused
     const tasks = this.tables.get("tasks");
     const users = this.tables.get("users");
     if (!tasks || !users) return;
@@ -613,6 +641,11 @@ export class MockDataSource implements DashboardDataSource {
         throw new DataSourceError("unauthorized", "this credential cannot run functions");
       if (c.readOnly && fn.kind !== "query")
         throw new DataSourceError("unauthorized", `a read-only credential cannot run a ${fn.kind}`);
+      if (this.paused)
+        throw new DataSourceError(
+          "invalid_request",
+          "This deployment is paused: new function calls fail until it is resumed (Settings → General).",
+        );
       // arguments that do not fit the declared validator fail the call, as a server's validation does
       const invalid = fn.args ? validateValue(fn.args, args)[0] : undefined;
       const error = invalid

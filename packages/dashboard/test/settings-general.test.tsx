@@ -61,4 +61,55 @@ describe("Settings: General", () => {
     expect(row(s, "Client URL")?.textContent).toContain("http://127.0.0.1:3210");
     expect(row(s, "HTTP actions URL")).toBeUndefined();
   });
+
+  test("pause: the state in words, a confirmation, then every screen says it; resume undoes it", async () => {
+    const { source, history } = mount();
+    const pause = await screen.findByRole("region", { name: "Pause deployment" });
+    await within(pause).findByText("running");
+    expect(within(pause).getByText("New function calls will return an error.")).toBeDefined();
+    expect(screen.queryByText(/This deployment is paused/)).toBeNull();
+    const user = userEvent.setup();
+    await user.click(within(pause).getByRole("button", { name: "Pause deployment" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Pause local?" });
+    await expectAccessible(dialog); // the modal hides the page behind it
+    await user.click(within(dialog).getByRole("button", { name: "Pause deployment" }));
+    await within(pause).findByText("paused");
+    expect((await source.getDeploymentState()).state).toBe("paused");
+    const banner = await screen.findByText(/This deployment is paused/);
+    await expect(source.runFunction("tasks:list", {})).rejects.toThrow("paused");
+    // the banner stays on other screens, and links back here
+    await user.click(within(banner.closest("[role=status]") as HTMLElement).getByRole("link", { name: "Settings" }));
+    expect(history.location.pathname).toBe("/settings/general");
+    await user.click(within(pause).getByRole("button", { name: "Resume deployment" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog", { name: "Resume local?" })).getByRole("button", {
+        name: "Resume deployment",
+      }),
+    );
+    await within(pause).findByText("running");
+    expect(screen.queryByText(/This deployment is paused/)).toBeNull();
+  });
+
+  test("pause: a credential without the operation sees the state but cannot change it", async () => {
+    const source = new MockDataSource({
+      seed: 7,
+      now: NOW,
+      executions: 5,
+      documents: { tasks: 3, users: 3 },
+      capabilities: { operations: ["viewData"], readOnly: false },
+    });
+    mount("/settings/general", source);
+    const pause = await screen.findByRole("region", { name: "Pause deployment" });
+    await within(pause).findByText("running");
+    expect(within(pause).getByRole("button", { name: "Pause deployment" }).hasAttribute("disabled")).toBe(true);
+    expect(within(pause).getByText("This credential cannot pause the deployment.")).toBeDefined();
+  });
+
+  test("pause: not shown for a source that does not offer it", async () => {
+    const source = mockSource();
+    Object.assign(source, { getDeploymentState: undefined, pauseDeployment: undefined, resumeDeployment: undefined });
+    mount("/settings/general", source);
+    await section();
+    expect(screen.queryByRole("region", { name: "Pause deployment" })).toBeNull();
+  });
 });
