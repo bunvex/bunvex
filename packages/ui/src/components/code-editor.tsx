@@ -21,6 +21,8 @@ export type CodeEditorProps = {
   onTab?: () => void;
   /** Where the text stops making sense, and why: underlined from there, the message on hover. */
   error?: { message: string; offset?: number };
+  /** More problems to underline, each at its offset (the field's message stays `error`'s). */
+  moreErrors?: { message: string; offset: number }[];
   /** Ids of elements that describe the field (a hint, the error text). */
   describedBy?: string;
   autoFocus?: boolean;

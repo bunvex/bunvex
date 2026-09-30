@@ -1,7 +1,8 @@
 // The function runner (STUDY-12 §7, UI-01 §13.3): docked below every screen, as in Convex. Pick a function,
 // write its arguments as a JavaScript literal (the code editor, as for documents), run it once with the Run
 // button or Ctrl+Enter, and read its value, or its error, with the lines it logged. A read-only credential
-// runs queries only.
+// runs queries only. A function that declares an arguments validator starts from a template of it, and the
+// arguments are checked against it as they are typed (STUDY-12 V1), as Convex's runner does.
 import { Button } from "@bunvex/ui/components/button";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
@@ -11,22 +12,47 @@ import { Play, X } from "lucide-react";
 import { useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
-import { type FunctionInfo, type FunctionRun, toDataSourceError, type Value } from "../data-source.ts";
-import { formatLiteral, parseLiteral, UNSET } from "../database/literal.ts";
+import {
+  type FunctionInfo,
+  type FunctionRun,
+  toDataSourceError,
+  type ValidatorJson,
+  type Value,
+} from "../data-source.ts";
+import { formatLiteral, parseLiteralLocated, UNSET } from "../database/literal.ts";
 import { describeFunction } from "../functions/tree.ts";
 import { formatDuration } from "../logs/log-list.tsx";
+import { defaultValueFor, validateValue } from "../validators.ts";
 
-type Args = { ok: true; args: Record<string, Value> } | { ok: false; error: string; offset?: number };
+type Args =
+  | { ok: true; args: Record<string, Value> }
+  | { ok: false; error: string; offset?: number; more?: { message: string; offset: number }[] };
 
-/** A function's arguments: one object literal (`{}` for none). */
-export function parseArgs(text: string): Args {
-  if (text.trim() === "") return { ok: true, args: {} };
-  const r = parseLiteral(text);
-  if (!r.ok) return r;
+/**
+ * A function's arguments: one object literal (`{}` for none) — and, when the function declares an arguments
+ * validator, one that fits it (the first misfit, with where it is).
+ */
+export function parseArgs(text: string, validator?: ValidatorJson): Args {
+  if (text.trim() === "") text = "{}";
+  const r = parseLiteralLocated(text);
+  if (!r.ok) return { ok: false, error: r.error, offset: r.offset };
   const v = r.value;
   if (v === UNSET || typeof v !== "object" || v === null || Array.isArray(v) || "$integer" in v || "$bytes" in v)
     return { ok: false, error: "The arguments are one object: { name: value, … }", offset: 0 };
+  // every misfit is underlined, as in Convex's runner; the first one is also said below the box
+  const issues = (validator ? validateValue(validator, v) : []).map((issue) => {
+    const at = r.place(issue.path);
+    return { message: issue.message, offset: (issue.at === "key" ? at?.key : undefined) ?? at?.value ?? 0 };
+  });
+  const [first, ...more] = issues;
+  if (first) return { ok: false, error: first.message, offset: first.offset, ...(more.length > 0 && { more }) };
   return { ok: true, args: v as Record<string, Value> };
+}
+
+/** What the arguments box starts with: a template of the declared validator, or `{}`. */
+export function argsTemplate(fn: FunctionInfo | undefined): string {
+  const v = fn?.args ? defaultValueFor(fn.args) : undefined;
+  return v === undefined ? "{}" : formatLiteral(v, "  ");
 }
 
 // the arguments typed for each function, while the page is open
@@ -39,13 +65,13 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
   const { data: functions = [] } = useQuery(functionsQuery(scope));
   const { data: caps } = useQuery(capabilitiesQuery(scope));
   const fn: FunctionInfo | undefined = functions.find((f) => f.path === props.path) ?? functions[0];
-  const [text, setText] = useState(() => drafts.get(fn?.path ?? "") ?? "{}");
+  const [text, setText] = useState(() => drafts.get(fn?.path ?? "") ?? argsTemplate(fn));
   const [outcome, setOutcome] = useState<Outcome>();
   const [running, setRunning] = useState(false);
   const titleId = useId();
   const pickerId = useId();
   const checkId = useId();
-  const args = parseArgs(text);
+  const args = parseArgs(text, fn?.args);
   const readOnly = caps?.readOnly ?? false;
   const blocked = fn !== undefined && readOnly && fn.kind !== "query";
 
@@ -121,6 +147,7 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
               if (fn) drafts.set(fn.path, t);
             }}
             error={args.ok ? undefined : { message: args.error, offset: args.offset }}
+            moreErrors={args.ok ? undefined : args.more}
             describedBy={checkId}
             onSubmit={() => void run()}
           />

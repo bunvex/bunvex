@@ -10,6 +10,7 @@ import type {
   LogLevel,
 } from "../data-source.ts";
 import { encodeInt64 } from "../filters.ts";
+import { MOCK_VALIDATORS } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
 
 export type FixtureTable = { name: string; indexes: IndexInfo[]; documents: Document[]; declared: boolean };
@@ -57,7 +58,7 @@ export const MOCK_FUNCTIONS: FunctionInfo[] = [
   { path: "users:get", kind: "query", visibility: "public" },
   { path: "users:upsert", kind: "mutation", visibility: "internal" },
   { path: "users:syncFromAuth", kind: "action", visibility: "internal" },
-];
+].map((f) => ({ ...f, ...MOCK_VALIDATORS[f.path] }) as FunctionInfo);
 
 /** Creation times spread over the last `spanMs`, increasing, with a unique id each. */
 function stamps(rnd: Random, n: number, now: number, spanMs: number) {
