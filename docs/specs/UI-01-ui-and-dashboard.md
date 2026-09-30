@@ -1163,3 +1163,14 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   loaded: its call stands at the top; no outcome yet: running). The **Outcome** is now the line's own
   execution's, not another call's in the same request.
 
+## 17. Amendment — Settings → General, narrow screens, the design system (30 Sep 2026)
+
+### 17.1 Settings → General (STUDY-12 §11)
+
+- `/settings` now opens **General**, the first page, as Convex's; the Settings frame (`settings/layout.tsx`)
+  lists General and Environment variables.
+- **Deployment**: name, version, persistence, the **client URL** and the **HTTP actions URL**, each with a
+  copy button; a URL the source does not give is left out. The contract's `DeploymentInfo` gains optional
+  `httpActionsUrl` (Convex's site URL); the mock's is `http://127.0.0.1:3211`, next to its client URL on
+  3210, as a self-hosted Convex backend.
+

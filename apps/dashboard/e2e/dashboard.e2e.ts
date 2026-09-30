@@ -257,9 +257,8 @@ describe("the dashboard in a browser", () => {
   });
 
   test("Settings: show a hidden value, add a variable and save", async () => {
-    const { page, errors, close } = await open("/settings");
+    const { page, errors, close } = await open("/settings/environment-variables");
     await heading(page, "Settings");
-    await page.waitForURL(`${ORIGIN}/settings/environment-variables`);
     await page.getByRole("button", { name: "Show the value of LOG_LEVEL" }).click();
     await page.getByText("info", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add a variable" }).click();

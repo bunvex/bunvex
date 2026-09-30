@@ -494,3 +494,27 @@ functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tab
 | F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **decided** (30 Sep 2026): images only, as Convex |
 | H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | follows the data |
 | H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |
+
+## 11. Settings → General, narrow screens, the design system (added 30 Sep 2026)
+
+### 11.1 How Convex does it
+
+- **General** is the first settings page (`dashboard-common/src/layouts/deploymentSettingsPages.ts`,
+  `DeploymentSettingsLayout.tsx`); self-hosted, it holds **Pause Deployment** only
+  (`dashboard-self-hosted/src/pages/settings/index.tsx`). The deployment's two URLs — the client ("Cloud")
+  URL and the **HTTP Actions URL** — are shown with the Health summary
+  (`features/health/components/DeploymentSummary.tsx`, cloud only) and on the cloud "URL & Deploy Key" page.
+- **Pause / resume** (`features/settings/components/PauseDeployment.tsx`): "This deployment is currently
+  paused / running", a button (danger to pause, primary to resume) gated on the `PauseDeployment` /
+  `UnpauseDeployment` operations, a confirmation naming the deployment, and the consequences listed (paused:
+  new calls fail, scheduled jobs queue, cron jobs are skipped; resumed: calls run, queued jobs run, crons
+  resume). The routes are `POST /api/pause_deployment` and `/api/unpause_deployment`
+  (`features/settings/lib/api.ts`). While paused, every page shows a banner linking to the setting
+  (`layouts/DeploymentDashboardLayout.tsx`).
+
+### 11.2 Divergences
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| G1 | The URLs (client, HTTP actions) and the deployment's name, version and persistence sit on **Settings → General**, next to pausing; Convex shows the URLs with the Health summary (cloud only) | self-hosted has no cloud page for them; General is where a self-hosted reader looks for "what is this deployment" | **decided** (30 Sep 2026): the owner asked for them in Settings |
+
