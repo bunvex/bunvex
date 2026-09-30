@@ -811,13 +811,16 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   destructive colour.
 - **Lines** (`useLogLines`): the newest `listLogs` page (200 lines; the route loader fetches it), then
   whatever `watchLogs` delivers, merged by id, at most 10 000 (as Convex). Older pages load at the end of
-  the list (STUDY-12 L4, open). **Pause** holds new lines and counts them ("Resume (3 new)"); resuming shows
+  the list (STUDY-12 L4, decided: keep the paging). **Pause** holds new lines and counts them ("Resume (3 new)"); resuming shows
   them. **Clear** hides every loaded line; "Show N cleared" brings them back.
 - **Filters on the client** (`log-filter.ts`): functions and types (success, failure, debug, info, warn,
   error — a line passes on its level, or on its execution's outcome) as multi-selects, and a text box
-  (200 ms after the last keystroke) matching the function path, the message or a request id. Kept in this
-  browser per deployment scope (`bunvex:logs:<scope>`), as Convex keeps them per deployment; not in the
-  URL, so the old `?function=&level=` search params of the placeholder route are gone.
+  (200 ms after the last keystroke) matching the function path, the message or a request id. **In the URL
+  and in this browser** (STUDY-12 L7, the owner's call): `?function=a:b,c:d&type=failure,error&q=text`
+  (comma lists; `none` for an empty choice), validated by hand like the table's search; every change is
+  also kept per deployment scope (`bunvex:logs:<scope>`), and the screen opened without filters starts
+  from that view and writes it into the address. Picking functions or types is a history step (Back
+  undoes it); typing replaces the address.
 - **Details** (`LogDetails`, in the shared `shell/panel.tsx`): the activated line — function, request id
   (copy), the execution's outcome and duration, the message, and every loaded line of the same request —
   with **Filter by this request**. The list is the data grid: arrows move between lines, a click or Enter
