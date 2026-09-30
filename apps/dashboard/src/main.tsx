@@ -17,6 +17,8 @@ const source = new MockDataSource({
   failRate: Number(params.get("fail") ?? 0),
   // a task inserted (or deleted) every few seconds, so the Database screen has something live to show
   liveWritesMs: Number(params.get("writes") ?? 3000),
+  // ?tables=0: a deployment with no tables yet
+  tables: params.get("tables") !== "0",
 });
 
 createRoot(document.getElementById("root")!).render(

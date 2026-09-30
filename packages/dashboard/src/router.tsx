@@ -98,6 +98,7 @@ export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch
 // loading them lazily also breaks that import cycle.
 const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Overview");
 const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
+const EmptyDatabase = lazyRouteComponent(() => import("./database/empty.tsx"), "EmptyDatabase");
 const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
@@ -132,9 +133,8 @@ export const databaseRoute = createRoute({
     const first = tables.map((t) => t.name).sort()[0];
     if (first !== undefined) throw redirect({ to: "/database/$table", params: { table: first }, replace: true });
   },
-  component: () => (
-    <NotBuiltYet title="Database" message="This deployment has no tables yet. They appear once data is written." />
-  ),
+  // reached only when there is no table to open
+  component: EmptyDatabase,
 });
 
 export const tableRoute = createRoute({

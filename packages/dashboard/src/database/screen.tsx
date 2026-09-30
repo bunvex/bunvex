@@ -18,6 +18,7 @@ import { DeleteDialog, DeleteSelected, deleteDocumentsNow, type Outcome, TableMe
 import { CellEditor } from "./cell-editor.tsx";
 import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
+import { useCanCreateTable } from "./create-table.tsx";
 import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
 import { decodeFilter, encodeFilter } from "./filter-url.ts";
@@ -40,10 +41,8 @@ export function DatabaseScreen(): ReactNode {
   const { table } = tableRoute.useParams();
   const scope = useQueryScope();
   const { data: tables } = useSuspenseQuery(tablesQuery(scope));
-  const { data: caps } = useQuery(capabilitiesQuery(scope));
   const info = tables.find((t) => t.name === table);
-  const canCreate =
-    !!caps && !caps.readOnly && caps.operations.includes("writeData") && typeof scope.source.createTable === "function";
+  const canCreate = useCanCreateTable() === true;
   return (
     // full-bleed inside <main>: the sidebar and the panel run to its edges
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 md:flex-row">

@@ -28,6 +28,12 @@ describe("the dev host's mock knobs", () => {
     expect(replaced).toEqual(["/database/users?panel=schema"]);
   });
 
+  test("tables=0 is a knob too", () => {
+    const { env: e, replaced } = env("http://localhost:5173/database?tables=0");
+    expect(takeDevKnobs(e).get("tables")).toBe("0");
+    expect(replaced).toEqual(["/database"]);
+  });
+
   test("an address with only knobs keeps just its path", () => {
     const { env: e, replaced } = env("http://localhost:5173/logs?fail=0.5");
     expect(takeDevKnobs(e).get("fail")).toBe("0.5");

@@ -31,6 +31,8 @@ export type FixtureOptions = {
   documents?: Partial<Record<"users" | "tasks" | "messages" | "imports", number>>;
   /** Function executions in the log history (each writes 1–4 lines). Default 800. */
   executions?: number;
+  /** `false`: a deployment with no tables yet (the Database screen's empty state). Default true. */
+  tables?: boolean;
 };
 
 export const SYSTEM_INDEXES: IndexInfo[] = [
@@ -192,7 +194,7 @@ export function makeExecution(
 export function createFixture(opts: FixtureOptions = {}): Fixture {
   const rnd = createRandom(opts.seed ?? 1);
   const now = opts.now ?? Date.now();
-  const tables = makeTables(rnd, now, opts.documents);
+  const tables = opts.tables === false ? [] : makeTables(rnd, now, opts.documents);
   const executions = opts.executions ?? 800;
   const logs: LogEntry[] = [];
   const span = 6 * 3_600_000;
