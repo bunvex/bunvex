@@ -1,4 +1,4 @@
-// The History screen (UI-01 §14.5, STUDY-12 §8): the deployment's audit log, newest first, between two days
+// The History screen (UI-01 §14.5, STUDY-12 §9): the deployment's audit log, newest first, between two days
 // and for one action if asked; an event's details beside the list. Live: new events come in as recorded.
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";

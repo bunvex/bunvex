@@ -1,4 +1,4 @@
-// The mock's audit log (UI-01 §14.5, STUDY-12 §8): events with Convex's action names, a few from the past
+// The mock's audit log (UI-01 §14.5, STUDY-12 §9): events with Convex's action names, a few from the past
 // (deploys, index builds, the variables' creation), then whatever the mock's writes record.
 import type { AuditEvent, AuditEventQuery, Json, Page, Value } from "../data-source.ts";
 import type { Random } from "./random.ts";
