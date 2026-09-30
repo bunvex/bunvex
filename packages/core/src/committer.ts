@@ -8,17 +8,34 @@ import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
 
 export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
-export type LogEntry = { ts: number; writes: { index: number; key: Uint8Array }[] };
+/**
+ * One commit in the write log: its index-key writes (`id` is the document whose entry it is, null for a
+ * removed entry) and its write source (the mutation's name, when the caller gave one).
+ */
+export type LogEntry = { ts: number; writes: { index: number; key: Uint8Array; id: string | null }[]; source?: string };
 
-export function overlaps(writes: LogEntry["writes"], reads: Interval[]): boolean {
+/** The first write of `writes` inside one of `reads`, if any. */
+export function firstOverlap(writes: LogEntry["writes"], reads: Interval[]): LogEntry["writes"][number] | undefined {
   for (const w of writes)
     for (const r of reads)
-      if (r.index === w.index && compareKeys(w.key, r.lo) >= 0 && compareKeys(w.key, r.hi) < 0) return true;
-  return false;
+      if (r.index === w.index && compareKeys(w.key, r.lo) >= 0 && compareKeys(w.key, r.hi) < 0) return w;
+  return undefined;
 }
 
+export function overlaps(writes: LogEntry["writes"], reads: Interval[]): boolean {
+  return firstOverlap(writes, reads) !== undefined;
+}
+
+/**
+ * What a rejected commit conflicted with, as Convex's `ConflictingReadWithWriteSource`: the commit that
+ * wrote into its read-set (its ts, the index and document of the write, and its write source). Absent
+ * fields are unknown, e.g. for a snapshot older than the write log.
+ */
+export type Conflict = { writeTs: number; index?: number; id?: string | null; source?: string };
+
+/** A commit refused by validation: something it read changed after its snapshot. The engine retries it. */
 export class ConflictError extends Error {
-  constructor() {
+  constructor(readonly conflict: Conflict = { writeTs: 0 }) {
     super("write conflict");
   }
 }
@@ -44,6 +61,8 @@ type PendingCommit = {
   reads: Interval[];
   docs: DocWrite[];
   idx: IndexWrite[];
+  /** The write source recorded in the log, for other transactions' conflict errors. */
+  source?: string;
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
@@ -60,6 +79,8 @@ export class Committer {
   private running = false;
   private listeners: ((e: LogEntry[]) => void)[] = [];
   private fatalListeners: ((e: CommitterStoppedError) => void)[] = [];
+  /** Callers of `waitForVisible`, woken once `visibleTs` reaches their ts. */
+  private visibleWaiters: { ts: number; resolve: () => void }[] = [];
   /** Set once persistence has failed; the committer accepts nothing afterwards. */
   stopped: CommitterStoppedError | null = null;
 
@@ -78,6 +99,24 @@ export class Committer {
     this.fatalListeners.push(fn);
   }
 
+  /**
+   * Resolve once `ts` is visible (durable) or the committer stops, as Convex's `wait_for_write_ts`: a
+   * mutation retried after a conflict first waits for the write it conflicted with, so its next snapshot
+   * includes it.
+   */
+  waitForVisible(ts: number): Promise<void> {
+    if (ts <= this.visibleTs || this.stopped) return Promise.resolve();
+    return new Promise((resolve) => this.visibleWaiters.push({ ts, resolve }));
+  }
+
+  private wakeVisible() {
+    if (this.visibleWaiters.length === 0) return;
+    const ready = this.visibleWaiters.filter((w) => w.ts <= this.visibleTs || this.stopped);
+    if (ready.length === 0) return;
+    this.visibleWaiters = this.visibleWaiters.filter((w) => !(w.ts <= this.visibleTs || this.stopped));
+    for (const w of ready) w.resolve();
+  }
+
   commit(c: Omit<PendingCommit, "resolve" | "reject">): Promise<number> {
     if (this.stopped) return Promise.reject(this.stopped);
     return new Promise((resolve, reject) => {
@@ -91,13 +130,18 @@ export class Committer {
     });
   }
 
-  private validate(p: PendingCommit): boolean {
-    if (p.reads.length === 0) return true;
+  /** The conflict that refuses `p`, or null when it may commit. */
+  private validate(p: PendingCommit): Conflict | null {
+    if (p.reads.length === 0) return null;
     // The window must still cover the snapshot, otherwise we cannot prove the absence of a conflict.
-    if (this.log.length && this.log[0].ts > p.snapshot + 1 && p.snapshot < this.appliedTs) return false;
-    for (let i = this.log.length - 1; i >= 0 && this.log[i].ts > p.snapshot; i--)
-      if (overlaps(this.log[i].writes, p.reads)) return false;
-    return true;
+    if (this.log.length && this.log[0].ts > p.snapshot + 1 && p.snapshot < this.appliedTs)
+      return { writeTs: this.appliedTs };
+    for (let i = this.log.length - 1; i >= 0 && this.log[i].ts > p.snapshot; i--) {
+      const e = this.log[i];
+      const w = firstOverlap(e.writes, p.reads);
+      if (w) return { writeTs: e.ts, index: w.index, id: w.id, source: e.source };
+    }
+    return null;
   }
 
   private async drain() {
@@ -107,6 +151,13 @@ export class Committer {
       this.stop(e);
     }
     this.running = false;
+    // A commit queued between drainGroups' last check and this point (a caller whose previous commit just
+    // resolved, re-committing in the same microtask chain) found `running` still true and scheduled
+    // nothing: drain again for it.
+    if (this.queue.length && !this.stopped) {
+      this.running = true;
+      setImmediate(() => this.drain());
+    }
   }
 
   private async drainGroups() {
@@ -116,13 +167,15 @@ export class Committer {
       const accepted: [PendingCommit, LogEntry][] = [];
       try {
         for (const p of group) {
-          if (!this.validate(p)) {
+          const conflict = this.validate(p);
+          if (conflict) {
             this.conflicts++;
-            p.reject(new ConflictError());
+            p.reject(new ConflictError(conflict));
             continue;
           }
           const ts = ++this.appliedTs;
-          accepted.push([p, { ts, writes: p.idx.map((w) => ({ index: w.index, key: w.key })) }]);
+          const writes = p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
+          accepted.push([p, p.source === undefined ? { ts, writes } : { ts, writes, source: p.source }]);
           this.persistence.apply(ts, p.docs, p.idx);
           this.log.push(accepted[accepted.length - 1][1]); // seen by the validation of the NEXT commits of this group
         }
@@ -141,6 +194,7 @@ export class Committer {
       const entries = accepted.map(([, e]) => e);
       for (const l of this.listeners) l(entries);
       for (const [p, e] of accepted) p.resolve(e.ts);
+      this.wakeVisible();
     }
   }
 
@@ -150,6 +204,7 @@ export class Committer {
     const queued = this.queue;
     this.queue = [];
     for (const p of queued) p.reject(this.stopped);
+    this.wakeVisible();
     for (const l of this.fatalListeners) l(this.stopped);
   }
 }

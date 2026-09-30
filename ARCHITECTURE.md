@@ -41,7 +41,7 @@ bunvex/
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M
-│   │   ├── engine                   snapshots, mutation retries, query cache by read-set      ✅
+│   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── indexing                 backfill a new index over existing data                   M

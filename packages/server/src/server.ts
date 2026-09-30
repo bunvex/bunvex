@@ -1,6 +1,14 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the WebSocket
 // sync protocol, both speaking @bunvex/protocol v0. One process: the committer is single by design.
-import { type Engine, type FormatError, parseValue, type SubResult, Subscriptions, stringifyValue } from "@bunvex/core";
+import {
+  type Engine,
+  type FormatError,
+  OccError,
+  parseValue,
+  type SubResult,
+  Subscriptions,
+  stringifyValue,
+} from "@bunvex/core";
 import { type ClientMessage, subscriptionKey } from "@bunvex/protocol";
 import type { Server } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
@@ -77,7 +85,12 @@ export function createServer(opts: ServerOptions) {
    * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
    * A system failure is a 500 with the fixed internal message.
    */
-  const udfResponse = (r: WithLogLines<string>) => {
+  const udfResponse = (r: WithLogLines<string>, kind: string) => {
+    // A mutation that exhausted its OCC retries is not the function's error in Convex: the request fails
+    // with 503 and the OCC code (`ErrorCode::OCC` → SERVICE_UNAVAILABLE, crates/errors/src/lib.rs). Inside
+    // an action, the same error is just an exception the action may catch.
+    if (!r.ok && kind === "mutation" && r.error instanceof OccError)
+      return requestError(503, r.error.code, r.error.message);
     if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
     if (isSystemError(r.error)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
     const e = formatError(r.error);
@@ -130,11 +143,13 @@ export function createServer(opts: ServerOptions) {
           const { id, path, args } = m;
           const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
           const lines = linesField("l", r.logLines, redact);
-          ws.send(
-            r.ok
-              ? `{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`
-              : `{"t":"res","id":${JSON.stringify(id)}${errorFields(formatError(r.error))}${lines}}`,
-          );
+          if (r.ok) ws.send(`{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`);
+          else {
+            // An exhausted OCC budget is not the function's error: Convex ends the connection with it
+            // (STUDY-21 D2); v0 sends its message as the result.
+            const e = r.error instanceof OccError ? { error: r.error.message } : formatError(r.error);
+            ws.send(`{"t":"res","id":${JSON.stringify(id)}${errorFields(e)}${lines}}`);
+          }
         }
       },
       close(ws) {
@@ -180,6 +195,7 @@ export function createServer(opts: ServerOptions) {
               : await functions.runAction(body.path, args);
           return stringifyValue(value);
         }),
+        kind,
       );
     },
   });
