@@ -55,16 +55,26 @@ export function createServer(opts: ServerOptions) {
         }
         if (m.t === "sub") {
           const key = subscriptionKey(m.path, m.args);
+          const send = (r: { value: string } | { error: string } | null) => {
+            if (r === null) return;
+            ws.send(
+              "value" in r
+                ? `{"t":"upd","k":${JSON.stringify(key)},"v":${r.value}}`
+                : JSON.stringify({ t: "err", k: key, e: r.error }),
+            );
+          };
+          // Already subscribed on this socket: one reference per socket and key, just resend the result.
+          if (ws.data.keys.has(key)) return send(subs.current(key));
           ws.subscribe(key); // join the topic BEFORE the first run publishes to it
           ws.data.keys.add(key);
-          let current: string | null;
+          let current: { value: string } | { error: string } | null;
           try {
             current = await subs.subscribe(key, functions.queryBody(m.path, m.args));
           } catch (e) {
             ws.send(JSON.stringify({ t: "err", k: key, e: String((e as Error).message ?? e) }));
             return;
           }
-          if (current !== null) ws.send(`{"t":"upd","k":${JSON.stringify(key)},"v":${current}}`);
+          send(current);
         } else if (m.t === "unsub") {
           const key = subscriptionKey(m.path, m.args);
           if (ws.data.keys.delete(key)) {
