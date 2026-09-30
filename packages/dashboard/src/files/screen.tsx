@@ -14,7 +14,7 @@ import { capabilitiesQuery } from "../data/queries.ts";
 import { type StoredFile, toDataSourceError } from "../data-source.ts";
 import { formatTime } from "../database/values.ts";
 import { type FilesSearch, filesRoute } from "../router.tsx";
-import { formatCount } from "../screens/stats.ts";
+import { formatBytes, formatCount } from "../screens/stats.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -24,18 +24,7 @@ import { fileCountQuery, fileKeys, fileQuery, filesQuery, useFilesLive } from ".
 
 const col = dataTableColumns<StoredFile>();
 
-/** "1.2 KB", "3.4 MB" (powers of 1 024, as file sizes are usually read). */
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
+export { formatBytes }; // shared (screens/stats.ts); tests import it from here
 
 const files = (n: number) => `${formatCount(n)} ${n === 1 ? "file" : "files"}`;
 

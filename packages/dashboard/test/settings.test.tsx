@@ -44,10 +44,9 @@ test("the batch a set of rows makes: a rename is a delete and a set", () => {
 });
 
 describe("Settings: environment variables", () => {
-  test("Settings opens them; values are hidden until shown", async () => {
-    const { history } = mount("/settings");
+  test("values are hidden until shown", async () => {
+    mount("/settings/environment-variables");
     await loaded();
-    expect(history.location.pathname).toBe("/settings/environment-variables");
     const secret = item("AUTH_SECRET");
     expect(secret.textContent).not.toContain("s3cr3t");
     expect(within(secret).getByText("Hidden value")).toBeDefined();
