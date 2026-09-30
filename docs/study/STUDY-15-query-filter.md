@@ -1,6 +1,6 @@
 # STUDY-15 — `.filter()` and the filter builder
 
-- **Status:** implemented (this PR)
+- **Status:** implemented (#37)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-07](STUDY-07-query-semantics.md), [STUDY-12](STUDY-12-value-model.md)
 

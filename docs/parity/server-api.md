@@ -46,11 +46,11 @@ Key bunvex facts behind the statuses:
 | Every user index implicitly ends with `_creationTime`, then `_id` | crates/common/src/types/index.rs; index_validation_error.rs | done (#10) | |
 | `.fullTableScan()` | impl/query_impl.ts | missing | Only the implicit default (`by_creation_time`). |
 | `.order("asc" \| "desc")` | impl/query_impl.ts | partial | Works. It doesn't reject a second `.order()` or `.order()` on a search query. |
-| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#NN) | |
-| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#NN) | |
-| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#NN) | |
-| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#NN) | |
-| Filter logic `and` / `or` / `not` | filter_builder.ts | done (#NN) | |
+| `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
+| Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
+| Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#37) | |
+| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
+| Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | missing | |
 | At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | missing | |
 | `.limit(n)` (non-terminal operator on OrderedQuery) | server/query.ts | missing | |
