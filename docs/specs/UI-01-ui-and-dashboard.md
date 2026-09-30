@@ -865,3 +865,23 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 - **No Statistics tab** (STUDY-12 L1, decided): the server has no app metrics yet. No Run button until
   §13.3.
 - Nothing open: a hint. An unknown function in the URL is named. No functions: says so.
+
+### 13.3 The function runner
+
+- **Contract**: an optional `runFunction(path, args)` → `FunctionRun` (`value`, or `error: { message,
+  data? }` when the function threw, its `logLines`, `durationMs`). A function that throws is a result, not
+  a rejected call. The call rejects only when it cannot be made: `not_found` (no such function),
+  `unauthorized` (no `runFunctions`, or a read-only credential running a mutation or an action), or
+  `unavailable`. The run is logged like any other execution. The mock runs `<table>:list`, `<table>:get`
+  and `tasks:byOwner` over its tables, returns `null` otherwise and changes no data; as a mock-only hook,
+  `throw: "…"` makes a run throw. The contract suite covers it when opted in (`run: { query, args }`).
+- **The panel** (`src/runner/`): docked at the bottom of every screen, as in Convex, and opened by **Run
+  functions** in the header, **Run** on the Functions screen, or **Ctrl+`** anywhere. It has a function
+  picker; **arguments** as a JavaScript literal in the code editor, with a draft kept per function while
+  the page is open; **Run query / mutation / action**, or Ctrl+Enter; then the result as a literal, or the
+  error, with the duration and the lines the run logged. A refused call is shown as an alert. While the
+  runner is open, the screen keeps room to scroll past it.
+- Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
+  credential runs queries only.
+- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", argument
+  validation against the function's validator, custom test queries.
