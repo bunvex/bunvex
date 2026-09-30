@@ -347,6 +347,8 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 
 ### 8.3 Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96, P2 under Gaps.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | P1 | `InvalidCursor` is recognized by its message only. Convex also checks a system error's `data.paginationError`. | bunvex sends no such system-error data; the message is how its cursor errors read (`InvalidCursor: …`) | **recommend** |

@@ -141,6 +141,7 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-94 | A replayed session mutation (a resend that already committed) answers the ts of the snapshot that saw its record, at or after the original commit | the original commit's ts | yes (protocol ts only) | Exact ts needs `Persistence` to return a version's ts (a PERSIST-01 change); clients behave the same | [STUDY-23 P13](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
+| DV-96 | `usePaginatedQuery` recognizes `InvalidCursor` by its message only | also by a system error's `data.paginationError` | yes | bunvex's server sends no such data yet (STUDY-17 D4) | [STUDY-26 P1](../study/STUDY-26-sync-client.md#83-divergences) |
 
 ## Gaps recorded in studies
 
@@ -160,3 +161,4 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-12 S2, H2](../study/STUDY-12-dashboard.md#93-divergences) | Dashboard: component picker; server-recorded events (pushes, index builds) |
 | [STUDY-26 C6](../study/STUDY-26-sync-client.md#4-divergences) | Client: `setAuth` (with `@bunvex/auth`); the paginated query client and the HTTP client come in the next PRs |
 | [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: auth helpers and `usePreloadedQuery` (with `@bunvex/auth` and `@bunvex/nextjs`); `usePaginatedQuery` comes in the next PR |
+| [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery` |
