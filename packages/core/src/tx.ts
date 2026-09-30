@@ -157,6 +157,31 @@ export const TRANSACTION_MAX_READ_SET_INTERVALS = 4096;
 const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
+type QState = {
+  t: TableDef | undefined;
+  ix: IndexDef | undefined;
+  range: Range;
+  desc: boolean;
+  orderSet: boolean;
+  filters: ExpressionOrValue[];
+  stage: "initializer" | "query";
+  closed: boolean;
+  iterated: boolean;
+};
+
+/** A query under construction (Convex's QueryInitializer / Query / OrderedQuery in one shape). */
+export type TxQuery = {
+  withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery;
+  fullTableScan(): TxQuery;
+  order(dir: "asc" | "desc"): TxQuery;
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery;
+  take(n: number): Promise<Doc[]>;
+  first(): Promise<Doc | null>;
+  unique(): Promise<Doc | null>;
+  collect(): Promise<Doc[]>;
+  [Symbol.asyncIterator](): AsyncIterator<Doc>;
+};
+
 export class Tx {
   reads: Interval[] = [];
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
@@ -298,118 +323,116 @@ export class Tx {
     return json ? decodeDoc(json) : null;
   }
 
-  query(table: string) {
-    const found = this.findTable(table);
-    if (!found) return this.missingTableQuery();
-    const t = found;
-    let ix = t.indexes.get("by_creation_time")!;
-    let range: Range = FULL;
-    let desc = false;
-    const filters: ExpressionOrValue[] = [];
-    const snapshotRange = async (lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> => {
-      const p = this.persistence as Persistence & Partial<ScanDocs>;
-      if (p.scanDocs) {
-        // Remote persistence fuses the index range and the document fetches into one round trip.
-        const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, desc));
-        for (const j of rows) this.recordDoc(j);
-        return rows.map(decodeDoc);
-      }
-      const ids = await outsideExecution(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, desc));
-      const out: Doc[] = [];
-      for (const id of ids) {
-        const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
-        if (json) {
-          this.recordDoc(json);
-          out.push(decodeDoc(json));
-        }
-      }
-      return out;
+  /**
+   * `db.query(table)`: an immutable chain as Convex's (`QueryInitializer` → `Query`): each operator returns
+   * a new query and closes the previous one; `withIndex` / `fullTableScan` only on the initializer; `order`
+   * at most once; results by `collect` / `take` / `first` / `unique` / `for await` (STUDY-16).
+   */
+  query(table: string): TxQuery {
+    const t = this.findTable(table);
+    if (!t) this.readMissingTable(); // a missing table has no rows; the read depends on _tables
+    const st: QState = {
+      t,
+      ix: t?.indexes.get("by_creation_time"),
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      filters: [],
+      stage: "initializer",
+      closed: false,
+      iterated: false,
     };
-    /** Up to `limit` documents of [lo, hi), this transaction's own writes merged in. */
-    const page = async (lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> => {
-      const pend: [Uint8Array, Doc | null][] = [];
-      this.pending.get(ix.id)?.forRange(lo, hi, false, (k, val) => {
-        pend.push([k, val]);
-      });
-      if (pend.length === 0) return snapshotRange(lo, hi, limit); // the common case: nothing written here
-      return this.mergePending(ix, pend, await snapshotRange(lo, hi, limit + countRemovals(pend)), limit, desc);
-    };
-    const run = async (limit: number): Promise<Doc[]> => {
-      if (limit <= 0) return [];
-      // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only
-      // affects how often the query cache is invalidated, never correctness).
-      this.recordInterval({ index: ix.id, lo: range.lo, hi: range.hi });
-      if (filters.length === 0) return page(range.lo, range.hi, limit);
-      // With filters: stream the range in pages until `limit` documents pass (reads count toward the
-      // transaction's limits as they happen, as in Convex).
-      const out: Doc[] = [];
-      for await (const d of stream()) {
-        if (filters.every((f) => passes(f, d))) out.push(d);
-        if (out.length >= limit) break;
-      }
-      return out;
-    };
-    /** Every document of the range in order, fetched in growing pages past the last key seen. */
-    const stream = async function* (): AsyncGenerator<Doc> {
-      let lo = range.lo;
-      let hi = range.hi;
-      let n = 64;
-      for (;;) {
-        const docs = await page(lo, hi, n);
-        for (const d of docs) yield d;
-        if (docs.length < n) return;
-        const last = indexKey(ix, docs[docs.length - 1]);
-        if (desc) hi = last;
-        else {
-          lo = new Uint8Array(last.length + 1);
-          lo.set(last);
-        }
-        n = Math.min(n * 2, 1024);
-      }
-    };
-    const q = {
-      withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder) {
-        const found = t.indexes.get(name);
-        if (!found) throw new Error(`unknown index ${table}.${name}`);
-        ix = found;
-        range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
-        return q;
-      },
-      order(dir: "asc" | "desc") {
-        desc = dir === "desc";
-        return q;
-      },
-      /** Keep the documents for which `predicate` is true (Convex's filter builder). */
-      filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>) {
-        if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
-        filters.push(predicate(filterBuilder));
-        return q;
-      },
-      take: (n: number) => {
-        if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
-        if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
-        return run(n);
-      },
-      first: async () => (await run(1))[0] ?? null,
-      // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
-      // enough to raise Convex's error).
-      collect: () => run(this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1),
-    };
-    return q;
+    return this.makeQuery(table, st);
   }
 
-  /** The query of a table that does not exist: the same surface, no rows. */
-  private missingTableQuery() {
-    this.readMissingTable();
-    const q = {
-      withIndex: (_name: string, _f?: (b: IndexRangeBuilder) => IndexRangeBuilder) => q,
-      order: (_dir: "asc" | "desc") => q,
-      filter: (_predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>) => q,
-      take: async (_n: number): Promise<Doc[]> => [],
-      first: async (): Promise<Doc | null> => null,
-      collect: async (): Promise<Doc[]> => [],
-    };
-    return q;
+  private makeQuery(table: string, st: QState): TxQuery {
+    return new QueryImpl(this, table, st);
+  }
+
+  /** @internal (QueryImpl) */
+  async *iterate(st: QState): AsyncGenerator<Doc> {
+    if (!st.t || !st.ix) return;
+    this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.hi });
+    for await (const d of this.stream(st)) if (st.filters.every((f) => passes(f, d))) yield d;
+  }
+
+  private async snapshotRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    const t = st.t!;
+    const ix = st.ix!;
+    const p = this.persistence as Persistence & Partial<ScanDocs>;
+    if (p.scanDocs) {
+      // Remote persistence fuses the index range and the document fetches into one round trip.
+      const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
+      for (const j of rows) this.recordDoc(j);
+      return rows.map(decodeDoc);
+    }
+    const ids = await outsideExecution(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
+    const out: Doc[] = [];
+    for (const id of ids) {
+      const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+      if (json) {
+        this.recordDoc(json);
+        out.push(decodeDoc(json));
+      }
+    }
+    return out;
+  }
+
+  /** Up to `limit` documents of [lo, hi), this transaction's own writes merged in. */
+  private async page(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    const ix = st.ix!;
+    const pend: [Uint8Array, Doc | null][] = [];
+    this.pending.get(ix.id)?.forRange(lo, hi, false, (k, val) => {
+      pend.push([k, val]);
+    });
+    if (pend.length === 0) return this.snapshotRange(st, lo, hi, limit); // the common case: nothing written here
+    return this.mergePending(
+      ix,
+      pend,
+      await this.snapshotRange(st, lo, hi, limit + countRemovals(pend)),
+      limit,
+      st.desc,
+    );
+  }
+
+  /** Every document of the range in order, fetched in growing pages past the last key seen. */
+  private async *stream(st: QState): AsyncGenerator<Doc> {
+    let lo = st.range.lo;
+    let hi = st.range.hi;
+    let n = 64;
+    for (;;) {
+      const docs = await this.page(st, lo, hi, n);
+      for (const d of docs) yield d;
+      if (docs.length < n) return;
+      const last = indexKey(st.ix!, docs[docs.length - 1]);
+      if (st.desc) hi = last;
+      else {
+        lo = new Uint8Array(last.length + 1);
+        lo.set(last);
+      }
+      n = Math.min(n * 2, 1024);
+    }
+  }
+
+  /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
+  collectLimit() {
+    return this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
+  }
+
+  /** @internal (QueryImpl) */
+  async runQuery(st: QState, limit: number): Promise<Doc[]> {
+    if (limit <= 0 || !st.t || !st.ix) return [];
+    // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only affects
+    // how often the query cache is invalidated, never correctness).
+    this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.hi });
+    if (st.filters.length === 0) return this.page(st, st.range.lo, st.range.hi, limit);
+    // With filters: stream until `limit` documents pass (reads count toward the limits as they happen).
+    const out: Doc[] = [];
+    for await (const d of this.stream(st)) {
+      if (st.filters.every((f) => passes(f, d))) out.push(d);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /**
@@ -620,3 +643,102 @@ function sortFields(doc: Record<string, unknown>): Doc {
 /** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
 export const encodeDoc = (doc: Doc): string => JSON.stringify(toJsonValue(doc as unknown as Value));
 export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) as unknown as Doc;
+
+const reusedError = () => new Error("This query has been chained with another operator and can't be reused.");
+
+/**
+ * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
+ * allocated per query: this is the hot path of every read).
+ */
+class QueryImpl implements TxQuery {
+  constructor(
+    private readonly tx: Tx,
+    private readonly table: string,
+    private readonly st: QState,
+  ) {}
+
+  private chain(change: (next: QState) => void): TxQuery {
+    const st = this.st;
+    if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
+    if (st.closed) throw reusedError();
+    st.closed = true;
+    const next: QState = { ...st, filters: [...st.filters], closed: false, iterated: false, stage: "query" };
+    change(next);
+    return new QueryImpl(this.tx, this.table, next);
+  }
+
+  private results(limit: number) {
+    if (this.st.closed || this.st.iterated) throw reusedError();
+    this.st.closed = true;
+    return this.tx.runQuery(this.st, limit);
+  }
+
+  private onlyInitializer(what: string) {
+    if (this.st.stage !== "initializer")
+      throw new Error(`${what} can only be called on db.query(table), before other operators.`);
+  }
+
+  withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery {
+    this.onlyInitializer("withIndex()");
+    const t = this.st.t;
+    return this.chain((n) => {
+      if (!t) return;
+      const found = t.indexes.get(name);
+      if (!found) throw new Error(`unknown index ${this.table}.${name}`);
+      n.ix = found;
+      n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
+    });
+  }
+
+  fullTableScan(): TxQuery {
+    this.onlyInitializer("fullTableScan()");
+    return this.chain(() => {});
+  }
+
+  order(dir: "asc" | "desc"): TxQuery {
+    if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
+    return this.chain((n) => {
+      n.desc = dir === "desc";
+      n.orderSet = true;
+    });
+  }
+
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
+    if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
+    return this.chain((n) => {
+      n.filters.push(predicate(filterBuilder));
+    });
+  }
+
+  take(n: number): Promise<Doc[]> {
+    if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
+    if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
+    return this.results(n);
+  }
+
+  async first(): Promise<Doc | null> {
+    return (await this.results(1))[0] ?? null;
+  }
+
+  async unique(): Promise<Doc | null> {
+    const two = await this.results(2);
+    if (two.length > 1)
+      throw new Error(
+        `unique() query returned more than one result from table ${this.table}:\n [${two[0]._id}, ${two[1]._id}, ...]`,
+      );
+    return two[0] ?? null;
+  }
+
+  collect(): Promise<Doc[]> {
+    // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
+    // enough to raise Convex's error).
+    return this.results(this.tx.collectLimit());
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<Doc> {
+    if (this.st.iterated) throw new Error("Iteration can only begin on a query once.");
+    if (this.st.closed) throw reusedError();
+    this.st.iterated = true;
+    return this.tx.iterate(this.st);
+  }
+}
