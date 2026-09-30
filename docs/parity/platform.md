@@ -325,7 +325,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Schema view, Functions (tree, perf graphs, function runner with identity) | `features/functions`, `functionRunner` | missing | |
 | Files (upload, delete, preview) | `features/files` | missing | |
 | Schedules (scheduled functions, cancel; crons with history) | `features/schedules` | missing | |
-| Logs (call tree, search), History (audit log) | `features/logs`, `history` | partial | The Logs screen is built on the mock (STUDY-12 §7, UI-01 §13.1): live lines newest first, pause, clear, client-side filters by function, type and text kept per deployment, a line's details with its request. Missing: the call tree, deployment events, usage and identity in the details, History (audit log); the server's log stream. |
+| Logs (call tree, search), History (audit log) | `features/logs`, `history` | partial | The Logs screen is built on the mock (STUDY-12 §7, UI-01 §13.1): live lines newest first, pause, clear, client-side filters by function, type and text, in the URL and kept per deployment (STUDY-12 L7), a line's details with its request. Missing: the call tree, deployment events, usage and identity in the details, History (audit log); the server's log stream. |
 | Settings: pause deployment, env vars, usage limits, auth config, components, integrations (log sinks) | `features/settings` | missing | Backups and custom domains are disabled on self-hosted. |
 
 ### 22. Deployment state, health, self-hosted configuration
