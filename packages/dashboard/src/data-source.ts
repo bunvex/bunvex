@@ -51,6 +51,8 @@ export type DeploymentInfo = {
   persistence: string;
   /** The deployment's client URL, if the host wants it shown. */
   url?: string;
+  /** Where its HTTP actions are served (Convex's "site" URL, `CONVEX_SITE_URL`), if the host wants it shown. */
+  httpActionsUrl?: string;
 };
 
 /** What the caller may do. The dashboard gates screens and buttons on it; the source enforces it. */
