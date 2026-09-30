@@ -347,7 +347,7 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 
 ### 8.3 Divergences
 
-Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96, P2 under Gaps.
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96 (decided), P2 under Gaps.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
