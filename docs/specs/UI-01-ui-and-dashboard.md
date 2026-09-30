@@ -789,6 +789,32 @@ which Convex's does not.
   resizable one.
 - Checked in a browser at 1 400 and 1 600 px, and by dragging both handles (the widths are saved).
 
+### 12.5.7 Values as JavaScript literals, in a code editor
+
+STUDY-12 D9 was decided "match Convex" (30 Sep 2026): the syntax of our own (a bare word is text,
+comma lists) is gone.
+
+- **`literal.ts`** (dashboard): a hand-written parser and formatter for JavaScript literals — never
+  evaluated. Objects with bare or quoted keys, arrays, strings in either quote, numbers, `10n` for an int64
+  (range-checked), `Bytes("base64")`, `true`/`false`/`null`, comments and trailing commas. `undefined`
+  means "no field": it removes a field in a patch, drops a key in an object and is refused in a list;
+  `NaN`/`Infinity` are refused. Every error carries the offset where it is. JSON is a subset.
+- **`CodeEditor`** (`@bunvex/ui/components/code-editor`): Monaco (`monaco-editor` 0.57 through
+  `@monaco-editor/react`, **bundled, no CDN**, its worker built by Vite) loaded on demand, with a plain
+  input/textarea that has the same keys until it loads and in tests (`setCodeEditorImplementation("plain")`).
+  One line (Enter submits, Escape cancels, Tab leaves the field or calls `onTab`) or several (Ctrl+Enter or
+  Cmd+Enter submits). A Monarch language `bunvex-literal`, light and dark themes built from the design
+  tokens (redefined when the theme changes), the error underlined from its offset. Only the editor
+  contributions a value box needs are imported. Monaco is ~3.2 MB, in its own chunk, fetched when the
+  Database screen mounts (`preloadCodeEditor`), not with the app.
+- **Where**: every filter value (index equals, range bounds, clause values; a list without brackets is read
+  as one), a cell (one line for a scalar; a multi-line popover for an object or a list, opening leftwards
+  near the grid's edge), **Add documents**, and a new **Edit** on the document panel — the fields without
+  `_id`/`_creationTime`, saved whole with `replaceDocument` (shown when the source has it and the
+  credential can write).
+- Checked in a browser: both themes, typing and auto-closing, both save shortcuts, an error underlined
+  in a cell, the object popover at the right edge, no request leaves localhost.
+
 ### 12.5.9 Accessibility pass (slice 7)
 
 - **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each

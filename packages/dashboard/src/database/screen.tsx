@@ -2,6 +2,7 @@
 // indexes and fields, live while it is open, with one side panel for a document, the schema or the
 // indexes. Everything that says what is shown lives in the URL: the table, the filter, the open panel.
 import { Button } from "@bunvex/ui/components/button";
+import { preloadCodeEditor } from "@bunvex/ui/components/code-editor";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -121,6 +122,7 @@ function TableView({ info }: { info: TableInfo }) {
     insert: canWrite && typeof source.insertDocuments === "function",
     delete: canWrite && typeof source.deleteDocuments === "function",
     clear: canWrite && typeof source.clearTable === "function",
+    replace: canWrite && typeof source.replaceDocument === "function",
   };
   const writable = can.edit;
   const queryClient = useQueryClient();
@@ -140,6 +142,7 @@ function TableView({ info }: { info: TableInfo }) {
   const [columnState, setColumnState] = useColumnState(scope.scope, table);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new filter is a new list
   useEffect(() => setSelected(new Set()), [search.filter]);
+  useEffect(preloadCodeEditor, []); // the filter, cell and document editors all use it
   const selectedIds = useMemo(() => docs.filter((d) => selected.has(d._id)).map((d) => d._id), [docs, selected]);
 
   // what the last action did, said once (and to screen readers)
@@ -167,7 +170,7 @@ function TableView({ info }: { info: TableInfo }) {
   );
   const closePanel = useCallback(() => setSearch({ doc: undefined, panel: undefined }), [setSearch]);
   const panel: PanelState | null = search.doc
-    ? { kind: "document", id: search.doc }
+    ? { kind: "document", id: search.doc, canEdit: can.replace }
     : search.panel === "add"
       ? can.insert
         ? {

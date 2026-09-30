@@ -8,7 +8,7 @@ import { JsonView } from "@bunvex/ui/components/json-view";
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { documentQuery, schemaQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
@@ -16,10 +16,12 @@ import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { AddDocuments } from "./add-documents.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
+import { DocumentEditor } from "./document-editor.tsx";
+import { formatLiteral } from "./literal.ts";
 import { formatTime } from "./values.ts";
 
 export type PanelState =
-  | { kind: "document"; id: string }
+  | { kind: "document"; id: string; canEdit: boolean }
   | { kind: "schema" }
   | { kind: "indexes" }
   | { kind: "add"; onAdded: (ids: string[]) => void }
@@ -53,7 +55,8 @@ function Panel({ title, onClose, children }: { title: ReactNode; onClose: () => 
 }
 
 export function SidePanel({ state, info, onClose }: { state: PanelState; info: TableInfo; onClose: () => void }) {
-  if (state.kind === "document") return <DocumentPanel table={info.name} id={state.id} onClose={onClose} />;
+  if (state.kind === "document")
+    return <DocumentPanel table={info.name} id={state.id} canEdit={state.canEdit} onClose={onClose} />;
   if (state.kind === "schema") return <SchemaPanel info={info} onClose={onClose} />;
   if (state.kind === "columns")
     return (
@@ -70,8 +73,11 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
   return <IndexesPanel info={info} onClose={onClose} />;
 }
 
-function DocumentPanel({ table, id, onClose }: { table: string; id: string; onClose: () => void }) {
+function DocumentPanel(props: { table: string; id: string; canEdit: boolean; onClose: () => void }) {
+  const { table, id, onClose } = props;
   const { data: doc, error, isPending, refetch } = useQuery(documentQuery(useQueryScope(), table, id));
+  const [editing, setEditing] = useState(false);
+  const [saved, setSaved] = useState(false);
   return (
     <Panel title={<span className="font-mono text-sm">{id}</span>} onClose={onClose}>
       {isPending ? (
@@ -80,14 +86,42 @@ function DocumentPanel({ table, id, onClose }: { table: string; id: string; onCl
         <ErrorState error={toDataSourceError(error)} onRetry={() => void refetch()} />
       ) : doc === null || doc === undefined ? (
         <p className="text-sm text-muted-foreground">No document with this id in {table}. It may have been deleted.</p>
+      ) : editing ? (
+        <DocumentEditor
+          table={table}
+          doc={doc}
+          onDone={(ok) => {
+            setEditing(false);
+            setSaved(ok);
+          }}
+        />
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-muted-foreground">
               Created <time dateTime={new Date(doc._creationTime).toISOString()}>{formatTime(doc._creationTime)}</time>
             </p>
-            <CopyButton text={JSON.stringify(doc, null, 2)} label="Copy JSON" />
+            <span className="flex gap-2">
+              {props.canEdit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSaved(false);
+                    setEditing(true);
+                  }}
+                >
+                  Edit
+                </Button>
+              )}
+              <CopyButton text={formatLiteral(doc, "  ")} label="Copy" />
+            </span>
           </div>
+          {saved && (
+            <p role="status" className="mt-2 text-sm text-muted-foreground">
+              Saved.
+            </p>
+          )}
           <JsonView className="mt-3" value={doc} label={`Document ${id}`} />
         </>
       )}

@@ -5,6 +5,10 @@
 //   3. no relative import leaves its package;
 //   4. no source file starts with `// @bun` — Bun reads that as its "already transpiled" pragma and
 //      would load the TypeScript as plain JavaScript (found the hard way during the ARCH-01 migration).
+//   5. no "convex" in the packages' shipped code (packages/*/src) outside comments: not in identifiers,
+//      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
+//      API and its messages carry its own names (owner's decision, STUDY-12 D1). Apps (apps/*, e.g. the site
+//      comparing benchmarks) may name Convex descriptively.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -54,6 +58,42 @@ const readPkg = (dir: string) => JSON.parse(readFileSync(join(dir, "package.json
 const dirOfName = new Map<string, string>();
 for (const [key, dir] of workspaces) dirOfName.set(readPkg(dir).name, key);
 
+/**
+ * The code of a TS/TSX source with its comments blanked out (strings, template literals and regex-free code
+ * kept), so rule 5 sees identifiers, strings and URLs but not the comments that cite Convex.
+ */
+function withoutComments(text: string): string {
+  let out = "";
+  let i = 0;
+  let quote: string | null = null;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (quote) {
+      out += c;
+      if (c === "\\") {
+        out += next ?? "";
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i++;
+    } else if (c === "/" && next === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (c === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      out += text.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop;
+    } else {
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
@@ -85,6 +125,15 @@ for (const [name, dir] of dirOfName) {
   for (const file of tsFiles(root)) {
     const rel = relative(ROOT, file);
     const text = readFileSync(file, "utf8");
+    if (/^packages\/[^/]+\/src\//.test(rel)) {
+      const code = withoutComments(text).split("\n");
+      code.forEach((line, n) => {
+        if (/convex/i.test(line))
+          errors.push(
+            `${rel}:${n + 1}: "convex" in shipped code outside a comment — use bunvex's own names and messages (rule 5)`,
+          );
+      });
+    }
     if (text.startsWith("// @bun"))
       errors.push(`${rel}: starts with "// @bun" (Bun's pre-transpiled pragma) — reword the first line`);
     for (const m of text.matchAll(importRe)) {

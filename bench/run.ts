@@ -1,5 +1,6 @@
 // ENGINE-00 microbenchmarks, in-process (no HTTP). `bun bench/run.ts [m1|m2|m3|m4|all]`
 // Env: DIR (scratch dir for data files, default ./.data), SECS (per trial, default 5).
+
 import { mkdirSync, rmSync } from "node:fs";
 import {
   Committer,
@@ -12,6 +13,7 @@ import {
 } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
+import { compareValues } from "@bunvex/values";
 
 const DIR = process.env.DIR ?? `${import.meta.dir}/../.data`;
 const SECS = Number(process.env.SECS ?? 5);
@@ -44,16 +46,7 @@ function m1() {
     for (let i = 0; i < len; i++) s += String.fromCharCode([0, 1, 97, 98, 0xe9, 0x4e2d][Math.floor(Math.random() * 6)]);
     return s;
   };
-  const rank = (v: KeyValue) => (v === null ? 0 : v === false ? 1 : v === true ? 2 : typeof v === "number" ? 3 : 4);
-  const utf8 = new TextEncoder();
-  const cmpVal = (a: KeyValue, b: KeyValue): number => {
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra !== rb) return ra - rb;
-    if (typeof a === "number" && typeof b === "number") return a === b ? 0 : a < b ? -1 : 1;
-    if (typeof a === "string" && typeof b === "string") return compareKeys(utf8.encode(a), utf8.encode(b));
-    return 0;
-  };
+  const cmpVal = (a: KeyValue, b: KeyValue): number => compareValues(a, b); // Convex's order (STUDY-12)
   const tuples = Array.from({ length: 20000 }, () => [rnd(), rnd()] as KeyValue[]);
   const byVal = [...tuples].sort((a, b) => cmpVal(a[0], b[0]) || cmpVal(a[1], b[1]));
   const byKey = [...tuples].sort((a, b) => compareKeys(encodeKey(a), encodeKey(b)));
@@ -83,10 +76,9 @@ const I_BY_CREATION = 2;
 function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
-  const idBytes = new TextEncoder().encode(id);
   const idx: IndexWrite[] = [
-    { index: I_BY_TENANT_CREATED, key: encodeKey([tenant, createdAt, idBytes]), id },
-    { index: I_BY_CREATION, key: encodeKey([createdAt, idBytes]), id },
+    { index: I_BY_TENANT_CREATED, key: encodeKey([tenant, createdAt, id]), id },
+    { index: I_BY_CREATION, key: encodeKey([createdAt, id]), id },
   ];
   return { docs: [{ table: T_ITEMS, id, json }], idx };
 }

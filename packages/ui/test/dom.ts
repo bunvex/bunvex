@@ -6,6 +6,10 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
 GlobalRegistrator.register({ url: "http://localhost/" });
 
+// Monaco needs layout and workers: the code editor's plain field (same keys, same labels) stands in.
+const { setCodeEditorImplementation } = await import("@bunvex/ui/components/code-editor");
+setCodeEditorImplementation("plain");
+
 // happy-dom has no layout: every offsetHeight is 0, so a virtualized DataTable would render no row. Its
 // scroll container (data-slot="data-table") gets the size a browser would give it: 360 × 800 px.
 for (const [key, size] of Object.entries({ offsetHeight: 360, offsetWidth: 800 })) {

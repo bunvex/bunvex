@@ -1,15 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { compareValues } from "@bunvex/values";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "../src/keyenc.ts";
 
-const utf8 = new TextEncoder();
-const rank = (v: KeyValue) => (v === null ? 0 : v === false ? 1 : v === true ? 2 : typeof v === "number" ? 3 : 4);
-/** The reference order the byte encoding must reproduce. */
-function cmpValue(a: KeyValue, b: KeyValue): number {
-  if (rank(a) !== rank(b)) return rank(a) - rank(b);
-  if (typeof a === "number" && typeof b === "number") return a === b ? 0 : a < b ? -1 : 1;
-  if (typeof a === "string" && typeof b === "string") return compareKeys(utf8.encode(a), utf8.encode(b));
-  return 0;
-}
+/** The reference order the byte encoding must reproduce: Convex's (STUDY-12). */
+const cmpValue = (a: KeyValue, b: KeyValue) => compareValues(a, b);
 const sign = (n: number) => Math.sign(n);
 
 describe("keyenc", () => {
@@ -40,8 +34,9 @@ describe("keyenc", () => {
     expect(compareKeys(encodeKey(["t1"]), encodeKey(["t10"]))).toBeLessThan(0);
   });
 
-  test("-0 and 0 encode identically", () => {
-    expect(compareKeys(encodeKey([-0]), encodeKey([0]))).toBe(0);
+  test("-0 sorts just below 0 (IEEE-754 total order, as Convex)", () => {
+    expect(compareKeys(encodeKey([-0]), encodeKey([0]))).toBeLessThan(0);
+    expect(compareKeys(encodeKey([-Number.MIN_VALUE]), encodeKey([-0]))).toBeLessThan(0);
   });
 
   test("prefixEnd bounds exactly the keys that start with the prefix", () => {
