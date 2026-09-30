@@ -10,7 +10,7 @@ import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { Play, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Play, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
@@ -25,6 +25,7 @@ import { formatLiteral, parseLiteralLocated, UNSET } from "../database/literal.t
 import { describeFunction } from "../functions/tree.ts";
 import { formatDuration } from "../logs/log-list.tsx";
 import { defaultValueFor, validateValue } from "../validators.ts";
+import { appendRunHistory, type RunHistoryEntry, readRunHistory } from "./history.ts";
 
 type Args =
   | { ok: true; args: Record<string, Value> }
@@ -79,6 +80,19 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
   const live = fn?.kind === "query" && typeof scope.source.watchFunction === "function";
   const argsKey = args.ok ? JSON.stringify(args.args) : null;
   const [waiting, setWaiting] = useState(false);
+  // a mutation's or an action's past arguments (a query follows its own): Previous / Next step through them
+  const [history, setHistory] = useState<RunHistoryEntry[]>(() =>
+    fn && fn.kind !== "query" ? readRunHistory(scope.scope, fn.path) : [],
+  );
+  const [historyAt, setHistoryAt] = useState(0);
+  const showHistory = (i: number) => {
+    const entry = history[i];
+    if (!entry || !fn) return;
+    const t = formatLiteral(entry.args, "  ");
+    setText(t);
+    drafts.set(fn.path, t);
+    setHistoryAt(i);
+  };
 
   // a watched query: subscribed with the current (valid) arguments; the last result stays until the next
   // biome-ignore lint/correctness/useExhaustiveDependencies: argsKey stands for args.args
@@ -106,6 +120,11 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
     // a watched query is not run: it follows its arguments
     if (!fn || !args.ok || blocked || live || !scope.source.runFunction) return;
     setRunning(true);
+    // a query keeps none, even run once (without watchFunction)
+    if (fn.kind !== "query") {
+      setHistory(appendRunHistory(scope.scope, fn.path, { args: args.args, startedAt: Date.now() }));
+      setHistoryAt(0);
+    }
     try {
       setOutcome({ run: await scope.source.runFunction(fn.path, args.args) });
     } catch (e) {
@@ -162,6 +181,30 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
             void run();
           }}
         >
+          {!live && history.length > 0 && (
+            <div className="flex items-center justify-end gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Previous arguments"
+                disabled={historyAt + 1 >= history.length}
+                onClick={() => showHistory(historyAt + 1)}
+              >
+                <ArrowLeft aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Next arguments"
+                disabled={historyAt <= 0}
+                onClick={() => showHistory(historyAt - 1)}
+              >
+                <ArrowRight aria-hidden="true" />
+              </Button>
+            </div>
+          )}
           <CodeEditor
             label="Arguments"
             multiline

@@ -4,6 +4,7 @@ import { MockDataSource, type MockDataSourceOptions } from "@bunvex/dashboard/mo
 import { createMemoryHistory } from "@tanstack/react-router";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { appendRunHistory, RUN_HISTORY_LENGTH, readRunHistory } from "../src/runner/history.ts";
 import { parseArgs } from "../src/runner/runner.tsx";
 import { expectAccessible } from "./axe.ts";
 
@@ -164,6 +165,9 @@ describe("the function runner", () => {
     expect(within(runner()).queryByText(/^Subscribed/)).toBeNull();
     await user.click(within(runner()).getByRole("button", { name: "Run query" }));
     await within(runner()).findByText(/^Succeeded in \d+ ms$/);
+    // run, not watched — and still no history: a query keeps none, as in Convex
+    expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
+    expect(readRunHistory("default", "tasks:list")).toEqual([]);
   });
 
   test("no runner where the source cannot run functions, or the credential may not", async () => {
@@ -174,5 +178,38 @@ describe("the function runner", () => {
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
     await userEvent.setup().keyboard("{Control>}`{/Control}");
     expect(screen.queryByRole("region", { name: "Run a function" })).toBeNull();
+  });
+
+  test("a mutation's or action's past arguments: Previous / Next fill the editor; kept in this browser", async () => {
+    mount("/functions?function=tasks:summarize");
+    await screen.findByRole("heading", { level: 1, name: "summarize" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
+    for (const text of ["{ n: 1 }", "{ n: 2 }", "{ n: 2 }"]) {
+      fireEvent.change(args(), { target: { value: text } });
+      await user.click(within(runner()).getByRole("button", { name: "Run action" }));
+      await within(runner()).findByText(/^(Succeeded|Failed) in/);
+    }
+    const previous = within(runner()).getByRole("button", { name: "Previous arguments" });
+    const next = within(runner()).getByRole("button", { name: "Next arguments" });
+    expect(next.hasAttribute("disabled")).toBe(true);
+    await user.click(previous); // the same arguments twice in a row are one entry
+    expect((args() as HTMLTextAreaElement).value).toBe("{\n  n: 1,\n}");
+    expect(previous.hasAttribute("disabled")).toBe(true);
+    await user.click(next);
+    expect((args() as HTMLTextAreaElement).value).toBe("{\n  n: 2,\n}");
+    expect(readRunHistory("default", "tasks:summarize").map((e) => e.args)).toEqual([{ n: 2 }, { n: 1 }]);
+  });
+
+  test("the history keeps the last 25 runs; a query has none", async () => {
+    for (let n = 0; n < 30; n++) appendRunHistory("s", "m:f", { args: { n }, startedAt: n });
+    const kept = readRunHistory("s", "m:f");
+    expect(kept.length).toBe(RUN_HISTORY_LENGTH);
+    expect(kept[0]!.args).toEqual({ n: 29 });
+    mount("/functions?function=tasks:list");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run" }));
+    expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
   });
 });

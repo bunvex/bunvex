@@ -517,7 +517,7 @@ subscribes a query when the source has it and falls back to Run once when it has
 first, kept in the browser per deployment (`useGlobalLocalStorage("runHistory/<deployment>/<function>")`);
 the same arguments twice in a row are one entry. **Previous arguments** / **Next arguments** buttons step
 through them, filling the editor. Only mutations and actions have it: a query follows its arguments.
-**Status: planned**, as Convex.
+**Status: built**, as Convex (no divergence; the entry keeps the arguments, the identity comes with §10.3).
 
 ### 10.3 Acting as a user (R3)
 
