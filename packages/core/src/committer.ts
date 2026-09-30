@@ -23,6 +23,22 @@ export class ConflictError extends Error {
   }
 }
 
+/**
+ * The committer stopped because persistence failed (a throwing `apply` or `flush`). As in Convex, this is
+ * fail-stop: nothing after the failure is ever made visible, every later commit is refused, and the process
+ * is expected to restart and recover from what persistence durably holds (PERSIST-01 C5).
+ */
+export class CommitterStoppedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `the committer stopped after a persistence failure: ${cause instanceof Error ? cause.message : String(cause)}`,
+      {
+        cause,
+      },
+    );
+  }
+}
+
 type PendingCommit = {
   snapshot: number;
   reads: Interval[];
@@ -43,6 +59,9 @@ export class Committer {
   private queue: PendingCommit[] = [];
   private running = false;
   private listeners: ((e: LogEntry[]) => void)[] = [];
+  private fatalListeners: ((e: CommitterStoppedError) => void)[] = [];
+  /** Set once persistence has failed; the committer accepts nothing afterwards. */
+  stopped: CommitterStoppedError | null = null;
 
   constructor(
     private persistence: Persistence,
@@ -54,7 +73,13 @@ export class Committer {
     this.listeners.push(fn);
   }
 
+  /** Called once, when persistence fails and the committer stops (the server shuts the process down). */
+  onFatal(fn: (e: CommitterStoppedError) => void) {
+    this.fatalListeners.push(fn);
+  }
+
   commit(c: Omit<PendingCommit, "resolve" | "reject">): Promise<number> {
+    if (this.stopped) return Promise.reject(this.stopped);
     return new Promise((resolve, reject) => {
       this.queue.push({ ...c, resolve, reject });
       if (!this.running) {
@@ -76,35 +101,55 @@ export class Committer {
   }
 
   private async drain() {
+    try {
+      await this.drainGroups();
+    } catch (e) {
+      this.stop(e);
+    }
+    this.running = false;
+  }
+
+  private async drainGroups() {
     while (this.queue.length) {
       const group = this.queue;
       this.queue = [];
       const accepted: [PendingCommit, LogEntry][] = [];
-      for (const p of group) {
-        if (!this.validate(p)) {
-          this.conflicts++;
-          p.reject(new ConflictError());
-          continue;
-        }
-        const ts = ++this.appliedTs;
-        this.persistence.apply(ts, p.docs, p.idx);
-        const entry: LogEntry = { ts, writes: p.idx.map((w) => ({ index: w.index, key: w.key })) };
-        this.log.push(entry); // visible to the validation of the NEXT commits of this very group
-        accepted.push([p, entry]);
-      }
-      if (this.log.length > this.logWindow) this.log.splice(0, this.log.length - this.logWindow);
-      if (!accepted.length) continue;
       try {
+        for (const p of group) {
+          if (!this.validate(p)) {
+            this.conflicts++;
+            p.reject(new ConflictError());
+            continue;
+          }
+          const ts = ++this.appliedTs;
+          accepted.push([p, { ts, writes: p.idx.map((w) => ({ index: w.index, key: w.key })) }]);
+          this.persistence.apply(ts, p.docs, p.idx);
+          this.log.push(accepted[accepted.length - 1][1]); // seen by the validation of the NEXT commits of this group
+        }
+        if (this.log.length > this.logWindow) this.log.splice(0, this.log.length - this.logWindow);
+        if (!accepted.length) continue;
         await this.persistence.flush();
-        this.groups++;
-        this.visibleTs = accepted[accepted.length - 1][1].ts;
-        const entries = accepted.map(([, e]) => e);
-        for (const l of this.listeners) l(entries);
-        for (const [p, e] of accepted) p.resolve(e.ts);
       } catch (e) {
-        for (const [p] of accepted) p.reject(e);
+        // Nothing of this group becomes visible: visibleTs stays where it was, and readers ignore versions
+        // above it. The group, and everything queued behind it, is refused.
+        this.stop(e);
+        for (const [p] of accepted) p.reject(this.stopped);
+        return;
       }
+      this.groups++;
+      this.visibleTs = accepted[accepted.length - 1][1].ts;
+      const entries = accepted.map(([, e]) => e);
+      for (const l of this.listeners) l(entries);
+      for (const [p, e] of accepted) p.resolve(e.ts);
     }
-    this.running = false;
+  }
+
+  private stop(cause: unknown) {
+    if (this.stopped) return;
+    this.stopped = new CommitterStoppedError(cause);
+    const queued = this.queue;
+    this.queue = [];
+    for (const p of queued) p.reject(this.stopped);
+    for (const l of this.fatalListeners) l(this.stopped);
   }
 }

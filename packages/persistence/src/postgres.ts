@@ -56,16 +56,18 @@ export class PostgresPersistence implements Persistence, ScanDocs {
   }
 
   async scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
-    // DISTINCT ON walks the index in (key, ts desc) order and keeps the newest version of each key.
+    // DISTINCT ON walks the index in (key, ts desc) order and keeps the newest version of each key; the
+    // removed entries are filtered AFTER it and the limit applies to what is left, so the answer is exact.
+    const dir = desc ? "desc" : "asc";
     const rows = await this.sql.unsafe(
-      `select distinct on (key) key, deleted, document_id from indexes
-       where index_id = $1 and key >= $2 and key < $3 and ts <= $4
-       order by key ${desc ? "desc" : "asc"}, ts desc limit $5`,
-      [index, Buffer.from(lo), Buffer.from(hi), ts, limit * 2] as any,
+      `select document_id from (
+         select distinct on (key) key, deleted, document_id from indexes
+         where index_id = $1 and key >= $2 and key < $3 and ts <= $4
+         order by key ${dir}, ts desc) e
+       where not e.deleted order by e.key ${dir} limit $5`,
+      [index, Buffer.from(lo), Buffer.from(hi), ts, Math.max(0, limit)] as any,
     );
-    const out: string[] = [];
-    for (const r of rows) if (!r.deleted && out.length < limit) out.push(r.document_id);
-    return out;
+    return rows.map((r) => r.document_id as string);
   }
 
   async get(table: number, id: string, ts: number) {
@@ -90,12 +92,12 @@ export class PostgresPersistence implements Persistence, ScanDocs {
       `with e as (
          select distinct on (key) key, deleted, document_id from indexes
          where index_id = $1 and key >= $2 and key < $3 and ts <= $4
-         order by key ${dir}, ts desc limit $5)
+         order by key ${dir}, ts desc)
        select d.json_value from e
        cross join lateral (select json_value, deleted from documents
-                           where table_id = $6 and id = e.document_id and ts <= $4 order by ts desc limit 1) d
-       where not e.deleted and not d.deleted order by e.key ${dir} limit $7`,
-      [index, Buffer.from(lo), Buffer.from(hi), ts, limit * 2, table, limit] as any,
+                           where table_id = $5 and id = e.document_id and ts <= $4 order by ts desc limit 1) d
+       where not e.deleted and not d.deleted order by e.key ${dir} limit $6`,
+      [index, Buffer.from(lo), Buffer.from(hi), ts, table, Math.max(0, limit)] as any,
     );
     return rows.map((r) => r.json_value as string);
   }

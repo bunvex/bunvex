@@ -25,6 +25,7 @@ export type IndexMeta = {
 
 export class Catalog {
   readonly tables = new Map<string, TableDef>();
+  private readonly numbers = new Map<number, TableDef>();
 
   add(name: string, tablet: number, number: number, indexes: { name: string; fields: string[]; id: number }[]) {
     const t: TableDef = { id: tablet, number, name, indexes: new Map(), byId: undefined as never };
@@ -34,7 +35,13 @@ export class Catalog {
     }
     t.byId = t.indexes.get("by_id")!;
     this.tables.set(name, t);
+    this.numbers.set(number, t);
     return t;
+  }
+
+  /** The table an id's number names, if any. */
+  byNumber(number: number): TableDef | undefined {
+    return this.numbers.get(number);
   }
 
   table(name: string): TableDef {
