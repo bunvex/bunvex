@@ -11,6 +11,17 @@ export { type ExecutionKind, wallClock } from "./determinism.ts";
 export { Engine, parseValue, stringifyValue, type TxBody } from "./engine.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-export { type Doc, type FieldValue, type IndexDef, indexKey, Schema, type TableDef } from "./schema.ts";
+export {
+  type DeclaredTable,
+  type Doc,
+  defineSchema,
+  defineTable,
+  type FieldValue,
+  type IndexDef,
+  indexKey,
+  type SchemaDefinition,
+  type TableDef,
+  TableDefinition,
+} from "./schema.ts";
 export { type Publish, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, Tx } from "./tx.ts";

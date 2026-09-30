@@ -1,7 +1,7 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
-import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, type GenericValidator, toJsonValue, type Value } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
@@ -17,7 +17,7 @@ import { Committer, ConflictError, type Interval, overlaps } from "./committer.t
 import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
-import { type Doc, indexKey, type Schema } from "./schema.ts";
+import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 
 /** A function result as Convex JSON text (`undefined` → null), and back. */
@@ -32,15 +32,23 @@ export class Engine {
   readonly committer: Committer;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = bootstrapCatalog();
+  /** Document validators of the declared tables (empty when `schemaValidation` is off). */
+  private readonly docValidators = new Map<string, GenericValidator>();
   private cache = new Map<string, CacheEntry>();
   stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
 
   constructor(
-    readonly schema: Schema,
+    readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: { cacheMax?: number; maxRetries?: number } = {},
   ) {
     installDeterminism();
+    // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
+    if (schema.schemaValidation)
+      for (const t of schema.tables.values()) {
+        const dv = documentValidator(t.name, t.document);
+        if (dv) this.docValidators.set(t.name, dv);
+      }
     this.committer = new Committer(persistence);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
@@ -113,6 +121,7 @@ export class Engine {
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
   }

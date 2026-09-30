@@ -1,11 +1,23 @@
 // The convex-bench functions, mirroring ~/sandbox/convex-bench/convex/bench.ts: same names, arguments
 // and semantics (so the same k6 script and fan-out harness run unchanged).
-import { action, internalMutation, internalQuery, mutation, query, Schema } from "bunvex/server";
+import { action, defineSchema, defineTable, internalMutation, internalQuery, mutation, query } from "bunvex/server";
+import { v } from "bunvex/values";
 
-export const benchSchema = new Schema()
-  .table("items", { by_tenant_created: ["tenantId", "createdAt"] })
-  .table("counters", { by_key: ["key"] })
-  .table("messages", { by_room_sent: ["room", "sentAt"] });
+// The same schema as convex-bench/convex/schema.ts, validators included (both sides validate every write).
+export const benchSchema = defineSchema({
+  items: defineTable({
+    tenantId: v.string(),
+    title: v.string(),
+    status: v.union(v.literal("open"), v.literal("done")),
+    amount: v.number(),
+    createdAt: v.number(),
+  }).index("by_tenant_created", ["tenantId", "createdAt"]),
+  counters: defineTable({ key: v.string(), value: v.number() }).index("by_key", ["key"]),
+  messages: defineTable({ room: v.string(), body: v.string(), sentAt: v.number() }).index("by_room_sent", [
+    "room",
+    "sentAt",
+  ]),
+});
 
 const PAGE = 20;
 

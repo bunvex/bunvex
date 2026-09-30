@@ -21,7 +21,7 @@ const ALLOWED: Record<string, string[]> = {
   values: [],
   core: ["values"],
   persistence: ["core"],
-  "persistence-conformance": ["core"],
+  "persistence-conformance": ["core", "values"],
   protocol: [],
   server: ["core", "protocol", "values", "auth", "file-storage", "persistence"],
   client: ["protocol", "values"],
