@@ -16,10 +16,11 @@ import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { DeleteSelected, type Outcome, TableMenu } from "./actions.tsx";
 import { CellEditor } from "./cell-editor.tsx";
+import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
 import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
-import { decodeFilter } from "./filter-url.ts";
+import { decodeFilter, encodeFilter } from "./filter-url.ts";
 import { useLiveTable } from "./live.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
@@ -169,8 +170,25 @@ function TableView({ info }: { info: TableInfo }) {
     [navigate],
   );
   const closePanel = useCallback(() => setSearch({ doc: undefined, panel: undefined }), [setSearch]);
+  const [editRequest, setEditRequest] = useState<number>();
+  // what a cell's context menu and shortcuts do (cell-menu.tsx)
+  const cellActions = (d: Document): CellActions => ({
+    filter: (clause) => setSearch({ filter: encodeFilter(withClause(applied, clause)) }),
+    copy: (text, what) =>
+      void navigator.clipboard.writeText(text).then(
+        () => setNotice({ ok: true, message: `Copied ${what === "document" ? "the document" : what}.` }),
+        () => setNotice({ ok: false, message: "Could not copy to the clipboard." }),
+      ),
+    viewDocument: () => setSearch({ doc: d._id, panel: undefined }),
+    editDocument: can.replace
+      ? () => {
+          setEditRequest((n) => (n ?? 0) + 1);
+          setSearch({ doc: d._id, panel: undefined });
+        }
+      : undefined,
+  });
   const panel: PanelState | null = search.doc
-    ? { kind: "document", id: search.doc, canEdit: can.replace }
+    ? { kind: "document", id: search.doc, canEdit: can.replace, editRequest }
     : search.panel === "add"
       ? can.insert
         ? {
@@ -315,6 +333,16 @@ function TableView({ info }: { info: TableInfo }) {
               renderEditor: ({ row, columnId, done }) => (
                 <CellEditor table={table} doc={row} field={columnId} done={done} />
               ),
+              cellMenu: ({ row, columnId, edit }) => (
+                <CellMenuItems
+                  doc={row}
+                  field={columnId}
+                  canEdit={writable && !columnId.startsWith("_")}
+                  edit={edit}
+                  actions={cellActions(row)}
+                />
+              ),
+              onCellKey: (e, { row, columnId }) => cellShortcut(e, row, columnId, cellActions(row)),
             }}
             empty={
               query.isPending

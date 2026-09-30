@@ -8,7 +8,7 @@ import { JsonView } from "@bunvex/ui/components/json-view";
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { documentQuery, schemaQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
@@ -21,7 +21,8 @@ import { formatLiteral } from "./literal.ts";
 import { formatTime } from "./values.ts";
 
 export type PanelState =
-  | { kind: "document"; id: string; canEdit: boolean }
+  /** `editRequest` changes each time the document should open in its editor (Shift+Enter on a cell). */
+  | { kind: "document"; id: string; canEdit: boolean; editRequest?: number }
   | { kind: "schema" }
   | { kind: "indexes" }
   | { kind: "add"; onAdded: (ids: string[]) => void }
@@ -56,7 +57,16 @@ function Panel({ title, onClose, children }: { title: ReactNode; onClose: () => 
 
 export function SidePanel({ state, info, onClose }: { state: PanelState; info: TableInfo; onClose: () => void }) {
   if (state.kind === "document")
-    return <DocumentPanel table={info.name} id={state.id} canEdit={state.canEdit} onClose={onClose} />;
+    return (
+      <DocumentPanel
+        key={state.id} // another document starts in its own view, not in the last one's editor
+        table={info.name}
+        id={state.id}
+        canEdit={state.canEdit}
+        editRequest={state.editRequest}
+        onClose={onClose}
+      />
+    );
   if (state.kind === "schema") return <SchemaPanel info={info} onClose={onClose} />;
   if (state.kind === "columns")
     return (
@@ -73,10 +83,20 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
   return <IndexesPanel info={info} onClose={onClose} />;
 }
 
-function DocumentPanel(props: { table: string; id: string; canEdit: boolean; onClose: () => void }) {
+function DocumentPanel(props: {
+  table: string;
+  id: string;
+  canEdit: boolean;
+  editRequest?: number;
+  onClose: () => void;
+}) {
   const { table, id, onClose } = props;
   const { data: doc, error, isPending, refetch } = useQuery(documentQuery(useQueryScope(), table, id));
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(props.canEdit && props.editRequest !== undefined);
+  const firstRequest = useRef(props.editRequest);
+  useEffect(() => {
+    if (props.canEdit && props.editRequest !== firstRequest.current) setEditing(true);
+  }, [props.canEdit, props.editRequest]);
   const [saved, setSaved] = useState(false);
   return (
     <Panel title={<span className="font-mono text-sm">{id}</span>} onClose={onClose}>
