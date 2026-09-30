@@ -66,6 +66,17 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
   return { function: str(input.function), run: str(input.run) };
 }
 
+/** Files (UI-01 §14.3): the order, a day range (`YYYY-MM-DD`, the viewer's zone), the open file. */
+export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
+const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  order: input.order === "asc" ? "asc" : undefined,
+  from: day(input.from),
+  to: day(input.to),
+  file: str(input.file),
+});
+
 /** Cron jobs: the job whose details are open. */
 export type CronsSearch = { cron?: string };
 export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch => ({ cron: str(input.cron) });
@@ -81,6 +92,7 @@ const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
 const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
+const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 
 export const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   component: Shell,
@@ -142,6 +154,13 @@ export const logsRoute = createRoute({
   component: LogsScreen,
 });
 
+export const filesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "files",
+  validateSearch: validateFilesSearch,
+  component: FilesScreen,
+});
+
 /** `/schedules` opens the scheduled functions, as Convex's sidebar does. */
 export const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -171,6 +190,7 @@ export const routeTree = rootRoute.addChildren([
   tableRoute,
   functionsRoute,
   logsRoute,
+  filesRoute,
   schedulesRoute,
   scheduledRoute,
   cronsRoute,

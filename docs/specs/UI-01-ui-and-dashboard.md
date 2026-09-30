@@ -1005,6 +1005,26 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   read-only and no-`writeData` credentials, the crons and their runs, a source without them, axe); the
   contract suite on the mock; an e2e case and axe with colour contrast in both themes.
 
+### 14.3 Files
+
+- **Contract**, optional: `listFiles({ numItems, cursor, order?, from?, to? })` — newest first by default
+  (`StoredFile`: storage id, creation time, base64 SHA-256, size, content type or null, a URL);
+  `countFiles()`; `getFile(id)` (null when absent); `uploadFile(blob)` → the new storage id (the content type
+  is the blob's); `deleteFiles(ids)` (unknown ids ignored); `watchFiles(onChange, onError)`. Reading needs
+  `viewData`; uploading and deleting `writeData`, as Convex.
+- **Contract suite**: the reads (both orders, a time range, the count, `getFile`) whenever offered; upload
+  and delete only with `files: { write: true }` (it checks size, type and SHA-256 of what it stored).
+- **Mock** (`mock/files.ts`): six SVG avatars, a text, a JSON, a CSV, a PDF-like and two binaries (one with
+  no type), over the last 30 days; object URLs, so previews and downloads work in a browser.
+- **Screen** (`/files`): the total ("12 files stored"), **Upload files** (several at once), a lookup by
+  storage id (opens its details), the order and a day range in the URL (`?order=asc&from=&to=`, days in
+  the viewer's zone), the grid (storage id, size, content type, uploaded) with row selection and **Delete N**
+  after a confirmation; a file's details (`?file=`): a **preview for images only**, as Convex (STUDY-12 F1,
+  decided: no text previews), size, type, SHA-256, time, **Download**, **Delete**.
+- Tests: the screen (order, day range, details and preview, no preview for text, upload, select and delete,
+  lookup, delete from details, read-only, a source without files, axe), the contract suite on the mock, an
+  e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
+
 ## 15. Amendment — deepening the screens (30 Sep 2026)
 
 ### 15.1 Validators on functions (STUDY-12 §8, V1)
@@ -1037,6 +1057,22 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
   arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
   test makes `scrollIntoView` return a Promise.
+
+### 15.3 The cell menu, completed (STUDY-12 D11, D13)
+
+- **View `<field>`** (Space, or the menu): the whole value beside the cell (`ValueView`, a Popover
+  anchored to the cell's rectangle, which `DataTable` now hands to `cellMenu` and `onCellKey` as
+  `anchor()`): the field's name, the value as a literal, Copy. Escape closes it; the focus returns to the
+  cell.
+- **Go to reference** (Cmd/Ctrl+G, or the menu) takes View's place when the value is id-shaped text (31–37
+  characters of lowercase base32, not the row's own `_id`) and the source's optional `tableOfId(id)`
+  names a table — Convex decodes the id with its table mapping; bunvex asks the source. It opens the
+  document in its table (`/database/<table>?doc=<id>`). The mock answers by looking the id up.
+- **Delete document** (the menu, destructive): the same confirmation as Delete selected
+  (`DeleteDialog`, now controlled; STUDY-12 D13, decided: keep asking). The behaviour sits behind
+  `CONFIRM_DELETE_FROM_CELL_MENU` (`database/screen.tsx`): `false` deletes at once, as Convex does outside
+  production; it becomes a check of the deployment's kind once deployments have one.
+- Read-only: Delete document disabled, like the edit items.
 
 ### 15.6 The functions a request called (STUDY-12 L6)
 

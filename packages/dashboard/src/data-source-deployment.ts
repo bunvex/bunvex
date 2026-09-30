@@ -57,6 +57,26 @@ export type CronJob = {
   running: boolean;
 };
 
+// ------------------------------------------------------------------ file storage
+
+/** A stored file (Convex's `_storage`), with a URL the browser can fetch it from. */
+export type StoredFile = {
+  /** The storage id. */
+  id: string;
+  /** When it was stored (wall-clock ms). */
+  creationTime: number;
+  /** Base64 SHA-256 of the contents, as Convex stores it. */
+  sha256: string;
+  /** Bytes. */
+  size: number;
+  contentType: string | null;
+  /** Where to download or preview it; may expire (fetch the file again for a fresh one). */
+  url: string;
+};
+
+/** Newest first by default; `from` / `to` bound the creation time (ms, inclusive). */
+export type FileQuery = PageRequest & { order?: "asc" | "desc"; from?: number; to?: number };
+
 // ------------------------------------------------------------------ the optional methods
 
 export interface DeploymentFeatures {
@@ -72,4 +92,17 @@ export interface DeploymentFeatures {
   listCronJobs?(opts?: CallOptions): Promise<CronJob[]>;
   /** A cron job's runs, newest first (the source keeps a few per job, as Convex keeps 5). */
   listCronRuns?(name: string, opts?: CallOptions): Promise<CronRun[]>;
+
+  // File storage: read with `viewData`; uploading and deleting need `writeData` (and not `readOnly`).
+  listFiles?(query: FileQuery, opts?: CallOptions): Promise<Page<StoredFile>>;
+  /** Every stored file. */
+  countFiles?(opts?: CallOptions): Promise<number>;
+  /** `null` when there is no such file. */
+  getFile?(id: string, opts?: CallOptions): Promise<StoredFile | null>;
+  /** Stores the contents (the content type is the blob's); returns the new storage id. */
+  uploadFile?(file: Blob, opts?: CallOptions): Promise<string>;
+  /** Ids that do not exist are ignored. */
+  deleteFiles?(ids: string[], opts?: CallOptions): Promise<void>;
+  /** Tells the caller the stored files changed. Never synchronously. */
+  watchFiles?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
 }

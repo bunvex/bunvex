@@ -75,9 +75,12 @@ export type DataGridOptions<TData> = {
    * The items of a cell's context menu (DropdownMenu items). `edit` starts editing the cell (when it can
    * be edited). Without it, there is no context menu.
    */
-  cellMenu?: (cell: { row: TData; columnId: string; edit: () => void }) => ReactNode;
+  cellMenu?: (cell: { row: TData; columnId: string; edit: () => void; anchor: () => DOMRect | undefined }) => ReactNode;
   /** A key on a cell (not in an editor), before the grid's own keys; return true when it was handled. */
-  onCellKey?: (e: KeyboardEvent<HTMLElement>, cell: { row: TData; columnId: string }) => boolean;
+  onCellKey?: (
+    e: KeyboardEvent<HTMLElement>,
+    cell: { row: TData; columnId: string; anchor: () => DOMRect | undefined },
+  ) => boolean;
 };
 
 type DataTableProps<TData extends RowData> = {
@@ -515,7 +518,15 @@ function DataTable<TData extends RowData>({
     if (
       current &&
       columnIds[col] !== SELECT_COLUMN &&
-      grid?.onCellKey?.(e, { row: current.original, columnId: columnIds[col]! })
+      grid?.onCellKey?.(e, {
+        row: current.original,
+        columnId: columnIds[col]!,
+        // the cell itself, kept now: an event's currentTarget is cleared once the handler returns
+        anchor: (
+          (cell) => () =>
+            cell.getBoundingClientRect()
+        )(e.currentTarget as HTMLElement),
+      })
     ) {
       e.preventDefault();
       return;
@@ -768,6 +779,11 @@ function DataTable<TData extends RowData>({
                 edit: () => {
                   const i = rows.findIndex((r) => r.id === menu.rowId);
                   if (i >= 0) startEdit(i, menu.col);
+                },
+                // where the cell is on screen, to anchor something to it (a value's view)
+                anchor: () => {
+                  const i = rows.findIndex((r) => r.id === menu.rowId);
+                  return scroller.current?.querySelector(`[data-cell="${i}:${menu.col}"]`)?.getBoundingClientRect();
                 },
               })}
             </DropdownMenuContent>

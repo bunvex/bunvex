@@ -236,6 +236,26 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Files: upload one, see it first, preview an image", async () => {
+    const { page, errors, close } = await open("/files");
+    await heading(page, "Files");
+    await page
+      .getByLabel("Files to upload")
+      .setInputFiles({ name: "note.txt", mimeType: "text/plain", buffer: Buffer.from("hi\n") });
+    await page.getByText("Uploaded 1 file.").waitFor();
+    const grid = page.getByRole("grid", { name: "Files" });
+    expect(await grid.getByRole("row").nth(1).textContent()).toContain("text/plain");
+    await grid.getByRole("gridcell", { name: "image/svg+xml" }).first().click();
+    const img = page.getByRole("complementary", { name: "File" }).getByRole("img");
+    await img.waitFor();
+    // the preview really loaded (a broken image has no natural width)
+    await page.waitForFunction(
+      () => (document.querySelector("aside img") as HTMLImageElement | null)?.naturalWidth === 96,
+    );
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -246,6 +266,7 @@ describe("the dashboard in a browser", () => {
         ["/database/users?panel=add", "users"],
         ["/schedules/functions", "Schedules"],
         ["/schedules/crons?cron=summarize+tasks", "Schedules"],
+        ["/files", "Files"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

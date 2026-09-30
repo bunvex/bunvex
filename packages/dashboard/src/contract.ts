@@ -321,6 +321,13 @@ export function describeDataSourceContract(
       expect(await src.getDocument(table, "0000000000000000000000000000zzzz")).toBeNull();
     });
 
+    test("tableOfId (when present) names a document's table, and null for an unknown id", async () => {
+      const { src, table, docs } = await fixture();
+      if (!src.tableOfId) return;
+      expect(await src.tableOfId(docs[0]!._id)).toBe(table);
+      expect(await src.tableOfId("0000000000000000000000000000zzzz")).toBeNull();
+    });
+
     test("functions have a module:name path and a kind", async () => {
       for (const f of await (await make()).listFunctions()) {
         expect(f.path).toMatch(/^[^:]+:[^:]+$/);
