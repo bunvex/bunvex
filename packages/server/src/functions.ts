@@ -58,6 +58,10 @@ export class Functions {
   runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
     return this.engine.query(this.queryBody(name, args, fromClient), `${name}\u0000${JSON.stringify(args ?? {})}`);
   }
+  /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored). */
+  runQueryJson(name: string, args: unknown): Promise<string> {
+    return this.engine.queryJson(this.queryBody(name, args, true), `${name}\u0000${JSON.stringify(args ?? {})}`);
+  }
 
   runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     const f = this.fn(name, "mutation", fromClient);

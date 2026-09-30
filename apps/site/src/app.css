@@ -1,0 +1,4 @@
+/* The site's stylesheet: the bunvex design system (tokens, themes, Tailwind) plus the classes of this app. */
+@import "@bunvex/ui/styles.css";
+
+@source "./**/*.{ts,tsx}";

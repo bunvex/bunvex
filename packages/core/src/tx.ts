@@ -18,51 +18,119 @@ import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
 
+type RangeExpr = { op: "eq" | "gt" | "gte" | "lt" | "lte"; field: string; value: KeyValue };
+
+/** `withIndex(name, q => q.eq(…).gt(…))`: records the expressions; `compile` checks them against the index. */
 export class IndexRangeBuilder {
-  private eqs: KeyValue[] = [];
-  private lower: { v: KeyValue; incl: boolean } | null = null;
-  private upper: { v: KeyValue; incl: boolean } | null = null;
-  eq(_field: string, v: KeyValue) {
-    this.eqs.push(v);
+  readonly exprs: RangeExpr[] = [];
+  eq(field: string, value: KeyValue) {
+    this.exprs.push({ op: "eq", field, value });
     return this;
   }
-  gt(_f: string, v: KeyValue) {
-    this.lower = { v, incl: false };
+  gt(field: string, value: KeyValue) {
+    this.exprs.push({ op: "gt", field, value });
     return this;
   }
-  gte(_f: string, v: KeyValue) {
-    this.lower = { v, incl: true };
+  gte(field: string, value: KeyValue) {
+    this.exprs.push({ op: "gte", field, value });
     return this;
   }
-  lt(_f: string, v: KeyValue) {
-    this.upper = { v, incl: false };
+  lt(field: string, value: KeyValue) {
+    this.exprs.push({ op: "lt", field, value });
     return this;
   }
-  lte(_f: string, v: KeyValue) {
-    this.upper = { v, incl: true };
+  lte(field: string, value: KeyValue) {
+    this.exprs.push({ op: "lte", field, value });
     return this;
-  }
-  /** Fields are consumed in index order (eq… then one range), as in Convex. */
-  range(): Range {
-    const prefix = encodeKey(this.eqs);
-    let lo = prefix;
-    let hi = prefixEnd(prefix);
-    if (this.lower) {
-      const k = encodeKey([...this.eqs, this.lower.v]);
-      lo = this.lower.incl ? k : prefixEnd(k);
-    }
-    if (this.upper) {
-      const k = encodeKey([...this.eqs, this.upper.v]);
-      hi = this.upper.incl ? prefixEnd(k) : k;
-    }
-    if (this.eqs.length === 0 && !this.lower) lo = FULL.lo;
-    if (this.eqs.length === 0 && !this.upper) hi = FULL.hi;
-    return { lo, hi };
   }
 }
 
+const COMPARATOR = { eq: "==", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const;
+const quoted = (f: string) => JSON.stringify(f);
+const list = (fs: string[]) => `[${fs.map(quoted).join(", ")}]`;
+
+/**
+ * Turn range expressions into a key interval, with Convex's rules and errors (`IndexRange::compile` in
+ * crates/common/src/query.rs): equalities on distinct fields, at most one lower and one upper bound, both
+ * on the same field, and together a prefix of the index's fields in order (the trailing `_id` included).
+ */
+export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
+  const indexName = `${ix.table}.${ix.name}`;
+  const indexed = ix.name === "by_id" ? [] : ix.fields; // the fields Convex lists; `_id` is implicit
+  const withId = [...indexed, "_id"];
+  const eqs = new Map<string, KeyValue>();
+  let ineqField: string | null = null;
+  let lower: { v: KeyValue; incl: boolean } | null = null;
+  let upper: { v: KeyValue; incl: boolean } | null = null;
+  for (const e of exprs) {
+    if (e.op === "eq") {
+      if (eqs.has(e.field))
+        throw new Error(
+          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${JSON.stringify(e.value)}.`,
+        );
+      eqs.set(e.field, e.value);
+      continue;
+    }
+    const isUpper = e.op === "lt" || e.op === "lte";
+    if ((isUpper ? upper : lower) !== null)
+      throw new Error(
+        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${JSON.stringify(e.value)}.`,
+      );
+    if (ineqField !== null && ineqField !== e.field)
+      throw new Error(
+        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead. See https://docs.convex.dev/using/indexes for more info.`,
+      );
+    ineqField = e.field;
+    const bound = { v: e.value, incl: e.op === "lte" || e.op === "gte" };
+    if (isUpper) upper = bound;
+    else lower = bound;
+  }
+  const rank = new Map(withId.map((f, i) => [f, i]));
+  for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
+    if (!rank.has(f))
+      throw new Error(
+        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field. For more information see https://docs.convex.dev/using/indexes.`,
+      );
+  const eqFields = [...eqs.keys()].sort((a, b) => rank.get(a)! - rank.get(b)!);
+  const used = [...eqFields, ...(ineqField ? [ineqField] : [])];
+  used.forEach((f, i) => {
+    if (withId[i] !== f)
+      throw new Error(
+        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}\nFor more information see https://docs.convex.dev/using/indexes.`,
+      );
+  });
+  // The trailing `_id` of a non-by_id index is stored as its UTF-8 bytes (schema.ts indexKey).
+  const keyValue = (f: string, v: KeyValue): KeyValue =>
+    f === "_id" && ix.name !== "by_id" && typeof v === "string" ? utf8.encode(v) : v;
+  const prefixVals = eqFields.map((f) => keyValue(f, eqs.get(f)!));
+  if (prefixVals.length === 0 && !lower && !upper) return FULL;
+  const prefix = encodeKey(prefixVals);
+  let lo = prefixVals.length ? prefix : FULL.lo;
+  let hi = prefixVals.length ? prefixEnd(prefix) : FULL.hi;
+  if (lower) {
+    const k = encodeKey([...prefixVals, keyValue(ineqField!, lower.v)]);
+    lo = lower.incl ? k : prefixEnd(k);
+  }
+  if (upper) {
+    const k = encodeKey([...prefixVals, keyValue(ineqField!, upper.v)]);
+    hi = upper.incl ? prefixEnd(k) : k;
+  }
+  return { lo, hi };
+}
+const utf8 = new TextEncoder();
+
+/** Convex's per-transaction read limits (crates/common/src/knobs.rs). System transactions are exempt. */
+export const TRANSACTION_MAX_READ_SIZE_ROWS = 32_000;
+export const TRANSACTION_MAX_READ_SIZE_BYTES = 1 << 24; // 16 MiB
+export const TRANSACTION_MAX_READ_SET_INTERVALS = 4096;
+const OVER_LIMIT_HELP =
+  "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
+
 export class Tx {
   reads: Interval[] = [];
+  /** Documents and bytes read from the snapshot, counted against Convex's limits. */
+  private docsRead = 0;
+  private bytesRead = 0;
   private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
@@ -84,6 +152,29 @@ export class Tx {
   private tableDef(name: string) {
     if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
     return this.catalog.table(name);
+  }
+
+  private recordInterval(i: Interval) {
+    this.reads.push(i);
+    if (!this.system && this.reads.length > TRANSACTION_MAX_READ_SET_INTERVALS)
+      throw new Error(
+        `Too many reads in a single function execution (limit: ${TRANSACTION_MAX_READ_SET_INTERVALS}). ${OVER_LIMIT_HELP}`,
+      );
+  }
+
+  /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */
+  private recordDoc(json: string) {
+    this.docsRead++;
+    this.bytesRead += json.length;
+    if (this.system) return;
+    if (this.docsRead > TRANSACTION_MAX_READ_SIZE_ROWS)
+      throw new Error(
+        `Too many documents read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_ROWS}). ${OVER_LIMIT_HELP}`,
+      );
+    if (this.bytesRead > TRANSACTION_MAX_READ_SIZE_BYTES)
+      throw new Error(
+        `Too many bytes read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_BYTES} bytes). ${OVER_LIMIT_HELP}`,
+      );
   }
 
   /**
@@ -114,10 +205,12 @@ export class Tx {
     const t = this.tableDef(table);
     if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
-    if (w) return w.next;
+    // A copy: mutating what `get` returned must not change what this transaction wrote.
+    if (w) return w.next && structuredClone(w.next);
     const k = encodeKey([id]);
-    this.reads.push({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
+    this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+    if (json) this.recordDoc(json);
     return json ? (JSON.parse(json) as Doc) : null;
   }
 
@@ -133,6 +226,7 @@ export class Tx {
         const rows = await outsideExecution(() =>
           p.scanDocs!(t.id, ix.id, range.lo, range.hi, this.snapshot, limit, desc),
         );
+        for (const j of rows) this.recordDoc(j);
         return rows.map((j) => JSON.parse(j) as Doc);
       }
       const ids = await outsideExecution(() =>
@@ -141,14 +235,18 @@ export class Tx {
       const out: Doc[] = [];
       for (const id of ids) {
         const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
-        if (json) out.push(JSON.parse(json) as Doc);
+        if (json) {
+          this.recordDoc(json);
+          out.push(JSON.parse(json) as Doc);
+        }
       }
       return out;
     };
     const run = async (limit: number): Promise<Doc[]> => {
+      if (limit <= 0) return [];
       // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only
       // affects how often the query cache is invalidated, never correctness).
-      this.reads.push({ index: ix.id, lo: range.lo, hi: range.hi });
+      this.recordInterval({ index: ix.id, lo: range.lo, hi: range.hi });
       const pend: [Uint8Array, Doc | null][] = [];
       this.pending.get(ix.id)?.forRange(range.lo, range.hi, false, (k, v) => {
         pend.push([k, v]);
@@ -161,16 +259,22 @@ export class Tx {
         const found = t.indexes.get(name);
         if (!found) throw new Error(`unknown index ${table}.${name}`);
         ix = found;
-        if (f) range = f(new IndexRangeBuilder()).range();
+        range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
         return q;
       },
       order(dir: "asc" | "desc") {
         desc = dir === "desc";
         return q;
       },
-      take: (n: number) => run(n),
+      take: (n: number) => {
+        if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
+        if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
+        return run(n);
+      },
       first: async () => (await run(1))[0] ?? null,
-      collect: () => run(8192),
+      // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
+      // enough to raise Convex's error).
+      collect: () => run(this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1),
     };
     return q;
   }
@@ -230,7 +334,8 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    this.stage(t, id, null, { ...fields, _id: id, _creationTime: creationTime } as Doc);
+    // Copied at the call: mutating `fields` afterwards must not change what is written (Convex serializes).
+    this.stage(t, id, null, { ...structuredClone(fields), _id: id, _creationTime: creationTime } as Doc);
     return id;
   }
 
@@ -239,7 +344,7 @@ export class Tx {
     const cur = await this.read(table, id, "db.patch");
     if (!cur) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
-    this.stage(t, id, old, { ...cur, ...fields, _id: id, _creationTime: cur._creationTime });
+    this.stage(t, id, old, { ...cur, ...structuredClone(fields), _id: id, _creationTime: cur._creationTime });
   }
 
   async delete(table: string, id: string) {

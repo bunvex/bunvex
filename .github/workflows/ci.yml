@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue tests each queued PR combined with main and the PRs ahead of it.
+  merge_group:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -26,9 +28,11 @@ jobs:
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - run: bun run test
       - run: bun run build:dashboard
+      - run: bun run build:site
 
-  conformance:
-    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+  # One job per external store, in parallel; `conformance` below keeps the required check's name.
+  conformance-postgres:
+    name: conformance · Postgres
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -39,6 +43,23 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: conformance on Postgres
+        env:
+          DRIVERS: postgres
+          KILLS: "4"
+          PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+        run: bun run conformance
+
+  conformance-mysql:
+    name: conformance · MySQL
+    runs-on: ubuntu-latest
+    services:
       mysql:
         image: mysql:8.4
         env:
@@ -47,6 +68,23 @@ jobs:
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -uroot -pbunvex" --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: conformance on MySQL
+        env:
+          DRIVERS: mysql
+          KILLS: "4"
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+        run: bun run conformance
+
+  conformance-mongodb:
+    name: conformance · MongoDB
+    runs-on: ubuntu-latest
+    services:
       mongodb:
         image: mongo:8
         ports: ["27017:27017"]
@@ -58,11 +96,22 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - name: conformance on the external drivers
+      - name: conformance on MongoDB
         env:
-          DRIVERS: postgres,mysql,mongodb
+          DRIVERS: mongodb
           KILLS: "4"
-          PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
-          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
           MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k
         run: bun run conformance
+
+  conformance:
+    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+    if: always()
+    needs: [conformance-postgres, conformance-mysql, conformance-mongodb]
+    runs-on: ubuntu-latest
+    steps:
+      - name: all three stores passed
+        run: |
+          echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }} mongodb=${{ needs.conformance-mongodb.result }}"
+          test "${{ needs.conformance-postgres.result }}" = success
+          test "${{ needs.conformance-mysql.result }}" = success
+          test "${{ needs.conformance-mongodb.result }}" = success

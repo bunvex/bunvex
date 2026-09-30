@@ -143,7 +143,8 @@ describe("read-own-writes inside a mutation", () => {
           (q.lt === undefined || (d.n as number) < q.lt),
       );
       rows.sort((x, y) => {
-        const c = (x[field] as number) - (y[field] as number);
+        // Convex's order: the indexed field, then the implicit _creationTime, then _id.
+        const c = (x[field] as number) - (y[field] as number) || x._creationTime - y._creationTime;
         return c !== 0 ? c : x._id < y._id ? -1 : x._id > y._id ? 1 : 0;
       });
       if (q.desc) rows.reverse();

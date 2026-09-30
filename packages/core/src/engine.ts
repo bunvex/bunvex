@@ -13,14 +13,15 @@ import {
   type TableMeta,
 } from "./catalog.ts";
 import { Committer, ConflictError, type Interval, overlaps } from "./committer.ts";
-import { type ExecutionKind, installDeterminism, runDeterministic, wallClock } from "./determinism.ts";
+import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
 import { type Doc, indexKey, type Schema } from "./schema.ts";
 import { Tx } from "./tx.ts";
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
-type CacheEntry = { value: unknown; reads: Interval[] };
+/** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
+type CacheEntry = { json: string; reads: Interval[] };
 
 export class Engine {
   readonly committer: Committer;
@@ -105,7 +106,7 @@ export class Engine {
 
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
-    const now = wallClock();
+    const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
@@ -113,31 +114,60 @@ export class Engine {
 
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
   async query<T>(body: TxBody<T>, cacheKey?: string): Promise<T> {
+    const r = await this.cachedQuery(body, cacheKey);
+    return "json" in r ? (JSON.parse(r.json) as T) : r.value;
+  }
+
+  /**
+   * The same, as the result's JSON: a cache hit goes straight to the transport without a parse or a
+   * stringify (the HTTP API).
+   */
+  async queryJson(body: TxBody<unknown>, cacheKey?: string): Promise<string> {
+    const r = await this.cachedQuery(body, cacheKey);
+    return "json" in r ? r.json : JSON.stringify(r.value ?? null);
+  }
+
+  private async cachedQuery<T>(body: TxBody<T>, cacheKey?: string): Promise<{ json: string } | { value: T }> {
     if (cacheKey !== undefined) {
       const hit = this.cache.get(cacheKey);
       if (hit) {
         this.stats.cacheHits++;
-        return hit.value as T;
+        return { json: hit.json };
       }
       this.stats.cacheMisses++;
     }
     const snapshot = this.committer.visibleTs;
     const { tx, value } = await this.execute("query", snapshot, body);
     // Cache only if nothing committed after the snapshot (it would have been invalidated had it been
-    // cached already — the same rule, checked at insertion).
+    // cached already — the same rule, checked at insertion). The caller keeps `value`; the cache keeps
+    // its own serialized copy.
     if (cacheKey !== undefined && this.committer.visibleTs === snapshot) {
       const max = this.opts.cacheMax ?? 1000;
       if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
-      this.cache.set(cacheKey, { value, reads: tx.reads });
+      const json = JSON.stringify(value ?? null);
+      this.cache.set(cacheKey, { json, reads: tx.reads });
+      return { json };
     }
-    return value;
+    return { value };
   }
 
-  /** A read-only transaction for a SUBSCRIPTION: returns its read-set too, never touches the cache. */
-  async queryTracked<T>(body: TxBody<T>): Promise<{ value: T; reads: Interval[]; ts: number }> {
+  /**
+   * A read-only transaction for a SUBSCRIPTION: never touches the cache, and settles instead of throwing.
+   * A failed run still returns what it read before failing — as in Convex, an error is a result that is
+   * re-evaluated when those reads change (e.g. a query that throws until a document exists).
+   */
+  async queryTracked<T>(
+    body: TxBody<T>,
+  ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
     const snapshot = this.committer.visibleTs;
-    const { tx, value } = await this.execute("query", snapshot, body);
-    return { value, reads: tx.reads, ts: snapshot };
+    const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
+    const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    try {
+      const value = await runDeterministic("query", now, () => body(tx));
+      return { ok: true, value, reads: tx.reads, ts: snapshot };
+    } catch (error) {
+      return { ok: false, error, reads: tx.reads, ts: snapshot };
+    }
   }
 
   /** A read-write transaction, re-run on conflict up to `maxRetries` times. */
