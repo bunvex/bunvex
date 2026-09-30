@@ -167,6 +167,7 @@
       "dependencies": {
         "@bunvex/core": "workspace:*",
         "@bunvex/protocol": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
