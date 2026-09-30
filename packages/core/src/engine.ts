@@ -1,7 +1,7 @@
 // The engine: runs transactions against a snapshot, retries mutations on conflict, and caches query
 // results by read-set. It executes ANONYMOUS transaction bodies (`db => …`); naming, registering and
 // exposing functions is the server's job (@bunvex/server).
-import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, type GenericValidator, toJsonValue, type Value } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
@@ -17,12 +17,15 @@ import { Committer, type Conflict, ConflictError, type Interval, overlaps } from
 import { type ExecutionKind, installDeterminism, preciseClock, runDeterministic } from "./determinism.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import type { IndexWrite, Persistence } from "./persistence/index.ts";
-import { type Doc, indexKey, type Schema } from "./schema.ts";
+import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 
 /** A function result as Convex JSON text (`undefined` → null), and back. */
 export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
 export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
+
+/** What a subscribed query carries from one run to the next (Convex's `QueryJournal`). */
+export type QueryJournal = { endCursor?: string | null };
 
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
 /**
@@ -62,11 +65,13 @@ export class Engine {
   readonly committer: Committer;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = bootstrapCatalog();
+  /** Document validators of the declared tables (empty when `schemaValidation` is off). */
+  private readonly docValidators = new Map<string, GenericValidator>();
   private cache = new Map<string, CacheEntry>();
   stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
 
   constructor(
-    readonly schema: Schema,
+    readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: {
       cacheMax?: number;
@@ -75,9 +80,17 @@ export class Engine {
       /** Backoff between retries, in ms (default: Convex's 100 ms doubling up to 2 s, full jitter). */
       occInitialBackoffMs?: number;
       occMaxBackoffMs?: number;
+      /** Signs pagination cursors (STUDY-17); the deployment's secret, as Convex's INSTANCE_SECRET. */
+      instanceSecret?: string;
     } = {},
   ) {
     installDeterminism();
+    // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
+    if (schema.schemaValidation)
+      for (const t of schema.tables.values()) {
+        const dv = documentValidator(t.name, t.document);
+        if (dv) this.docValidators.set(t.name, dv);
+      }
     this.committer = new Committer(persistence);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
@@ -150,6 +163,8 @@ export class Engine {
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    if (this.opts.instanceSecret) tx.instanceSecret = this.opts.instanceSecret;
+    if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
   }
@@ -200,15 +215,22 @@ export class Engine {
    */
   async queryTracked<T>(
     body: TxBody<T>,
-  ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
+    journal: QueryJournal = {},
+  ): Promise<
+    ({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number; journal: QueryJournal }
+  > {
     const snapshot = this.committer.visibleTs;
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    if (this.opts.instanceSecret) tx.instanceSecret = this.opts.instanceSecret;
+    // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
+    tx.prevEndCursor = journal.endCursor ?? null;
+    const out = () => ({ reads: tx.reads, ts: snapshot, journal: { endCursor: tx.nextEndCursor } });
     try {
       const value = await runDeterministic("query", now, () => body(tx));
-      return { ok: true, value, reads: tx.reads, ts: snapshot };
+      return { ok: true, value, ...out() };
     } catch (error) {
-      return { ok: false, error, reads: tx.reads, ts: snapshot };
+      return { ok: false, error, ...out() };
     }
   }
 
@@ -231,6 +253,16 @@ export class Engine {
       const { docs, idx } = tx.toWrites();
       try {
         await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx, source });
+        // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
+        // durable; a transaction that raced to create the same table conflicted on _tables and retries).
+        for (const [name, c] of tx.createdTables)
+          if (!this.catalog.tables.has(name))
+            this.catalog.add(
+              name,
+              c.meta.tablet,
+              c.meta.number,
+              c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+            );
         return value;
       } catch (e) {
         if (!(e instanceof ConflictError)) throw e;

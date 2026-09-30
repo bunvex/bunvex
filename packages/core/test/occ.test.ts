@@ -1,6 +1,7 @@
 // OCC retries and the OCC error, as Convex (STUDY-21): 4 retries (5 executions) with full-jitter backoff
 // from 100 ms to 2 s, a wait for the conflicting write, and `OptimisticConcurrencyControlFailure`.
 import { expect, test } from "bun:test";
+import { v } from "@bunvex/values";
 import { Committer, ConflictError } from "../src/committer.ts";
 import {
   Engine,
@@ -11,10 +12,10 @@ import {
   occBackoffMs,
 } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { Schema } from "../src/schema.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
 import type { Tx } from "../src/tx.ts";
 
-const schema = new Schema().table("counters", {});
+const schema = defineSchema({ counters: defineTable(v.any()) });
 
 test("Convex's budget: 4 retries, 100 ms doubling up to 2 s, full jitter", () => {
   expect([OCC_MAX_RETRIES, OCC_INITIAL_BACKOFF_MS, OCC_MAX_BACKOFF_MS]).toEqual([4, 100, 2000]);

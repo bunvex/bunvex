@@ -2,9 +2,10 @@
 // ONE document for SECS seconds. Reports committed/s, OCC failures surfaced, retries and latency.
 //   bun bench/occ.ts [memory|sqlite]        Env: C (default 16), SECS (default 5), DIR (sqlite scratch dir)
 import { mkdirSync, rmSync } from "node:fs";
-import { Engine, type Persistence, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
+import { v } from "@bunvex/values";
 
 const kind = process.argv[2] ?? "memory";
 const C = Number(process.env.C ?? 16);
@@ -17,7 +18,7 @@ if (kind === "sqlite") {
   persistence = new SqlitePersistence(`${dir}/db`, { durable: true });
 } else persistence = await MemoryPersistence.open(null, { durable: false });
 
-const engine = await new Engine(new Schema().table("counters", {}), persistence).init();
+const engine = await new Engine(defineSchema({ counters: defineTable(v.any()) }), persistence).init();
 const id = await engine.mutation((db) => db.insert("counters", { n: 0 }));
 const ok: number[] = [];
 const all: number[] = [];

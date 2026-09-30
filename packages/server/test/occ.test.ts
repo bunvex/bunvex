@@ -1,14 +1,15 @@
 // The OCC error on the wire (STUDY-21): a mutation that exhausts its retries fails the HTTP request with
 // 503 and Convex's code, as Convex's backend does; inside an action it is an ordinary exception.
 import { expect, test } from "bun:test";
-import { Engine, Schema } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { v } from "@bunvex/values";
 import { action, Functions, mutation } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
 test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; from an action, a function error", async () => {
   const engine = await new Engine(
-    new Schema().table("counters", {}),
+    defineSchema({ counters: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
     { occInitialBackoffMs: 1, occMaxBackoffMs: 2 },
   ).init();

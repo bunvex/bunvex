@@ -18,11 +18,24 @@ export {
   OccError,
   occBackoffMs,
   parseValue,
+  type QueryJournal,
   stringifyValue,
   type TxBody,
 } from "./engine.ts";
+export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-export { type Doc, type FieldValue, type IndexDef, indexKey, Schema, type TableDef } from "./schema.ts";
+export {
+  type DeclaredTable,
+  type Doc,
+  defineSchema,
+  defineTable,
+  type FieldValue,
+  type IndexDef,
+  indexKey,
+  type SchemaDefinition,
+  type TableDef,
+  TableDefinition,
+} from "./schema.ts";
 export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
-export { IndexRangeBuilder, Tx } from "./tx.ts";
+export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

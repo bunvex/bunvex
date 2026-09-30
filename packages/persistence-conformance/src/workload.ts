@@ -1,11 +1,13 @@
 // The workload the conformance suite runs through the engine: a tiny schema and the transaction bodies
 // K3–K7 need. It uses the engine directly (no server, no function registry), so a third-party driver
 // only has to depend on @bunvex/core and this package.
-import { type Doc, Engine, type Persistence, Schema, type Tx } from "@bunvex/core";
+import { type Doc, defineSchema, defineTable, Engine, type Persistence, type Tx } from "@bunvex/core";
+import { v } from "@bunvex/values";
 
-export const schema = new Schema()
-  .table("items", { by_tenant_created: ["tenantId", "createdAt"] })
-  .table("counters", { by_key: ["key"] });
+export const schema = defineSchema({
+  items: defineTable(v.any()).index("by_tenant_created", ["tenantId", "createdAt"]),
+  counters: defineTable(v.any()).index("by_key", ["key"]),
+});
 
 export const newEngine = (p: Persistence, opts?: ConstructorParameters<typeof Engine>[2]) =>
   new Engine(schema, p, opts).init();
