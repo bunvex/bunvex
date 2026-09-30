@@ -185,6 +185,7 @@ describe("the function runner", () => {
     await screen.findByRole("heading", { level: 1, name: "summarize" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" }); // its own chunk
     expect(within(runner()).queryByRole("button", { name: "Previous arguments" })).toBeNull();
     for (const text of ["{ n: 1 }", "{ n: 2 }", "{ n: 2 }"]) {
       fireEvent.change(args(), { target: { value: text } });
