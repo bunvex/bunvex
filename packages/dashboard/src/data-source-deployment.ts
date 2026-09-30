@@ -77,6 +77,13 @@ export type StoredFile = {
 /** Newest first by default; `from` / `to` bound the creation time (ms, inclusive). */
 export type FileQuery = PageRequest & { order?: "asc" | "desc"; from?: number; to?: number };
 
+// ------------------------------------------------------------------ environment variables
+
+export type EnvironmentVariable = { name: string; value: string };
+
+/** One change in a batch: a value sets (adds or replaces) the variable, `null` deletes it. */
+export type EnvironmentVariableChange = { name: string; value: string | null };
+
 // ------------------------------------------------------------------ the optional methods
 
 export interface DeploymentFeatures {
@@ -105,4 +112,15 @@ export interface DeploymentFeatures {
   deleteFiles?(ids: string[], opts?: CallOptions): Promise<void>;
   /** Tells the caller the stored files changed. Never synchronously. */
   watchFiles?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+
+  // Environment variables: read with `viewEnvironmentVariables`, changed with `writeEnvironmentVariables`
+  // (and not `readOnly`), as Convex's operations.
+  /** Every variable, by name. */
+  listEnvironmentVariables?(opts?: CallOptions): Promise<EnvironmentVariable[]>;
+  /**
+   * Applies the changes together or not at all, as Convex's `update_environment_variables`: a bad name, a
+   * value over 8 KiB, more than 512 variables or 512 KiB in all is `invalid_request` naming the variable.
+   * Deleting an unknown name is allowed. A rename is a delete and a set in one batch.
+   */
+  updateEnvironmentVariables?(changes: EnvironmentVariableChange[], opts?: CallOptions): Promise<void>;
 }

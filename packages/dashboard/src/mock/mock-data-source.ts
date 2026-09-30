@@ -14,6 +14,8 @@ import {
   type DeploymentStats,
   type Document,
   type DocumentQuery,
+  type EnvironmentVariable,
+  type EnvironmentVariableChange,
   type FieldPatch,
   type FileQuery,
   type FilterExpression,
@@ -33,6 +35,7 @@ import {
   type Value,
 } from "../data-source.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
+import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution } from "./fixture.ts";
 import { createRandom, type Random } from "./random.ts";
@@ -132,6 +135,7 @@ export class MockDataSource implements DashboardDataSource {
   readonly scheduler: MockScheduler;
   /** File storage (UI-01 §14). Not part of the contract: tests read blobs from it. */
   readonly files: MockFiles;
+  private readonly envVars = new MockEnvironmentVariables();
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -644,6 +648,31 @@ export class MockDataSource implements DashboardDataSource {
 
   watchFiles(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
     return this.files.watch(onChange);
+  }
+
+  // ---------------------------------------------------------------- environment variables (§14)
+
+  private can(op: "viewEnvironmentVariables" | "writeEnvironmentVariables") {
+    const c = this.opts.capabilities;
+    if (!c.operations.includes(op) || (op === "writeEnvironmentVariables" && c.readOnly))
+      throw new DataSourceError(
+        "unauthorized",
+        `this credential cannot ${op === "viewEnvironmentVariables" ? "view" : "change"} environment variables`,
+      );
+  }
+
+  listEnvironmentVariables(opts?: CallOptions): Promise<EnvironmentVariable[]> {
+    return this.call(opts?.signal, () => {
+      this.can("viewEnvironmentVariables");
+      return this.envVars.list();
+    });
+  }
+
+  updateEnvironmentVariables(changes: EnvironmentVariableChange[], opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.can("writeEnvironmentVariables");
+      this.envVars.update(changes);
+    });
   }
 }
 

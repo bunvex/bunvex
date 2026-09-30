@@ -93,6 +93,10 @@ const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsSc
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
 const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
+const EnvironmentVariablesScreen = lazyRouteComponent(
+  () => import("./settings/screen.tsx"),
+  "EnvironmentVariablesScreen",
+);
 
 export const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   component: Shell,
@@ -161,6 +165,21 @@ export const filesRoute = createRoute({
   component: FilesScreen,
 });
 
+/** `/settings` opens its only page so far, the environment variables (UI-01 §14.4). */
+export const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings",
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/environment-variables", replace: true });
+  },
+});
+
+export const envVarsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/environment-variables",
+  component: EnvironmentVariablesScreen,
+});
+
 /** `/schedules` opens the scheduled functions, as Convex's sidebar does. */
 export const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -194,6 +213,8 @@ export const routeTree = rootRoute.addChildren([
   schedulesRoute,
   scheduledRoute,
   cronsRoute,
+  settingsRoute,
+  envVarsRoute,
 ]);
 
 // ------------------------------------------------------------------ the router
