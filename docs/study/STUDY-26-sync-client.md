@@ -390,6 +390,9 @@ Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96,
 
 ### 9.3 Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): H1 under DV-03, H2 as DV-97, H4 as DV-98, H3 under
+Gaps.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | H1 | The client header is `Bunvex-Client: npm-<version>`, and no `format` field is sent (Convex: `Convex-Client`, `format: "convex_encoded_json"`) | Owner's naming rule; the server ignores both and always answers encoded JSON | follows the rule |
