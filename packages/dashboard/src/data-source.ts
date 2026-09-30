@@ -325,6 +325,13 @@ export interface DashboardDataSource extends DeploymentFeatures {
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
 
   /**
+   * Creates an empty table (STUDY-12 D11), not in the schema until declared there. A name that is taken, or
+   * not an identifier (letters, digits, `_`; not starting with a digit or `_`; at most 64): `invalid_request`.
+   * Convex's dashboard does it with a mutation that inserts a document and deletes it.
+   */
+  createTable?(name: string, opts?: CallOptions): Promise<void>;
+
+  /**
    * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what
    * Convex's dashboard reads off the id with its table mapping. Optional; without it, ids are plain text.
    */

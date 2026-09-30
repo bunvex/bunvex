@@ -193,4 +193,60 @@ describe("adding, deleting, clearing", () => {
     await within(panel).findByRole("button", { name: "Copy" });
     expect(within(panel).queryByRole("button", { name: "Edit" })).toBeNull();
   });
+
+  test("Create table: the name is checked as it is typed; Create opens the new, empty table", async () => {
+    const { history, src } = mount("/database/users");
+    await heading("users");
+    const user = userEvent.setup();
+    const tables = screen.getByRole("navigation", { name: "Tables" });
+    await user.click(within(tables).getByRole("button", { name: "Create table" }));
+    const box = within(tables).getByRole("textbox", { name: "New table's name" });
+    expect(document.activeElement).toBe(box);
+    const create = within(tables).getByRole("button", { name: "Create" });
+    expect(create.hasAttribute("disabled")).toBe(true);
+    for (const [name, says] of [
+      ["9lives", "Table name must only contain letters, digits or underscores, and cannot start with a digit."],
+      ["_x", "Table name cannot start with an underscore."],
+      ["users", 'Table "users" already exists.'],
+    ] as const) {
+      await user.clear(box);
+      await user.type(box, name);
+      expect(within(tables).getByText(says)).toBeDefined();
+      expect(box.getAttribute("aria-invalid")).toBe("true");
+      expect(create.hasAttribute("disabled")).toBe(true);
+    }
+    await user.clear(box);
+    await user.type(box, "notes{Enter}");
+    await heading("notes");
+    expect(history.location.pathname).toBe("/database/notes");
+    await screen.findByText("No documents in notes yet.");
+    expect(within(tables).getByRole("link", { name: /^notes/ }).textContent).toContain("(not in the schema)");
+    expect((await src.listTables()).some((t) => t.name === "notes")).toBe(true);
+  });
+
+  test("Create table: Escape leaves things as they were; a refusal is said", async () => {
+    const src = source();
+    src.createTable = () => Promise.reject(new Error("the deployment is paused"));
+    mount("/database/users", src);
+    await heading("users");
+    const user = userEvent.setup();
+    const tables = screen.getByRole("navigation", { name: "Tables" });
+    const open = within(tables).getByRole("button", { name: "Create table" });
+    await user.click(open);
+    await user.type(within(tables).getByRole("textbox"), "x{Escape}");
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Create table"));
+    expect(within(tables).queryByRole("textbox")).toBeNull();
+    await user.click(within(tables).getByRole("button", { name: "Create table" }));
+    await user.type(within(tables).getByRole("textbox"), "notes{Enter}");
+    expect((await within(tables).findByRole("alert")).textContent).toBe("the deployment is paused");
+    await expectAccessible();
+  });
+
+  test("read-only, or a source that cannot: no Create table", async () => {
+    mount("/database/users", source({ capabilities: { operations: ["viewData"], readOnly: false } }));
+    await heading("users");
+    expect(
+      within(screen.getByRole("navigation", { name: "Tables" })).queryByRole("button", { name: "Create table" }),
+    ).toBeNull();
+  });
 });

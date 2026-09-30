@@ -33,7 +33,7 @@ export type FixtureOptions = {
   executions?: number;
 };
 
-const SYSTEM_INDEXES: IndexInfo[] = [
+export const SYSTEM_INDEXES: IndexInfo[] = [
   { name: "by_id", fields: ["_id"], system: true, state: "ready" },
   { name: "by_creation_time", fields: ["_creationTime"], system: true, state: "ready" },
 ];
