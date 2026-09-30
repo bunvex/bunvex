@@ -212,4 +212,20 @@ describe("DataTable as a grid", () => {
     await user.keyboard("{ArrowDown}");
     expect(cellText()).toBe("r3");
   });
+
+  test("the first Tab into the grid shows where the focus is", async () => {
+    render(
+      <>
+        <button type="button">before</button>
+        <Editable initial={rows(3)} />
+      </>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "before" }));
+    await user.tab();
+    const cell = document.activeElement as HTMLElement;
+    expect(cell.getAttribute("role")).toBe("gridcell");
+    expect(cell.getAttribute("aria-selected")).toBe("true");
+    expect(cell.className).toContain("ring-2");
+  });
 });

@@ -789,6 +789,22 @@ which Convex's does not.
   resizable one.
 - Checked in a browser at 1 400 and 1 600 px, and by dragging both handles (the widths are saved).
 
+### 12.5.9 Accessibility pass (slice 7)
+
+- **axe on every screen state** (`packages/dashboard/test/a11y.test.tsx`): the overview, a table, each
+  side panel, a table not in the schema, an unknown table, Functions, Logs. Colour contrast, which the
+  test DOM cannot compute, was run with axe in Chrome on the same states in both themes: one failure, a
+  select's placeholder on its dark hover surface (4.29:1). Dark `--muted-foreground` went from
+  `oklch(0.72 0 0)` to `oklch(0.74 0 0)` (4.66:1), and the token test gained that pair
+  (`input/50@card`, dark only).
+- **Keyboard walk-through** (same file): skip link → main, sidebar → Database, table list → a table, one
+  tab stop into the grid, Enter on `_id` opens the document, Escape closes it and returns the focus to
+  the same cell. It found a bug: the first Tab into the grid focused the default cell without marking it
+  current, so no focus ring showed (WCAG 2.4.7); fixed in `DataTable`.
+- **Reduced motion**: the global rule in `globals.css` (animations and transitions to 0.01 ms) is now
+  under test; the grid's highlight already falls back to a steady tint (STUDY-12 D6).
+- READMEs for `@bunvex/ui`, `@bunvex/dashboard` and `apps/dashboard`.
+
 ### 12.6 Decisions (29 Sep 2026)
 
 1. The screen is named **Database**, at **`/database/$table`**.
