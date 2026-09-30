@@ -99,17 +99,17 @@ export class Committer {
     private clockUs: () => number = wallClockUs,
   ) {}
 
+  /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
+  resume(maxTs: number) {
+    this.appliedTs = this.visibleTs = this.purgedTs = maxTs;
+  }
+
   /**
    * Whether a durable commit in `(from, to]` (`to` ≤ visibleTs) wrote into `reads`. When it did not, a query
    * result read at either end is also the result at the other: its reads saw the same data (Convex's
    * `extend_validity`). True when the write log no longer reaches back to `from`, as the absence of a
    * conflict can then not be proven.
    */
-  /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
-  resume(maxTs: number) {
-    this.appliedTs = this.visibleTs = this.purgedTs = maxTs;
-  }
-
   changedBetween(reads: Interval[], from: number, to: number): boolean {
     if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
     if (from >= to) return false;
