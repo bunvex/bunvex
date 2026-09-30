@@ -2,6 +2,7 @@
 // ("module:fn"), internal functions, and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
 import { type Engine, stringifyValue, type Tx } from "@bunvex/core";
+import { perAttempt } from "./logs.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -68,7 +69,8 @@ export class Functions {
 
   runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
     const f = this.fn(name, "mutation", fromClient);
-    return this.engine.mutation((db) => f.handler({ db }, args ?? {}));
+    // perAttempt: a retried run's console lines replace the aborted attempt's (logs.ts).
+    return this.engine.mutation(perAttempt((db) => f.handler({ db }, args ?? {})));
   }
 
   runAction(name: string, args: unknown): Promise<unknown> {

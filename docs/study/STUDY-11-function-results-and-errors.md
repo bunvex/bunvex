@@ -1,6 +1,8 @@
 # STUDY-11 — Function results and errors on the wire
 
-- **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
+- **Status:** draft (retroactive). The code in §3 was written before the study-first rule. D1, D2, D3 and D7
+  are settled by [STUDY-20](STUDY-20-function-errors-and-logs.md), which also corrects §1.1: the backend
+  answers function errors with 200, and 560 is the hosted service's status.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**

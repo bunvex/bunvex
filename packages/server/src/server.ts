@@ -1,9 +1,11 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the WebSocket
 // sync protocol, both speaking @bunvex/protocol v0. One process: the committer is single by design.
-import { type Engine, parseValue, Subscriptions, stringifyValue } from "@bunvex/core";
+import { type Engine, type FormatError, parseValue, type SubResult, Subscriptions, stringifyValue } from "@bunvex/core";
 import { type ClientMessage, subscriptionKey } from "@bunvex/protocol";
 import type { Server } from "bun";
+import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
+import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
 
 type WsData = { keys: Set<string> };
 
@@ -15,13 +17,43 @@ export type ServerOptions = {
   /** What to do when persistence fails and the committer stops. Default: log and exit(1), as Convex does, so
    *  a supervisor restarts the process and it recovers from what persistence durably holds. */
   onFatal?: (e: Error) => void;
+  /**
+   * Hide error details and log lines from clients (Convex's `--redact-logs-to-client`, for production): a
+   * failing function then answers only `[Request ID: …] Server Error`, and no `logLines`. A `BunvexError`'s
+   * data is still sent. Default: the `REDACT_LOGS_TO_CLIENT` environment variable, else off — Convex's
+   * self-hosted default, which suits development.
+   */
+  redactLogsToClient?: boolean;
 };
 
-/** Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. */
-const fromWire = (args: unknown) => parseValue(JSON.stringify(args ?? {}));
+/**
+ * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
+ * Convex (`UdfArgsJson`), `args` is the arguments object or an array holding it (what Convex's clients send).
+ */
+const fromWire = (args: unknown) => parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+
+const envFlag = (v: string | undefined) => v !== undefined && v !== "" && v !== "false" && v !== "0";
+
+/** `,"<field>":[…]` for the log lines a client may see, or nothing (Convex omits empty `logLines`). */
+const linesField = (field: string, lines: string[], redact: boolean) =>
+  redact || lines.length === 0 ? "" : `,${JSON.stringify(field)}:${JSON.stringify(lines)}`;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
+  /** A failed function run, for a client: the message (without its request id) and the app's data. */
+  const formatError: FormatError = (e) => {
+    if (isSystemError(e)) return { error: INTERNAL_SERVER_ERROR_MESSAGE };
+    const c = clientError(e, redact);
+    return c.data === undefined ? { error: c.message } : { error: c.message, data: JSON.stringify(c.data) };
+  };
+  /** `,"e":…` (+ `,"d":…`) of a WebSocket frame carrying an error. */
+  const errorFields = (r: { error: string; data?: string }) =>
+    `,"e":${JSON.stringify(withRequestId(r.error))}${r.data === undefined ? "" : `,"d":${r.data}`}`;
+  const subFrame = (key: string, r: SubResult) =>
+    "value" in r
+      ? `{"t":"upd","k":${JSON.stringify(key)},"v":${r.value}}`
+      : `{"t":"err","k":${JSON.stringify(key)}${errorFields(r)}}`;
   engine.committer.onFatal(
     opts.onFatal ??
       ((e) => {
@@ -31,17 +63,29 @@ export function createServer(opts: ServerOptions) {
   );
   let server: Server<WsData> | null = null;
   // Fan-out rides on Bun's native pub/sub: one topic per subscription key.
-  const subs = new Subscriptions(engine, (key, msg) =>
-    server?.publish(
-      key,
-      "value" in msg
-        ? `{"t":"upd","k":${JSON.stringify(key)},"v":${msg.value}}`
-        : JSON.stringify({ t: "err", k: key, e: msg.error }),
-    ),
-  );
+  const subs = new Subscriptions(engine, (key, msg) => server?.publish(key, subFrame(key, msg)), formatError);
 
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const jsonText = (body: string, status = 200) =>
+    new Response(body, { status, headers: { "content-type": "application/json" } });
+  /** A request-level failure (not the function's): Convex's `{code, message}` body. */
+  const requestError = (status: number, code: string, message: string) => json({ code, message }, status);
+
+  /**
+   * The response to a function call, as Convex's `UdfResponse`: `{status:"success", value, logLines?}`, or
+   * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
+   * A system failure is a 500 with the fixed internal message.
+   */
+  const udfResponse = (r: WithLogLines<string>) => {
+    if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
+    if (isSystemError(r.error)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+    const e = formatError(r.error);
+    const data = e.data === undefined ? "" : `,"errorData":${e.data}`;
+    return jsonText(
+      `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`,
+    );
+  };
 
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
@@ -58,23 +102,21 @@ export function createServer(opts: ServerOptions) {
         }
         if (m.t === "sub") {
           const key = subscriptionKey(m.path, m.args);
-          const send = (r: { value: string } | { error: string } | null) => {
-            if (r === null) return;
-            ws.send(
-              "value" in r
-                ? `{"t":"upd","k":${JSON.stringify(key)},"v":${r.value}}`
-                : JSON.stringify({ t: "err", k: key, e: r.error }),
-            );
+          const send = (r: SubResult | null) => {
+            if (r !== null) ws.send(subFrame(key, r));
           };
           // Already subscribed on this socket: one reference per socket and key, just resend the result.
           if (ws.data.keys.has(key)) return send(subs.current(key));
           ws.subscribe(key); // join the topic BEFORE the first run publishes to it
           ws.data.keys.add(key);
-          let current: { value: string } | { error: string } | null;
+          let current: SubResult | null;
           try {
-            current = await subs.subscribe(key, functions.queryBody(m.path, fromWire(m.args)));
+            const body = functions.queryBody(m.path, fromWire(m.args));
+            // A subscription's runs belong to no caller: a re-run triggered by a mutation's commit must not
+            // add its console lines to that mutation's logLines.
+            current = await subs.subscribe(key, (db) => withoutLogs(() => body(db)));
           } catch (e) {
-            ws.send(JSON.stringify({ t: "err", k: key, e: String((e as Error).message ?? e) }));
+            send(formatError(e));
             return;
           }
           send(current);
@@ -85,12 +127,14 @@ export function createServer(opts: ServerOptions) {
             subs.unsubscribe(key);
           }
         } else if (m.t === "mut") {
-          try {
-            const v = await functions.runMutation(m.path, fromWire(m.args));
-            ws.send(`{"t":"res","id":${JSON.stringify(m.id)},"v":${stringifyValue(v)}}`);
-          } catch (e) {
-            ws.send(JSON.stringify({ t: "res", id: m.id, e: String((e as Error).message ?? e) }));
-          }
+          const { id, path, args } = m;
+          const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
+          const lines = linesField("l", r.logLines, redact);
+          ws.send(
+            r.ok
+              ? `{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`
+              : `{"t":"res","id":${JSON.stringify(id)}${errorFields(formatError(r.error))}${lines}}`,
+          );
         }
       },
       close(ws) {
@@ -117,28 +161,26 @@ export function createServer(opts: ServerOptions) {
         });
       }
       const route = /^\/api\/(query|mutation|action)$/.exec(url.pathname);
-      if (req.method !== "POST" || !route) return json({ status: "error", errorMessage: "not found" }, 404);
+      if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       let body: { path: string; args: unknown };
       try {
         body = (await req.json()) as typeof body;
-      } catch {
-        return json({ status: "error", errorMessage: "invalid json" }, 400);
-      }
-      try {
-        if (route[1] === "query") {
-          const v = await functions.runQueryJson(body.path, fromWire(body.args));
-          return new Response(`{"status":"success","value":${v}}`, { headers: { "content-type": "application/json" } });
-        }
-        const value =
-          route[1] === "mutation"
-            ? await functions.runMutation(body.path, fromWire(body.args))
-            : await functions.runAction(body.path, fromWire(body.args));
-        return new Response(`{"status":"success","value":${stringifyValue(value)}}`, {
-          headers: { "content-type": "application/json" },
-        });
       } catch (e) {
-        return json({ status: "error", errorMessage: String((e as Error).message ?? e) }, 500);
+        return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
       }
+      if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
+      const kind = route[1];
+      return udfResponse(
+        await collectLogs(async () => {
+          const args = fromWire(body.args);
+          if (kind === "query") return functions.runQueryJson(body.path, args);
+          const value =
+            kind === "mutation"
+              ? await functions.runMutation(body.path, args)
+              : await functions.runAction(body.path, args);
+          return stringifyValue(value);
+        }),
+      );
     },
   });
   return { server, subscriptions: subs, stop: () => server?.stop(true) };
