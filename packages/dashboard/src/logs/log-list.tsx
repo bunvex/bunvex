@@ -5,8 +5,9 @@ import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/co
 import { cn } from "@bunvex/ui/lib/utils";
 import type { ReactNode } from "react";
 import type { FunctionKind, LogEntry } from "../data-source.ts";
+import type { LogRow } from "./events.ts";
 
-const col = dataTableColumns<LogEntry>();
+const col = dataTableColumns<LogRow>();
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 
 /** "09-29 12:04:05.123" in the viewer's time zone. */
@@ -22,7 +23,7 @@ export const KIND_LETTER: Record<FunctionKind, string> = { query: "Q", mutation:
 /** A line that went wrong: an error, or the end of a failed execution. */
 export const isFailure = (e: LogEntry) => e.level === "error" || e.execution?.status === "failure";
 
-const columns: DataTableColumn<LogEntry>[] = [
+const columns: DataTableColumn<LogRow>[] = [
   col.accessor((e) => e.time, {
     id: "time",
     header: "Time",
@@ -53,25 +54,31 @@ const columns: DataTableColumn<LogEntry>[] = [
   col.accessor((e) => e.level, {
     id: "level",
     header: "Level",
-    cell: (c) => (
-      <span
-        className={cn(
-          "font-mono text-xs uppercase",
-          c.getValue() === "error"
-            ? "text-destructive"
-            : c.getValue() === "warn"
-              ? "text-warning"
-              : "text-muted-foreground",
-        )}
-      >
-        {c.getValue()}
-      </span>
-    ),
+    cell: (c) =>
+      c.row.original.event ? (
+        <span className="font-mono text-xs text-info uppercase">event</span>
+      ) : (
+        <span
+          className={cn(
+            "font-mono text-xs uppercase",
+            c.getValue() === "error"
+              ? "text-destructive"
+              : c.getValue() === "warn"
+                ? "text-warning"
+                : "text-muted-foreground",
+          )}
+        >
+          {c.getValue()}
+        </span>
+      ),
   }),
   col.accessor((e) => e.function, {
     id: "function",
     header: "Function",
     cell: (c) => {
+      // a deployment event: who did it, where a line has its function
+      const event = c.row.original.event;
+      if (event) return <span className="truncate text-xs text-muted-foreground">{event.author ?? "unknown"}</span>;
       const f = c.getValue() as LogEntry["function"];
       if (!f) return null;
       return (
@@ -100,11 +107,12 @@ const WIDTHS: Record<string, number> = { time: 176, request: 92, outcome: 124, l
 
 export function LogList(props: {
   label: string;
-  lines: LogEntry[];
-  /** Enter or a click on a line. */
-  onOpen: (line: LogEntry) => void;
-  /** The current line moved while details are open: they follow it. */
-  onMove?: (line: LogEntry) => void;
+  /** Lines, and deployment events among them (STUDY-12 §10.4). */
+  lines: LogRow[];
+  /** Enter or a click on a row. */
+  onOpen: (row: LogRow) => void;
+  /** The current row moved while details are open: they follow it. */
+  onMove?: (row: LogRow) => void;
   onEndReached?: () => void;
   empty: ReactNode;
   footer?: ReactNode;

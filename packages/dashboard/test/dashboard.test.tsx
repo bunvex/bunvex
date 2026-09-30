@@ -175,3 +175,26 @@ describe("overview", () => {
     expect(screen.getByRole("region", { name: "Commit timestamp" })).toBeDefined();
   });
 });
+
+describe("the shell on a narrow screen (UI-01 §17.4)", () => {
+  test("Menu shows and hides the screens; a pick or Escape closes it", async () => {
+    const { history } = mount("/");
+    const menu = await screen.findByRole("button", { name: "Menu" });
+    const list = document.getElementById("dashboard-screens")!;
+    expect(menu.getAttribute("aria-controls")).toBe("dashboard-screens");
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    expect(list.className).toContain("hidden");
+    const user = userEvent.setup();
+    await user.click(menu);
+    expect(menu.getAttribute("aria-expanded")).toBe("true");
+    expect(list.className).not.toMatch(/(^| )hidden( |$)/);
+    await user.click(within(list).getByRole("link", { name: "Logs" }));
+    await waitFor(() => expect(history.location.pathname).toBe("/logs"));
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    await user.click(menu);
+    within(list).getByRole("link", { name: "Files" }).focus();
+    await user.keyboard("{Escape}");
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(menu);
+  });
+});
