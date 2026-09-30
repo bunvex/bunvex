@@ -103,3 +103,16 @@ describe("static components", () => {
     await expectAccessible();
   });
 });
+
+describe("Checkbox", () => {
+  test("a partial state reads as mixed and shows a dash, not a tick", async () => {
+    const { Checkbox } = await import("@bunvex/ui/components/checkbox");
+    render(<Checkbox aria-label="Some rows" indeterminate checked={false} />);
+    const box = screen.getByRole("checkbox", { name: "Some rows" });
+    expect(box.getAttribute("aria-checked")).toBe("mixed");
+    const [tick, dash] = [...box.querySelectorAll("svg")];
+    expect(tick?.getAttribute("class")).toContain("group-data-indeterminate/checkbox:hidden");
+    expect(dash?.getAttribute("class")).toContain("group-data-indeterminate/checkbox:block");
+    expect(box.hasAttribute("data-indeterminate")).toBe(true);
+  });
+});

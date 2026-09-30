@@ -545,3 +545,255 @@ are removed — the router owns the URL.
 Unchanged between bunvex packages (`dashboard → ui`, `ui → none`). The new external dependencies are
 declared by the packages that import them, as `check-deps` requires.
 
+
+## 12. Amendment — the dashboard after studying Convex's (29 Sep 2026)
+
+> **Status: decided** (§12.6, the same day). The owner asked for the structure of Convex's own dashboard
+> to be studied before the data screens go further; the study is
+> [STUDY-12](../study/STUDY-12-dashboard.md) (it was a research note; moved to `docs/study/` when that convention landed). This section records what changes.
+> It supersedes the "tables" screens of §11 (list at `/tables`, documents at `/tables/$table`, a document at
+> `/tables/$table/$id`), which were built but not merged.
+
+### 12.1 What we keep, and what we do better than the reference
+
+- **The split** is Convex's: shared screens in `@bunvex/dashboard`, thin hosts. Convex consumes its shared
+  package through tsconfig aliases and lets it know its hosts; ours goes through `exports` and the
+  dependency rules forbid the reverse edge — keep it.
+- **The seam** stays the `DashboardDataSource` interface plus a few `<Dashboard>` props, not a 60-member
+  context of hooks. Differences between hosts are **capabilities of the source** (§12.3) and **prop slots**,
+  never `isSelfHosted` branches.
+- **The design system** stays `@bunvex/ui` (Convex has the same: a separate package, semantic tokens, a
+  `.dark` class, an injected `Link`).
+
+### 12.2 Navigation
+
+Health · **Database** · Schema · Functions · Logs, then Settings. (Files, Schedules and History come with the
+server features they show.) The overview is renamed **Health**; its commit clock stays and gains the
+function metrics when the server has them.
+
+### 12.3 The Database screen
+
+One screen, as Convex's "Data" (named **Database** here):
+
+```
+/database/$table?filter=<base64url JSON>&doc=<id>&panel=schema|indexes
+DatabaseScreen
+├─ TablesSidebar      table search, one link per table (+ count), "not in schema" marker
+└─ TableView  key=table
+   ├─ Toolbar         table name · N documents · actions (gated by capabilities) · menu: schema, indexes
+   ├─ FilterBar       index + index clauses (prefix, trailing range) · field filters · order · columns
+   ├─ DataTable       virtualized, columns = observed ∪ schema fields (_id first, _creationTime last),
+   │                  resizable / reorderable / hideable, per-table settings in localStorage
+   └─ SidePanel       ONE at a time: document (viewer, later editor) · schema · indexes
+```
+
+- `/database` goes to the first table; an unknown table says so inside the screen, with the sidebar.
+- **URL state**: the table (path), the filter expression (one `filter` search param), the open document
+  and the open panel. A link to one document is `/database/tasks?doc=<id>`. Filters of each table are
+  remembered in memory when switching tables. Column widths, order and hidden columns live in
+  localStorage per deployment `scope` + table.
+- **Filter model**: a pure module (`filters.ts`) that knows the index rules and offers only valid next
+  moves; the UI keeps a draft and applies it when valid (typed values debounced).
+- **Live data**: the documents and the count update while the screen is open (§12.4, `watchTable`),
+  keeping the scroll position; the previous rows stay visible while a new filter loads.
+- **Editing** (insert, patch a field, replace, delete selected, clear table) comes in a later slice,
+  behind the `writeData` capability, with confirmation for destructive actions.
+
+### 12.4 Contract v2 (`@bunvex/dashboard/data-source`)
+
+Additive where possible; the removals are marked.
+
+```ts
+// Values: JSON, plus encodings for what JSON cannot carry; a missing field is not null.
+type Value = Json | { $integer: string /* base64 LE int64 */ } | { $bytes: string /* base64 */ };
+
+// Filters — one serializable expression, validated by the source.
+type FieldOp = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "anyOf" | "noneOf" | "type" | "notype";
+type FieldFilter = { id: string; field: string; op: FieldOp; value?: Value | Value[] | ValueType; enabled: boolean };
+type IndexFilter = {
+  name: string;
+  eq: { value: Value; enabled: boolean }[];                      // a prefix of the index fields
+  range?: { lower?: { op: "gt" | "gte"; value: Value }; upper?: { op: "lt" | "lte"; value: Value } };
+};
+type FilterExpression = { index?: IndexFilter; clauses: FieldFilter[]; order: "asc" | "desc" };
+
+type DocumentQuery = PageRequest & { table: string; filter?: FilterExpression };  // replaces index/order
+// An invalid expression → DataSourceError("invalid_request", …, { clause?: string /* FieldFilter.id */ })
+
+interface DashboardDataSource {
+  // … v1 methods, with listDocuments taking the new DocumentQuery …
+  getCapabilities(opts?): Promise<Capabilities>;
+  getSchema(opts?): Promise<SchemaInfo>;              // declared tables, document validators (when
+                                                      // @bunvex/values has them), indexes with state
+  watchTable(table, onChange: (e: { count?: number }) => void, onError): Unsubscribe;
+  // optional, present when capabilities.writeData:
+  insertDocuments?(table, docs: Record<string, Value>[], opts?): Promise<string[]>;  // all or nothing
+  patchDocuments?(table, ids: string[], fields: Record<string, Value | { $unset: true }>, opts?): Promise<void>;
+  replaceDocument?(table, id, doc, opts?): Promise<void>;
+  deleteDocuments?(table, ids: string[], opts?): Promise<void>;
+  clearTable?(table, opts?): Promise<{ deleted: number }>;
+}
+
+type Capabilities = { operations: ("viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions")[];
+                      readOnly: boolean };
+type IndexInfo = { name: string; fields: string[]; system: boolean; state: "ready" | "backfilling";
+                   progress?: { indexed: number; total?: number } };
+```
+
+- **Reactivity** is `watchTable`: "this table changed (and its count is now n)". The dashboard then
+  refreshes the pages it has loaded. It is simpler for the server than reactive pages (Convex subscribes to
+  each page's key range) and enough for a dashboard; reactive pages can come later without changing the
+  screen.
+- **Where it maps on the server** (for the server session; see research §6): capabilities ↔ a
+  `check_admin_key`-style endpoint; `listDocuments` ↔ `paginatedTableDocuments` (index range, then field
+  filters while scanning, bounded reads per page, `_id eq` as a point lookup); `watchTable` ↔ a
+  subscription on the table's write set; the writes ↔ `addDocument` / `patchDocumentsFields` /
+  `replaceDocument` / `deleteDocuments` / `clearTablePage`, each with an audit entry.
+- The mock implements all of it, and `describeDataSourceContract` grows to cover filters, `watchTable`,
+  and — when a source declares `writeData` — the writes.
+
+### 12.5 Slices, replanned
+
+5. **Contract v2 + mock + contract suite** (filters, schema, capabilities, watchTable; writes in the mock).
+6. **Database screen, read-only**: sidebar, table view, filter bar with the filter model, side panel with the
+   document and schema/indexes, URL state, live updates.
+7. **Editing** behind `writeData`.
+8. **Functions and Logs**, then **Health** metrics — each when the server has the data.
+
+### 12.5.1 Slice 5, as built
+
+- `data-source.ts` is the v2 contract above. Value order and filter meaning live in a pure module,
+  `filters.ts` (`valueType`, `compareValues`, int64 encode/decode, `matchesClause`, `validateFilter`,
+  `matchesFilter`, `canonicalFilter` — what a cursor is bound to: disabled clauses and clause ids do not
+  change the query). Its tests pin the semantics by hand, because…
+- …the contract suite uses `filters.ts` as its **oracle**: for a dozen expressions (every operator, unset
+  fields, a disabled clause, an index prefix, a range) a source must return exactly the documents the oracle
+  selects, in index order, across pages. Against the mock this mostly checks pagination and cursors (the
+  mock evaluates with the same module); against a server it checks the semantics.
+- **Write tests are opt-in** (`{ writes: { table, clear? } }`): the suite may be pointed at a live
+  deployment, and must never touch a table nobody named.
+- The mock: int64 and bytes values, a table not in the schema (`imports`), a backfilling index
+  (`tasks.by_text`), capabilities (read-only credentials are refused with `unauthorized`), bounded
+  all-or-nothing writes, `watchTable`, and `liveWritesMs` (the dev app inserts or deletes a task every 3 s).
+- Checked by sabotage: the mock ignoring field clauses, a non-atomic insert, and `neq` excluding unset
+  fields each turn a test red.
+- Routes: `/database` (redirects to the first table) and `/database/$table` (a placeholder until slice 6);
+  the overview is titled **Health**. The v1 tables screens were removed.
+
+### 12.5.2 Slice 6, as built — the Database screen, read-only
+
+- `src/database/`: `screen.tsx` (sidebar + table view), `tables-sidebar.tsx` (search, sizes, "*" for tables
+  not in the schema; a picker below md), `filter-bar.tsx`, `side-panel.tsx` (document · schema · indexes,
+  one at a time, Escape closes, covers the table below lg), `live.ts` (`watchTable` → invalidate the
+  table's documents, the open document and the table list), and three pure modules with their own tests:
+  `filter-url.ts` (base64url JSON in the `filter` param, read defensively: an unreadable link opens
+  unfiltered and says so), `value-input.ts` (`42`, `true`, `"quoted"`, `[1,2]`, `42n` for int64, a bare word
+  is text), `filter-model.ts` (the draft and its valid moves; an empty range bound is no bound).
+- The bar applies 350 ms after the last change, only when the draft is valid for the model and for the
+  table's indexes (`validateFilter`); the source's rejection is shown against the clause it names. The
+  creation-time index offers its range only (nobody looks for one exact timestamp).
+- The previous rows stay (dimmed) while a new filter loads; a new filter scrolls back to the top.
+- `DataTable` gained **top-row anchoring**: rows inserted above the view (a live, newest-first list) keep
+  the row at the top in place instead of pushing it down.
+- The QueryClient retries only `unavailable`, once: a rejected filter used to wait for a pointless retry.
+- Tests: the screen end to end on the mock (redirect, sidebar, columns, building a filter, a filtered
+  link, a rejected and an unreadable filter, the document / schema / indexes panels, live insertion and
+  count, an unknown table), axe on each. Sabotage: the live invalidation and the filter's apply each turn a
+  test red. (A first sabotage run "passed" because the formatter had re-indented the target line and the
+  edit never applied — sabotages now print how many edits they made.)
+- **Left for the UI review the owner announced**: the narrow table and the column settings were done in
+  §12.5.6; the loader still keeps the previous table on screen for the ~250 ms it takes to load the next
+  one.
+
+### 12.5.3 The data grid and in-place editing (slice 6, continued)
+
+- `DataTable` takes `grid`: the WAI-ARIA data grid pattern. One cell is in the tab order (roving
+  tabindex); arrows, Home/End (row), Ctrl/Cmd+Home/End (grid), PageUp/PageDown (a screenful) move, and the
+  virtual list scrolls along (scrollTop set directly, then a scroll event: it works in browsers and in
+  happy-dom). The focused cell is kept by **row id**, so live rows arriving above it do not move it. Enter
+  or F2 or a double-click edits through the caller's `renderEditor`, or calls `onCellActivate` on a cell
+  that cannot be edited; `done("stay" | "right" | "cancel")` ends the edit and puts the focus back.
+  Clicking another cell during an edit leaves it unsaved. Cells say `aria-readonly` when they cannot be
+  edited.
+- The Database screen's editor (`cell-editor.tsx`): the value in the filter bar's syntax (`42`, `true`,
+  `"text"`, `[1, 2]`, `42n`); an empty box removes the field (`$unset`). Enter saves and stays, Tab saves
+  and moves right, Escape cancels (without closing the side panel). A value that does not parse, or that
+  the source refuses, keeps the editor open with the reason. A save goes through `patchDocuments`, then
+  the new value is written into the cached pages and document; the live refresh confirms it.
+- Editable: any non-system field, when the capabilities grant `writeData`, the credential is not read-only
+  and the source has `patchDocuments`; otherwise the screen says "Read-only". `_id` and `_creationTime`
+  are never edited: Enter on them opens the document.
+- Checked by sabotage: not refocusing after an edit, not scrolling to the focused row, and a save that
+  skips the source each turn tests red.
+
+### 12.5.4 Showing what changed (live)
+
+Studied in Convex (`DataCell/utils/useTrackCellChanges.ts`, `DataRow.tsx`, `Table.tsx`): a cell compares its
+value with the previous render's and flashes for 1 s; a new row flashes when its `_creationTime` is less than
+1 s old; when rows arrive above a scrolled view, the header's bottom edge flashes. All on the client, from
+the reactive query's new results. Ours (`DataTable highlightChanges`, pure diff in
+`@bunvex/ui/lib/change-tracking`), with three differences:
+
+- compared by **row id**, not position: scrolling, the next page or a new filter (`resetKey`) flash
+  nothing;
+- a row is "added" when it arrives **between or above rows already shown** — no dependence on the
+  viewer's clock (Convex compares `_creationTime` with `Date.now()`, which a skewed clock breaks);
+- **reduced motion** keeps a steady tint for the same time instead of no mark at all (our global rule
+  cuts animations short); a polite live region says "2 documents changed, 1 document added", at most once
+  every 5 s.
+
+Whoever made the change — another tab, a function, this editor — it flashes. The colour is a light **blue**
+(`--highlight`, from `--info`; contrast-tested in both themes), and so is the header edge: in bunvex blue
+already means "live" (the commit pulse, the focus ring), while yellow would read as our `--warning` (the
+owner chose blue over Convex's yellow). The table list shows a table icon (lucide `table-2`),
+which Convex's does not.
+
+### 12.5.5 Selecting, adding, deleting, clearing
+
+- `DataTable selection`: a checkbox column in front that is a grid column like the others (Space or Enter
+  toggles, Shift for a range since the last toggle; Shift-click too); the header's checkbox selects every
+  loaded row and shows a dash for "some" (the generated shadcn checkbox drew a tick for that state — fixed
+  in `checkbox.tsx`). Controlled by the screen: a new filter clears it, rows that left the list leave it.
+- **Add documents**: a side panel (`panel=add`) with a JSON editor — one object or a list — checked as you
+  type (no `_` fields; the reason shows under the editor), inserted all or nothing; the draft survives
+  closing the panel; Ctrl+Enter adds.
+- **Delete (n)**: shown with a selection, behind a confirmation naming the count and that it cannot be
+  undone; batches of 4 096 ids (the contract's bound).
+- **Clear table…**: in the table's "More" menu, behind a confirmation that asks for the table's name.
+- Each action is shown only when the capabilities grant `writeData`, the credential is not read-only and
+  the source has the method; its outcome is said once (`role="status"`, or `alert` when it failed).
+- **Focus**: when the focused row disappears (deleted here, or live), `DataTable` puts the focus on the
+  neighbouring row's cell instead of losing it to `<body>`. After Delete, the button that opened the dialog
+  is gone with the selection: the dialog does not restore focus (`finalFocus={false}`) and the screen asks
+  the grid for it (`DataTable focusRequest`). Checked in a browser: Base UI hides the page behind a modal
+  with `aria-hidden` and traps the focus (no `inert`), so axe is run on the dialog while it is open.
+- Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
+  search when the screen writes its own; harmless, to be fixed with the app's history setup.
+
+### 12.5.6 Columns and room for the table
+
+- **Columns, per table, kept in this browser** (`localStorage`, per deployment `scope` and table): the
+  order and hidden columns from a **Columns** side panel (a checkbox and move up / move down per column,
+  Reset); widths from a **resize handle** on each header's edge. `DataTable` takes `columnState` +
+  `onColumnStateChange` and applies them before the table model (order via `mergeColumnOrder` — a field
+  that appears later lands after its natural predecessor, so a saved order survives it and `_creationTime`
+  stays last — hidden ones dropped, widths on a fixed-layout `<colgroup>`). The `_id` column starts at
+  260 px, others at 180. Reordering by dragging headers (as Convex) is not built; the panel does it from the
+  keyboard.
+- **`ResizeHandle`** (`@bunvex/ui/components/resize-handle`): the WAI-ARIA window-splitter pattern — a
+  focusable `separator` with its value; drag, or Left/Right (16 px, Shift 64), Enter or a double-click for
+  the default. Used by the column headers and by the table list.
+- **Room**: the side panel is a drawer over the table below 1 536 px (`2xl`) and beside it above, so it no
+  longer squeezes the table; the table list is **resizable** from its edge (160–480 px, kept in this
+  browser). A collapsible table list was built first and dropped at the owner's request in favour of the
+  resizable one.
+- Checked in a browser at 1 400 and 1 600 px, and by dragging both handles (the widths are saved).
+
+### 12.6 Decisions (29 Sep 2026)
+
+1. The screen is named **Database**, at **`/database/$table`**.
+2. Live data through **`watchTable`** + refreshing the loaded pages.
+3. ~~Editing after the read-only screen (slice 7).~~ **Revised the same day**: the owner wanted the table to
+   work like Convex's data grid — move between cells with the keyboard, Enter to edit, Enter to save and keep
+   going — so in-place editing joined slice 6 (§12.5.3); then the owner asked to finish the Database screen in
+   the same pull request, so inserting, deleting and clearing joined it too (§12.5.5).

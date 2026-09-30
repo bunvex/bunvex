@@ -6,11 +6,12 @@ import type {
   DashboardDataSource,
   DeploymentStats,
   Document,
-  DocumentQuery,
+  FilterExpression,
   LogEntry,
   LogFilter,
   Page,
 } from "../data-source.ts";
+import { canonicalFilter } from "../filters.ts";
 
 export type QueryScope = { source: DashboardDataSource; scope: string };
 
@@ -19,8 +20,10 @@ export const dashboardKeys = {
   deployment: (scope: string) => [...dashboardKeys.all(scope), "deployment"] as const,
   statsHistory: (scope: string) => [...dashboardKeys.all(scope), "stats", "history"] as const,
   tables: (scope: string) => [...dashboardKeys.all(scope), "tables"] as const,
-  documents: (scope: string, q: Omit<DocumentQuery, "cursor" | "numItems">) =>
-    [...dashboardKeys.all(scope), "documents", q.table, q.index ?? "by_creation_time", q.order ?? "desc"] as const,
+  documents: (scope: string, table: string, filter?: FilterExpression) =>
+    [...dashboardKeys.all(scope), "documents", table, canonicalFilter(table, filter)] as const,
+  capabilities: (scope: string) => [...dashboardKeys.all(scope), "capabilities"] as const,
+  schema: (scope: string) => [...dashboardKeys.all(scope), "schema"] as const,
   document: (scope: string, table: string, id: string) => [...dashboardKeys.all(scope), "document", table, id] as const,
   functions: (scope: string) => [...dashboardKeys.all(scope), "functions"] as const,
   logs: (scope: string, f: LogFilter) =>
@@ -34,6 +37,19 @@ export const deploymentQuery = ({ source, scope }: QueryScope) =>
     staleTime: 60_000,
   });
 
+export const capabilitiesQuery = ({ source, scope }: QueryScope) =>
+  queryOptions({
+    queryKey: dashboardKeys.capabilities(scope),
+    queryFn: ({ signal }) => source.getCapabilities({ signal }),
+    staleTime: 60_000,
+  });
+
+export const schemaQuery = ({ source, scope }: QueryScope) =>
+  queryOptions({
+    queryKey: dashboardKeys.schema(scope),
+    queryFn: ({ signal }) => source.getSchema({ signal }),
+  });
+
 export const tablesQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: dashboardKeys.tables(scope),
@@ -42,12 +58,14 @@ export const tablesQuery = ({ source, scope }: QueryScope) =>
 
 export const documentsQuery = (
   { source, scope }: QueryScope,
-  q: Omit<DocumentQuery, "cursor" | "numItems">,
+  table: string,
+  filter?: FilterExpression,
   numItems = 100,
 ) =>
   infiniteQueryOptions({
-    queryKey: dashboardKeys.documents(scope, q),
-    queryFn: ({ pageParam, signal }) => source.listDocuments({ ...q, numItems, cursor: pageParam }, { signal }),
+    queryKey: dashboardKeys.documents(scope, table, filter),
+    queryFn: ({ pageParam, signal }) =>
+      source.listDocuments({ table, filter, numItems, cursor: pageParam }, { signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (last: Page<Document>) => (last.isDone ? undefined : last.continueCursor),
   });

@@ -319,9 +319,9 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| Self-hosted dashboard app (Next.js, `NEXT_PUBLIC_DEPLOYMENT_URL`, admin-key login) | `npm-packages/dashboard-self-hosted`; `dashboard-common` | missing | ARCHITECTURE marks it D. Divergence? It could reuse Convex's dashboard against a compatible API, since the dashboard is Apache-2.0. |
-| Health (failure rate, cache hit, calls, concurrency, invalidations) | `dashboard-common/features/health` | missing | Needs app metrics. |
-| Data browser (filters, index selection, edit/add/delete documents, clear table, create table, generate schema) | `features/data`; `system-udfs/_system/frontend/*` | missing | The dashboard relies on about 40 system UDFs (`_system/frontend/*`, `_system/cli/*`). |
+| Self-hosted dashboard app (Next.js, `NEXT_PUBLIC_DEPLOYMENT_URL`, admin-key login) | `npm-packages/dashboard-self-hosted`; `dashboard-common` | partial | bunvex's own: `@bunvex/dashboard` behind a `DashboardDataSource`, hosted by `apps/dashboard` (Vite) — on a mock until the server's admin API exists; no admin-key login yet. Reusing Convex's dashboard was considered: the repository is FSL-1.1-Apache-2.0 (Apache only two years after each release) and it needs ~40 system UDFs plus HTTP routes (STUDY-12 D1). |
+| Health (failure rate, cache hit, calls, concurrency, invalidations) | `dashboard-common/features/health` | missing | Needs app metrics. bunvex's Health screen shows the engine's counters meanwhile (STUDY-12 D12). |
+| Data browser (filters, index selection, edit/add/delete documents, clear table, create table, generate schema) | `features/data`; `system-udfs/_system/frontend/*` | partial | Built on the mock (STUDY-12, UI-01 §12): index + field filters, live documents and counts, in-place editing, add / delete / clear, column layout. Missing: create table, generate schema, custom query, per-table metrics, context menu; the server's admin API (Convex's relies on about 40 system UDFs, `_system/frontend/*`, `_system/cli/*`). Divergences D5–D10 await the owner. |
 | Schema view, Functions (tree, perf graphs, function runner with identity) | `features/functions`, `functionRunner` | missing | |
 | Files (upload, delete, preview) | `features/files` | missing | |
 | Schedules (scheduled functions, cancel; crons with history) | `features/schedules` | missing | |
@@ -385,9 +385,9 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Status | Count |
 |---|---|
 | done | 2 |
-| partial | 8 |
-| missing | 226 |
+| partial | 10 |
+| missing | 224 |
 
 - The two done rows are system indexes and database selection.
-- The eight partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, and OCC retries.
+- The ten partial rows are: declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries, the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

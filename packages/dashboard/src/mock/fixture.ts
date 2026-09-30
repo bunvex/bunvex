@@ -9,9 +9,10 @@ import type {
   LogEntry,
   LogLevel,
 } from "../data-source.ts";
+import { encodeInt64 } from "../filters.ts";
 import { createRandom, type Random } from "./random.ts";
 
-export type FixtureTable = { name: string; indexes: IndexInfo[]; documents: Document[] };
+export type FixtureTable = { name: string; indexes: IndexInfo[]; documents: Document[]; declared: boolean };
 
 export type Fixture = {
   deployment: DeploymentInfo;
@@ -25,17 +26,17 @@ export type FixtureOptions = {
   seed?: number;
   /** The wall-clock ms the history ends at. Default: the current time. */
   now?: number;
-  /** Documents per table. Default: users 40, tasks 1 000, messages 400. */
-  documents?: Partial<Record<"users" | "tasks" | "messages", number>>;
+  /** Documents per table. Default: users 40, tasks 1 000, messages 400, imports 12. */
+  documents?: Partial<Record<"users" | "tasks" | "messages" | "imports", number>>;
   /** Function executions in the log history (each writes 1–4 lines). Default 800. */
   executions?: number;
 };
 
 const SYSTEM_INDEXES: IndexInfo[] = [
-  { name: "by_id", fields: ["_id"], system: true },
-  { name: "by_creation_time", fields: ["_creationTime"], system: true },
+  { name: "by_id", fields: ["_id"], system: true, state: "ready" },
+  { name: "by_creation_time", fields: ["_creationTime"], system: true, state: "ready" },
 ];
-const index = (name: string, ...fields: string[]): IndexInfo => ({ name, fields, system: false });
+const index = (name: string, ...fields: string[]): IndexInfo => ({ name, fields, system: false, state: "ready" });
 
 const FIRST = ["Ada", "Alan", "Barbara", "Edsger", "Frances", "Grace", "Ken", "Leslie", "Margaret", "Radia"];
 const LAST = ["Lovelace", "Turing", "Liskov", "Dijkstra", "Allen", "Hopper", "Thompson", "Lamport", "Hamilton"];
@@ -69,7 +70,14 @@ function makeTables(rnd: Random, now: number, counts: FixtureOptions["documents"
   const day = 86_400_000;
   const users: Document[] = stamps(rnd, counts.users ?? 40, now - 30 * day, 60 * day).map((s) => {
     const name = `${rnd.pick(FIRST)} ${rnd.pick(LAST)}`;
-    return { ...s, name, email: `${name.toLowerCase().replace(" ", ".")}@example.com`, admin: rnd.chance(0.1) };
+    return {
+      ...s,
+      name,
+      email: `${name.toLowerCase().replace(" ", ".")}@example.com`,
+      admin: rnd.chance(0.1),
+      // a 64-bit integer, to exercise the int64 encoding
+      credits: encodeInt64(BigInt(rnd.int(0, 1_000_000)) * 10_000_000_000n),
+    };
   });
   const owner = () => rnd.pick(users)._id;
   const tasks: Document[] = stamps(rnd, counts.tasks ?? 1000, now, 30 * day).map((s) => ({
@@ -87,14 +95,35 @@ function makeTables(rnd: Random, now: number, counts: FixtureOptions["documents"
     body: Array.from({ length: rnd.int(3, 12) }, () => rnd.pick(WORDS)).join(" "),
     meta: rnd.chance(0.2) ? { edited: true, editedAt: s._creationTime + rnd.int(1000, 60_000) } : null,
   }));
+  // written by a one-off script: not in the schema, fields vary, and one field holds bytes
+  const imports: Document[] = stamps(rnd, counts.imports ?? 12, now, 2 * day).map((s) => {
+    const doc: Document = { ...s, source: rnd.pick(["csv", "json", "api"]) };
+    if (rnd.chance(0.5)) doc.rows = rnd.int(1, 5000);
+    if (rnd.chance(0.5))
+      doc.checksum = { $bytes: btoa(String.fromCharCode(...Array.from({ length: 8 }, () => rnd.int(0, 255)))) };
+    return doc;
+  });
   return [
-    { name: "messages", indexes: [...SYSTEM_INDEXES, index("by_channel", "channel")], documents: messages },
+    { name: "imports", indexes: [...SYSTEM_INDEXES], documents: imports, declared: false },
+    {
+      name: "messages",
+      indexes: [...SYSTEM_INDEXES, index("by_channel", "channel")],
+      documents: messages,
+      declared: true,
+    },
     {
       name: "tasks",
-      indexes: [...SYSTEM_INDEXES, index("by_owner", "owner"), index("by_done_priority", "done", "priority")],
+      indexes: [
+        ...SYSTEM_INDEXES,
+        index("by_owner", "owner"),
+        index("by_done_priority", "done", "priority"),
+        // just added to the schema: still being filled
+        { ...index("by_text", "text"), state: "backfilling", progress: { indexed: 610, total: tasks.length } },
+      ],
       documents: tasks,
+      declared: true,
     },
-    { name: "users", indexes: [...SYSTEM_INDEXES, index("by_email", "email")], documents: users },
+    { name: "users", indexes: [...SYSTEM_INDEXES, index("by_email", "email")], documents: users, declared: true },
   ];
 }
 
