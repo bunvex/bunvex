@@ -1,6 +1,6 @@
 // MySQL: the same two generic tables (documents + indexes). No DISTINCT ON, so the newest version per key
 // is chosen client-side from an over-fetched ordered range. The native driver `mysql2` is an optional peer.
-import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "@bunvex/core/persistence";
+import { type DocWrite, type IndexWrite, type Persistence, type ScanDocs, scanLatest } from "@bunvex/core/persistence";
 import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
 
@@ -51,23 +51,23 @@ export class MysqlPersistence implements Persistence, ScanDocs {
     }
   }
 
-  private async latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
-    // No DISTINCT ON in MySQL: read in (key, ts desc) order, over-fetch, keep the first row per key.
+  private latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+    // No DISTINCT ON in MySQL: page through (key, ts desc) order and keep the first row per key.
     const dir = desc ? "desc" : "asc";
-    const [rows] = (await this.pool.execute(
-      `select \`key\`, deleted, document_id from indexes where index_id = ? and \`key\` >= ? and \`key\` < ? and ts <= ?
-       order by \`key\` ${dir}, ts desc limit ${Math.floor(limit * 4)}`,
-      [index, Buffer.from(lo), Buffer.from(hi), ts],
-    )) as any;
-    const out: string[] = [];
-    let last: Buffer | null = null;
-    for (const r of rows) {
-      if (last && Buffer.compare(last, r.key) === 0) continue;
-      last = r.key;
-      if (!r.deleted) out.push(r.document_id);
-      if (out.length >= limit) break;
-    }
-    return out;
+    return scanLatest(
+      async (p) => {
+        const [rows] = (await this.pool.execute(
+          `select \`key\`, deleted, document_id from indexes where index_id = ? and \`key\` >= ? and \`key\` < ? and ts <= ?
+           order by \`key\` ${dir}, ts desc limit ${Math.floor(p.n)}`,
+          [index, Buffer.from(p.lo), Buffer.from(p.hi), ts],
+        )) as any;
+        return (rows as any[]).map((r) => ({ key: r.key as Uint8Array, deleted: !!r.deleted, id: r.document_id }));
+      },
+      lo,
+      hi,
+      limit,
+      desc,
+    );
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {

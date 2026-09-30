@@ -25,6 +25,7 @@ export type IndexMeta = {
 
 export class Catalog {
   readonly tables = new Map<string, TableDef>();
+  private readonly numbers = new Map<number, TableDef>();
 
   add(name: string, tablet: number, number: number, indexes: { name: string; fields: string[]; id: number }[]) {
     const t: TableDef = { id: tablet, number, name, indexes: new Map(), byId: undefined as never };
@@ -34,7 +35,13 @@ export class Catalog {
     }
     t.byId = t.indexes.get("by_id")!;
     this.tables.set(name, t);
+    this.numbers.set(number, t);
     return t;
+  }
+
+  /** The table an id's number names, if any. */
+  byNumber(number: number): TableDef | undefined {
+    return this.numbers.get(number);
   }
 
   table(name: string): TableDef {
@@ -91,7 +98,10 @@ export function planCatalog(
       changes.insertTables.push({ name: d.name, number, tablet, state: "active" });
     }
     const stored = indexes.filter((i) => i.tablet === tablet);
-    const wanted = { ...SYSTEM_INDEXES, ...d.indexes };
+    // As in Convex, every user index ends with an implicit `_creationTime` (then `_id`, in the key), so
+    // documents with equal indexed values come back in creation order.
+    const userIndexes = Object.fromEntries(Object.entries(d.indexes).map(([n, f]) => [n, [...f, "_creationTime"]]));
+    const wanted = { ...SYSTEM_INDEXES, ...userIndexes };
     for (const [name, fields] of Object.entries(wanted)) {
       const have = stored.find((i) => i.name === name);
       if (have && sameFields(have.fields, fields)) continue;

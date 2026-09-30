@@ -28,6 +28,15 @@ const realSetInterval = globalThis.setInterval;
 /** The wall clock, whether or not an execution is running (for the engine's own bookkeeping). */
 export const wallClock = (): number => realNow();
 
+const realPerformanceNow = performance.now.bind(performance);
+const origin = performance.timeOrigin;
+/**
+ * The wall clock in FRACTIONAL milliseconds (sub-ms precision), as Convex takes a transaction's first
+ * `_creationTime` from a nanosecond clock (`CreationTime::for_transaction`); `Date.now()` inside the
+ * execution is its floor (`udf_unix_timestamp`).
+ */
+export const preciseClock = (): number => origin + realPerformanceNow();
+
 function notAllowed(what: string, kind: ExecutionKind): Error {
   return new Error(`Can't use ${what} in ${kind === "query" ? "queries" : "mutations"}. Use an action instead.`);
 }

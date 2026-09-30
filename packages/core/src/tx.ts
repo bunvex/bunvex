@@ -6,6 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { decodeId, encodeId } from "@bunvex/values";
 import BTree from "sorted-btree";
 import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
@@ -17,48 +18,106 @@ import { type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
 
+type RangeExpr = { op: "eq" | "gt" | "gte" | "lt" | "lte"; field: string; value: KeyValue };
+
+/** `withIndex(name, q => q.eq(…).gt(…))`: records the expressions; `compile` checks them against the index. */
 export class IndexRangeBuilder {
-  private eqs: KeyValue[] = [];
-  private lower: { v: KeyValue; incl: boolean } | null = null;
-  private upper: { v: KeyValue; incl: boolean } | null = null;
-  eq(_field: string, v: KeyValue) {
-    this.eqs.push(v);
+  readonly exprs: RangeExpr[] = [];
+  eq(field: string, value: KeyValue) {
+    this.exprs.push({ op: "eq", field, value });
     return this;
   }
-  gt(_f: string, v: KeyValue) {
-    this.lower = { v, incl: false };
+  gt(field: string, value: KeyValue) {
+    this.exprs.push({ op: "gt", field, value });
     return this;
   }
-  gte(_f: string, v: KeyValue) {
-    this.lower = { v, incl: true };
+  gte(field: string, value: KeyValue) {
+    this.exprs.push({ op: "gte", field, value });
     return this;
   }
-  lt(_f: string, v: KeyValue) {
-    this.upper = { v, incl: false };
+  lt(field: string, value: KeyValue) {
+    this.exprs.push({ op: "lt", field, value });
     return this;
   }
-  lte(_f: string, v: KeyValue) {
-    this.upper = { v, incl: true };
+  lte(field: string, value: KeyValue) {
+    this.exprs.push({ op: "lte", field, value });
     return this;
-  }
-  /** Fields are consumed in index order (eq… then one range), as in Convex. */
-  range(): Range {
-    const prefix = encodeKey(this.eqs);
-    let lo = prefix;
-    let hi = prefixEnd(prefix);
-    if (this.lower) {
-      const k = encodeKey([...this.eqs, this.lower.v]);
-      lo = this.lower.incl ? k : prefixEnd(k);
-    }
-    if (this.upper) {
-      const k = encodeKey([...this.eqs, this.upper.v]);
-      hi = this.upper.incl ? prefixEnd(k) : k;
-    }
-    if (this.eqs.length === 0 && !this.lower) lo = FULL.lo;
-    if (this.eqs.length === 0 && !this.upper) hi = FULL.hi;
-    return { lo, hi };
   }
 }
+
+const COMPARATOR = { eq: "==", gt: ">", gte: ">=", lt: "<", lte: "<=" } as const;
+const quoted = (f: string) => JSON.stringify(f);
+const list = (fs: string[]) => `[${fs.map(quoted).join(", ")}]`;
+
+/**
+ * Turn range expressions into a key interval, with Convex's rules and errors (`IndexRange::compile` in
+ * crates/common/src/query.rs): equalities on distinct fields, at most one lower and one upper bound, both
+ * on the same field, and together a prefix of the index's fields in order (the trailing `_id` included).
+ */
+export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
+  const indexName = `${ix.table}.${ix.name}`;
+  const indexed = ix.name === "by_id" ? [] : ix.fields; // the fields Convex lists; `_id` is implicit
+  const withId = [...indexed, "_id"];
+  const eqs = new Map<string, KeyValue>();
+  let ineqField: string | null = null;
+  let lower: { v: KeyValue; incl: boolean } | null = null;
+  let upper: { v: KeyValue; incl: boolean } | null = null;
+  for (const e of exprs) {
+    if (e.op === "eq") {
+      if (eqs.has(e.field))
+        throw new Error(
+          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${JSON.stringify(e.value)}.`,
+        );
+      eqs.set(e.field, e.value);
+      continue;
+    }
+    const isUpper = e.op === "lt" || e.op === "lte";
+    if ((isUpper ? upper : lower) !== null)
+      throw new Error(
+        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${JSON.stringify(e.value)}.`,
+      );
+    if (ineqField !== null && ineqField !== e.field)
+      throw new Error(
+        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead. See https://docs.convex.dev/using/indexes for more info.`,
+      );
+    ineqField = e.field;
+    const bound = { v: e.value, incl: e.op === "lte" || e.op === "gte" };
+    if (isUpper) upper = bound;
+    else lower = bound;
+  }
+  const rank = new Map(withId.map((f, i) => [f, i]));
+  for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
+    if (!rank.has(f))
+      throw new Error(
+        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field. For more information see https://docs.convex.dev/using/indexes.`,
+      );
+  const eqFields = [...eqs.keys()].sort((a, b) => rank.get(a)! - rank.get(b)!);
+  const used = [...eqFields, ...(ineqField ? [ineqField] : [])];
+  used.forEach((f, i) => {
+    if (withId[i] !== f)
+      throw new Error(
+        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}\nFor more information see https://docs.convex.dev/using/indexes.`,
+      );
+  });
+  // The trailing `_id` of a non-by_id index is stored as its UTF-8 bytes (schema.ts indexKey).
+  const keyValue = (f: string, v: KeyValue): KeyValue =>
+    f === "_id" && ix.name !== "by_id" && typeof v === "string" ? utf8.encode(v) : v;
+  const prefixVals = eqFields.map((f) => keyValue(f, eqs.get(f)!));
+  if (prefixVals.length === 0 && !lower && !upper) return FULL;
+  const prefix = encodeKey(prefixVals);
+  let lo = prefixVals.length ? prefix : FULL.lo;
+  let hi = prefixVals.length ? prefixEnd(prefix) : FULL.hi;
+  if (lower) {
+    const k = encodeKey([...prefixVals, keyValue(ineqField!, lower.v)]);
+    lo = lower.incl ? k : prefixEnd(k);
+  }
+  if (upper) {
+    const k = encodeKey([...prefixVals, keyValue(ineqField!, upper.v)]);
+    hi = upper.incl ? prefixEnd(k) : k;
+  }
+  return { lo, hi };
+}
+const utf8 = new TextEncoder();
 
 export class Tx {
   reads: Interval[] = [];
@@ -74,15 +133,44 @@ export class Tx {
     private nextCreationTime: number = wallClock(),
     /** System transactions (the engine's own) may touch `_`-prefixed system tables; app code may not. */
     private readonly system = false,
-  ) {}
+  ) {
+    this.day = Math.floor(nextCreationTime / 86_400_000);
+  }
+  /** Days since the Unix epoch at the transaction's start: the last two bytes of every id it creates. */
+  private readonly day: number;
 
   private tableDef(name: string) {
     if (name.startsWith("_") && !this.system) throw new Error(`System table ${name} is not accessible here.`);
     return this.catalog.table(name);
   }
 
+  /**
+   * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
+   * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
+   */
+  private checkId(table: string, id: string, method: string): boolean {
+    let n: number;
+    try {
+      n = decodeId(id).tableNumber;
+    } catch (e) {
+      throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
+    }
+    const actual = this.catalog.byNumber(n);
+    if (!actual) return false;
+    if (actual.name !== table)
+      throw new Error(
+        `Invalid argument \`id\` for \`${method}\`: expected to be an Id<"${table}">, got Id<"${actual.name}"> instead.`,
+      );
+    return true;
+  }
+
   async get(table: string, id: string): Promise<Doc | null> {
+    return this.read(table, id, "db.get");
+  }
+
+  private async read(table: string, id: string, method: string): Promise<Doc | null> {
     const t = this.tableDef(table);
+    if (!this.checkId(table, id, method)) return null;
     const w = this.writes.get(id);
     if (w) return w.next;
     const k = encodeKey([id]);
@@ -131,7 +219,7 @@ export class Tx {
         const found = t.indexes.get(name);
         if (!found) throw new Error(`unknown index ${table}.${name}`);
         ix = found;
-        if (f) range = f(new IndexRangeBuilder()).range();
+        range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
         return q;
       },
       order(dir: "asc" | "desc") {
@@ -190,7 +278,13 @@ export class Tx {
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     const t = this.tableDef(table);
-    const id = crypto.randomUUID();
+    // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
+    // randomness is the real CSPRNG, drawn outside the deterministic execution.
+    const internal = new Uint8Array(16);
+    outsideExecution(() => crypto.getRandomValues(internal.subarray(0, 14)));
+    internal[14] = this.day >> 8;
+    internal[15] = this.day & 0xff;
+    const id = encodeId(t.number, internal);
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
@@ -200,7 +294,7 @@ export class Tx {
 
   async patch(table: string, id: string, fields: Record<string, unknown>) {
     const t = this.tableDef(table);
-    const cur = await this.get(table, id);
+    const cur = await this.read(table, id, "db.patch");
     if (!cur) throw new Error(`patch: ${table}/${id} not found`);
     const old = this.writes.get(id)?.old ?? cur;
     this.stage(t, id, old, { ...cur, ...fields, _id: id, _creationTime: cur._creationTime });
@@ -208,7 +302,7 @@ export class Tx {
 
   async delete(table: string, id: string) {
     const t = this.tableDef(table);
-    const cur = await this.get(table, id);
+    const cur = await this.read(table, id, "db.delete");
     if (!cur) return;
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
   }

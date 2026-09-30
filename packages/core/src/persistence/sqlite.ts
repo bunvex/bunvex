@@ -2,8 +2,8 @@
 // transaction, so a group of commits is durable (and crash-atomic) as a whole. Ships with @bunvex/core:
 // bun:sqlite is built into Bun, so this driver has no dependency at all.
 import { Database } from "bun:sqlite";
-import { compareKeys } from "../keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./index.ts";
+import { scanLatestSync } from "./scan.ts";
 
 export class SqlitePersistence implements Persistence {
   private db: Database;
@@ -52,18 +52,19 @@ export class SqlitePersistence implements Persistence {
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
-    // Over-fetch: a key may carry several versions. For the bench's insert-only data every key has one.
-    const rows = (desc ? this.scanDesc : this.scanAsc).all(index, lo, hi, ts, limit * 4) as any[];
-    const out: string[] = [];
-    let last: Uint8Array | null = null;
-    for (const r of rows) {
-      const k = r.key as Uint8Array;
-      if (last && compareKeys(last, k) === 0) continue; // older version of a key already decided
-      last = k;
-      if (!r.deleted) out.push(r.document_id);
-      if (out.length >= limit) break;
-    }
-    return out;
+    const q = desc ? this.scanDesc : this.scanAsc;
+    return scanLatestSync(
+      (p) =>
+        (q.all(index, p.lo, p.hi, ts, p.n) as any[]).map((r) => ({
+          key: r.key as Uint8Array,
+          deleted: !!r.deleted,
+          id: r.document_id as string | null,
+        })),
+      lo,
+      hi,
+      limit,
+      desc,
+    );
   }
 
   get(table: number, id: string, ts: number) {

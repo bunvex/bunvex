@@ -7,10 +7,25 @@ import type { Functions } from "./functions.ts";
 
 type WsData = { keys: Set<string> };
 
-export type ServerOptions = { engine: Engine; functions: Functions; port?: number; label?: string };
+export type ServerOptions = {
+  engine: Engine;
+  functions: Functions;
+  port?: number;
+  label?: string;
+  /** What to do when persistence fails and the committer stops. Default: log and exit(1), as Convex does, so
+   *  a supervisor restarts the process and it recovers from what persistence durably holds. */
+  onFatal?: (e: Error) => void;
+};
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  engine.committer.onFatal(
+    opts.onFatal ??
+      ((e) => {
+        console.error(`bunvex: ${e.message}; shutting down`, e.cause);
+        process.exit(1);
+      }),
+  );
   let server: Server<WsData> | null = null;
   // Fan-out rides on Bun's native pub/sub: one topic per subscription key.
   const subs = new Subscriptions(engine, (key, msg) =>
