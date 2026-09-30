@@ -3,3 +3,27 @@ node_modules/
 *.log
 .DS_Store
 .playwright-mcp/
+
+# builds (every app and package)
+dist/
+.output/
+.tanstack/
+*.tsbuildinfo
+
+# tests: `bun test --coverage`, Playwright
+coverage/
+test-results/
+playwright-report/
+
+# local secrets and config
+.env
+.env.*
+!.env.example
+
+# editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+Thumbs.db
