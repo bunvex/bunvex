@@ -29,11 +29,13 @@ import {
   type LogQuery,
   OPERATIONS,
   type Page,
+  type RunOptions,
   type ScheduledFunction,
   type ScheduledFunctionQuery,
   type SchemaInfo,
   type StoredFile,
   type TableInfo,
+  toDataSourceError,
   type Unsubscribe,
   type ValidatorJson,
   type Value,
@@ -632,7 +634,7 @@ export class MockDataSource implements DashboardDataSource {
    * `<table>:get` the document `id` (or null), `tasks:byOwner` the tasks of `owner`; everything else returns
    * null, and nothing changes data. Mock only: `throw: "message"` in the arguments makes it throw.
    */
-  runFunction(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun> {
+  runFunction(path: string, args: Record<string, Value>, opts?: RunOptions): Promise<FunctionRun> {
     return this.call(opts?.signal, () => {
       const fn = this.functions.find((f) => f.path === path);
       if (!fn) throw new DataSourceError("not_found", `no function "${path}"`);
@@ -641,6 +643,9 @@ export class MockDataSource implements DashboardDataSource {
         throw new DataSourceError("unauthorized", "this credential cannot run functions");
       if (c.readOnly && fn.kind !== "query")
         throw new DataSourceError("unauthorized", `a read-only credential cannot run a ${fn.kind}`);
+      const identity = opts?.identity;
+      if (identity && !c.operations.includes("actAsUser"))
+        throw new DataSourceError("unauthorized", "this credential cannot act as a user");
       if (this.paused)
         throw new DataSourceError(
           "invalid_request",
@@ -653,7 +658,7 @@ export class MockDataSource implements DashboardDataSource {
         : typeof args.throw === "string"
           ? `Uncaught Error: ${args.throw}`
           : undefined;
-      const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error });
+      const lines = makeExecution(this.rnd, this.logs.length + 1, this.now(), { fn, error, identity });
       this.log(lines);
       const run: FunctionRun = {
         logLines: lines.map((l) => ({ level: l.level, message: l.message })),
@@ -663,6 +668,38 @@ export class MockDataSource implements DashboardDataSource {
       else run.value = this.mockValue(path, args);
       return run;
     });
+  }
+
+  watchFunction(
+    path: string,
+    args: Record<string, Value>,
+    onResult: (run: FunctionRun) => void,
+    onError: (error: DataSourceError) => void,
+    opts?: Pick<RunOptions, "identity">,
+  ): Unsubscribe {
+    let live = true;
+    const fail = (e: unknown) => live && onError(toDataSourceError(e));
+    const fn = this.functions.find((f) => f.path === path);
+    if (fn && fn.kind !== "query") {
+      setTimeout(
+        () => fail(new DataSourceError("invalid_request", `${path} is a ${fn.kind}: only a query is watched`)),
+        0,
+      );
+      return () => {
+        live = false;
+      };
+    }
+    // a query reads its module's table (tasks:list reads tasks): it runs again when that table changes
+    const rerun = () => {
+      if (live) this.runFunction(path, args, opts).then((r) => live && onResult(r), fail);
+    };
+    rerun();
+    const table = path.split(":")[0]!;
+    const off = this.tables.has(table) ? this.watchTable(table, rerun, () => {}) : () => {};
+    return () => {
+      live = false;
+      off();
+    };
   }
 
   private mockValue(path: string, args: Record<string, Value>): Value {

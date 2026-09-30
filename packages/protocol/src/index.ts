@@ -36,5 +36,22 @@ export type ServerMessage =
 /** The key both sides use for a subscription: function path + NUL + JSON of the args. */
 export const subscriptionKey = (path: string, args: unknown) => `${path}\u0000${JSON.stringify(args ?? {})}`;
 
+// ---------------------------------------------------------------- function references (STUDY-26 C3)
+export {
+  type AnyApi,
+  type AnyFunctionReference,
+  anyApi,
+  type DefaultFunctionArgs,
+  type EmptyObject,
+  type FunctionArgs,
+  type FunctionReference,
+  type FunctionReturnType,
+  type FunctionType,
+  type FunctionVisibility,
+  functionName,
+  getFunctionName,
+  makeFunctionReference,
+  type OptionalRestArgs,
+} from "./api.ts";
 // ---------------------------------------------------------------- v1 (STUDY-23): Convex's sync protocol
 export * as v1 from "./v1.ts";

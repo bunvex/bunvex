@@ -15,6 +15,7 @@ import {
   type Document,
   type FieldFilter,
   type FilterExpression,
+  type FunctionRun,
   type IndexInfo,
   type LogEntry,
   OPERATIONS,
@@ -370,6 +371,21 @@ export function describeDataSourceContract(
           expect(requestOf.get(e.parentExecutionId)).toBe(e.requestId);
     });
 
+    test("an execution's usage and identity, when given, are well-formed (STUDY-12 §10.5)", async () => {
+      const src = await make();
+      const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
+      const identities = ["admin", "user", "acting_as_user", "system", "unknown"];
+      for (const e of page) {
+        const x = e.execution;
+        if (!x) continue;
+        if (x.identity !== undefined) expect(identities).toContain(x.identity);
+        for (const v of Object.values(x.usage ?? {})) {
+          expect(typeof v).toBe("number");
+          expect(v as number).toBeGreaterThanOrEqual(0);
+        }
+      }
+    });
+
     test("logs page newest first with increasing ids, and respect the filter", async () => {
       const src = await make();
       const first: LogEntry[] = (await src.listLogs({ numItems: 50, cursor: null })).page;
@@ -488,6 +504,39 @@ export function describeDataSourceContract(
       test("runFunction: an unknown function is not_found", async () => {
         const src = await runner();
         await expectError(src.runFunction("no_such_module:nothing", {}), "not_found");
+      });
+
+      test("watchFunction (when present): a query's run arrives, never inside the call; a mutation is invalid_request", async () => {
+        const src = await runner();
+        if (!src.watchFunction) return;
+        const runs: FunctionRun[] = [];
+        const errors: DataSourceError[] = [];
+        const off = src.watchFunction(
+          run.query,
+          run.args ?? {},
+          (r) => runs.push(r),
+          (e) => errors.push(e),
+        );
+        expect(runs).toEqual([]); // asynchronously
+        const deadline = performance.now() + watchTimeoutMs;
+        while (runs.length === 0 && errors.length === 0 && performance.now() < deadline) await sleep(5);
+        off();
+        expect(errors).toEqual([]);
+        expect(runs[0]?.error).toBeUndefined();
+        expect(runs[0]?.value).not.toBeUndefined();
+        const mutation = (await src.listFunctions()).find((f) => f.kind === "mutation");
+        if (!mutation) return;
+        const refused: DataSourceError[] = [];
+        const off2 = src.watchFunction(
+          mutation.path,
+          {},
+          () => {},
+          (e) => refused.push(e),
+        );
+        const until = performance.now() + watchTimeoutMs;
+        while (refused.length === 0 && performance.now() < until) await sleep(5);
+        off2();
+        expect(refused[0]?.code).toBe("invalid_request");
       });
 
       const misfit = run.misfitArgs;

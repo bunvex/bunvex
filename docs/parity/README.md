@@ -7,7 +7,7 @@ item. It is the project's to-do list at the scale of the whole product.
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 25 | 36 | ~170 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 43 | 18 | ~103 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 103 | 18 | ~43 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 3 | 20 | ~209 |
 
 These counts were taken on 2026-09-29, with #6 (catalog) and #7 (ids) counted as done; client-sync was
@@ -20,6 +20,8 @@ no single status.
 - A row goes from *missing* to *done* only with the study (`docs/study/`) and tests.
 - Rows marked **Divergence?** in their notes are places where bunvex might deliberately differ. The owner
   decides them; until then, the default is to match Convex.
+- **Every decided divergence gets a row in [divergences.md](divergences.md)**, the central ledger of what
+  bunvex does differently from Convex and why. A PR that decides, changes or resolves one updates it.
 - **Statuses:**
   - **done** means it matches Convex's behaviour.
   - **partial** means it exists but differs, and the note says how.

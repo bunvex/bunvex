@@ -10,8 +10,8 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-      <div className="flex flex-col gap-6 md:flex-row">
-        <nav aria-label="Settings" className="md:w-52 md:shrink-0">
+      <div className="flex flex-col gap-6 lg:flex-row">
+        <nav aria-label="Settings" className="lg:w-52 lg:shrink-0">
           <ul>
             <li>
               <DashLink link={{ to: "/settings/general" }} className={TAB}>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { v } from "@bunvex/values";
+import { isBunvexError, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
@@ -70,6 +70,16 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     ).rejects.toThrow(
       "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.",
     );
+    // A cursor of another query is an app error with Convex's data shape (STUDY-26 P1): a function may catch it.
+    const caught = await e.query(async (db) => {
+      try {
+        await db.query("items").withIndex("by_n").order("desc").paginate({ numItems: 3, cursor: a.continueCursor });
+        return null;
+      } catch (x) {
+        return { bunvex: isBunvexError(x), data: (x as { data?: unknown }).data };
+      }
+    });
+    expect(caught).toEqual({ bunvex: true, data: { isBunvexSystemError: true, paginationError: "InvalidCursor" } });
     await expect(page(e, `${a.continueCursor}x`, 3)).rejects.toThrow("InvalidCursor: Failed to parse cursor");
     const other = await new Engine(e.schema, e.persistence, { instanceSecret: "s2" }).init();
     await expect(page(other, a.continueCursor, 3)).rejects.toThrow("Failed to parse cursor");
@@ -98,6 +108,18 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     expect(a.splitCursor).not.toBeNull();
     const b = await page(e, a.continueCursor, 80);
     expect(ns(b.page)[0]).toBe(30);
+  });
+
+  test("a pinned page stopped by maximumRowsRead still continues at its end, so its split covers it all", async () => {
+    const e = await engine(20);
+    const whole = await page(e, null, 20);
+    const a = await page(e, null, 20, { endCursor: whole.continueCursor, maximumRowsRead: 8 });
+    expect(a.page.length).toBe(8);
+    expect(a.pageStatus).toBe("SplitRequired");
+    expect(a.continueCursor).toBe(whole.continueCursor); // Convex: end_cursor.or_else(query.cursor())
+    const first = await page(e, null, 20, { endCursor: a.splitCursor });
+    const second = await page(e, a.splitCursor ?? null, 20, { endCursor: a.continueCursor });
+    expect([...ns(first.page), ...ns(second.page)]).toEqual(ns(whole.page));
   });
 
   test("an explicit endCursor returns exactly the page up to it", async () => {

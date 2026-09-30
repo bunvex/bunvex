@@ -80,9 +80,9 @@ change after the fact, two catalogs and two instance secrets). C7 enforces it.
 
 A driver implements C7 by implementing the `Lease` interface (`acquireLease`, `renewLease`,
 `releaseLease`). v2 is optional per driver: a driver without it behaves as in v1, and the engine then has
-no protection (the driver's docs say so). First-party status: **postgres** and **mongodb** implement C7 (mysql: #67; sqlite and memory: #70).
-MongoDB needs a replica set (a single-node one is enough): a flush is a multi-document transaction whose
-first write is the fence.
+no protection (the driver's docs say so). First-party status: every first-party driver implements C7 —
+**postgres**, **mysql**, **mongodb**, **sqlite** and **memory**. MongoDB needs a replica set (a single-node one
+is enough): a flush is a multi-document transaction whose first write is the fence.
 
 - **The lease** is one record in the store: `epoch` (strictly increasing), `holder` (an opaque string
   naming the process), `expires_at`, and `max_ts` (the durable prefix, see below).
@@ -107,6 +107,14 @@ first write is the fence.
   recovery (log truncation, deleting rows above a commit marker) only under the lease.
 - **Liveness.** Opening a store must not wait on another process's open transaction (a paused process
   must not wedge `open()`: STUDY-24 S3), and two concurrent opens of an empty store must not fail.
+
+**Process-scoped leases (embedded stores).** A store that is a file on one machine (sqlite, memory+log)
+implements C7 as an **exclusive OS lock** next to the file (`leaseScope = "process"`): taken at open when
+free, held for exactly as long as the process lives, dropped by the kernel when it dies (kill -9
+included). `acquireLease` reports a held lock as `{ heldBy, expiresInMs: null }`; there is no TTL and
+nothing to renew, and a writer that does not hold the lock cannot apply. Recovery (the memory log's torn
+tail) runs only under the lock. Convex's SQLite store has no lock and loses writes with two processes
+(STUDY-25 L9, measured); bunvex diverges on purpose (owner, 2026-09-30).
 
 The engine side (`@bunvex/core`): `init()` acquires the lease with `holder = host:pid:random` and the
 TTL (default 5 s). A live lease fails `init()` with `LeaseHeldError` (who holds it, when it expires),
@@ -135,10 +143,13 @@ runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` r
 | K16 | index-only commits | a commit with index entries and no documents is counted by `maxTs()` |
 | K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
 | K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
+| K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
   that loses all its index entries leaves the index counts equal to each other.
+- K11–K14 test expiry and paused holders: they do not apply to a process-scoped lease (an OS lock has
+  neither), which K10, K16–K19 cover.
 - K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
   moment lands inside the flush often enough, and the takeover must still finish in time.
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit

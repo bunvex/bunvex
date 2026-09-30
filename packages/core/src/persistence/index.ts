@@ -32,8 +32,9 @@ export interface Persistence {
   close(): void | Promise<void>;
 }
 
-/** What `acquireLease` found: the lease is now ours (`epoch`), or another process holds it. */
-export type LeaseAcquire = { epoch: number } | { heldBy: string; expiresInMs: number };
+/** What `acquireLease` found: the lease is now ours (`epoch`), or another process holds it — until its lease
+ *  expires (`expiresInMs`), or for as long as it lives (`null`: a process-scoped lease, an OS lock). */
+export type LeaseAcquire = { epoch: number } | { heldBy: string; expiresInMs: number | null };
 
 /**
  * PERSIST-01 C7, single writer: one lease record in the store, taken only when free, released or expired
@@ -41,6 +42,8 @@ export type LeaseAcquire = { epoch: number } | { heldBy: string; expiresInMs: nu
  * Optional per driver; the engine uses it when the driver has it.
  */
 export interface Lease {
+  /** "process": an OS lock that lives exactly as long as the holding process (no TTL, no renewal). */
+  readonly leaseScope?: "ttl" | "process";
   acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire>;
   /** Extend the lease by its TTL; throws `LeaseLostError` if another holder has taken it. */
   renewLease(): Promise<void>;
@@ -63,10 +66,13 @@ export class LeaseLostError extends Error {
 export class LeaseHeldError extends Error {
   constructor(
     readonly heldBy: string,
-    readonly expiresInMs: number,
+    /** null: the holder keeps it for as long as it lives (an OS lock on an embedded store). */
+    readonly expiresInMs: number | null,
   ) {
     super(
-      `another bunvex process (${heldBy}) holds this store's lease; it expires in ${Math.ceil(expiresInMs / 1000)} s if that process is gone`,
+      expiresInMs === null
+        ? `another bunvex process (${heldBy}) holds this store; it is released when that process exits`
+        : `another bunvex process (${heldBy}) holds this store's lease; it expires in ${Math.ceil(expiresInMs / 1000)} s if that process is gone`,
     );
     this.name = "LeaseHeldError";
   }

@@ -9,6 +9,8 @@ bun run build     # dist/: a static host that answers unknown paths with index.h
 bun run preview   # the built app
 ```
 
+`/design-system.html` shows `@bunvex/ui`'s tokens and components in both themes (UI-01 §17.5).
+
 Query parameters on any page tune the mock (they are taken out of the address and kept for the tab), to see loading, errors and live data:
 `?latency=300` (ms per call), `?fail=0.2` (share of calls that fail), `?writes=500` (a live insert or
 delete every 500 ms; `0` turns it off), `?tables=0` (a deployment with no tables yet).

@@ -2,5 +2,5 @@
   "extends": "./tsconfig.base.json",
   "include": ["packages/*/src", "packages/*/test", "bench", "scripts"],
   // The UI packages need DOM types and JSX, which the engine and server must not see: own tsconfigs (UI-01 §8).
-  "exclude": ["packages/ui", "packages/dashboard"]
+  "exclude": ["packages/ui", "packages/dashboard", "packages/react"]
 }

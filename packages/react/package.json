@@ -2,11 +2,22 @@
   "name": "@bunvex/react",
   "version": "0.0.0",
   "private": true,
-  "description": "React bindings: useQuery, useMutation, usePaginatedQuery.",
+  "description": "React bindings: BunvexProvider, useQuery, useMutation, useAction.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/values": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0"
   },
   "repository": {
     "type": "git",

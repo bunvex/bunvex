@@ -5,10 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
-import { type LogEntry, toDataSourceError } from "../data-source.ts";
+import { type AuditEvent, type LogEntry, toDataSourceError } from "../data-source.ts";
 import { logsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
+import { interleave, useLogEvents } from "./events.ts";
 import { LogDetails } from "./log-details.tsx";
 import {
   isFiltered,
@@ -60,9 +61,22 @@ export function LogsView(props: {
   functions?: string[];
   /** Above the toolbar, e.g. the screen's heading. */
   header?: ReactNode;
+  /** The deployment's events to place among the lines (STUDY-12 §10.4), and what Enter on one does. */
+  events?: AuditEvent[];
+  onOpenEvent?: (e: AuditEvent) => void;
 }) {
   const { logs, view, onView } = props;
   const shown = useMemo(() => logs.lines.filter((e) => matchesLogView(e, view)), [logs.lines, view]);
+  // events within the loaded lines' time, among them — not filtered: they are not log lines (as in Convex)
+  const oldest = logs.lines.at(-1)?.time;
+  const rows = useMemo(
+    () =>
+      interleave(
+        shown,
+        (props.events ?? []).filter((e) => oldest !== undefined && e.time >= oldest),
+      ),
+    [shown, props.events, oldest],
+  );
   const [open, setOpen] = useState<LogEntry | null>(null);
   const filtered = isFiltered(view);
   const status = logs.loadingOlder
@@ -83,9 +97,9 @@ export function LogsView(props: {
           <LogList
             label={props.label}
             className="max-h-[calc(100svh-12rem)]"
-            lines={shown}
-            onOpen={setOpen}
-            onMove={open ? setOpen : undefined}
+            lines={rows}
+            onOpen={(row) => (row.event ? props.onOpenEvent?.(row.event) : setOpen(row))}
+            onMove={open ? (row) => row.event || setOpen(row) : undefined}
             onEndReached={logs.loadOlder}
             empty={
               logs.pending
@@ -120,10 +134,14 @@ export function LogsScreen() {
     navigate({ search, replace }),
   );
   const logs = useLogLines();
+  const events = useLogEvents(logs.lines.at(-1)?.time);
   return (
     // full-bleed inside <main>: the details panel runs to its edges
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] md:-m-6">
       <LogsView
+        events={events}
+        // an event's details are the History screen's
+        onOpenEvent={(e) => void navigate({ to: "/history", search: { event: e.id } })}
         header={<h1 className="text-xl font-semibold tracking-tight">Logs</h1>}
         label="Log lines"
         logs={logs}

@@ -56,6 +56,10 @@ export function describeEvent(e: AuditEvent): string {
       return `Canceled ${n(m.count, "scheduled run")}${m.function ? ` of ${str(m.function)}` : ""}`;
     case "push_config":
       return "Deployed functions";
+    case "pause_deployment":
+      return "Paused the deployment";
+    case "unpause_deployment":
+      return "Resumed the deployment";
     case "build_indexes":
       return "Built indexes";
     default:
