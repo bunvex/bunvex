@@ -13,6 +13,7 @@ import {
   INSTANCE_TABLE,
   type IndexMeta,
   planCatalog,
+  SESSION_REQUESTS_TABLE,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
@@ -33,7 +34,16 @@ import {
   LeaseLostError,
   type Persistence,
 } from "./persistence/index.ts";
-import { type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
+import { type DeclaredTable, type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
+import {
+  deleteSessionRequestsBefore,
+  findSessionRequest,
+  recordSessionRequest,
+  SESSION_CLEANUP_CHUNK,
+  SESSION_REQUESTS_INDEX,
+  type SessionRequestId,
+  type SessionRequestOutcome,
+} from "./session-requests.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 
 /** A function result as Convex JSON text (`undefined` → null), and back. */
@@ -216,7 +226,14 @@ export class Engine {
     });
     const { tables, indexes } = await this.runMutation(async (db) => {
       const current = await read(db);
-      const systemTables = [{ name: INSTANCE_TABLE, indexes: {}, document: v.any() }];
+      const systemTables: DeclaredTable[] = [
+        { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+        {
+          name: SESSION_REQUESTS_TABLE,
+          indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
+          document: v.any(),
+        },
+      ];
       const changes = planCatalog([...systemTables, ...this.schema.tables.values()], current.tables, current.indexes);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
@@ -344,6 +361,40 @@ export class Engine {
    */
   mutationWithTs<T>(body: TxBody<T>, source?: string): Promise<{ value: T; ts: number }> {
     return this.runMutation(body, false, source, true);
+  }
+
+  /**
+   * A sync session's mutation, run at most once per (sessionId, requestId): a request that already
+   * committed is not run again, and its recorded outcome comes back as `replayed`. `outcome` turns a
+   * successful run's value into what is recorded, in the same transaction as the run's writes.
+   *
+   * A replay's `ts` is the snapshot that saw the record, not the original commit's: it is at or after
+   * that commit, which is what a client waiting for its write needs.
+   */
+  async sessionMutation<T>(
+    body: TxBody<T>,
+    source: string | undefined,
+    request: SessionRequestId,
+    outcome: (value: T) => SessionRequestOutcome,
+  ): Promise<{ ts: number } & ({ value: T } | { replayed: SessionRequestOutcome })> {
+    const r = await this.runMutation(
+      async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
+        const prior = await findSessionRequest(db, request);
+        if (prior) return { replayed: prior };
+        const value = await body(db);
+        await recordSessionRequest(db, request, outcome(value));
+        return { value };
+      },
+      false,
+      source,
+      true,
+    );
+    return { ...r.value, ts: r.ts };
+  }
+
+  /** Delete one chunk of session requests created before `cutoffMs` (retention); how many it deleted. */
+  deleteSessionRequests(cutoffMs: number, limit = SESSION_CLEANUP_CHUNK): Promise<number> {
+    return this.runMutation((db) => deleteSessionRequestsBefore(db, cutoffMs, limit), true, "session_requests_cleanup");
   }
 
   private runMutation<T>(body: TxBody<T>, system: boolean, source?: string, withTs?: false): Promise<T>;

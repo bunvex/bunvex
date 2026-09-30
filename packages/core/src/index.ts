@@ -47,5 +47,12 @@ export {
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
+export {
+  SESSION_CLEANUP_CHUNK,
+  SESSION_CLEANUP_ROWS_PER_SECOND,
+  SESSION_REQUEST_RETENTION_MS,
+  type SessionRequestId,
+  type SessionRequestOutcome,
+} from "./session-requests.ts";
 export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

@@ -50,7 +50,7 @@ idempotency or reconnect logic.
 | `ModifyQuerySet` {baseVersion, newVersion, modifications: Add \| Remove} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | done (STUDY-23) |  |
 | `Add` {queryId, udfPath, args, journal?, componentPath?}: client-assigned numeric query id | `browser/sync/protocol.ts` | done (STUDY-23) | The journal is `{"endCursor":…}` as JSON text, opaque to the client. |
 | `Remove` {queryId} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
-| `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | partial (STUDY-23) | Runs in the connection's queue and answers with the commit ts; not yet idempotent by (session, request id). |
+| `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | done (STUDY-23) | Runs in the connection's queue, answers with the commit ts, and is idempotent by (sessionId, requestId). |
 | `Action` {requestId, udfPath, args, componentPath?} over the WebSocket | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Concurrent, at most 1000 in flight. |
 | `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | partial (STUDY-23) | Answered with `AuthError` until `@bunvex/auth` verifies tokens (P9). |
 | `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | partial (STUDY-23) | As "User". |
@@ -103,10 +103,10 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Session id (UUID v4) generated once per client and sent in `Connect` | `browser/sync/session.ts`, `browser/sync/client.ts` | missing | — |
+| Session id (UUID v4) generated once per client and sent in `Connect` | `browser/sync/session.ts`, `browser/sync/client.ts` | partial (STUDY-23) | The server keys idempotency by it; the client side comes with `@bunvex/client`. |
 | Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | partial | bunvex's `mut.id` is supplied by the client and only echoed back. |
-| Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | missing | A resend would run the mutation twice. |
-| Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | missing | Needs a system table plus retention. |
+| Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | done (STUDY-23) | A replay answers the recorded result and log lines. Its ts is the snapshot that saw the record, ≥ the original (P13, open). |
+| Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | done (STUDY-23) | Same transaction as the writes; cleanup by `_creationTime`, 64 per transaction, ≤ 256/s, `MAX_SESSION_CLEANUP_DURATION_HOURS`. |
 | Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | v0 closes on mutations only; v1 on both. |
 | 60 s timeout per WS mutation | `crates/sync/src/worker.rs` (`SYNC_WORKER_PROCESS_TIMEOUT`) | missing | — |
 | Server request id derived from session + request id (tracing / logs correlation) | `crates/sync/src/worker.rs` (`RequestId::new_for_ws_session`) | missing | — |

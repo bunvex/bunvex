@@ -15,6 +15,7 @@ import type { Server, ServerWebSocket } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
+import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { MAX_PENDING_MUTATIONS, SyncHub, SyncSession } from "./sync.ts";
 
 export { MAX_PENDING_MUTATIONS };
@@ -45,6 +46,12 @@ export type ServerOptions = {
    * self-hosted default, which suits development.
    */
   redactLogsToClient?: boolean;
+  /**
+   * How long the sync protocol keeps a committed mutation's record for idempotent resends
+   * (`_session_requests`, STUDY-23 P6); null keeps them forever. Default: `MAX_SESSION_CLEANUP_DURATION_HOURS`,
+   * else two weeks, as Convex.
+   */
+  sessionRequestRetentionMs?: number | null;
 };
 
 /**
@@ -114,6 +121,10 @@ export function createServer(opts: ServerOptions) {
   };
 
   const sync = new SyncHub({ engine, functions, redact, formatError, fromWire });
+  const stopCleanup = startSessionCleanup(
+    engine,
+    opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
+  );
 
   /** Run one WebSocket mutation and send its `res` frame. Never throws. */
   const runWsMutation = async (ws: ServerWebSocket<V0Data>, id: number, path: string, args: unknown) => {
@@ -258,6 +269,7 @@ export function createServer(opts: ServerOptions) {
     subscriptions: subs,
     sync,
     stop: () => {
+      stopCleanup();
       sync.stop();
       server?.stop(true);
     },
