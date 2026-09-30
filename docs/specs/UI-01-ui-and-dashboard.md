@@ -458,7 +458,7 @@ Virtual. Versions checked on npm and the current docs (context7) the same day:
 
 | package | version | where | for |
 |---|---|---|---|
-| `@tanstack/react-router` | 1.170 | dashboard (and the app, for `createHashHistory`) | routes, search params, loaders |
+| `@tanstack/react-router` | 1.170 | dashboard | routes, search params, loaders |
 | `@tanstack/react-query` | 5.104 | dashboard | the cache every read goes through |
 | `@tanstack/react-router-devtools`, `@tanstack/react-query-devtools` | 1.167, 5.104 | dashboard, lazy | `<Dashboard devtools>`; the app turns them on in development (a 0.3 kB no-op chunk in production) |
 | `@tanstack/react-table` | **9.2** (a new major: `useTable`, required `features`, `table.FlexRender`) | ui | `DataTable` |
@@ -488,7 +488,8 @@ are removed — the router owns the URL.
 ### 11.2 Routing
 
 - **The router lives in the package; the host picks the history.** `<Dashboard history={…} basepath={…}>`:
-  `createHashHistory()` in `apps/dashboard` (a static host needs no rewrites), the browser history under a
+  the browser history in `apps/dashboard` (plain paths, as Convex's dashboard; ~~`createHashHistory()`~~
+  until 30 Sep 2026, when the owner dropped the `/#/` addresses), the browser history under a
   `basepath` in a control plane (`/projects/p1/dashboard`), `createMemoryHistory()` in tests.
 - Routes: `/`, `/tables`, `/tables/$table?index&order`, `/tables/$table/$id`, `/functions`,
   `/logs?function&level`. Search params are validated by hand (`validateDocumentsSearch`,
@@ -770,7 +771,8 @@ which Convex's does not.
 - ~~Known, left: in `apps/dashboard`, the dev-only query params (`?writes=…`) leak into the hash route's
   search.~~ Fixed: TanStack's `createHashHistory` reads `location.search` as the route's search, so the
   host now reads the mock's knobs once, keeps them for the tab (sessionStorage) and takes them out of
-  the address (`apps/dashboard/src/knobs.ts`).
+  the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
+  the query with the route's own search, so only their three keys are taken out.
 
 ### 12.5.6 Columns and room for the table
 
@@ -850,6 +852,27 @@ As in Convex (STUDY-12 §1.4.1).
 - **Reduced motion**: the global rule in `globals.css` (animations and transitions to 0.01 ms) is now
   under test; the grid's highlight already falls back to a steady tint (STUDY-12 D6).
 - READMEs for `@bunvex/ui`, `@bunvex/dashboard` and `apps/dashboard`.
+
+### 12.5.10 Smoke tests in a real browser
+
+The owner decided (29 Sep 2026): Playwright, with a CI job that is not a required check until it has
+proved stable.
+
+- `apps/dashboard/e2e/dashboard.e2e.ts`, run by `bun run e2e` (root or `apps/dashboard`): builds the app,
+  serves it with `vite preview`, and drives Chromium through `playwright-core` (pinned, 1.63.0) —
+  the system Chrome locally, Playwright's Chromium in CI (`E2E_BROWSER=chromium`, job **e2e ·
+  dashboard in Chromium**).
+- What it covers, which the DOM tests cannot: Monaco loads from the app with no request elsewhere and
+  its worker is bundled; a cell edited in Monaco (Enter saves, Tab saves and moves right, Escape leaves
+  it); the object editor stays inside the grid; a document typed fast and saved with Ctrl+Enter is saved
+  exactly; the theme toggle switches Monaco's theme too; reduced motion cuts transitions; axe with
+  colour contrast on the main screens in both themes.
+- It found a bug on its first run: `CodeEditor` controlled Monaco through `value`, and typing faster than
+  React re-rendered lost keystrokes — a document was saved truncated. Fixed in #22 (Monaco holds the
+  text; `value` is written back only when it changes from outside; Enter / Tab / Ctrl+Enter render the
+  last keystroke before calling the handler).
+- Selecting everything and typing a quote wraps the selection in quotes (Monaco's `autoSurround`), as in
+  Convex's editor, which keeps Monaco's defaults; kept.
 
 ### 12.6 Decisions (29 Sep 2026)
 

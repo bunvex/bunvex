@@ -9,6 +9,7 @@
     "dev": "bun --bun vite",
     "build": "bun --bun vite build",
     "preview": "bun --bun vite preview",
+    "e2e": "bun --bun vite build && bun test ./e2e/dashboard.e2e.ts --timeout 60000",
     "test": "bun test"
   },
   "devDependencies": {
@@ -16,6 +17,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "axe-core": "4.13.0",
+    "playwright-core": "1.63.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.1"
   },
