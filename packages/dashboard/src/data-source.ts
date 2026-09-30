@@ -350,6 +350,13 @@ export interface DashboardDataSource extends DeploymentFeatures {
   createTable?(name: string, opts?: CallOptions): Promise<void>;
 
   /**
+   * A document type every document in the table fits (STUDY-12 D11, the "Generated" schema), in Convex's
+   * JSON form without system fields — what Convex computes as the table's shape. Null when the table is
+   * empty; an unknown table is `not_found`.
+   */
+  inferDocumentType?(table: string, opts?: CallOptions): Promise<ValidatorJson | null>;
+
+  /**
    * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what
    * Convex's dashboard reads off the id with its table mapping. Optional; without it, ids are plain text.
    */
