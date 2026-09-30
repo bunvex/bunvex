@@ -3,13 +3,13 @@ export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from
 export { valuesToKey } from "./sorting.ts";
 export {
   compareValues,
-  convexToJson,
   copyValue,
+  fromJsonValue,
   isSimpleObject,
   isSpecialFloat,
   type JSONValue,
-  jsonToConvex,
   stringifyValueForError,
+  toJsonValue,
   type Value,
   validateObjectField,
 } from "./value.ts";

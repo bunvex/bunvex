@@ -189,9 +189,9 @@ Key bunvex facts behind the statuses:
 | Value `bigint` (int64, range-checked) | values/value.ts | missing | `JSON.stringify` throws on bigint. |
 | Value `ArrayBuffer` (bytes) | values/value.ts | missing | Serialises to `{}`. |
 | Value arrays and plain objects | values/value.ts | partial | Stored fine. Not index-keyable: keyenc has no array/object tags, and objects fall into the bytes branch. |
-| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | partial | Dropped by JSON with no error. `undefined` in arrays becomes `null` silently. |
+| `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | missing | |
-| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | missing | Plain JSON only. |
+| Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | missing | Errors reach the client as `String(message)` only. |

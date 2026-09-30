@@ -6,7 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
-import { convexToJson, copyValue, decodeId, encodeId, isSimpleObject, jsonToConvex, type Value } from "@bunvex/values";
+import { copyValue, decodeId, encodeId, fromJsonValue, isSimpleObject, toJsonValue, type Value } from "@bunvex/values";
 import BTree from "sorted-btree";
 import type { Catalog } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
@@ -428,5 +428,5 @@ function sortFields(doc: Record<string, unknown>): Doc {
 }
 
 /** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
-export const encodeDoc = (doc: Doc): string => JSON.stringify(convexToJson(doc as unknown as Value));
-export const decodeDoc = (json: string): Doc => jsonToConvex(JSON.parse(json)) as unknown as Doc;
+export const encodeDoc = (doc: Doc): string => JSON.stringify(toJsonValue(doc as unknown as Value));
+export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) as unknown as Doc;

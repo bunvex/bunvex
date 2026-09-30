@@ -98,14 +98,14 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
 }
 
 /** A Convex value as JSON (throws on anything that is not a Convex value). */
-export function convexToJson(value: Value): JSONValue {
+export function toJsonValue(value: Value): JSONValue {
   return toJson(value, value, "");
 }
 
 /** Parse the JSON form back: `$integer` → bigint, `$float` → number, `$bytes` → ArrayBuffer. */
-export function jsonToConvex(value: JSONValue): Value {
+export function fromJsonValue(value: JSONValue): Value {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(jsonToConvex);
+  if (Array.isArray(value)) return value.map(fromJsonValue);
   const keys = Object.keys(value);
   if (keys.length === 1) {
     const k = keys[0];
@@ -130,7 +130,7 @@ export function jsonToConvex(value: JSONValue): Value {
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(value)) {
     validateObjectField(k);
-    out[k] = jsonToConvex(v);
+    out[k] = fromJsonValue(v);
   }
   return out;
 }
@@ -225,7 +225,7 @@ function copy(value: unknown, original: unknown, context: string): Value {
 }
 
 /**
- * A validated deep copy of a value, as a `jsonToConvex(convexToJson(v))` round trip would give (same
+ * A validated deep copy of a value, as a `fromJsonValue(toJsonValue(v))` round trip would give (same
  * checks and messages, fields sorted, undefined fields dropped) without building the JSON.
  */
 export function copyValue(value: Value): Value {

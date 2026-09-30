@@ -1,10 +1,10 @@
 // The function runtime: query / mutation / action definitions, the registry that names them
 // ("module:fn"), internal functions, and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
-import { type Engine, type Tx, valueToJson } from "@bunvex/core";
+import { type Engine, stringifyValue, type Tx } from "@bunvex/core";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
-const cacheKey = (name: string, args: unknown) => `${name}\u0000${valueToJson(args ?? {})}`;
+const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
 
 export type QueryCtx = { db: Tx };
 export type MutationCtx = { db: Tx };

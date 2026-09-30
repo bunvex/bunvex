@@ -82,22 +82,22 @@
 ## 3. How bunvex does it
 
 - **`@bunvex/values`:**
-  - `value.ts`: `Value`, `convexToJson`, `jsonToConvex`, `validateObjectField`, `compareValues`;
+  - `value.ts`: `Value`, `toJsonValue` / `fromJsonValue` (Convex's `convexToJson` / `jsonToConvex`; bunvex's public names carry no "convex"), `validateObjectField`, `compareValues`;
   - `sorting.ts`: `valuesToKey` (the tuple encoding above, with `undefined`).
 - **`@bunvex/core`:**
   - `keyenc` is replaced by `valuesToKey`;
   - `indexKey` appends `_id` as a string;
-  - documents are stored as `convexToJson` text and read with `jsonToConvex`;
+  - documents are stored as `toJsonValue` text and read with `fromJsonValue`;
   - `patch` with `undefined` removes a field;
-  - writes are validated through `convexToJson`, so an unsupported type throws at the call.
-- **`@bunvex/server`:** decodes arguments with `jsonToConvex` and encodes results with `convexToJson`.
+  - writes are validated as `toJsonValue` would (`copyValue`), so an unsupported type throws at the call.
+- **`@bunvex/server`:** decodes arguments with `fromJsonValue` and encodes results with `toJsonValue`.
 - **Old stores are unreadable**, which is fine: there is no production data.
 
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| — | none intended | | |
+| D1 | Public function names: `toJsonValue` / `fromJsonValue` instead of `convexToJson` / `jsonToConvex` | bunvex's public API carries no "convex" in its names (owner, 2026-09-30) | accepted |
 
 ## 5. Tests
 
