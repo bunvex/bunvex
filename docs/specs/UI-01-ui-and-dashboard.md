@@ -1015,7 +1015,9 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   names a table — Convex decodes the id with its table mapping; bunvex asks the source. It opens the
   document in its table (`/database/<table>?doc=<id>`). The mock answers by looking the id up.
 - **Delete document** (the menu, destructive): the same confirmation as Delete selected
-  (`DeleteDialog`, now controlled; STUDY-12 D13, open: Convex does not ask outside production).
+  (`DeleteDialog`, now controlled; STUDY-12 D13, decided: keep asking). The behaviour sits behind
+  `CONFIRM_DELETE_FROM_CELL_MENU` (`database/screen.tsx`): `false` deletes at once, as Convex does outside
+  production; it becomes a check of the deployment's kind once deployments have one.
 - Read-only: Delete document disabled, like the edit items.
 
 ### 15.4 Creating a table (STUDY-12 D11)
