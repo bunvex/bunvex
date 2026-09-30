@@ -95,7 +95,7 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   return (
     <nav
       aria-label="Functions"
-      className="flex max-h-72 shrink-0 flex-col border-b md:max-h-none md:w-64 md:border-r md:border-b-0"
+      className="flex max-h-72 shrink-0 flex-col border-b lg:max-h-none lg:w-64 lg:border-r lg:border-b-0"
     >
       <div className="p-3">
         <label htmlFor={searchId} className="sr-only">
@@ -182,8 +182,8 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
             <span className="text-sm text-muted-foreground">
               {describeFunction(fn)} in <span className="font-mono text-xs">{module}</span>
             </span>
-            <span className="ml-auto flex items-center gap-1">
-              <code className="font-mono text-xs">{fn.path}</code>
+            <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
+              <code className="font-mono text-xs break-all">{fn.path}</code>
               <CopyButton text={fn.path} label="Copy the function's path" />
               {runner.available && (
                 <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
@@ -207,7 +207,7 @@ export function FunctionsScreen() {
   const fn = functions.find((f) => f.path === search.function);
   return (
     // full-bleed inside <main>: the sidebar and the details panel run to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 md:flex-row">
+    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:flex-row">
       <FunctionsSidebar functions={functions} current={fn?.path} />
       {fn ? (
         <FunctionView key={fn.path} fn={fn} />
