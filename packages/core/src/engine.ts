@@ -24,6 +24,9 @@ import { decodeDoc, Tx } from "./tx.ts";
 export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
 export const parseValue = (json: string): unknown => fromJsonValue(JSON.parse(json));
 
+/** What a subscribed query carries from one run to the next (Convex's `QueryJournal`). */
+export type QueryJournal = { endCursor?: string | null };
+
 export type TxBody<T> = (db: Tx) => Promise<T> | T;
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
 type CacheEntry = { json: string; reads: Interval[] };
@@ -40,7 +43,12 @@ export class Engine {
   constructor(
     readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
-    private opts: { cacheMax?: number; maxRetries?: number } = {},
+    private opts: {
+      cacheMax?: number;
+      maxRetries?: number;
+      /** Signs pagination cursors (STUDY-17); the deployment's secret, as Convex's INSTANCE_SECRET. */
+      instanceSecret?: string;
+    } = {},
   ) {
     installDeterminism();
     // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
@@ -121,6 +129,7 @@ export class Engine {
   private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    if (this.opts.instanceSecret) tx.instanceSecret = this.opts.instanceSecret;
     if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
     return { tx, value };
@@ -172,15 +181,22 @@ export class Engine {
    */
   async queryTracked<T>(
     body: TxBody<T>,
-  ): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number }> {
+    journal: QueryJournal = {},
+  ): Promise<
+    ({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number; journal: QueryJournal }
+  > {
     const snapshot = this.committer.visibleTs;
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    if (this.opts.instanceSecret) tx.instanceSecret = this.opts.instanceSecret;
+    // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
+    tx.prevEndCursor = journal.endCursor ?? null;
+    const out = () => ({ reads: tx.reads, ts: snapshot, journal: { endCursor: tx.nextEndCursor } });
     try {
       const value = await runDeterministic("query", now, () => body(tx));
-      return { ok: true, value, reads: tx.reads, ts: snapshot };
+      return { ok: true, value, ...out() };
     } catch (error) {
-      return { ok: false, error, reads: tx.reads, ts: snapshot };
+      return { ok: false, error, ...out() };
     }
   }
 

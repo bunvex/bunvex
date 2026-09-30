@@ -15,5 +15,6 @@ export {
   type QueryCtx,
   query,
 } from "./functions.ts";
+export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 export { createServer, type ServerOptions } from "./server.ts";

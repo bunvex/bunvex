@@ -8,7 +8,7 @@ export {
   overlaps,
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
-export { Engine, parseValue, stringifyValue, type TxBody } from "./engine.ts";
+export { Engine, parseValue, type QueryJournal, stringifyValue, type TxBody } from "./engine.ts";
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
@@ -25,4 +25,4 @@ export {
   TableDefinition,
 } from "./schema.ts";
 export { type Publish, Subscriptions } from "./subscriptions.ts";
-export { IndexRangeBuilder, Tx } from "./tx.ts";
+export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";
