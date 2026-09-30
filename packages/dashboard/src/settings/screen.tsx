@@ -8,14 +8,14 @@ import { Textarea } from "@bunvex/ui/components/textarea";
 import { cn } from "@bunvex/ui/lib/utils";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, Plus } from "lucide-react";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys, type QueryScope } from "../data/queries.ts";
 import { type EnvironmentVariable, type EnvironmentVariableChange, toDataSourceError } from "../data-source.ts";
-import { DashLink } from "../router.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { formatDotenv, nameProblem, parseDotenv, setProblem, valueProblem, valueWarning } from "./env-vars.ts";
+import { SettingsLayout } from "./layout.tsx";
 
 export const envVarsQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
@@ -78,28 +78,6 @@ function validate(rows: Row[]) {
     if (v) value.set(r.key, v);
   }
   return { name, value, set: setProblem(live), ok: name.size === 0 && value.size === 0 && !setProblem(live) };
-}
-
-function SettingsLayout({ children }: { children: ReactNode }) {
-  const TAB =
-    "block border-l-2 border-transparent px-2 py-1 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-foreground";
-  return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-      <div className="flex flex-col gap-6 md:flex-row">
-        <nav aria-label="Settings" className="md:w-52 md:shrink-0">
-          <ul>
-            <li>
-              <DashLink link={{ to: "/settings/environment-variables" }} className={TAB}>
-                Environment variables
-              </DashLink>
-            </li>
-          </ul>
-        </nav>
-        <div className="min-w-0 flex-1">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 export function EnvironmentVariablesScreen() {

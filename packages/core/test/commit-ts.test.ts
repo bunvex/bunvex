@@ -20,7 +20,10 @@ describe("commit timestamps", () => {
     await e.mutation((db) => db.insert("items", { n: 1 }));
     const ts = e.committer.visibleTs;
     expect(ts).toBeGreaterThanOrEqual(before);
-    expect(ts).toBeLessThanOrEqual(wallClockUs());
+    // At most ~1 ms ahead: when performance.now() lags Date.now(), the clock falls back to Date.now() (ms
+    // resolution), and commits within one millisecond take `last + 1` µs — ahead of the clock, as Convex's
+    // `max(last + 1, clock)` also runs ahead when commits outpace it.
+    expect(ts).toBeLessThanOrEqual(wallClockUs() + 1000);
     expect(Number.isSafeInteger(ts)).toBe(true);
   });
 

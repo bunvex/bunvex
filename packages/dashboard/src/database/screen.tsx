@@ -45,7 +45,7 @@ export function DatabaseScreen(): ReactNode {
   const canCreate = useCanCreateTable() === true;
   return (
     // full-bleed inside <main>: the sidebar and the panel run to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 md:flex-row">
+    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:flex-row">
       <TablesSidebar tables={tables} current={table} canCreate={canCreate} />
       {info ? (
         <TableView key={info.name} info={info} />
@@ -260,7 +260,7 @@ function TableView({ info }: { info: TableInfo }) {
               Read-only
             </span>
           )}
-          <span className="ml-auto flex items-center gap-1">
+          <span className="ml-auto flex flex-wrap items-center gap-1">
             {can.delete && selectedIds.length > 0 && (
               <DeleteSelected
                 table={table}
