@@ -48,13 +48,15 @@ describe("filter in the URL", () => {
 });
 
 describe("value boxes", () => {
-  test("JSON is JSON, 42n is an int64, a bare word is text", () => {
+  test("JavaScript literals: JSON, 42n for an int64, quoted text", () => {
     expect(parseValueInput("42")).toEqual({ ok: true, value: 42 });
     expect(parseValueInput(" true ")).toEqual({ ok: true, value: true });
     expect(parseValueInput('"42"')).toEqual({ ok: true, value: "42" });
     expect(parseValueInput("[1, 2]")).toEqual({ ok: true, value: [1, 2] });
     expect(parseValueInput("-9n")).toEqual({ ok: true, value: encodeInt64(-9n) });
-    expect(parseValueInput("ada@example.com")).toEqual({ ok: true, value: "ada@example.com" });
+    expect(parseValueInput("'ada@example.com'")).toEqual({ ok: true, value: "ada@example.com" });
+    expect(parseValueInput("ada")).toMatchObject({ ok: false, offset: 0 });
+    expect(parseValueInput("undefined").ok).toBe(false);
   });
 
   test("mistakes are reported, not guessed", () => {

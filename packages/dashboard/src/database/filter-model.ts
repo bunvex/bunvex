@@ -70,18 +70,13 @@ export function toDraft(expr: FilterExpression | null): FilterDraft {
   };
 }
 
-/** A list box: a JSON array, or values separated by commas. */
+/** A list box: a list literal `["a", 1]`, or values separated by commas (`"a", 1`). */
 export function parseList(text: string): { ok: true; value: Value[] } | { ok: false; error: string } {
   const t = text.trim();
-  if (t.startsWith("[")) {
-    const p = parseValueInput(t);
-    return p.ok && Array.isArray(p.value) ? { ok: true, value: p.value } : { ok: false, error: "Not a valid list" };
-  }
-  const parts = t === "" ? [] : t.split(",").map((s) => parseValueInput(s));
-  if (parts.length === 0) return { ok: false, error: "Type one or more values, separated by commas" };
-  const bad = parts.find((p) => !p.ok);
-  if (bad && !bad.ok) return { ok: false, error: bad.error };
-  return { ok: true, value: parts.map((p) => (p as { value: Value }).value) };
+  if (t === "") return { ok: false, error: "Type one or more values, separated by commas" };
+  const p = parseValueInput(t.startsWith("[") ? t : `[${t}]`);
+  if (!p.ok) return { ok: false, error: p.error };
+  return Array.isArray(p.value) ? { ok: true, value: p.value } : { ok: false, error: "Not a list" };
 }
 
 export type DraftErrors = Record<string, string>;
