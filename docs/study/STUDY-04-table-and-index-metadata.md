@@ -91,7 +91,7 @@
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | The tablet id is a small integer allocated from a counter, not a random 16-byte id; `_tables` and `_index` have fixed ids instead of persistence globals | PERSIST-01 stores integer ids. Fixed bootstrap ids replace the globals. Not observable. | owner |
-| D2 | Tables exist only if the schema declares them: no implicit creation on first insert | Schemaless tables need schema-optional validation; listed as a parity gap | owner (gap) |
+| D2 | ~~Tables exist only if the schema declares them~~ Fixed in #30: a first insert creates the table in the same transaction | — | done |
 | D3 | Backfill runs synchronously at startup, before the server accepts requests, instead of in the background | Simple and correct for now; a large table delays startup. Background backfill is a parity gap. | owner (gap) |
 | D4 | No `Backfilled`/staged state and no namespaces (components) | Parity gaps, with their own studies later | owner (gap) |
 | D5 | Stores created before this change are not readable (no migration) | Pre-alpha; bench data is reseeded | owner |
