@@ -78,7 +78,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
       );
     if (ineqField !== null && ineqField !== e.field)
       throw new Error(
-        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead. See https://docs.convex.dev/using/indexes for more info.`,
+        `Upper and lower bounds in \`range\` can only be applied to a single index field. This query against index ${indexName} attempted to set a range bound on both ${quoted(ineqField)} and ${quoted(e.field)}. Consider using \`filter\` instead.`,
       );
     ineqField = e.field;
     const bound = { v: e.value, incl: e.op === "lte" || e.op === "gte" };
@@ -89,14 +89,14 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
     if (!rank.has(f))
       throw new Error(
-        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field. For more information see https://docs.convex.dev/using/indexes.`,
+        `The index range included a comparison with ${quoted(f)}, but ${indexName} with fields ${list(indexed)} doesn't index this field.`,
       );
   const eqFields = [...eqs.keys()].sort((a, b) => rank.get(a)! - rank.get(b)!);
   const used = [...eqFields, ...(ineqField ? [ineqField] : [])];
   used.forEach((f, i) => {
     if (withId[i] !== f)
       throw new Error(
-        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}\nFor more information see https://docs.convex.dev/using/indexes.`,
+        `Tried to query index ${indexName} but the query didn't use the index fields in order.\nIndex fields: ${list(indexed)}\nQuery fields: ${list(used)}\nFirst incorrect field: ${quoted(f)}`,
       );
   });
   const keyValue = (_f: string, v: KeyValue): KeyValue => v;

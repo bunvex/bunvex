@@ -34,7 +34,7 @@ describe("Convex values in documents and indexes (STUDY-12)", () => {
   test("unsupported values are refused at the call, with Convex's message", async () => {
     const e = await engine();
     await expect(e.mutation((db) => db.insert("items", { when: new Date(0) }))).rejects.toThrow(
-      "is not a supported Convex type (present at path .when",
+      "is not a supported value type (present at path .when",
     );
     await expect(e.mutation((db) => db.insert("items", { $bad: 1 }))).rejects.toThrow("starts with a '$'");
   });

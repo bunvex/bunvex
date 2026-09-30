@@ -131,19 +131,19 @@ describe("JSON form (toJsonValue / fromJsonValue)", () => {
 
   test("undefined fields are dropped; undefined elsewhere is refused", () => {
     expect(toJsonValue({ a: 1, b: undefined } as never)).toEqual({ a: 1 });
-    expect(() => toJsonValue([1, undefined] as never)).toThrow("undefined is not a valid Convex value");
+    expect(() => toJsonValue([1, undefined] as never)).toThrow("undefined is not a valid value");
   });
 
   test("unsupported types and field names are refused with Convex's messages", () => {
     expect(() => toJsonValue({ d: new Date(0) } as never)).toThrow(
-      "is not a supported Convex type (present at path .d",
+      "is not a supported value type (present at path .d",
     );
-    expect(() => toJsonValue(new Map() as never)).toThrow("Map[] is not a supported Convex type.");
-    expect(() => toJsonValue(new Set([1]) as never)).toThrow("Set[1] is not a supported Convex type.");
+    expect(() => toJsonValue(new Map() as never)).toThrow("Map[] is not a supported value type.");
+    expect(() => toJsonValue(new Set([1]) as never)).toThrow("Set[1] is not a supported value type.");
     class Point {
       x = 1;
     }
-    expect(() => toJsonValue(new Point() as never)).toThrow('Point {"x":1} is not a supported Convex type.');
+    expect(() => toJsonValue(new Point() as never)).toThrow('Point {"x":1} is not a supported value type.');
     expect(() => toJsonValue({ $x: 1 })).toThrow("Field name $x starts with a '$', which is reserved.");
     expect(() => toJsonValue({ é: 1 })).toThrow("Field names can only contain non-control ASCII characters");
     expect(() => toJsonValue(2n ** 63n)).toThrow("does not fit into a 64-bit signed integer");

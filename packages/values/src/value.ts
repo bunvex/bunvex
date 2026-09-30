@@ -54,15 +54,15 @@ export function stringifyValueForError(value: unknown): string {
 
 function unsupported(context: string, typeName: string, value: unknown, original: unknown) {
   return context
-    ? `${typeName}${stringifyValueForError(value)} is not a supported Convex type (present at path ${context} in original object ${stringifyValueForError(original)}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.`
-    : `${typeName}${stringifyValueForError(value)} is not a supported Convex type.`;
+    ? `${typeName}${stringifyValueForError(value)} is not a supported value type (present at path ${context} in original object ${stringifyValueForError(original)}).`
+    : `${typeName}${stringifyValueForError(value)} is not a supported value type.`;
 }
 
 function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (value === undefined) {
     const where = context && ` (present at path ${context} in original object ${stringifyValueForError(original)})`;
     throw new Error(
-      `undefined is not a valid Convex value${where}. To learn about Convex's supported types, see https://docs.convex.dev/using/types.`,
+      `undefined is not a valid value${where}.`,
     );
   }
   if (value === null) return null;
