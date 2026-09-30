@@ -378,85 +378,11 @@ export class Tx {
   }
 
   private makeQuery(table: string, st: QState): TxQuery {
-    const reused = () => new Error("This query has been chained with another operator and can't be reused.");
-    const chain = (change: (next: QState) => void): TxQuery => {
-      if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
-      if (st.closed) throw reused();
-      st.closed = true;
-      const next: QState = { ...st, filters: [...st.filters], closed: false, iterated: false, stage: "query" };
-      change(next);
-      return this.makeQuery(table, next);
-    };
-    const results = (limit: number) => {
-      if (st.closed || st.iterated) throw reused();
-      st.closed = true;
-      return this.runQuery(st, limit);
-    };
-    const onlyInitializer = (what: string) => {
-      if (st.stage !== "initializer")
-        throw new Error(`${what} can only be called on db.query(table), before other operators.`);
-    };
-    const q: TxQuery = {
-      withIndex: (name, f) => {
-        onlyInitializer("withIndex()");
-        return chain((n) => {
-          if (!st.t) return;
-          const found = st.t.indexes.get(name);
-          if (!found) throw new Error(`unknown index ${table}.${name}`);
-          n.ix = found;
-          n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
-        });
-      },
-      fullTableScan: () => {
-        onlyInitializer("fullTableScan()");
-        return chain(() => {});
-      },
-      order: (dir) => {
-        if (st.orderSet) throw new Error("Queries may only specify order at most once");
-        return chain((n) => {
-          n.desc = dir === "desc";
-          n.orderSet = true;
-        });
-      },
-      filter: (predicate) => {
-        if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
-        return chain((n) => {
-          n.filters.push(predicate(filterBuilder));
-        });
-      },
-      take: (n) => {
-        if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
-        if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
-        return results(n);
-      },
-      first: async () => (await results(1))[0] ?? null,
-      unique: async () => {
-        const two = await results(2);
-        if (two.length > 1)
-          throw new Error(
-            `unique() query returned more than one result from table ${table}:\n [${two[0]._id}, ${two[1]._id}, ...]`,
-          );
-        return two[0] ?? null;
-      },
-      // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
-      // enough to raise Convex's error).
-      collect: () => results(this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1),
-      paginate: (opts) => {
-        if (st.closed || st.iterated) throw reused();
-        st.closed = true;
-        return this.paginate(table, st, opts);
-      },
-      [Symbol.asyncIterator]: () => {
-        if (st.iterated) throw new Error("Iteration can only begin on a query once.");
-        if (st.closed) throw reused();
-        st.iterated = true;
-        return this.iterate(st);
-      },
-    };
-    return q;
+    return new QueryImpl(this, table, st);
   }
 
-  private async *iterate(st: QState): AsyncGenerator<Doc> {
+  /** @internal (QueryImpl) */
+  async *iterate(st: QState): AsyncGenerator<Doc> {
     if (!st.t || !st.ix) return;
     this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.hi });
     for await (const d of this.stream(st)) if (st.filters.every((f) => passes(f, d))) yield d;
@@ -521,7 +447,8 @@ export class Tx {
   }
 
   /** `.paginate()` as Convex's `query_page` (crates/isolate/src/environment/udf/async_syscall.rs). */
-  private async paginate(table: string, st: QState, opts: PaginationOptions): Promise<PaginationResult> {
+  /** @internal (QueryImpl) */
+  async paginate(table: string, st: QState, opts: PaginationOptions): Promise<PaginationResult> {
     const n = opts?.numItems;
     if (typeof n !== "number" || !(n > 0))
       throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
@@ -618,7 +545,13 @@ export class Tx {
     return done(page, pos, status, split);
   }
 
-  private async runQuery(st: QState, limit: number): Promise<Doc[]> {
+  /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
+  collectLimit() {
+    return this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
+  }
+
+  /** @internal (QueryImpl) */
+  async runQuery(st: QState, limit: number): Promise<Doc[]> {
     if (limit <= 0 || !st.t || !st.ix) return [];
     // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only affects
     // how often the query cache is invalidated, never correctness).
@@ -841,3 +774,108 @@ function sortFields(doc: Record<string, unknown>): Doc {
 /** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
 export const encodeDoc = (doc: Doc): string => JSON.stringify(toJsonValue(doc as unknown as Value));
 export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) as unknown as Doc;
+
+const reusedError = () => new Error("This query has been chained with another operator and can't be reused.");
+
+/**
+ * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
+ * allocated per query: this is the hot path of every read).
+ */
+class QueryImpl implements TxQuery {
+  constructor(
+    private readonly tx: Tx,
+    private readonly table: string,
+    private readonly st: QState,
+  ) {}
+
+  private chain(change: (next: QState) => void): TxQuery {
+    const st = this.st;
+    if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
+    if (st.closed) throw reusedError();
+    st.closed = true;
+    const next: QState = { ...st, filters: [...st.filters], closed: false, iterated: false, stage: "query" };
+    change(next);
+    return new QueryImpl(this.tx, this.table, next);
+  }
+
+  private results(limit: number) {
+    if (this.st.closed || this.st.iterated) throw reusedError();
+    this.st.closed = true;
+    return this.tx.runQuery(this.st, limit);
+  }
+
+  private onlyInitializer(what: string) {
+    if (this.st.stage !== "initializer")
+      throw new Error(`${what} can only be called on db.query(table), before other operators.`);
+  }
+
+  withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery {
+    this.onlyInitializer("withIndex()");
+    const t = this.st.t;
+    return this.chain((n) => {
+      if (!t) return;
+      const found = t.indexes.get(name);
+      if (!found) throw new Error(`unknown index ${this.table}.${name}`);
+      n.ix = found;
+      n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
+    });
+  }
+
+  fullTableScan(): TxQuery {
+    this.onlyInitializer("fullTableScan()");
+    return this.chain(() => {});
+  }
+
+  order(dir: "asc" | "desc"): TxQuery {
+    if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
+    return this.chain((n) => {
+      n.desc = dir === "desc";
+      n.orderSet = true;
+    });
+  }
+
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
+    if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
+    return this.chain((n) => {
+      n.filters.push(predicate(filterBuilder));
+    });
+  }
+
+  take(n: number): Promise<Doc[]> {
+    if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
+    if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
+    return this.results(n);
+  }
+
+  async first(): Promise<Doc | null> {
+    return (await this.results(1))[0] ?? null;
+  }
+
+  async unique(): Promise<Doc | null> {
+    const two = await this.results(2);
+    if (two.length > 1)
+      throw new Error(
+        `unique() query returned more than one result from table ${this.table}:\n [${two[0]._id}, ${two[1]._id}, ...]`,
+      );
+    return two[0] ?? null;
+  }
+
+  collect(): Promise<Doc[]> {
+    // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
+    // enough to raise Convex's error).
+    return this.results(this.tx.collectLimit());
+  }
+
+  paginate(opts: PaginationOptions): Promise<PaginationResult> {
+    if (this.st.closed || this.st.iterated) throw reusedError();
+    this.st.closed = true;
+    return this.tx.paginate(this.table, this.st, opts);
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<Doc> {
+    if (this.st.iterated) throw new Error("Iteration can only begin on a query once.");
+    if (this.st.closed) throw reusedError();
+    this.st.iterated = true;
+    return this.tx.iterate(this.st);
+  }
+}
