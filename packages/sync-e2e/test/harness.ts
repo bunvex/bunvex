@@ -1,6 +1,6 @@
 // A bunvex server in this process, with the functions the sync tests call, that can drop every socket and
 // come back on the same port (a restart, as far as clients can tell).
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type PaginationOptions } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { action, createServer, Functions, mutation, query } from "@bunvex/server";
 import { BunvexError, v } from "@bunvex/values";
@@ -28,6 +28,16 @@ export async function startServer() {
     }),
     broken: query(() => {
       throw new BunvexError("query says no");
+    }),
+    // Newest first. `tight` caps the rows a page may read, so a growing page is split (STUDY-26 §8).
+    paged: query(({ db }, { paginationOpts, tight }: { paginationOpts: PaginationOptions; tight?: boolean }) =>
+      db
+        .query("messages")
+        .order("desc")
+        .paginate(tight ? { ...paginationOpts, maximumRowsRead: 8 } : paginationOpts),
+    ),
+    sendMany: mutation(async ({ db }, { prefix, n }: { prefix: string; n: number }) => {
+      for (let i = 0; i < n; i++) await db.insert("messages", { body: `${prefix}${i}` });
     }),
     echo: action(async (_ctx, { x }: { x: unknown }) => {
       await gates.get("action");

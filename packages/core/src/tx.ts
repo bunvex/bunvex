@@ -584,7 +584,9 @@ export class Tx {
       status = "SplitRecommended";
     const split =
       status && keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
-    const pos: CursorPosition = exhausted ? (end ?? "end") : { after: last ?? lo };
+    // A page with a pinned end reports that end as its continue cursor even when it stopped early at a read
+    // limit (Convex's `end_cursor.or_else(query.cursor())`): the halves of its split then still cover it all.
+    const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last ?? lo });
     return done(page, pos, status, split);
   }
 
