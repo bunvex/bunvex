@@ -988,3 +988,18 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 - **Mock**: validators for most functions (`mock/function-validators.ts`); `runFunction` fails a misfit
   with `ArgumentValidationError: …` as a server would. **Contract suite**: declared validators are
   well-formed; `run.misfitArgs` (opt-in) fails the run, not the call.
+
+### 15.2 The saved schema (STUDY-12 §8)
+
+- **Contract**: `SchemaInfo.tables[].validator?: ValidatorJson` (was untyped JSON), without system
+  fields. The mock declares types for `messages`, `tasks` and `users` (not enforced); the contract suite
+  checks the form.
+- **`database/schema-code.ts`**: `schemaCode(schema, tables)` — the `bunvex/schema.ts` that declares the
+  schema, as Convex's `displaySchema` prints it (prettier's two layouts, with or without
+  `{ schemaValidation: false }`), and each table's line range.
+- **Schema panel**: the table's status in one sentence, then **Saved schema** — the file, the table's
+  lines tinted (`--info`) and scrolled to, "Lines a to b declare t." for screen readers, Copy. A table
+  outside the schema, or no schema at all, says so.
+- Found in the browser: `scrollIntoView` returns a Promise in current Chrome, so an effect written as an
+  arrow expression returned it and React tore the screen down. Effects that scroll use a block body; a
+  test makes `scrollIntoView` return a Promise.

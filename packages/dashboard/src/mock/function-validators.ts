@@ -23,28 +23,26 @@ const v = {
 };
 
 const system = (table: string) => ({ _id: v.id(table), _creationTime: v.number() });
-const user = v.object({
-  ...system("users"),
-  name: v.string(),
-  email: v.string(),
-  admin: v.boolean(),
-  credits: v.int64(),
-});
-const task = v.object({
-  ...system("tasks"),
-  text: v.string(),
-  done: v.boolean(),
-  owner: v.id("users"),
-  priority: v.number(),
-  tags: v.array(v.string()),
-});
-const message = v.object({
-  ...system("messages"),
-  author: v.id("users"),
-  channel: v.string(),
-  body: v.string(),
-  meta: v.union(v.null(), v.object({ edited: v.boolean(), editedAt: v.number() })),
-});
+const fields = {
+  users: { name: v.string(), email: v.string(), admin: v.boolean(), credits: v.int64() },
+  tasks: { text: v.string(), done: v.boolean(), owner: v.id("users"), priority: v.number(), tags: v.array(v.string()) },
+  messages: {
+    author: v.id("users"),
+    channel: v.string(),
+    body: v.string(),
+    meta: v.union(v.null(), v.object({ edited: v.boolean(), editedAt: v.number() })),
+  },
+};
+const user = v.object({ ...system("users"), ...fields.users });
+const task = v.object({ ...system("tasks"), ...fields.tasks });
+const message = v.object({ ...system("messages"), ...fields.messages });
+
+/** The schema's declared document types (STUDY-12 V2): without the system fields, as a schema writes them. */
+export const MOCK_DOCUMENT_TYPES: Record<string, ValidatorJson> = {
+  users: v.object(fields.users),
+  tasks: v.object(fields.tasks),
+  messages: v.object(fields.messages),
+};
 const priority = v.union(...[1, 2, 3, 4, 5].map((n) => v.literal(n)));
 
 /** By path; a function missing here declares no validators. */
