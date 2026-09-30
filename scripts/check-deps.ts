@@ -5,9 +5,10 @@
 //   3. no relative import leaves its package;
 //   4. no source file starts with `// @bun` — Bun reads that as its "already transpiled" pragma and
 //      would load the TypeScript as plain JavaScript (found the hard way during the ARCH-01 migration).
-//   5. no "convex" in shipped code (packages/*/src, apps/*/src) outside comments: not in identifiers, strings,
-//      error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public API and
-//      its messages carry its own names (owner's decision, STUDY-12 D1).
+//   5. no "convex" in the packages' shipped code (packages/*/src) outside comments: not in identifiers,
+//      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
+//      API and its messages carry its own names (owner's decision, STUDY-12 D1). Apps (apps/*, e.g. the site
+//      comparing benchmarks) may name Convex descriptively.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -122,7 +123,7 @@ for (const [name, dir] of dirOfName) {
   for (const file of tsFiles(root)) {
     const rel = relative(ROOT, file);
     const text = readFileSync(file, "utf8");
-    if (/\/src\//.test(rel)) {
+    if (/^packages\/[^/]+\/src\//.test(rel)) {
       const code = withoutComments(text).split("\n");
       code.forEach((line, n) => {
         if (/convex/i.test(line))
