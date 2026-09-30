@@ -263,7 +263,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_auth` | `crates/model/auth` | missing | |
 | `_environment_variables` | `crates/model/environment_variables` | missing | |
 | `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | missing | |
-| `_session_requests` | `crates/model/session_requests` | missing | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
+| `_session_requests` | `crates/model/session_requests` | done (STUDY-23) | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | missing | |
 | `_log_sinks` | `crates/model/log_sinks` | missing | |
 | `_deployment_audit_log`, `_audit_log_config` | `crates/model/deployment_audit_log`, `audit_log_config` | missing | |

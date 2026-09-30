@@ -242,8 +242,7 @@ export class Tx {
 
   /** A table visible to this transaction (the catalog, or one it created), or undefined. */
   private findTable(name: string): TableDef | undefined {
-    if (name.startsWith("_") && !this.system && this.systemDepth === 0)
-      throw new Error(`System table ${name} is not accessible here.`);
+    if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
     return this.catalog.tables.get(name) ?? this.createdTables.get(name)?.def;
   }
 
@@ -253,6 +252,22 @@ export class Tx {
     { def: TableDef; meta: Omit<TableMeta, "_id">; indexes: Omit<IndexMeta, "_id">[] }
   >();
   private systemDepth = 0;
+  private get systemAccess() {
+    return this.system || this.systemDepth > 0;
+  }
+
+  /**
+   * Run `fn` with access to system tables, inside an app transaction: for the engine's own records that
+   * must commit with the app's writes (the sync protocol's `_session_requests`). Not for app code.
+   */
+  async asSystem<T>(fn: () => Promise<T>): Promise<T> {
+    this.systemDepth++;
+    try {
+      return await fn();
+    } finally {
+      this.systemDepth--;
+    }
+  }
 
   /**
    * A read of a table that does not exist yet: nothing, but the read depends on `_tables`, so a cached
@@ -349,14 +364,14 @@ export class Tx {
       throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
     }
     const name = this.catalog.byNumber(n)?.name;
-    if (name?.startsWith("_") && !this.system) return undefined;
+    if (name?.startsWith("_") && !this.systemAccess) return undefined;
     return name;
   }
 
   /** Convex's `db.normalizeId(table, s)`: `s` as an id of `table`, or null. */
   normalizeId(table: string, idString: string): string | null {
     if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
-    if (table.startsWith("_") && !this.system) return null;
+    if (table.startsWith("_") && !this.systemAccess) return null;
     const t = this.catalog.tables.get(table) ?? this.createdTables.get(table)?.def;
     if (!t || typeof idString !== "string") return null;
     try {

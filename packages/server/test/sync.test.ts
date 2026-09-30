@@ -14,6 +14,7 @@ afterEach(() => {
 });
 
 async function setup() {
+  const runs: string[] = [];
   const engine = await new Engine(
     defineSchema({ a: defineTable(v.any()), b: defineTable(v.any()), other: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
@@ -36,29 +37,46 @@ async function setup() {
       return 1;
     }),
     default: query(() => "the default export"),
+    counted: mutation(async ({ db }, { tag }: { tag: string }) => {
+      runs.push(tag);
+      console.log(`running ${tag}`);
+      await db.insert("other", { tag });
+      return { tag, n: BigInt(runs.length) };
+    }),
+    countedFails: mutation(({ db }) => {
+      runs.push("fails");
+      return db
+        .query("other")
+        .collect()
+        .then(() => {
+          throw new BunvexError("nope");
+        });
+    }),
+    peek: query(({ db }) => db.query("_session_requests").collect()),
     ping: action(() => "pong"),
   });
   const { server, sync, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false });
   stops.push(stop);
-  return { engine, sync, url: `ws://127.0.0.1:${server!.port}/api/1.0.0/sync` };
+  return { engine, sync, runs, url: `ws://127.0.0.1:${server!.port}/api/1.0.0/sync` };
 }
 
 /** A bare v1 client: sends messages, records what the server sends. */
-async function client(url: string, maxObservedTimestamp?: bigint) {
+async function client(url: string, sessionId: string | null = crypto.randomUUID(), maxObservedTimestamp?: bigint) {
   const ws = new WebSocket(url);
   const got: v1.ServerMessage[] = [];
   ws.onmessage = (m) => got.push(v1.parseServerMessage(String(m.data)));
   const closed = new Promise<CloseEvent>((r) => (ws.onclose = r));
   await new Promise((r) => (ws.onopen = r));
   const send = (m: v1.ClientMessage) => ws.send(v1.encodeClientMessage(m));
-  send({
-    type: "Connect",
-    sessionId: crypto.randomUUID(),
-    connectionCount: 0,
-    lastCloseReason: null,
-    clientTs: 0,
-    ...(maxObservedTimestamp === undefined ? {} : { maxObservedTimestamp }),
-  });
+  if (sessionId !== null)
+    send({
+      type: "Connect",
+      sessionId,
+      connectionCount: 0,
+      lastCloseReason: null,
+      clientTs: 0,
+      ...(maxObservedTimestamp === undefined ? {} : { maxObservedTimestamp }),
+    });
   let querySet = 0;
   const modify = (modifications: (v1.AddQuery | v1.RemoveQuery)[]) =>
     send({ type: "ModifyQuerySet", baseVersion: querySet, newVersion: ++querySet, modifications });
@@ -204,7 +222,7 @@ describe("sync protocol v1", () => {
     a.send({ type: "Mutation", requestId: 0, udfPath: "m:both", args: [{}] });
     const r = (await a.until(() => a.got.find((m) => m.type === "MutationResponse"))) as v1.MutationResponse;
     if (!r.success) throw new Error("mutation failed");
-    const b = await client(url, r.ts);
+    const b = await client(url, crypto.randomUUID(), r.ts);
     b.modify([add(1, "m:count", { table: "a" })]);
     const t = await b.transition(0);
     expect(t.endVersion.ts >= r.ts).toBe(true);
@@ -314,5 +332,79 @@ describe("sync protocol v1", () => {
     const t = await c.transition(1);
     expect(t.endVersion.identity).toBe(1);
     expect(t.modifications).toEqual([]); // re-run, same result: not resent
+  });
+
+  describe("idempotent mutations (_session_requests)", () => {
+    const responses = (c: Awaited<ReturnType<typeof client>>) =>
+      c.got.filter((m): m is v1.MutationResponse => m.type === "MutationResponse");
+    const mutate = (c: Awaited<ReturnType<typeof client>>, requestId: number, udfPath: string, args = {}) =>
+      c.send({ type: "Mutation", requestId, udfPath, args: [args as v1.JSONValue] });
+
+    test("a resend after a reconnect gets the recorded answer and does not run again", async () => {
+      const { url, runs } = await setup();
+      const session = crypto.randomUUID();
+      const a = await client(url, session);
+      mutate(a, 0, "m:counted", { tag: "x" });
+      const [first] = await a.until(() => (responses(a).length ? responses(a) : undefined));
+      a.ws.close();
+      await a.closed;
+      const b = await client(url, session);
+      mutate(b, 0, "m:counted", { tag: "x" });
+      const [again] = await b.until(() => (responses(b).length ? responses(b) : undefined));
+      expect(runs).toEqual(["x"]);
+      expect(first.success && again.success).toBe(true);
+      if (!first.success || !again.success) return;
+      expect(again.result).toEqual(first.result);
+      expect(again.result).toEqual({ tag: "x", n: { $integer: v1.encodeU64(1n) } });
+      expect(again.logLines).toEqual(first.logLines);
+      expect(again.logLines).toHaveLength(1);
+      expect(again.ts >= first.ts).toBe(true);
+    });
+
+    test("the same request twice on one connection runs once", async () => {
+      const { url, runs } = await setup();
+      const c = await client(url);
+      mutate(c, 5, "m:counted", { tag: "y" });
+      mutate(c, 5, "m:counted", { tag: "y" });
+      await c.until(() => responses(c).length === 2 || undefined);
+      expect(runs).toEqual(["y"]);
+      const [r1, r2] = responses(c);
+      expect(r1.success && r2.success && r2.result).toEqual(r1.success ? r1.result : null);
+    });
+
+    test("a failed mutation is not recorded: its resend runs again", async () => {
+      const { url, runs } = await setup();
+      const c = await client(url);
+      mutate(c, 1, "m:countedFails");
+      mutate(c, 1, "m:countedFails");
+      await c.until(() => responses(c).length === 2 || undefined);
+      expect(runs).toEqual(["fails", "fails"]);
+      expect(responses(c).every((r) => !r.success)).toBe(true);
+    });
+
+    test("request ids are per session; without a Connect there is no idempotency", async () => {
+      const { url, runs } = await setup();
+      const a = await client(url);
+      const b = await client(url);
+      mutate(a, 0, "m:counted", { tag: "a" });
+      mutate(b, 0, "m:counted", { tag: "b" });
+      await Promise.all([a, b].map((c) => c.until(() => responses(c).length === 1 || undefined)));
+      const anon = await client(url, null);
+      mutate(anon, 0, "m:counted", { tag: "anon" });
+      mutate(anon, 0, "m:counted", { tag: "anon" });
+      await anon.until(() => responses(anon).length === 2 || undefined);
+      expect(runs.sort()).toEqual(["a", "anon", "anon", "b"]);
+    });
+
+    test("app code cannot read the records", async () => {
+      const { url } = await setup();
+      const c = await client(url);
+      c.modify([add(1, "m:peek")]);
+      const t = await c.transition(0);
+      expect(t.modifications[0]).toMatchObject({ type: "QueryFailed" });
+      expect((t.modifications[0] as { errorMessage: string }).errorMessage).toContain(
+        "System table _session_requests is not accessible here.",
+      );
+    });
   });
 });

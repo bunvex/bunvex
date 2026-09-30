@@ -458,14 +458,29 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, fromWire } = this.hub.deps;
+        const path = canonicalizeUdfPath(m.udfPath);
+        // With a session (Connect came first), the request runs at most once: a resend after a reconnect
+        // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
+        const session = this.sessionId;
         const r = await collectLogs(() =>
-          functions.runMutationWithTs(canonicalizeUdfPath(m.udfPath), fromWire(m.args)),
+          session === null
+            ? functions.runMutationWithTs(path, fromWire(m.args))
+            : functions.runSessionMutation(path, fromWire(m.args), { sessionId: session, requestId: m.requestId }),
         );
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
-        const out: WithLogLines<unknown> = r.ok ? { ok: true, value: r.value.value, logLines: r.logLines } : r;
-        this.send(this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null));
+        if (r.ok && "replayed" in r.value) {
+          const { result, logLines } = r.value.replayed;
+          const out: WithLogLines<unknown> = { ok: true, value: undefined, logLines };
+          this.send(this.response("MutationResponse", m.requestId, out, v1.encodeU64(wireTs(r.value.ts)), result));
+        } else {
+          const out: WithLogLines<unknown> =
+            r.ok && "value" in r.value ? { ok: true, value: r.value.value, logLines: r.logLines } : r;
+          this.send(
+            this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null),
+          );
+        }
         this.schedule();
       } finally {
         this.pendingMutations--;
@@ -492,11 +507,19 @@ export class SyncSession {
   }
 
   /** A MutationResponse / ActionResponse frame (`ts` only for a mutation: the commit's, or null on failure). */
-  private response(type: string, requestId: number, r: WithLogLines<unknown>, ts?: string | null) {
+  private response(
+    type: string,
+    requestId: number,
+    r: WithLogLines<unknown>,
+    ts?: string | null,
+    /** The result already as JSON text (a replayed session request's). */
+    resultJson?: string,
+  ) {
     const lines = this.hub.deps.redact ? "[]" : JSON.stringify(r.logLines);
     const tsField = ts === undefined ? "" : `,"ts":${JSON.stringify(ts)}`;
     const head = `{"type":"${type}","requestId":${requestId}`;
-    if (r.ok) return `${head},"success":true,"result":${stringifyValue(r.value)}${tsField},"logLines":${lines}}`;
+    if (r.ok)
+      return `${head},"success":true,"result":${resultJson ?? stringifyValue(r.value)}${tsField},"logLines":${lines}}`;
     const f = this.hub.deps.formatError(r.error);
     const data = f.data === undefined ? "" : `,"errorData":${f.data}`;
     return `${head},"success":false,"result":${JSON.stringify(withRequestId(f.error))}${tsField},"logLines":${lines}${data}}`;
