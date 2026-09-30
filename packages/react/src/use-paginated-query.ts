@@ -159,7 +159,11 @@ export function usePaginatedQuery<Q extends PaginatedQueryReference>(
       if (raw === undefined) return [items, undefined];
       if (raw instanceof Error) {
         // The data under a cursor changed shape: throw every cursor away and start over.
-        if (raw.message.includes("InvalidCursor")) {
+        const data = (raw as { data?: { isBunvexSystemError?: unknown; paginationError?: unknown } }).data;
+        if (
+          raw.message.includes("InvalidCursor") ||
+          (typeof data === "object" && data?.isBunvexSystemError === true && data.paginationError === "InvalidCursor")
+        ) {
           console.warn(`usePaginatedQuery hit error, resetting pagination state: ${raw.message}`);
           setState(createInitialState);
           return [[], undefined];

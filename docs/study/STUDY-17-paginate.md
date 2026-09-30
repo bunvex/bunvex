@@ -15,7 +15,9 @@
 - **A cursor** holds a position — *after* an index key, or *end* — plus the query's fingerprint. It is
   encrypted with the instance secret.
   - A tampered cursor fails with `InvalidCursor: Failed to parse cursor`.
-  - A cursor from another query fails with "…this cursor is from a different query.".
+  - A cursor from another query fails with "…this cursor is from a different query.", as a `BunvexError`
+    whose data is `{isBunvexSystemError: true, paginationError: "InvalidCursor"}` (Convex:
+    `isConvexSystemError`).
 - **Filling a page:** without `endCursor`, the page reads until `numItems` documents pass the filters.
   - A full page stops there, so its cursor is "after the last document" and `isDone` is false, even when
     nothing follows.
@@ -63,7 +65,7 @@ the split fields, and the validators.
 | D1 | Cursors are signed (HMAC), not encrypted: the index key position is visible to a client who decodes base64 | Tampering is refused all the same; encryption needs the key broker (admin keys, phase 3) | owner |
 | D2 | Without `INSTANCE_SECRET`, a random secret is generated on first start and stored with the data (system table `_instance`), as Convex's self-hosted image does (`self-hosted/docker-build/read_credentials.sh`: the env var, else the stored secret, else a new random one that is then saved). Convex saves it in a file of its data directory; bunvex saves it in the store, because the data may live in a remote database | accepted: option D (owner, 2026-09-30) |
 | D3 | The fingerprint covers table, index, range and order, not filter expressions | Filters are closures here, not a serialized expression | accepted |
-| D4 | `InvalidCursor` errors are plain errors, without Convex's error `data` | The error-data class lands with the errors work (track B, #32) | follow-up |
+| D4 | `InvalidCursor` errors are plain errors, without Convex's error `data` | The error-data class lands with the errors work (track B, #32) | resolved (STUDY-26 P1): a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}`; a cursor that does not parse stays a plain error, as in Convex |
 
 ## 5. Tests
 

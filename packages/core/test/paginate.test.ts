@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { v } from "@bunvex/values";
+import { isBunvexError, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
@@ -70,6 +70,16 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     ).rejects.toThrow(
       "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.",
     );
+    // A cursor of another query is an app error with Convex's data shape (STUDY-26 P1): a function may catch it.
+    const caught = await e.query(async (db) => {
+      try {
+        await db.query("items").withIndex("by_n").order("desc").paginate({ numItems: 3, cursor: a.continueCursor });
+        return null;
+      } catch (x) {
+        return { bunvex: isBunvexError(x), data: (x as { data?: unknown }).data };
+      }
+    });
+    expect(caught).toEqual({ bunvex: true, data: { isBunvexSystemError: true, paginationError: "InvalidCursor" } });
     await expect(page(e, `${a.continueCursor}x`, 3)).rejects.toThrow("InvalidCursor: Failed to parse cursor");
     const other = await new Engine(e.schema, e.persistence, { instanceSecret: "s2" }).init();
     await expect(page(other, a.continueCursor, 3)).rejects.toThrow("Failed to parse cursor");

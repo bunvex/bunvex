@@ -97,6 +97,22 @@ describe("BunvexClient", () => {
     expect(await c.action(api.messages.echo, { x: "early" })).toBe("early");
   });
 
+  test("an InvalidCursor reaches the client as a BunvexError with the pagination data", async () => {
+    const { client } = await setup();
+    const c = client();
+    await c.mutation(api.messages.sendMany, { prefix: "m", n: 4 });
+    const first = (await c.query(api.messages.flippable, { paginationOpts: { numItems: 2, cursor: null } })) as {
+      continueCursor: string;
+    };
+    await c.mutation(api.messages.flip, {});
+    const e = (await c
+      .query(api.messages.flippable, { paginationOpts: { numItems: 2, cursor: first.continueCursor } })
+      .catch((x) => x)) as BunvexError<{ isBunvexSystemError: boolean; paginationError: string }>;
+    expect(e).toBeInstanceOf(BunvexError);
+    expect(e.data).toEqual({ isBunvexSystemError: true, paginationError: "InvalidCursor" });
+    expect(e.message).toContain("InvalidCursor: Tried to run a query starting from a cursor");
+  });
+
   test("query() is one-shot; action() answers", async () => {
     const { client } = await setup();
     const c = client();

@@ -63,6 +63,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30.
 | DV-95 | `useSubscription` is built on React's `useSyncExternalStore` | a hand-written state + effect hook (whose own comment suggests `useSyncExternalStore`) | no | Same behaviour: the value on first render, a re-read right after subscribing, one render per change | owner, 2026-09-30 (#81) | [STUDY-26 R2](../study/STUDY-26-sync-client.md#73-divergences) |
 | DV-97 | The HTTP client sends admin auth as `Authorization: Bunvex <key>` | `Convex <key>` | yes (wire) | Owner naming rule; the server checks no admin key yet, so this sets the scheme | owner, 2026-09-30 (#85) | [STUDY-26 H2](../study/STUDY-26-sync-client.md#93-divergences) |
 | DV-98 | `/api/query_at_ts` with a ts ahead of the server's answers 400 `InvalidTimestamp` | whatever its database layer does for a future snapshot | yes | One node: bunvex's own clients never send one | owner, 2026-09-30 (#85) | [STUDY-26 H4](../study/STUDY-26-sync-client.md#93-divergences) |
+| DV-96 | A cursor of another query fails with a `BunvexError` whose data is `{isBunvexSystemError: true, paginationError: "InvalidCursor"}`; `usePaginatedQuery` restarts on that data or on the message | the same, with the key `isConvexSystemError` | yes | Owner naming rule (option a); closes STUDY-17 D4. The official client still recognizes it by the message | owner, 2026-09-30 (#86) | [STUDY-26 P1](../study/STUDY-26-sync-client.md#83-divergences), [STUDY-17 D4](../study/STUDY-17-paginate.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -143,7 +144,6 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-94 | A replayed session mutation (a resend that already committed) answers the ts of the snapshot that saw its record, at or after the original commit | the original commit's ts | yes (protocol ts only) | Exact ts needs `Persistence` to return a version's ts (a PERSIST-01 change); clients behave the same | [STUDY-23 P13](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
-| DV-96 | `usePaginatedQuery` recognizes `InvalidCursor` by its message only | also by a system error's `data.paginationError` | yes | bunvex's server sends no such data yet (STUDY-17 D4) | [STUDY-26 P1](../study/STUDY-26-sync-client.md#83-divergences) |
 
 ## Gaps recorded in studies
 
@@ -156,7 +156,6 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | Existing documents are not re-checked when the schema changes (deploy/push flow) |
 | [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex`, `staged` (phase 4) |
 | [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
-| [STUDY-17 D4](../study/STUDY-17-paginate.md#4-divergences) | `InvalidCursor` errors without Convex's error `data` |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |
 | [STUDY-12 D11, D12](../study/STUDY-12-dashboard.md#4-divergences) | Dashboard: custom query, per-table metrics; function metrics on the Health screen |
 | [STUDY-12 L6](../study/STUDY-12-dashboard.md#73-divergences) | Dashboard logs: deployment events, usage and identity, "act as a user", run history, live runner results |
