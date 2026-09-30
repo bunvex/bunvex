@@ -140,6 +140,13 @@ export function describeDataSourceContract(
       const schema = await src.getSchema();
       const declared = tables.filter((t) => t.declared).map((t) => t.name);
       expect(schema.tables.map((t) => t.name).sort()).toEqual(declared.sort());
+      // a declared document type comes in Convex's JSON form, without the system fields (STUDY-12 V2)
+      for (const t of schema.tables) {
+        if (t.validator === undefined) continue;
+        expect(isValidatorJson(t.validator)).toBe(true);
+        if (t.validator.type === "object")
+          expect(Object.keys(t.validator.value).some((k) => k.startsWith("_"))).toBe(false);
+      }
     });
 
     // -------------------------------------------------------------- pagination

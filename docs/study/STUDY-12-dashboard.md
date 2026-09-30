@@ -379,6 +379,18 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
   (`v.float64()` for a number, `v.int64()`, `v.id("t")`, `v.optional(...)` inside objects).
 - **The server** validates arguments too: a misfit fails the call with an `ArgumentValidationError`.
 - The Functions screen does not show validators; only the runner uses them.
+- **The saved schema.** `_system/frontend/getSchemas` returns the active schema as JSON (`SchemaJson` in
+  `dashboard-common/src/lib/format.ts`: per table its `documentType` validator and indexes, and
+  `schemaValidation`). The table's schema panel (`features/data/components/TableSchema.tsx`,
+  `ShowSchema.tsx`) prints it as the whole `convex/schema.ts` (`displaySchema`: `defineSchema({ t:
+  defineTable({ … }).index("name", ["field"]) })`, adding `{ schemaValidation: false }` only when off) and
+  highlights the table's lines; a second tab, "Generated", infers one from the documents.
+- **The saved schema.** `_system/frontend/getSchemas` returns the active schema as JSON (`SchemaJson` in
+  `dashboard-common/src/lib/format.ts`: per table its `documentType` validator and indexes, and
+  `schemaValidation`). The table's schema panel (`features/data/components/TableSchema.tsx`,
+  `ShowSchema.tsx`) prints it as the whole `convex/schema.ts` (`displaySchema`: `defineSchema({ t:
+  defineTable({ … }).index("name", ["field"]) })`, adding `{ schemaValidation: false }` only when off) and
+  highlights the table's lines; a second tab, "Generated", infers one from the documents.
 
 ### 8.2 How bunvex does it
 
@@ -392,6 +404,16 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
   server: a misfit is the run's `ArgumentValidationError`, not a rejected call. The contract suite checks
   that declared validators are well-formed, and (opt-in) that a misfit fails the run.
 - An `id` validator checks that the value is text; the table an id belongs to is not checked.
+- **The saved schema**: `SchemaInfo.tables[].validator` is the declared document type in the same form
+  (without system fields). The schema panel prints the whole `bunvex/schema.ts` (imports from
+  `bunvex/server` and `bunvex/values`, declared indexes from the table list, the option only when
+  validation is off), with the table's lines tinted and scrolled to, a screen-reader note naming them, and
+  Copy. The "Generated" tab comes with the D11 follow-ups.
+- **The saved schema**: `SchemaInfo.tables[].validator` is the declared document type in the same form
+  (without system fields). The schema panel prints the whole `bunvex/schema.ts` (imports from
+  `bunvex/server` and `bunvex/values`, declared indexes from the table list, the option only when
+  validation is off), with the table's lines tinted and scrolled to, a screen-reader note naming them, and
+  Copy. The "Generated" tab comes with the D11 follow-ups.
 
 ### 8.3 Divergences
 
