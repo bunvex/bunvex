@@ -160,21 +160,21 @@ idempotency or reconnect logic.
 | Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | done (STUDY-26) |  |
 | React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | missing | — |
-| Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | missing | — |
+| Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
 
 ### 9. Pagination on the client (and its server contract)
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Query journals: opaque per-query state (the page end cursor) returned in `QueryUpdated/QueryFailed.journal`, stored by the client, re-sent in `Add.journal` on reconnect so pages keep the same boundaries | `browser/sync/protocol.ts`, `browser/sync/local_state.ts`, `crates/sync/src/state.rs` (`complete_fetch` saves journal) | missing | Server `paginate()` itself is also missing (`tx` "paginate M"). |
-| `paginate({numItems, cursor, endCursor?, maximumRowsRead?, maximumBytesRead?})` → `{page, isDone, continueCursor, splitCursor?, pageStatus?}` | `browser/sync/pagination.ts` (`asPaginationResult`), server `paginationOptsValidator` | missing | Server-side area, but the client relies on this exact shape. |
-| Gapless reactive pagination: each loaded page is its own subscription, pinned by `endCursor`; pages grow or shrink but never leave gaps | `browser/sync/paginated_query_client.ts`, `react/use_paginated_query.ts` | missing | — |
-| Page splitting when a page becomes too large (`SplitRecommended` / `SplitRequired` + `splitCursor`): subscribe to two halves, swap once both are loaded | `browser/sync/paginated_query_client.ts` (`splitPaginatedQueryPage`, `completePaginatedQuerySplit`) | missing | — |
-| `InvalidCursor` error (or `paginationError` in ConvexError data) → reset to the first page | `react/use_paginated_query.ts` | missing | — |
-| Per-hook pagination `id` in the args as a cache-buster (independent journals per hook instance) | `react/use_paginated_query.ts` (`nextPaginationId`), `browser/sync/udf_path_utils.ts` (`serializePaginatedPathAndArgs`) | missing | — |
-| `usePaginatedQuery(query, args \| "skip", {initialNumItems})` → `{results, status: LoadingFirstPage \| CanLoadMore \| LoadingMore \| Exhausted, isLoading, loadMore(n)}` | `react/use_paginated_query.ts` | missing | — |
+| Query journals: opaque per-query state (the page end cursor) returned in `QueryUpdated/QueryFailed.journal`, stored by the client, re-sent in `Add.journal` on reconnect so pages keep the same boundaries | `browser/sync/protocol.ts`, `browser/sync/local_state.ts`, `crates/sync/src/state.rs` (`complete_fetch` saves journal) | done (STUDY-17, STUDY-23, STUDY-26) | The server pins page ends (#42), sends journals (v1), and the client stores and re-sends them. |
+| `paginate({numItems, cursor, endCursor?, maximumRowsRead?, maximumBytesRead?})` → `{page, isDone, continueCursor, splitCursor?, pageStatus?}` | `browser/sync/pagination.ts` (`asPaginationResult`), server `paginationOptsValidator` | done (STUDY-17, STUDY-26) | The shape and `asPaginationResult` in `@bunvex/client`. |
+| Gapless reactive pagination: each loaded page is its own subscription, pinned by `endCursor`; pages grow or shrink but never leave gaps | `browser/sync/paginated_query_client.ts`, `react/use_paginated_query.ts` | done (STUDY-26) | `usePaginatedQuery`: one subscription per page, ends pinned by the journal. |
+| Page splitting when a page becomes too large (`SplitRecommended` / `SplitRequired` + `splitCursor`): subscribe to two halves, swap once both are loaded | `browser/sync/paginated_query_client.ts` (`splitPaginatedQueryPage`, `completePaginatedQuerySplit`) | done (STUDY-26) | Needed a server fix: a pinned page stopped by a read limit continues at its end (STUDY-26 §8.2). |
+| `InvalidCursor` error (or `paginationError` in ConvexError data) → reset to the first page | `react/use_paginated_query.ts` | done (STUDY-26) | By message (P1). |
+| Per-hook pagination `id` in the args as a cache-buster (independent journals per hook instance) | `react/use_paginated_query.ts` (`nextPaginationId`), `browser/sync/udf_path_utils.ts` (`serializePaginatedPathAndArgs`) | done (STUDY-26) |  |
+| `usePaginatedQuery(query, args \| "skip", {initialNumItems})` → `{results, status: LoadingFirstPage \| CanLoadMore \| LoadingMore \| Exhausted, isLoading, loadMore(n)}` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
 | `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | missing | — |
-| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | missing | — |
+| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | missing | Later (STUDY-26 P2). |
 
 ### 10. Base client API (`BaseConvexClient`, `ConvexClient`)
 

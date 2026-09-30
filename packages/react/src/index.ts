@@ -22,4 +22,16 @@ export {
   useQuery_experimental,
 } from "./hooks.ts";
 export type { RequestForQueries } from "./queries-observer.ts";
+export {
+  insertAtBottomIfLoaded,
+  insertAtPosition,
+  insertAtTop,
+  optimisticallyUpdateValueInPaginatedQuery,
+  type PaginatedQueryArgs,
+  type PaginatedQueryItem,
+  type PaginatedQueryReference,
+  resetPaginationId,
+  type UsePaginatedQueryResult,
+  usePaginatedQuery,
+} from "./use-paginated-query.ts";
 export { useSubscription } from "./use-subscription.ts";

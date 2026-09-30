@@ -100,6 +100,18 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     expect(ns(b.page)[0]).toBe(30);
   });
 
+  test("a pinned page stopped by maximumRowsRead still continues at its end, so its split covers it all", async () => {
+    const e = await engine(20);
+    const whole = await page(e, null, 20);
+    const a = await page(e, null, 20, { endCursor: whole.continueCursor, maximumRowsRead: 8 });
+    expect(a.page.length).toBe(8);
+    expect(a.pageStatus).toBe("SplitRequired");
+    expect(a.continueCursor).toBe(whole.continueCursor); // Convex: end_cursor.or_else(query.cursor())
+    const first = await page(e, null, 20, { endCursor: a.splitCursor });
+    const second = await page(e, a.splitCursor ?? null, 20, { endCursor: a.continueCursor });
+    expect([...ns(first.page), ...ns(second.page)]).toEqual(ns(whole.page));
+  });
+
   test("an explicit endCursor returns exactly the page up to it", async () => {
     const e = await engine(20);
     const a = await page(e, null, 5);

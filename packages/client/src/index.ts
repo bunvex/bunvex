@@ -26,6 +26,12 @@ export {
 export type { FunctionFailure, FunctionResult, FunctionSuccess } from "./function-result.ts";
 export type { Logger } from "./logging.ts";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./optimistic-updates.ts";
+export {
+  asPaginationResult,
+  type PaginationOptions,
+  type PaginationResult,
+  type PaginationStatus,
+} from "./pagination.ts";
 export { BunvexClient, type BunvexClientOptions, type Unsubscribe } from "./simple-client.ts";
 export type { QueryToken } from "./udf-path.ts";
 export { VERSION } from "./version.ts";

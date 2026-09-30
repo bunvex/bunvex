@@ -283,6 +283,67 @@ Tests run against a real server in `packages/sync-e2e/react`, in their own proce
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
-| R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **recommend** |
+| R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **accepted** |
 | R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order |
+
+## 8. Paginated queries (`usePaginatedQuery`)
+
+### 8.1 How Convex does it (`react/use_paginated_query.ts`, `browser/sync/pagination.ts`)
+
+- **Pages.**
+  - Each loaded page is its own subscription of the query with `paginationOpts: {numItems, cursor, id}`.
+  - The first page starts at `cursor: null`, and `loadMore(n)` adds a page at the last page's
+    `continueCursor`.
+  - `id` comes from a module-wide counter, one per hook instance, so two hooks never share a page.
+  - The server pins each page's end through the query journal, so pages grow or shrink with the data but
+    never leave a gap or overlap.
+- **Splits.**
+  - A page is split at its `splitCursor` when the server marks it `SplitRecommended` or `SplitRequired`,
+    or when it holds more than twice `initialNumItems`.
+  - It becomes two pages, `(cursor, splitCursor]` and `(splitCursor, continueCursor]`, which replace it
+    once both have loaded.
+  - While a page is `SplitRequired`, the results stop before it and the status is `LoadingMore`.
+- **Status:**
+  - `LoadingFirstPage` before any page;
+  - `LoadingMore` while a page is loading;
+  - `CanLoadMore`;
+  - `Exhausted` once the last page `isDone`.
+
+  `loadMore` is a no-op outside `CanLoadMore` and works once per render.
+- **`InvalidCursor`:** an error whose message contains it (or a Convex system error carrying
+  `paginationError: "InvalidCursor"`) resets to the first page with a warning. Other errors are thrown.
+- **New arguments** (compared by JSON) or a new function reset the state. `"skip"` renders
+  `LoadingFirstPage` with no subscription.
+- **Optimistic helpers:**
+  - `optimisticallyUpdateValueInPaginatedQuery`: maps every loaded page of the same args;
+  - `insertAtTop`: first page, once loaded;
+  - `insertAtBottomIfLoaded`: only into a done last page, otherwise the item would pop out;
+  - `insertAtPosition`: sorted, per group of pages, where a group is same args plus pagination `id`.
+- **The server contract** this relies on (`async_syscall.rs` `read_page_from_query`): a page with an end
+  cursor (explicit, or from the journal) answers that end cursor as its `continueCursor`, even when a read
+  limit stopped it early (`end_cursor.or_else(query.cursor())`).
+
+### 8.2 How bunvex does it
+
+`@bunvex/react` exports `usePaginatedQuery`, the four helpers and `resetPaginationId`, with the same
+state machine over `useQueries`. `@bunvex/client` exports the `PaginationOptions` and `PaginationResult`
+shapes and `asPaginationResult`.
+
+**A server fix found by these tests.** bunvex's `paginate` (STUDY-17) answered "after the last row read"
+for a pinned page stopped by `maximumRowsRead`, so the split halves lost the rest of the page. It now
+answers the pinned end, as Convex does. There is a regression test in `core/test/paginate.test.ts`.
+
+The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
+- first page, `loadMore`, and exhaustion;
+- pages growing with new data without a gap or duplicate;
+- a page that outgrows its read limit being split until whole;
+- `"skip"`;
+- `insertAtTop`.
+
+### 8.3 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| P1 | `InvalidCursor` is recognized by its message only. Convex also checks a system error's `data.paginationError`. | bunvex sends no such system-error data; the message is how its cursor errors read (`InvalidCursor: …`) | **recommend** |
+| P2 | `onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later | `usePaginatedQuery` does not use them, in Convex either | **recommend** later |
 

@@ -88,10 +88,10 @@ bunvex/
 │   │   ├── sync                     WebSocket, reconnect, session (STUDY-26)                  ✅
 │   │   ├── local-state              a client's subscriptions advance together                 ✅
 │   │   ├── optimistic               optimistic updates                                        ✅
-│   │   ├── pagination               paginated queries                                         M
+│   │   ├── pagination               paginated queries (usePaginatedQuery, STUDY-26 §8)        ✅
 │   │   └── http                     plain HTTP client                                         M
 │   │
-│   ├── react/                       @bunvex/react   useQuery, useMutation (✅), usePaginatedQuery 🟡
+│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  ✅
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D
 │   │
 │   ├── ui/                          @bunvex/ui       design system (UI-01): Tailwind v4 tokens,
