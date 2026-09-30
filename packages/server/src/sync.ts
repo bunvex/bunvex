@@ -279,7 +279,7 @@ export class SyncSession {
       case "Connect": {
         this.sessionId = m.sessionId;
         if (m.clientTs > 0) this.clientClockSkew = m.clientTs - Date.now();
-        const latest = BigInt(this.hub.deps.engine.committer.visibleTs);
+        const latest = wireTs(this.hub.deps.engine.committer.visibleTs);
         // A client that saw a later ts talked to a backend with writes this one does not have.
         if (m.maxObservedTimestamp !== undefined && m.maxObservedTimestamp > latest)
           return this.internalError(
@@ -410,7 +410,7 @@ export class SyncSession {
     for (const q of this.queries.values()) q.validAt = ts;
     if (this.keysChanged) this.watchKeys();
 
-    const end: v1.StateVersion = { querySet, ts: BigInt(ts), identity };
+    const end: v1.StateVersion = { querySet, ts: wireTs(ts), identity };
     const endText = versionJson(end);
     this.send(
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
@@ -465,7 +465,7 @@ export class SyncSession {
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
         const out: WithLogLines<unknown> = r.ok ? { ok: true, value: r.value.value, logLines: r.logLines } : r;
-        this.send(this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(BigInt(r.value.ts)) : null));
+        this.send(this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null));
         this.schedule();
       } finally {
         this.pendingMutations--;
@@ -506,6 +506,13 @@ export class SyncSession {
 const keyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}\u0000${NO_IDENTITY}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
 /** The last ts encoded: every session of a round sends the same one. */
+/**
+ * A commit ts as Convex's clients see it: wall-clock nanoseconds in a u64. bunvex counts microseconds (a JS
+ * number is exact only to 2^53; STUDY-06 D9), so the wire value is × 1000: same magnitude and order as
+ * Convex's, at microsecond resolution.
+ */
+const wireTs = (us: number) => BigInt(us) * 1000n;
+
 let lastTs: [bigint, string] = [0n, v1.encodeU64(0n)];
 const encodeTs = (ts: bigint) => {
   if (lastTs[0] !== ts) lastTs = [ts, v1.encodeU64(ts)];

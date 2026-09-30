@@ -136,8 +136,7 @@ export class Engine {
     // The lease first (PERSIST-01 C7): maxTs is only meaningful once no other process can write.
     if (hasLease(this.persistence)) await this.acquireLease(this.persistence);
     const m = (await this.persistence.maxTs?.()) ?? 0;
-    this.committer.appliedTs = m;
-    this.committer.visibleTs = m;
+    this.committer.resume(m);
     await this.reconcileCatalog();
     await this.loadInstanceSecret();
     return this;
