@@ -1212,3 +1212,14 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
 - Button rows wrap (a table's actions, a function's path and buttons, a URL and its copy button).
 - An e2e case at 390 px checks that no screen scrolls sideways and that Menu works.
 
+### 17.5 The design system's page
+
+- `apps/dashboard/design-system.html` (`src/design-system.tsx`): `@bunvex/ui`'s tokens (the surface /
+  foreground pairs, lines and chart colours) and components (type, buttons, badges, form controls, card,
+  tabs, data table, JSON view, sparkline, skeleton), each rendered in a **light and a dark panel side by
+  side** (the `.dark` class works on any subtree), for whoever builds screens.
+- A second page of the private dev host, not of `apps/site`: the site is the public bunvex.dev (SITE-01,
+  users' documentation), and this is a tool for contributors. It is a separate Vite entry, so it adds
+  nothing to the dashboard's first load.
+- An e2e case loads it and runs axe, colour contrast included, over both themes at once.
+
