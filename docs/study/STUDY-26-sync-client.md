@@ -283,6 +283,8 @@ Tests run against a real server in `packages/sync-e2e/react`, in their own proce
 
 ### 7.3 Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): R1 under DV-03, R2 as DV-95, R3 under Gaps.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
