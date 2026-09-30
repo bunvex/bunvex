@@ -21,11 +21,11 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. |
-| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | done (#NN) | The id names its table. |
+| `db.get(id)`, the legacy form where the id carries its table | server/database.ts | done (#44) | The id names its table. |
 | `db.get` returns `null` for a missing or deleted doc | impl/database_impl.ts | done | |
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
 | `db.query(table)` returns a QueryInitializer | server/query.ts | partial | Exists and defaults to `by_creation_time` ascending. It is one mutable object rather than Convex's chain of single-use stages. |
-| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | done (#NN) | Legacy v4/v5 id formats are not accepted (no legacy data). |
+| `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | done (#44) | Legacy v4/v5 id formats are not accepted (no legacy data). |
 | `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | missing | There are no user-visible system tables yet (`_storage`, `_scheduled_functions`). |
 | User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | missing | The in-flight schema change rejects `_`-prefixed user table names. There is no `db.system` split. |
 | `db.table(name)` scoped reader (`.get(id)`, `.query()`), the newer "WithTable" API | server/database.ts (`GenericDatabaseReaderWithTable`) | missing | |
