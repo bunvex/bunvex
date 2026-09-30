@@ -1,6 +1,6 @@
 # STUDY-14 — Schemas: `defineSchema`, `defineTable`, document validation
 
-- **Status:** implemented (#26); implicit table creation comes in the next PR
+- **Status:** implemented (#29); implicit table creation comes in the next PR
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-13](STUDY-13-validators.md), [STUDY-04](STUDY-04-table-and-index-metadata.md)
 

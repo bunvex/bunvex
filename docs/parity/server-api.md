@@ -99,7 +99,7 @@ Key bunvex facts behind the statuses:
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | missing | New Convex feature. |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
 | Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | partial | Retries up to 30 times with jittered backoff (Convex: 4). The conflict error isn't user-visible in Convex's shape. |
-| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#26) | |
+| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | |
 
 ### 5. Function builders and registration
 
@@ -223,14 +223,14 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#26) | |
-| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#26) | |
+| `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#29) | |
+| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29) | |
 | `.index(name, [fields])` | server/schema.ts | partial | Declared as `{ name: fields[] }` in `Schema.table`. |
 | `.index(name, { fields, staged })`: staged indexes that don't block a push | server/schema.ts | missing | |
 | `.searchIndex(name, { searchField, filterFields, staged })` | server/schema.ts | missing | |
 | `.vectorIndex(name, { vectorField, dimensions, filterFields, staged })` | server/schema.ts | missing | |
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
-| `schemaValidation` option (default true) | server/schema.ts | done (#26) | |
+| `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
 | `strictTableNameTypes` option (type-level) | server/schema.ts | missing | |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | missing | |
