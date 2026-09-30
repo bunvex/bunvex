@@ -24,7 +24,8 @@ Before implementing a feature that Convex has:
    - every divergence and why.
 3. **Divergences need the owner.** Matching Convex is the default and needs no approval. Anything else —
    a different format, a missing piece, an extra feature — is listed under *Divergences* and decided by
-   the owner before it merges.
+   the owner before it merges. Record the decision in the study's table **and** in
+   [docs/parity/divergences.md](../parity/divergences.md), the central ledger of divergences.
 4. **Never copy Convex code.** Study it, then write bunvex's version from scratch (see [NOTICE](../../NOTICE)).
    Quoting a constant or a format description in a study is fine; pasting an implementation is not.
 

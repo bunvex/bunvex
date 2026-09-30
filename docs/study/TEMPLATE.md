@@ -26,6 +26,9 @@ decided by the owner.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 
+Record each decision in [docs/parity/divergences.md](../parity/divergences.md) too (decided, resolved or
+pending), keeping this table's IDs in its Source column.
+
 ## 5. Tests
 
 How we check that bunvex matches: the cases and properties, and ideally the same scenario run against
