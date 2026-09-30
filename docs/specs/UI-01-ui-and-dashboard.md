@@ -913,7 +913,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   drilldown).
 - **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
   that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
-- Not yet (STUDY-12 L6): usage and identity (the call tree came with §15.6, deployment events with §16.4).
+- Built since (STUDY-12 L6, §10): the call tree (§15.6), deployment events (§16.4), usage and identity (§16.5).
 
 ### 13.2 The Functions screen
 
@@ -1206,3 +1206,14 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   the author where a line has its function, the event in words (History's `describeEvent`). The log filters
   leave them, as in Convex. They refresh on `watchAuditEvents`. Enter on one opens it on the History screen.
 - Only when the source has `listAuditEvents` and the credential `viewAuditLog`.
+
+### 16.5 Usage and identity in a line's details (STUDY-12 §10.5, L9)
+
+- **Contract**: an execution's last line may carry `usage` (`memoryMb`, database, file and returned bytes) and
+  `identity` — who started the request: `admin`, `user`, `acting_as_user`, `system`, `unknown` (Convex's
+  `identityType`). **Contract suite**: when given, they are well-formed.
+- **Details**: **Started by** (Convex's words, with what they mean) and **Resources used** — compute (memory
+  for the time), database read / written, files read / written, returned — summed over the request's loaded
+  executions (memory: the most one used), saying so when there are several (`logs/usage.ts`).
+- **Mock**: every execution has both, made up from its kind, duration and place (not the random stream, so
+  the fixture is unchanged); the runner's runs are an admin's, or an admin's acting as a user.

@@ -14,6 +14,7 @@ import {
   viewFromSearch,
   writeLogView,
 } from "../src/logs/log-filter.ts";
+import { sumUsage } from "../src/logs/usage.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -286,5 +287,47 @@ describe("the Logs screen", () => {
     await source.insertDocuments("tasks", [{ text: "x" }]);
     await new Promise((r) => setTimeout(r, 50));
     expect(rows().some((r) => cells(r)[COL.level] === "event")).toBe(false);
+  });
+
+  test("a line's details say who started the request and the resources it used", async () => {
+    mount();
+    await opened();
+    const user = userEvent.setup();
+    // a line that ends an execution: it carries the usage and the identity
+    const end = rows().find((r) => /^(success|failure)/.test(cells(r)[COL.outcome]!))!;
+    await user.click(within(end).getAllByRole("gridcell")[COL.message]!);
+    const panel = await screen.findByRole("complementary");
+    expect(within(panel).getByText("Started by")).toBeDefined();
+    expect(within(panel).getByText(/^(User|System)$/)).toBeDefined();
+    const used = within(panel).getByRole("region", { name: "Resources used" });
+    expect(within(used).getByText(/^\d+ MB for \d+\.\d\d s$/)).toBeDefined();
+    expect(within(used).getByText(/ read, .* written$/)).toBeDefined();
+    await expectAccessible();
+  });
+});
+
+describe("usage and identity", () => {
+  test("the request's usage is summed over its executions; memory is the most one used", () => {
+    const end = (id: string, durationMs: number, usage: object) =>
+      ({ ...line({ id }), execution: { status: "success", durationMs, usage } }) as LogEntry;
+    expect(
+      sumUsage([
+        end("1", 100, { memoryMb: 16, databaseReadBytes: 10, returnBytes: 5 }),
+        line({ id: "2" }),
+        end("3", 50, { memoryMb: 128, databaseReadBytes: 20 }),
+      ]),
+    ).toEqual({ executions: 2, runtimeMs: 150, memoryMb: 128, databaseReadBytes: 30, returnBytes: 5 });
+    expect(sumUsage([line({})])).toBeNull();
+  });
+
+  test("the mock: a runner's run is an admin's, or an admin's acting as a user", async () => {
+    const source = mockSource();
+    const newestEnd = async () =>
+      (await source.listLogs({ numItems: 20, cursor: null })).page.find((e) => e.execution)!.execution!;
+    await source.runFunction("tasks:list", {});
+    expect((await newestEnd()).identity).toBe("admin");
+    await source.runFunction("tasks:list", {}, { identity: { subject: "u", issuer: "i" } });
+    expect((await newestEnd()).identity).toBe("acting_as_user");
+    expect((await newestEnd()).usage?.memoryMb).toBe(16);
   });
 });
