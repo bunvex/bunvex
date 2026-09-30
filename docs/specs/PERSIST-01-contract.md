@@ -59,7 +59,7 @@ For a snapshot `T`:
   entries), and nothing with `ts > M` is visible. `M ≥` the last acknowledged commit. A torn commit (some
   of its rows present, others not) is a violation. Stores that cannot write two collections atomically
   achieve this with a **commit marker**: the rows first, then the marker `M` durably; `maxTs()` returns
-  the marker and reads never see rows above it (recovery may delete them).
+  the marker and reads never see rows above it (recovery may delete them — under the lease only, C7).
 
 ## C5 — recovery
 
@@ -80,8 +80,9 @@ change after the fact, two catalogs and two instance secrets). C7 enforces it.
 
 A driver implements C7 by implementing the `Lease` interface (`acquireLease`, `renewLease`,
 `releaseLease`). v2 is optional per driver: a driver without it behaves as in v1, and the engine then has
-no protection (the driver's docs say so). First-party status: **postgres** implements C7; mysql, mongodb,
-sqlite and memory follow in their own PRs.
+no protection (the driver's docs say so). First-party status: **postgres** and **mongodb** implement C7 (mysql: #67; sqlite and memory: #70).
+MongoDB needs a replica set (a single-node one is enough): a flush is a multi-document transaction whose
+first write is the fence.
 
 - **The lease** is one record in the store: `epoch` (strictly increasing), `holder` (an opaque string
   naming the process), `expires_at`, and `max_ts` (the durable prefix, see below).

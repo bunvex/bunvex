@@ -1,14 +1,27 @@
-// MongoDB (optional peer: `mongodb`): the same two logical collections (documents, indexes), on a store that is not SQL and has
-// no multi-collection atomicity outside transactions (which need a replica set). Two driver-local rules
-// make it satisfy PERSIST-01:
+// MongoDB (optional peer: `mongodb`): the same two logical collections (documents, indexes). Three
+// driver-local rules make it satisfy PERSIST-01:
 //
 //   C2 ordering — BinData compares by LENGTH first, which breaks byte order ("b" < "aa"). Keys are stored as
 //      lowercase hex strings, whose (binary-collation) string order IS the byte order.
-//   C4 atomicity — a COMMIT MARKER: a group's rows are written first, then `meta.commit.ts` with j:true. The
-//      journal is sequential, so once the marker is journaled every row before it is too. maxTs() is the
-//      marker; on open, rows above it (a flush interrupted by a crash) are deleted before any new commit
-//      could reuse their ts.
-import { type DocWrite, type IndexWrite, type Persistence, type ScanDocs, scanLatest } from "@bunvex/core/persistence";
+//   C4 atomicity — a group is flushed in ONE multi-document transaction (w: majority, journaled).
+//   C7 single writer — the lease is one document, `meta` {_id: "lease"} (epoch, holder, expiresAt on the
+//      server's clock, maxTs). Each flush's transaction first updates it only if our epoch is current, and
+//      records the group's top as the durable prefix; a mismatch aborts the whole group.
+//
+// Transactions need a replica set (a single-node one is enough): the driver refuses a standalone server
+// (owner's decision, 2026-09-30; STUDY-24 §4.4). Stores written by earlier versions used a commit marker
+// (`meta` {_id: "commit"}) and rows written before it; they are read as such, and the rows a crash left
+// above the marker are deleted — under the lease only, never by a mere open.
+import {
+  type DocWrite,
+  type IndexWrite,
+  type Lease,
+  type LeaseAcquire,
+  LeaseLostError,
+  type Persistence,
+  type ScanDocs,
+  scanLatest,
+} from "@bunvex/core/persistence";
 import type { Collection, Db, MongoClient } from "mongodb";
 import { loadPeer } from "./peer.ts";
 
@@ -17,34 +30,155 @@ type IdxRow = { x: number; k: string; ts: number; d: string | null };
 
 const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
 
-export class MongoPersistence implements Persistence, ScanDocs {
+type LeaseDoc = {
+  _id: string;
+  epoch: number;
+  holder: string | null;
+  app: string | null;
+  expiresAt: Date;
+  maxTs: number;
+};
+
+export class MongoPersistence implements Persistence, ScanDocs, Lease {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
+  /** Our lease's epoch, 0 when we hold none. */
+  private epoch = 0;
+  private ttlMs = 0;
   private constructor(
     private client: MongoClient,
     private docs: Collection<DocRow>,
     private idx: Collection<IdxRow>,
-    private meta: Collection<{ _id: string; ts: number }>,
-    private marker: number,
+    private meta: Collection<any>,
+    /** This instance's appName, recorded in the lease: a successor that finds us paused inside a flush
+     *  after our lease expired ends exactly our sessions. */
+    private app: string,
   ) {}
 
   static async open(url: string, opts: { fresh?: boolean; pool?: number } = {}) {
     const { MongoClient: Client } = await loadPeer<typeof import("mongodb")>("mongodb", "mongodb");
-    const client = new Client(url, { maxPoolSize: opts.pool ?? 16 });
+    const app = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+    const client = new Client(url, { maxPoolSize: opts.pool ?? 16, appName: app });
     await client.connect();
     const db: Db = client.db();
+    const hello = await db.admin().command({ hello: 1 });
+    if (!hello.setName) {
+      await client.close();
+      throw new Error(
+        "bunvex needs MongoDB as a replica set (a single-node one is enough: start mongod with --replSet and run rs.initiate()); a standalone server cannot run the transactions a flush needs",
+      );
+    }
     if (opts.fresh) await db.dropDatabase();
     const docs = db.collection<DocRow>("documents");
     const idx = db.collection<IdxRow>("indexes");
-    const meta = db.collection<{ _id: string; ts: number }>("meta");
-    await docs.createIndex({ t: 1, i: 1, ts: -1 });
-    await idx.createIndex({ x: 1, k: 1, ts: -1 });
-    await idx.createIndex({ x: 1, k: -1, ts: -1 }); // descending scans keep "newest version first" per key
-    const m = (await meta.findOne({ _id: "commit" }))?.ts ?? 0;
-    // Recovery: anything above the marker is the remains of an interrupted flush.
-    await docs.deleteMany({ ts: { $gt: m } });
-    await idx.deleteMany({ ts: { $gt: m } });
-    return new MongoPersistence(client, docs, idx, meta, m);
+    const meta = db.collection<any>("meta");
+    // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
+    const want: [Collection<any>, Record<string, 1 | -1>][] = [
+      [docs, { t: 1, i: 1, ts: -1 }],
+      [idx, { x: 1, k: 1, ts: -1 }],
+      [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
+    ];
+    for (const [c, key] of want) {
+      const have = await c
+        .listIndexes()
+        .toArray()
+        .catch(() => []);
+      if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
+    }
+    return new MongoPersistence(client, docs, idx, meta, app);
+  }
+
+  async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
+    // A store without a lease document: its durable prefix is the old commit marker, else the newest row.
+    if (!(await this.meta.findOne({ _id: "lease" }))) {
+      const marker = (await this.meta.findOne({ _id: "commit" }))?.ts as number | undefined;
+      const newest = async (c: Collection<any>) =>
+        ((
+          await c
+            .find({}, { projection: { ts: 1 } })
+            .sort({ ts: -1 })
+            .limit(1)
+            .toArray()
+        )[0]?.ts as number) ?? 0;
+      const maxTs = marker ?? Math.max(await newest(this.docs), await newest(this.idx));
+      await this.meta
+        .insertOne({ _id: "lease", epoch: 0, holder: null, app: null, expiresAt: new Date(0), maxTs })
+        .catch((e) => {
+          if ((e as { code?: number }).code !== 11000) throw e; // a concurrent first acquire created it
+        });
+    }
+    for (let attempt = 0; ; attempt++) {
+      let won: LeaseDoc | null;
+      try {
+        won = await this.meta.findOneAndUpdate(
+          { _id: "lease", $or: [{ holder: null }, { $expr: { $lte: ["$expiresAt", "$$NOW"] } }] },
+          [
+            {
+              $set: {
+                epoch: { $add: ["$epoch", 1] },
+                holder: opts.holder,
+                app: this.app,
+                expiresAt: { $add: ["$$NOW", opts.ttlMs] },
+              },
+            },
+          ],
+          { returnDocument: "after", maxTimeMS: 1000, writeConcern: { w: "majority" } },
+        );
+      } catch (e) {
+        // A holder's open flush transaction wrote the lease document: our write waits for it (up to the
+        // server's transaction lifetime). Look below, then retry.
+        if ((e as { code?: number }).code !== 50 || attempt >= 3) throw e; // 50: MaxTimeMSExpired
+        won = null;
+        const [s] = await this.meta
+          .aggregate([
+            { $match: { _id: "lease" } },
+            { $project: { holder: 1, app: 1, expired: { $lte: ["$expiresAt", "$$NOW"] } } },
+          ])
+          .toArray();
+        // Expired, yet still in a transaction on the lease: a paused (stopped, frozen) process mid-flush.
+        // End its sessions; its uncommitted group aborts, and it was never acknowledged.
+        if (s?.expired && s.app) await this.killSessionsOf(s.app as string);
+        continue;
+      }
+      if (won) {
+        this.epoch = won.epoch;
+        this.ttlMs = opts.ttlMs;
+        // Rows above the durable prefix are the remains of an interrupted flush of an earlier version
+        // (commit-marker stores): delete them now that no one else can be writing.
+        await this.docs.deleteMany({ ts: { $gt: won.maxTs } });
+        await this.idx.deleteMany({ ts: { $gt: won.maxTs } });
+        return { epoch: this.epoch };
+      }
+      const [s] = await this.meta
+        .aggregate([
+          { $match: { _id: "lease" } },
+          { $project: { holder: 1, ms: { $max: [0, { $subtract: ["$expiresAt", "$$NOW"] }] } } },
+        ])
+        .toArray();
+      return { heldBy: s.holder as string, expiresInMs: Number(s.ms) };
+    }
+  }
+
+  private async killSessionsOf(app: string) {
+    const admin = this.client.db("admin");
+    const ops = await admin
+      .aggregate([{ $currentOp: { allUsers: true, idleSessions: true } }, { $match: { appName: app } }])
+      .toArray();
+    const lsids = ops.map((o) => o.lsid).filter(Boolean);
+    if (lsids.length) await admin.command({ killSessions: lsids }).catch(() => {});
+  }
+
+  async renewLease() {
+    const r = await this.meta.updateOne({ _id: "lease", epoch: this.epoch }, [
+      { $set: { expiresAt: { $add: ["$$NOW", this.ttlMs] } } },
+    ]);
+    if (r.matchedCount !== 1) throw new LeaseLostError();
+  }
+
+  async releaseLease() {
+    if (!this.epoch) return;
+    await this.meta.updateOne({ _id: "lease", epoch: this.epoch }, { $set: { holder: null } });
+    this.epoch = 0;
   }
 
   apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
@@ -54,22 +188,32 @@ export class MongoPersistence implements Persistence, ScanDocs {
 
   async flush() {
     if (!this.docsBuf.length && !this.idxBuf.length) return;
+    if (!this.epoch) throw new Error("flush without the store's lease (PERSIST-01 C7): acquireLease first");
     const docs = this.docsBuf;
     const idx = this.idxBuf;
     this.docsBuf = [];
     this.idxBuf = [];
     const top = Math.max(docs.at(-1)?.ts ?? 0, idx.at(-1)?.ts ?? 0);
-    // Rows unjournaled, in parallel; then the marker, journaled (it waits for everything before it).
-    await Promise.all([
-      docs.length ? this.docs.insertMany(docs, { ordered: false, writeConcern: { w: 1 } }) : null,
-      idx.length ? this.idx.insertMany(idx, { ordered: false, writeConcern: { w: 1 } }) : null,
-    ]);
-    await this.meta.updateOne(
-      { _id: "commit" },
-      { $max: { ts: top } },
-      { upsert: true, writeConcern: { w: 1, j: true } },
-    );
-    this.marker = top;
+    const session = this.client.startSession();
+    try {
+      await session.withTransaction(
+        async () => {
+          // The fence first: nothing of the group commits unless the lease still carries our epoch. A
+          // concurrent takeover makes this a write conflict (retried by withTransaction, then refused here).
+          const f = await this.meta.updateOne(
+            { _id: "lease", epoch: this.epoch },
+            { $set: { maxTs: top } },
+            { session },
+          );
+          if (f.matchedCount !== 1) throw new LeaseLostError();
+          if (docs.length) await this.docs.insertMany(docs, { session, ordered: false });
+          if (idx.length) await this.idx.insertMany(idx, { session, ordered: false });
+        },
+        { writeConcern: { w: "majority", j: true } },
+      );
+    } finally {
+      await session.endSession();
+    }
   }
 
   private latest(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
@@ -136,8 +280,12 @@ export class MongoPersistence implements Persistence, ScanDocs {
     return out;
   }
 
-  maxTs() {
-    return this.marker;
+  /** The durable prefix (PERSIST-01 C5/C7): the lease document's maxTs, which every fenced flush sets; for a
+   *  store never leased, the old commit marker. */
+  async maxTs() {
+    const lease = await this.meta.findOne({ _id: "lease" });
+    if (lease) return lease.maxTs as number;
+    return ((await this.meta.findOne({ _id: "commit" }))?.ts as number) ?? 0;
   }
 
   async auditLiveDocs(table: number, ts: number) {

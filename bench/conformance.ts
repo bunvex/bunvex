@@ -19,7 +19,7 @@ for (const name of drivers) {
     kills: Number(process.env.KILLS ?? 8),
     checks: process.env.CHECKS?.split(",") as Check[] | undefined,
     // The first-party drivers that implement PERSIST-01 C7 (single writer); the others follow.
-    requireLease: ["postgres"].includes(name),
+    requireLease: ["postgres", "mongodb"].includes(name),
   });
   failures += r.failures;
 }
