@@ -12,12 +12,14 @@ import { deploymentQuery } from "../data/queries.ts";
 import { toDataSourceError } from "../data-source.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { SettingsLayout } from "./layout.tsx";
+import { PauseSection } from "./pause.tsx";
 
 export function GeneralSettingsScreen() {
   return (
     <SettingsLayout>
       <div className="flex flex-col gap-8">
         <DeploymentInfoSection />
+        <PauseSection />
       </div>
     </SettingsLayout>
   );
