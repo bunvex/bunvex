@@ -1,0 +1,108 @@
+// Sort keys (STUDY-12): an order-preserving, self-delimiting byte encoding of values, in the layout Convex
+// uses for index keys (`crates/value/src/sorting.rs`, after FoundationDB's tuple layer). Comparing two keys
+// byte-wise compares the values in Convex's order; a tuple is the concatenation of its values' keys.
+import type { Value } from "./value.ts";
+
+const UNDEFINED = 0x01;
+const NULL = 0x03;
+const ZERO_INT = 0x08; // negative ints below it, positive above; the distance is the byte width
+const FLOAT = 0x0d;
+const FALSE = 0x0e;
+const TRUE = 0x0f;
+const STRING = 0x10;
+const BYTES = 0x11;
+const ARRAY = 0x12;
+const OBJECT = 0x15;
+const TERMINATOR = 0x00;
+const ESCAPE = 0xff;
+
+class Writer {
+  buf = new Uint8Array(64);
+  n = 0;
+  private room(k: number) {
+    if (this.n + k <= this.buf.length) return;
+    const next = new Uint8Array(Math.max(this.buf.length * 2, this.n + k));
+    next.set(this.buf.subarray(0, this.n));
+    this.buf = next;
+  }
+  byte(b: number) {
+    this.room(1);
+    this.buf[this.n++] = b;
+  }
+  /** Bytes with every 0x00 escaped as 0x00 0xFF, then a 0x00 terminator. */
+  escaped(bytes: Uint8Array) {
+    this.room(bytes.length * 2 + 1);
+    for (const b of bytes) {
+      this.buf[this.n++] = b;
+      if (b === TERMINATOR) this.buf[this.n++] = ESCAPE;
+    }
+    this.buf[this.n++] = TERMINATOR;
+  }
+  done() {
+    return this.buf.slice(0, this.n);
+  }
+}
+
+const utf8 = new TextEncoder();
+const f64 = new DataView(new ArrayBuffer(8));
+
+function writeInt(w: Writer, n: bigint) {
+  if (n === 0n) return w.byte(ZERO_INT);
+  const width =
+    n >= -128n && n <= 127n ? 1 : n >= -32768n && n <= 32767n ? 2 : n >= -(2n ** 31n) && n < 2n ** 31n ? 3 : 4;
+  w.byte(n < 0n ? ZERO_INT - width : ZERO_INT + width);
+  const bytes = 1 << (width - 1);
+  const u = BigInt.asUintN(64, n);
+  for (let i = bytes - 1; i >= 0; i--) w.byte(Number((u >> BigInt(i * 8)) & 0xffn));
+}
+
+function writeFloat(w: Writer, x: number) {
+  f64.setFloat64(0, x);
+  let bits = f64.getBigUint64(0);
+  bits = bits & (1n << 63n) ? ~bits & 0xffffffffffffffffn : bits | (1n << 63n);
+  f64.setBigUint64(0, bits);
+  w.byte(FLOAT);
+  for (let i = 0; i < 8; i++) w.byte(f64.getUint8(i));
+}
+
+function write(w: Writer, v: Value | undefined) {
+  if (v === undefined) return w.byte(UNDEFINED);
+  if (v === null) return w.byte(NULL);
+  switch (typeof v) {
+    case "bigint":
+      return writeInt(w, v);
+    case "number":
+      return writeFloat(w, v);
+    case "boolean":
+      return w.byte(v ? TRUE : FALSE);
+    case "string":
+      w.byte(STRING);
+      return w.escaped(utf8.encode(v));
+  }
+  if (v instanceof ArrayBuffer) {
+    w.byte(BYTES);
+    return w.escaped(new Uint8Array(v));
+  }
+  if (Array.isArray(v)) {
+    w.byte(ARRAY);
+    for (const e of v) write(w, e);
+    return w.byte(TERMINATOR);
+  }
+  w.byte(OBJECT);
+  const fields = Object.keys(v).sort();
+  for (const k of fields) {
+    const e = (v as Record<string, Value>)[k];
+    if (e === undefined) continue;
+    w.escaped(utf8.encode(k));
+    if (k === "") w.byte(ESCAPE); // tells an empty field name from the object's terminator
+    write(w, e);
+  }
+  w.byte(TERMINATOR);
+}
+
+/** The sort key of a tuple of values; `undefined` is a missing field, below `null`. */
+export function valuesToKey(values: (Value | undefined)[]): Uint8Array {
+  const w = new Writer();
+  for (const v of values) write(w, v);
+  return w.done();
+}
