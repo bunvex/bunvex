@@ -41,6 +41,13 @@ const realPerformanceNow = performance.now.bind(performance);
 const origin = performance.timeOrigin;
 
 /**
+ * The wall clock in whole microseconds, whether or not an execution is running: the unit of commit
+ * timestamps (STUDY-06 D9). Convex counts nanoseconds in a u64, which a JS number cannot hold exactly;
+ * microseconds stay exact until the year 2255. Never behind Date.now().
+ */
+export const wallClockUs = (): number => Math.floor(Math.max(origin + realPerformanceNow(), realNow()) * 1000);
+
+/**
  * Round down to 0.1 ms, as Convex's `secs_as_dom_high_res_ms` (crates/isolate/src/ops/time.rs) does to
  * blunt timing side channels.
  */

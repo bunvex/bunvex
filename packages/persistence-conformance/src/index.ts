@@ -3,6 +3,7 @@
 //
 //   K1 byte order          K2 snapshots          K3 no lost update       K4 cache invalidation
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
+// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K18.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -11,15 +12,29 @@
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
-import { compareKeys, encodeKey, type KeyValue, OccError, type Persistence, type ScanDocs } from "@bunvex/core";
+import {
+  compareKeys,
+  type Engine,
+  encodeKey,
+  hasLease,
+  type KeyValue,
+  LeaseHeldError,
+  LeaseLostError,
+  OccError,
+  type Persistence,
+  type ScanDocs,
+} from "@bunvex/core";
 import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
   open(fresh: boolean): Promise<Persistence>;
   tearTail?(nextTs: number): void | Promise<void>;
+  /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
+   *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
+  writerInsideFlush?(): Promise<boolean>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9"; // K3 also runs K4 and K5
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10"; // K3 also runs K4–K5; K10 runs K10–K18
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -29,7 +44,14 @@ export type ConformanceOptions = {
   /** Subset of checks (default: all). */
   checks?: Check[];
   log?: (line: string) => void;
+  /** The driver claims PERSIST-01 C7 (single writer): its absence is a failure, not a skip. */
+  requireLease?: boolean;
 };
+
+/** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
+const CHILD_TTL_MS = 1000;
+/** How long a store may keep a paused writer's open transaction before a takeover gets through (K13). */
+const IDLE_TX_BOUND_MS = 2500;
 
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
@@ -320,6 +342,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       odd === 0 && final.length === 1920,
       `K5 no reader saw half a mutation (${odd} odd reads, ${final.length}/1920)`,
     );
+    await e.close();
   }
 
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
@@ -329,7 +352,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     let bad = 0;
     for (let k = 0; k < kills; k++) {
       const child = spawn(process.execPath, [childPath, opts.driverModule], {
-        env: process.env,
+        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
         stdio: ["ignore", "pipe", "inherit"],
       });
       let lastAck = 0;
@@ -350,9 +373,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       await new Promise((r) => child.on("exit", r));
 
       const st = await mod.open(false);
+      // Under a lease the engine first waits out the killed child's (K15), and maxTs is read after that.
+      // Opening an engine on an existing store only reads the catalog (no commit), so M is maxTs.
+      const e = await newEngine(st, { lease: { waitMs: 20 * CHILD_TTL_MS } });
       const M = Number((await st.maxTs?.()) ?? 0);
-      // Opening an engine on an existing store only reads the catalog (no commit), so M is unchanged.
-      const e = await newEngine(st);
       const items = e.catalog.table("items");
       const ixIds = [...items.indexes.values()].map((ix) => ix.id);
       if (M < lastAck) {
@@ -372,17 +396,18 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         log(`  kill ${k}: live docs ${live}, index entries ${JSON.stringify(counts)} (torn commit)`);
         bad++;
       }
-      // Writing resumes at M + 1 and the result is readable.
+      // Writing resumes above M and the result is readable (timestamps follow the clock: STUDY-06 D9).
       const id = await e.mutation(insertItem("resume"));
-      if (e.committer.visibleTs !== M + 1 || (await st.get(items.id, id, M + 1)) === null) {
-        log(`  kill ${k}: resume wrote ts ${e.committer.visibleTs}, expected ${M + 1}`);
+      const next = e.committer.visibleTs;
+      if (next <= M || (await st.get(items.id, id, next)) === null) {
+        log(`  kill ${k}: resume wrote ts ${next}, expected above ${M}`);
         bad++;
       }
-      await st.close();
+      await e.close();
     }
     check(
       bad === 0,
-      `K6 ${kills} SIGKILLs mid-commit: no acknowledged commit lost, no torn commit, resume at maxTs+1 (${bad} violations)`,
+      `K6 ${kills} SIGKILLs mid-commit: no acknowledged commit lost, no torn commit, resume above maxTs (${bad} violations)`,
     );
   }
 
@@ -394,36 +419,286 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const e = await newEngine(st);
     for (let i = 0; i < 50; i++) await e.mutation(insertItem("k7"));
     const M = Number(await st.maxTs!());
-    await st.close();
+    await e.close();
     await mod.tearTail(M + 1);
     const st2 = await mod.open(false);
     const e2 = await newEngine(st2);
     const M2 = Number(await st2.maxTs!());
     await e2.mutation(insertItem("k7"));
-    await st2.close();
+    await e2.close();
     const st3 = await mod.open(false); // the record written after recovery must survive a reopen
+    const e3 = await newEngine(st3);
     const M3 = Number(await st3.maxTs!());
-    const torn = await st3.get((await newEngine(st3)).catalog.table("items").id, "torn", M3);
-    await st3.close();
+    const torn = await st3.get(e3.catalog.table("items").id, "torn", M3);
+    await e3.close();
     check(
-      M2 === M && M3 === M + 1 && torn === null,
+      M2 === M && M3 > M && torn === null,
       `K7 a torn log tail is cut off and writing resumes (maxTs ${M} → ${M2} → ${M3})`,
     );
   }
 
+  // K10–K18 — single writer (PERSIST-01 C7): the lease, its fence, and the durable prefix.
+  async function leaseChecks() {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const raw = async (fresh: boolean) => {
+      const s = await mod.open(fresh);
+      if (!hasLease(s)) throw new Error("driver lost its lease between opens");
+      return s;
+    };
+    const TABLE = 950;
+    const INDEX = 951;
+    const row = (ts: number, id: string) =>
+      [[{ table: TABLE, id, json: `{"ts":${ts}}` }], [{ index: INDEX, key: encodeKey([id]), id }]] as const;
+
+    // K10 — exclusive, at the driver and through the engine.
+    {
+      const a = await raw(true);
+      const b = await raw(false);
+      const ra = await a.acquireLease({ holder: "k10-a", ttlMs: 30_000 });
+      const rb = await b.acquireLease({ holder: "k10-b", ttlMs: 30_000 });
+      await a.releaseLease();
+      await a.close();
+      await b.close();
+      const e1 = await newEngine(await mod.open(false));
+      const second = await newEngine(await mod.open(false)).catch((e) => e);
+      await e1.close();
+      check(
+        "epoch" in ra &&
+          "heldBy" in rb &&
+          rb.heldBy === "k10-a" &&
+          rb.expiresInMs > 0 &&
+          second instanceof LeaseHeldError,
+        "K10 a live lease is exclusive (driver: heldBy; engine: LeaseHeldError)",
+      );
+    }
+
+    // K11 — a holder that stops renewing is replaced within TTL + ε, with a greater epoch.
+    {
+      const a = await raw(false);
+      const b = await raw(false);
+      const ttl = 400;
+      const ra = await a.acquireLease({ holder: "k11-a", ttlMs: ttl });
+      const t0 = Date.now();
+      let rb = await b.acquireLease({ holder: "k11-b", ttlMs: 30_000 });
+      while (!("epoch" in rb) && Date.now() - t0 < ttl + 3000) {
+        await sleep(25);
+        rb = await b.acquireLease({ holder: "k11-b", ttlMs: 30_000 });
+      }
+      const took = Date.now() - t0;
+      await b.releaseLease();
+      await a.close();
+      await b.close();
+      check(
+        "epoch" in ra && "epoch" in rb && rb.epoch > ra.epoch && took <= ttl + 1000,
+        `K11 an expired lease is taken over within TTL + ε (${took} ms for a ${ttl} ms TTL), with a greater epoch`,
+      );
+    }
+
+    // K12 — after a takeover, the old holder's flush is refused and leaves nothing visible.
+    {
+      const a = await raw(false);
+      const b = await raw(false);
+      await a.acquireLease({ holder: "k12-a", ttlMs: 200 });
+      const M0 = Number(await a.maxTs!());
+      const [d1, i1] = row(M0 + 1, "k12-a1");
+      a.apply(M0 + 1, [...d1], [...i1]);
+      await a.flush(); // A is the holder: accepted
+      await sleep(350);
+      const rb = await b.acquireLease({ holder: "k12-b", ttlMs: 30_000 });
+      const M = Number(await b.maxTs!());
+      const [d2, i2] = row(M + 1, "k12-a2");
+      a.apply(M + 1, [...d2], [...i2]);
+      const err = await Promise.resolve(a.flush()).then(
+        () => null,
+        (e) => e,
+      );
+      const seen = await b.scan(INDEX, FULL_LO, FULL_HI, Number.MAX_SAFE_INTEGER, 100, false);
+      const M2 = Number(await b.maxTs!());
+      await b.releaseLease();
+      await a.close();
+      await b.close();
+      check(
+        "epoch" in rb &&
+          M === M0 + 1 &&
+          err instanceof LeaseLostError &&
+          JSON.stringify(seen) === JSON.stringify(["k12-a1"]) &&
+          M2 === M,
+        `K12 a stale holder's flush throws LeaseLostError and lands nothing (${err?.constructor?.name ?? "no error"}; visible ${JSON.stringify(seen)})`,
+      );
+    }
+
+    // K16 — maxTs counts a commit that wrote only index entries.
+    {
+      const s = await raw(false);
+      await s.acquireLease({ holder: "k16", ttlMs: 30_000 });
+      const M = Number(await s.maxTs!());
+      s.apply(M + 1, [], [{ index: INDEX, key: encodeKey(["k16"]), id: "k16" }]);
+      await s.flush();
+      await s.releaseLease();
+      await s.close();
+      const s2 = await raw(false);
+      const M2 = Number(await s2.maxTs!());
+      await s2.close();
+      check(M2 === M + 1, `K16 maxTs counts an index-only commit (${M} → ${M2}, expected ${M + 1})`);
+    }
+
+    // K18 — a released lease is taken at once, at the driver and through Engine.close().
+    {
+      const a = await raw(false);
+      const b = await raw(false);
+      const ra = await a.acquireLease({ holder: "k18-a", ttlMs: 60_000 });
+      await a.releaseLease();
+      const rb = await b.acquireLease({ holder: "k18-b", ttlMs: 60_000 });
+      await b.releaseLease();
+      await a.close();
+      await b.close();
+      const e1 = await newEngine(await mod.open(false), { lease: { ttlMs: 60_000 } });
+      await e1.close();
+      const e2 = await newEngine(await mod.open(false)).catch((e) => e);
+      if (!(e2 instanceof Error)) await (e2 as Engine).close();
+      check(
+        "epoch" in ra && "epoch" in rb && rb.epoch > ra.epoch && !(e2 instanceof Error),
+        "K18 a released lease (releaseLease, Engine.close) is taken at once",
+      );
+    }
+
+    // K17 — two engines opened at once on an empty store: exactly one wins; one catalog, one secret.
+    {
+      await mod.open(true).then((s) => s.close());
+      const opened = await Promise.allSettled([newEngine(await mod.open(false)), newEngine(await mod.open(false))]);
+      const won = opened.filter((r) => r.status === "fulfilled") as PromiseFulfilledResult<Engine>[];
+      const lost = opened.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      let catalogOk = false;
+      if (won.length === 1) {
+        const e = won[0].value;
+        const at = e.committer.visibleTs;
+        const tablesId = e.catalog.table("_tables").id;
+        const instanceId = e.catalog.table("_instance").id;
+        const tables = Number(await e.persistence.auditLiveDocs?.(tablesId, at));
+        const secrets = Number(await e.persistence.auditLiveDocs?.(instanceId, at));
+        // one `_tables` document per table (the two bootstrap tables, `_tables` and `_index`, have none);
+        // one secret. A second catalog would double the `_tables` documents.
+        catalogOk = secrets === 1 && tables === e.catalog.tables.size - 2;
+        await e.close();
+      }
+      for (const r of lost) if (!(r.reason instanceof LeaseHeldError)) log(`  K17: loser failed with ${r.reason}`);
+      check(
+        won.length === 1 && lost.length === 1 && lost[0].reason instanceof LeaseHeldError && catalogOk,
+        `K17 concurrent first boot: one engine opens, the other gets LeaseHeldError; one catalog, one secret (${won.length} won)`,
+      );
+    }
+
+    // K13 (+ K14) — a paused writer resumes after a takeover: it must stop with a lost lease and land nothing.
+    {
+      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
+      let bad = 0;
+      let worst = 0;
+      let insideFlush = 0;
+      for (let round = 0; round < 3; round++) {
+        await mod.open(true).then((s) => s.close());
+        const child = spawn(process.execPath, [childPath, opts.driverModule], {
+          env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
+          stdio: ["ignore", "pipe", "inherit"],
+        });
+        let started = false;
+        let stoppedBy = "";
+        let buf = "";
+        child.stdout.on("data", (d) => {
+          buf += d;
+          const lines = buf.split("\n");
+          buf = lines.pop()!;
+          for (const l of lines) {
+            if (l.startsWith("start")) started = true;
+            if (l === "lost" || l.startsWith("fatal ")) stoppedBy = l;
+          }
+        });
+        const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+        while (!started) await sleep(20);
+        await sleep(200 + rnd(500));
+        // Round 0 pauses the writer INSIDE a flush (K14) when the driver can tell; the others anywhere.
+        let inside = false;
+        child.kill("SIGSTOP");
+        if (round === 0 && mod.writerInsideFlush)
+          for (let tries = 0; tries < 500; tries++) {
+            inside = await mod.writerInsideFlush();
+            if (inside) break;
+            child.kill("SIGCONT");
+            await sleep(rnd(4));
+            child.kill("SIGSTOP");
+          }
+        if (inside) insideFlush++;
+        const t0 = Date.now();
+        const st = await mod.open(false);
+        const e = await newEngine(st, { lease: { waitMs: 30_000, ttlMs: 30_000 } }).catch((err: Error) => err);
+        const took = Date.now() - t0;
+        if (e instanceof Error) {
+          bad++;
+          log(`  K13 round ${round}: the takeover failed after ${took} ms: ${e.message}`);
+          child.kill("SIGKILL");
+          await exited;
+          await st.close();
+          continue;
+        }
+        worst = Math.max(worst, took);
+        const M = e.committer.visibleTs;
+        const items = e.catalog.table("items");
+        const childBefore = (await e.query(allOfTenant("child"))).length;
+        for (let i = 0; i < 20; i++) await e.mutation(insertItem("parent"));
+        child.kill("SIGCONT");
+        const code = await Promise.race([exited, sleep(15_000).then(() => "timeout" as const)]);
+        if (code === "timeout") child.kill("SIGKILL");
+        const childAfter = (await e.query(allOfTenant("child"))).length;
+        const parent = (await e.query(allOfTenant("parent"))).length;
+        const at = e.committer.visibleTs;
+        const counts: number[] = [];
+        for (const ix of items.indexes.values())
+          counts.push((await st.scan(ix.id, FULL_LO, FULL_HI, at, 1e7, false)).length);
+        const live = st.auditLiveDocs ? Number(await st.auditLiveDocs(items.id, at)) : counts[0];
+        // The child must stop (fail-stop) and land nothing. Paused between flushes it finds its lease lost
+        // (exit 3); paused INSIDE a flush the store aborts its idle transaction (K14) and that flush fails
+        // (exit 4). Either way no write of it may appear after the takeover.
+        const ok =
+          (code === 3 || code === 4) &&
+          stoppedBy !== "" &&
+          childAfter === childBefore &&
+          parent === 20 &&
+          at > M &&
+          new Set([...counts, live]).size === 1 &&
+          took <= CHILD_TTL_MS + IDLE_TX_BOUND_MS + 2000;
+        if (!ok) {
+          bad++;
+          log(
+            `  K13 round ${round}: exit ${code}, stopped by "${stoppedBy}", child rows ${childBefore} → ${childAfter}, parent ${parent}, ts ${M} → ${at}, counts ${JSON.stringify([...counts, live])}, takeover ${took} ms`,
+          );
+        }
+        await e.close();
+      }
+      check(
+        bad === 0,
+        `K13 a paused stale writer stops with LeaseLostError and lands nothing; takeover ≤ ${CHILD_TTL_MS + IDLE_TX_BOUND_MS + 2000} ms (worst ${worst} ms)`,
+      );
+      if (mod.writerInsideFlush)
+        check(insideFlush === 1, "K14 a writer paused inside its flush is taken over within the bound (K13 round 0)");
+    }
+  }
+
+  // K1, K2, K8 and K9 drive the store directly: under C7 they hold its lease like a writer would.
   const st = await mod.open(true);
+  const leased = hasLease(st);
+  if (leased) await st.acquireLease({ holder: "conformance", ttlMs: 60_000 });
   if (want("K1")) await k1(st);
   if (want("K2")) await k2(st);
   if (want("K8")) await k8(st);
   if (want("K9")) await k9(st);
+  if (leased) await st.releaseLease();
   await st.close();
-  if (want("K3")) {
-    const st2 = await mod.open(true);
-    await k3to5(st2);
-    await st2.close();
-  }
+  if (want("K3")) await k3to5(await mod.open(true));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();
+  if (want("K10")) {
+    if (leased) await leaseChecks();
+    else if (opts.requireLease) check(false, "K10–K18 the driver claims PERSIST-01 C7 but has no lease");
+  }
   return { failures };
 }

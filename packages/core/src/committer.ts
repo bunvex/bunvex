@@ -4,6 +4,8 @@
 // committer validates the read-set against every commit made after the snapshot (the in-memory write
 // log), assigns the next ts, applies the writes to persistence, and makes the whole GROUP durable with one
 // flush. Commits queued while a group is being flushed form the next group.
+
+import { wallClockUs } from "./determinism.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
 
@@ -81,12 +83,20 @@ export class Committer {
   private fatalListeners: ((e: CommitterStoppedError) => void)[] = [];
   /** Callers of `waitForVisible`, woken once `visibleTs` reaches their ts. */
   private visibleWaiters: { ts: number; resolve: () => void }[] = [];
+  /**
+   * Every commit with a ts above this is in the write log; the ones at or below it are not (trimmed, or
+   * made before the store was opened). Timestamps are sparse (STUDY-06 D9), so "the log reaches back to a
+   * snapshot" is `snapshot >= purgedTs`, never a guess from the first entry's ts.
+   */
+  private purgedTs = 0;
   /** Set once persistence has failed; the committer accepts nothing afterwards. */
   stopped: CommitterStoppedError | null = null;
 
   constructor(
     private persistence: Persistence,
     private logWindow = 20_000,
+    /** The clock commit timestamps follow, in microseconds (tests pass their own). */
+    private clockUs: () => number = wallClockUs,
   ) {}
 
   /**
@@ -95,10 +105,15 @@ export class Committer {
    * `extend_validity`). True when the write log no longer reaches back to `from`, as the absence of a
    * conflict can then not be proven.
    */
+  /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
+  resume(maxTs: number) {
+    this.appliedTs = this.visibleTs = this.purgedTs = maxTs;
+  }
+
   changedBetween(reads: Interval[], from: number, to: number): boolean {
     if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
     if (from >= to) return false;
-    if (this.log.length === 0 || this.log[0].ts > from + 1) return true;
+    if (from < this.purgedTs) return true;
     for (let i = this.log.length - 1; i >= 0 && this.log[i].ts > from; i--)
       if (this.log[i].ts <= to && overlaps(this.log[i].writes, reads)) return true;
     return false;
@@ -148,9 +163,9 @@ export class Committer {
   /** The conflict that refuses `p`, or null when it may commit. */
   private validate(p: PendingCommit): Conflict | null {
     if (p.reads.length === 0) return null;
-    // The window must still cover the snapshot, otherwise we cannot prove the absence of a conflict.
-    if (this.log.length && this.log[0].ts > p.snapshot + 1 && p.snapshot < this.appliedTs)
-      return { writeTs: this.appliedTs };
+    // The window must still cover the snapshot, otherwise we cannot prove the absence of a conflict (this
+    // holds with an empty log too: a snapshot from before the store was opened is refused; STUDY-24 S4).
+    if (p.snapshot < this.purgedTs) return { writeTs: this.appliedTs };
     for (let i = this.log.length - 1; i >= 0 && this.log[i].ts > p.snapshot; i--) {
       const e = this.log[i];
       const w = firstOverlap(e.writes, p.reads);
@@ -188,13 +203,17 @@ export class Committer {
             p.reject(new ConflictError(conflict));
             continue;
           }
-          const ts = ++this.appliedTs;
+          // As Convex's `next_commit_ts`: the wall clock, but always above the last timestamp assigned, so
+          // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
+          const ts = Math.max(this.appliedTs + 1, this.clockUs());
+          this.appliedTs = ts;
           const writes = p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
           accepted.push([p, p.source === undefined ? { ts, writes } : { ts, writes, source: p.source }]);
           this.persistence.apply(ts, p.docs, p.idx);
           this.log.push(accepted[accepted.length - 1][1]); // seen by the validation of the NEXT commits of this group
         }
-        if (this.log.length > this.logWindow) this.log.splice(0, this.log.length - this.logWindow);
+        if (this.log.length > this.logWindow)
+          this.purgedTs = this.log.splice(0, this.log.length - this.logWindow).at(-1)!.ts;
         if (!accepted.length) continue;
         await this.persistence.flush();
       } catch (e) {
@@ -211,6 +230,16 @@ export class Committer {
       for (const [p, e] of accepted) p.resolve(e.ts);
       this.wakeVisible();
     }
+  }
+
+  /** Resolve once nothing is queued or being flushed (a clean shutdown lets the last group land). */
+  async idle() {
+    while (this.running || this.queue.length) await new Promise((r) => setTimeout(r, 1));
+  }
+
+  /** Stop the committer from outside, as a persistence failure does (a lost lease). Fail-stop. */
+  fail(cause: unknown) {
+    this.stop(cause);
   }
 
   private stop(cause: unknown) {

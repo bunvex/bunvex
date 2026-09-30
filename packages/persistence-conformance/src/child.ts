@@ -7,7 +7,8 @@ import { insertItem, newEngine } from "./workload.ts";
 
 const mod = (await import(process.argv[2])) as DriverModule;
 const p = await mod.open(false);
-const e = await newEngine(p);
+// Under a lease (PERSIST-01 C7) a short TTL, so the parent's reopen after the SIGKILL waits little (K15).
+const e = await newEngine(p, { lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 1000) } });
 console.log(`start ${e.committer.visibleTs}`);
 await Promise.all(
   Array.from({ length: 16 }, async (_, w) => {
