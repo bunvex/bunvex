@@ -224,6 +224,42 @@ describe("adding, deleting, clearing", () => {
     expect((await src.listTables()).some((t) => t.name === "notes")).toBe(true);
   });
 
+  test("no tables at all: /database says so and offers Create table, which opens the new table", async () => {
+    const { history, src } = mount("/database", source({ tables: false }));
+    await screen.findByRole("heading", { level: 1, name: "Database" });
+    const empty = screen.getByRole("region", { name: "There are no tables here yet." });
+    await within(empty).findByText("Create a table to start storing data.");
+    await expectAccessible();
+    const user = userEvent.setup();
+    await user.click(within(empty).getByRole("button", { name: "Create table" }));
+    await user.type(within(empty).getByRole("textbox", { name: "New table's name" }), "notes{Enter}");
+    await heading("notes");
+    expect(history.location.pathname).toBe("/database/notes");
+    expect((await src.listTables()).map((t) => t.name)).toEqual(["notes"]);
+  });
+
+  test("no tables: no advice until the capabilities are known (the wrong one never flashes)", async () => {
+    const src = source({ tables: false });
+    const real = src.getCapabilities.bind(src);
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    src.getCapabilities = (opts) => held.then(() => real(opts));
+    mount("/database", src);
+    const empty = await screen.findByRole("region", { name: "There are no tables here yet." });
+    expect(within(empty).queryByText(/Tables appear|Create a table to start/)).toBeNull();
+    release();
+    await within(empty).findByText("Create a table to start storing data.");
+  });
+
+  test("no tables and no way to create one: it says where tables come from", async () => {
+    mount("/database", source({ tables: false, capabilities: { operations: ["viewData"], readOnly: false } }));
+    const empty = await screen.findByRole("region", { name: "There are no tables here yet." });
+    expect(within(empty).getByText(/Tables appear once data is written/)).toBeDefined();
+    expect(within(empty).queryByRole("button", { name: "Create table" })).toBeNull();
+  });
+
   test("Create table: Escape leaves things as they were; a refusal is said", async () => {
     const src = source();
     src.createTable = () => Promise.reject(new Error("the deployment is paused"));

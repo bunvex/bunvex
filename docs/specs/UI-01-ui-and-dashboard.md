@@ -1130,6 +1130,11 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 - Not yet: a deployment with no tables at all shows the `/database` message without the list, so no
   Create table there (the route component is in `router.tsx`, left alone while route splitting is under
   way elsewhere).
+- **A deployment with no tables at all**: `/database` (which otherwise opens the first table) shows
+  "There are no tables here yet." and, when the credential may create one, the same Create table, which
+  opens the new table (`database/empty.tsx`, lazy like the screens); otherwise it says tables appear once
+  data is written. As Convex's `EmptyData.tsx`. The mock's `tables: false` (the dev host's `?tables=0`)
+  gives such a deployment.
 
 ### 15.5 A generated schema (STUDY-12 D11)
 
