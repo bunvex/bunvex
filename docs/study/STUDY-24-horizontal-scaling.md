@@ -396,8 +396,15 @@ flush to the follower knowing the ts and write set:
 - **Read-your-writes:**
   - **WebSocket.** After a forwarded mutation returns at ts T, the node waits until its `visibleTs` ≥ T
     before scheduling a transition.
-    - `feat/sync-session` today schedules immediately, and only for sessions whose queries overlap the
-      write. A client's `await` can hang until an unrelated transition arrives.
+    - On one node this already holds (#50): `Committer.commit()` resolves only once `visibleTs` has
+      reached the commit's ts (`committer.ts`, after `flush()`), and after sending the `MutationResponse`
+      the mutating session always schedules a transition, overlap or not (`sync.ts`, `mutation()` →
+      `schedule()`), at `visibleTs ≥ ts` and sent even when empty. The test is `sync.test.ts` "a mutation
+      that changes nothing watched still advances the ts".
+    - With forwarding (A1), the follower gets `ts` from the leader while its own `visibleTs` may still be
+      behind, so it must `waitForVisible(ts)` before that `schedule()`; otherwise the transition can come
+      out at a ts below the mutation's and the client's `await` waits for a later one. This is one line in
+      `SyncSession.mutation()`, added with the forwarding work.
     - For `Connect` behind `maxObservedTimestamp`: Convex refuses. The recommendation is a short bounded
       wait, then refuse (H9).
   - **HTTP, actions, scheduled functions and `query_at_ts`: "read index".** Before a read, a follower asks
