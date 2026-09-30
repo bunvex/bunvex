@@ -251,3 +251,86 @@ columns, add documents).
 1. D5–D10: keep bunvex's choice, or match Convex?
 2. Should the admin API mirror Convex's system UDFs and routes (§1.5) closely enough that Convex's own
    dashboard could run against bunvex too? (UI-01 §5.7 puts the admin messages in `@bunvex/protocol`.)
+
+## 7. Logs, Functions and the function runner (added 29–30 Sep 2026)
+
+Read at the same commit, in `npm-packages/dashboard-common/src/features/{logs,functions,functionRunner}`
+and `lib/functions`, `lib/useLogs.ts`.
+
+### 7.1 How Convex does it
+
+**Logs** (`logs/components/Logs.tsx`, `LogList.tsx`, `LogListItem.tsx`, `LogDrilldown.tsx`,
+`logs/lib/filterLogs.ts`, `lib/useLogs.ts`):
+
+- One stream, opened when the screen mounts (`useLogs` over `stream_function_logs`, §1.5), never skipped.
+  It starts with what the server's ring buffer holds; there is no paging back beyond it. The screen keeps
+  at most **10 000** entries (`MAX_LOGS`), dropping the oldest.
+- Entries are either a **log line** (level DEBUG / INFO (`LOG`) / WARN / ERROR, messages, the function,
+  the request id) or an **outcome** (success / failure, duration, cached, error). The list shows them
+  **newest first**, one row each: time with milliseconds, the first 4 characters of the request id, the
+  outcome and duration (or a rule for a log line), the function kind's initial (Q / M / A / H) and name,
+  then the message. Failures and ERROR lines are tinted.
+- **Filters, all on the client** over the loaded buffer (`filterLogs`): functions (a multi-select of the
+  deployment's functions plus "other"), log types (a multi-select of success, failure, DEBUG, INFO, WARN,
+  ERROR), and a free-text box (debounced 200 ms) that matches the function name, the message or error, or
+  a request id. Filters are kept in **local storage per deployment** (`logs/<deployment>/…`), not in the
+  URL. Components add a component filter.
+- **Pause**: scrolling away from the top pauses the list, and so does the pause button; new entries are
+  buffered while paused and merged when it resumes (the button shows it). **Clear** hides what is loaded so
+  far (a marker row can bring it back).
+- **Drilldown**: activating a row opens a side panel with tabs for the execution (timing, usage, cached,
+  caller, identity), the request (every execution of the request) and the function call tree (rebuilt from
+  `parentExecutionId`). Up / Down move to the next or previous entry, Shift for the same request, Ctrl or
+  Cmd for the same execution; "filter by this request id" fills the text box. Deployment events (pushes,
+  environment changes) are interleaved in the list.
+
+**Functions** (`functions/components/FunctionsView.tsx`, `DirectorySidebar.tsx`, `FileTree.tsx`,
+`FunctionSummary.tsx`, `FunctionLogs.tsx`, `lib/functions/generateFileTree.ts`):
+
+- A sidebar with the modules as a file tree (folders from the module path, functions inside each file in
+  source order), searchable; the open function is `?function=<module:name>` in the URL.
+- The function's summary: its name, kind and visibility ("Internal query"), a copyable identifier (and the
+  URL for an HTTP action), and a **Run** button that opens the runner on it (disabled where the admin key
+  may not run it, and for internal functions without the matching operation).
+- Tabs: **Statistics** (invocations, errors, latency percentiles, cache hit rate — from the app-metrics
+  API) and **Logs** (the Logs list filtered to this function, with its own text and level filters kept per
+  function).
+
+**Function runner** (`functionRunner/components/FunctionRunnerWrapper.tsx`, `FunctionTester.tsx`,
+`FunctionResult.tsx`, `QueryResult.tsx`, `RunHistory.tsx`, `lib/functionRunner.ts`):
+
+- A panel docked to every screen (bottom, or right when "vertical"), toggled with **Ctrl+`** or the "Run
+  functions" button; it opens on the function being looked at, or on a "custom test query".
+- Arguments in the object editor (JavaScript literals in Monaco, the same editor as documents), checked
+  against the function's argument validator when it has one; "act as a user" adds an identity.
+- A **query** is subscribed: its result updates live, with its log lines. A **mutation or action** runs on
+  the **Run** button; each run is kept in a per-function history (local storage) that can be reopened. The
+  result shows the value, the duration and the function's log lines, or the error.
+
+### 7.2 How bunvex does it
+
+The contract already has `listFunctions` (path, kind, visibility), `listLogs` (newest first, paged) and
+`watchLogs` (live tail). Log entries are lines; the line that ends an execution carries its outcome
+(`execution: { status, durationMs }`) instead of a separate outcome entry. Nothing below needs the server.
+
+- **Logs**: one list, newest first, of the first `listLogs` page plus everything `watchLogs` delivers, at
+  most 10 000 entries; older pages load at the end of the list. Filters as in Convex, on the client, kept in
+  local storage per deployment scope: functions, types (success, failure and the four levels) and text
+  (function, message, request id). Pause and resume with a count of what arrived meanwhile; Clear. A side
+  panel for the activated line: the line, its execution's outcome and duration, and every line of the same
+  request, with "filter by this request". The list is the data grid, so arrows move between lines.
+- **Functions**: the modules as a tree, `?function=` in the URL, the summary (kind, visibility, copyable
+  path, Run), and the function's logs (the same list, filtered to it). No Statistics tab.
+- **Runner**: an optional `runFunction(path, args)` in the contract, a docked Run panel with the arguments
+  in the code editor, the result as a literal, or the error.
+
+### 7.3 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **decided** (29 Sep 2026): build without metrics |
+| L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
+| L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
+| L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **open** |
+| L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **open** |
+| L6 | Not yet: the call tree, deployment events in the list, usage and identity in the details, custom test queries, "act as a user", argument validation, run history, live (subscribed) query results | the contract has no parent execution id, events, usage, identity or live function results yet | follow-up |

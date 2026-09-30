@@ -63,6 +63,10 @@ export type DataGridOptions<TData> = {
   renderEditor?: (edit: { row: TData; columnId: string; done: (outcome: EditOutcome) => void }) => ReactNode;
   /** Enter on a cell that cannot be edited (e.g. open the row's details). */
   onCellActivate?: (row: TData, columnId: string) => void;
+  /** A click on a cell that cannot be edited activates it too, not only a double-click (a list of lines). */
+  activateOnClick?: boolean;
+  /** The current cell moved to another row or column (arrows, a click) — e.g. an open details panel follows. */
+  onCellFocus?: (row: TData, columnId: string) => void;
 };
 
 type DataTableProps<TData extends RowData> = {
@@ -393,6 +397,13 @@ function DataTable<TData extends RowData>({
   const focusRow = found >= 0 ? found : Math.min(lastRowIndex.current, rows.length - 1);
   if (found >= 0) lastRowIndex.current = found;
   const focusCol = Math.min(focus?.col ?? 0, columnIds.length - 1);
+  const onCellFocus = useRef(grid?.onCellFocus);
+  onCellFocus.current = grid?.onCellFocus;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a move of the current cell reports
+  useEffect(() => {
+    const row = focus ? rows.find((r) => r.id === focus.rowId) : undefined;
+    if (row && focus) onCellFocus.current?.(row.original, columnIds[focus.col] ?? "");
+  }, [focus?.rowId, focus?.col]);
 
   /** Scrolls a row into the view (below the sticky header), setting scrollTop directly. */
   const reveal = (index: number) => {
@@ -659,6 +670,10 @@ function DataTable<TData extends RowData>({
                             if (isEditing) return;
                             if (editing) setEditing(false); // clicking another cell leaves the edit, unsaved
                             setFocus({ rowId: row.id, col });
+                          }}
+                          onClick={() => {
+                            if (grid.activateOnClick && !isEditing && !grid.canEdit?.(row.original, cell.column.id))
+                              grid.onCellActivate?.(row.original, cell.column.id);
                           }}
                           onDoubleClick={() => !isEditing && startEdit(item.index, col)}
                           onKeyDown={(e) => onGridKey(e, item.index, col)}

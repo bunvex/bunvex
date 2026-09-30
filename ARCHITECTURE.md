@@ -97,7 +97,8 @@ bunvex/
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
-│   │   └── screens                  health ✅ (engine counters) · functions, logs                 D
+│   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
+│   │   └── screens                  health ✅ (engine counters) · functions                        D
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M

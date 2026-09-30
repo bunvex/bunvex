@@ -17,9 +17,11 @@ import {
 } from "@tanstack/react-router";
 import type { ComponentProps, ReactNode } from "react";
 import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
-import { type DataSourceError, LOG_LEVELS, type LogLevel, toDataSourceError } from "./data-source.ts";
+import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
 import { DatabaseScreen } from "./database/screen.tsx";
+import { LogsScreen } from "./logs/screen.tsx";
+import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
 import { Overview } from "./screens/overview.tsx";
 import { ErrorState } from "./shell/error-state.tsx";
@@ -29,7 +31,6 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 
 // ------------------------------------------------------------------ search params
 
-export type LogsSearch = { function?: string; level?: LogLevel };
 /** The Database screen's URL state (UI-01 §12.3): the applied filter, the open document, the open panel. */
 export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "indexes" | "add" | "columns" };
 
@@ -44,14 +45,6 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
   if (doc) out.doc = doc;
   if (input.panel === "schema" || input.panel === "indexes" || input.panel === "add" || input.panel === "columns")
     out.panel = input.panel;
-  return out;
-}
-
-export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
-  const out: LogsSearch = {};
-  const fn = str(input.function);
-  if (fn) out.function = fn;
-  if (LOG_LEVELS.includes(input.level as LogLevel)) out.level = input.level as LogLevel;
   return out;
 }
 
@@ -110,13 +103,9 @@ export const functionsRoute = createRoute({
 export const logsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "logs",
-  validateSearch: validateLogsSearch,
-  loaderDeps: ({ search }) => search,
-  loader: ({ context: { queryClient, scope }, deps }) =>
-    queryClient.ensureInfiniteQueryData(
-      logsQuery(scope, { function: deps.function, levels: deps.level ? [deps.level] : undefined }),
-    ),
-  component: () => <NotBuiltYet title="Logs" />,
+  // the newest page of every function's lines; filters apply on the client (STUDY-12 §7)
+  loader: ({ context: { queryClient, scope } }) => queryClient.ensureInfiniteQueryData(logsQuery(scope, {}, LOG_PAGE)),
+  component: LogsScreen,
 });
 
 export const routeTree = rootRoute.addChildren([healthRoute, databaseRoute, tableRoute, functionsRoute, logsRoute]);

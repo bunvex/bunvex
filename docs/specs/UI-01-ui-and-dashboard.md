@@ -797,3 +797,32 @@ which Convex's does not.
    work like Convex's data grid — move between cells with the keyboard, Enter to edit, Enter to save and keep
    going — so in-place editing joined slice 6 (§12.5.3); then the owner asked to finish the Database screen in
    the same pull request, so inserting, deleting and clearing joined it too (§12.5.5).
+
+## 13. Amendment — Logs, Functions and the function runner (30 Sep 2026)
+
+After STUDY-12 §7. The owner decided on 29 Sep 2026: Functions without metrics for now (L1), log filters on
+the client as in Convex (L2), and an optional `runFunction` in the contract with a Run panel (L3).
+
+### 13.1 The Logs screen
+
+- **`/logs`** (`src/logs/`): every function's log lines, newest first, one row per line: time (with ms),
+  the request id's first four characters, the execution's outcome and duration on its last line, level,
+  the function (its kind's letter and path) and the message; errors and failed executions in the
+  destructive colour.
+- **Lines** (`useLogLines`): the newest `listLogs` page (200 lines; the route loader fetches it), then
+  whatever `watchLogs` delivers, merged by id, at most 10 000 (as Convex). Older pages load at the end of
+  the list (STUDY-12 L4, open). **Pause** holds new lines and counts them ("Resume (3 new)"); resuming shows
+  them. **Clear** hides every loaded line; "Show N cleared" brings them back.
+- **Filters on the client** (`log-filter.ts`): functions and types (success, failure, debug, info, warn,
+  error — a line passes on its level, or on its execution's outcome) as multi-selects, and a text box
+  (200 ms after the last keystroke) matching the function path, the message or a request id. Kept in this
+  browser per deployment scope (`bunvex:logs:<scope>`), as Convex keeps them per deployment; not in the
+  URL, so the old `?function=&level=` search params of the placeholder route are gone.
+- **Details** (`LogDetails`, in the shared `shell/panel.tsx`): the activated line — function, request id
+  (copy), the execution's outcome and duration, the message, and every loaded line of the same request —
+  with **Filter by this request**. The list is the data grid: arrows move between lines, a click or Enter
+  opens the details, and while they are open they follow the current line (Convex's Up / Down in its
+  drilldown).
+- **`DataTable`** gained two grid options for lists like this one: `activateOnClick` (a click on a cell
+  that cannot be edited calls `onCellActivate`) and `onCellFocus` (each move of the current cell).
+- Not yet (STUDY-12 L6): the call tree, deployment events in the list, usage and identity.

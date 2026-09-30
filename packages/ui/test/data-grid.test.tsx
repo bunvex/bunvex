@@ -213,3 +213,49 @@ describe("DataTable as a grid", () => {
     expect(cellText()).toBe("r3");
   });
 });
+
+describe("a list of lines (activate on click, follow the current cell)", () => {
+  test("a click activates a cell that cannot be edited; an editable one still needs a double-click", async () => {
+    const activate = mock();
+    render(
+      <DataTable
+        label="Rows"
+        columns={columns}
+        data={rows(3)}
+        getRowId={(r) => r.id}
+        grid={{
+          activateOnClick: true,
+          canEdit: (_, c) => c === "name",
+          renderEditor: () => <input aria-label="Edit name" />,
+          onCellActivate: (r, c) => activate(`${r.id}:${c}`),
+        }}
+      />,
+    );
+    const user = userEvent.setup();
+    const [first] = within(screen.getByRole("grid")).getAllByRole("row").slice(1);
+    const [id, name] = within(first!).getAllByRole("gridcell");
+    await user.click(id!);
+    expect(activate.mock.calls).toEqual([["r0:id"]]);
+    await user.click(name!);
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  test("onCellFocus reports each move of the current cell, by arrows or a click", async () => {
+    const moves: string[] = [];
+    render(
+      <DataTable
+        label="Rows"
+        columns={columns}
+        data={rows(3)}
+        getRowId={(r) => r.id}
+        grid={{ onCellFocus: (r, c) => moves.push(`${r.id}:${c}`) }}
+      />,
+    );
+    const user = userEvent.setup();
+    const body = within(screen.getByRole("grid")).getAllByRole("row").slice(1);
+    await user.click(within(body[0]!).getAllByRole("gridcell")[1]!);
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+    expect(moves).toEqual(["r0:name", "r1:name", "r1:n"]);
+  });
+});
