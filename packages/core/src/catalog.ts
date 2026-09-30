@@ -11,6 +11,8 @@ export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
 /** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
 export const INSTANCE_TABLE = "_instance";
+/** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
+export const SESSION_REQUESTS_TABLE = "_session_requests";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;

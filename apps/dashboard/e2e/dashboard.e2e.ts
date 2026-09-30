@@ -43,7 +43,10 @@ afterAll(async () => {
 });
 
 /** A page that records every request leaving the app's origin, and every uncaught error. */
-async function open(path: string, opts: { colorScheme?: "light" | "dark"; reducedMotion?: "reduce" } = {}) {
+async function open(
+  path: string,
+  opts: { colorScheme?: "light" | "dark"; reducedMotion?: "reduce"; viewport?: { width: number; height: number } } = {},
+) {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ...opts });
   const page = await context.newPage();
   const external: string[] = [];
@@ -70,6 +73,44 @@ const clear = async (page: Page) => {
 };
 
 describe("the dashboard in a browser", () => {
+  test("the design system's page: every specimen in both themes, no axe violation (contrast included)", async () => {
+    const { page, errors, close } = await open("/design-system.html");
+    await page.getByRole("heading", { level: 1, name: "bunvex design system" }).waitFor();
+    for (const title of ["Colors", "Buttons", "Form controls", "Data"])
+      for (const theme of ["light", "dark"])
+        await page.getByRole("region", { name: `${title}, ${theme}`, exact: true }).waitFor();
+    await page.addScriptTag({ content: AXE });
+    const violations = await page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+      const axe = (window as any).axe;
+      const r = await axe.run(document, { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+    });
+    expect(violations).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("a phone's width: no screen scrolls sideways; the screens are behind Menu", async () => {
+    const phone = { viewport: { width: 390, height: 800 } };
+    const { page, errors, close } = await open("/", phone);
+    await heading(page, "Health");
+    for (const path of ["/database/users", "/functions?function=tasks:list", "/logs", "/settings/general", "/files"]) {
+      await page.goto(`${ORIGIN}${path}`);
+      await page.locator("main h1").first().waitFor();
+      const overflow = await page.evaluate(() => document.scrollingElement!.scrollWidth - innerWidth);
+      expect([path, overflow]).toEqual([path, 0]);
+    }
+    const menu = page.getByRole("button", { name: "Menu" });
+    expect(await page.getByRole("link", { name: "History" }).isVisible()).toBe(false);
+    await menu.click();
+    await page.getByRole("link", { name: "History" }).click();
+    await heading(page, "History");
+    expect(await menu.getAttribute("aria-expanded")).toBe("false");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
@@ -257,9 +298,8 @@ describe("the dashboard in a browser", () => {
   });
 
   test("Settings: show a hidden value, add a variable and save", async () => {
-    const { page, errors, close } = await open("/settings");
+    const { page, errors, close } = await open("/settings/environment-variables");
     await heading(page, "Settings");
-    await page.waitForURL(`${ORIGIN}/settings/environment-variables`);
     await page.getByRole("button", { name: "Show the value of LOG_LEVEL" }).click();
     await page.getByText("info", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add a variable" }).click();

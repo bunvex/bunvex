@@ -4,6 +4,7 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { interleave } from "../src/logs/events.ts";
 import {
   ALL_LOGS,
   matchesLogView,
@@ -13,6 +14,7 @@ import {
   viewFromSearch,
   writeLogView,
 } from "../src/logs/log-filter.ts";
+import { sumUsage } from "../src/logs/usage.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -48,6 +50,17 @@ const line = (over: Partial<LogEntry>): LogEntry => ({
   function: { path: "tasks:create", kind: "mutation" },
   requestId: "abcd1234",
   ...over,
+});
+
+describe("events among the lines", () => {
+  test("placed by time, newest first; lines keep their order", () => {
+    const at = (time: number, id: string) => ({ ...line({}), id, time });
+    const ev = (time: number, id: string) => ({ id, time, action: "add_documents", author: null, metadata: {} });
+    expect(
+      interleave([at(50, "c"), at(30, "b"), at(10, "a")], [ev(60, "z"), ev(40, "y"), ev(5, "x")]).map((r) => r.id),
+    ).toEqual(["event:z", "c", "event:y", "b", "a", "event:x"]);
+    expect(interleave([at(1, "a")], [])).toEqual([at(1, "a")]);
+  });
 });
 
 describe("which lines a view keeps", () => {
@@ -244,5 +257,77 @@ describe("the Logs screen", () => {
     expect(marked.textContent).toContain("this line");
     expect(within(calls).getAllByText(/^(Succeeded|Failed|Running):$/).length).toBe(items.length);
     await expectAccessible();
+  });
+
+  test("the deployment's events sit among the lines by time; filters leave them; Enter opens History", async () => {
+    const source = mount(mockSource(), "/logs?type=failure");
+    await screen.findByRole("heading", { level: 1, name: "Logs" });
+    await source.insertDocuments("tasks", [{ text: "from the dashboard" }]);
+    const event = await within(grid()).findByText("Added 1 document to tasks");
+    const row = event.closest("tr") as HTMLElement;
+    expect(cells(row)[COL.level]).toBe("event");
+    expect(cells(row)[COL.function]).toBe("admin key");
+    await expectAccessible();
+    within(row).getAllByRole("gridcell")[0]!.focus();
+    await userEvent.setup().keyboard("{Enter}");
+    await waitFor(() => expect(lastHistory.location.pathname).toBe("/history"));
+    expect(params().event).toBeDefined();
+  });
+
+  test("no events without an audit log this credential may read", async () => {
+    const source = new MockDataSource({
+      seed: 7,
+      now: NOW,
+      executions: 12,
+      logIntervalMs: 3_600_000,
+      capabilities: { operations: ["viewData", "writeData", "viewLogs"], readOnly: false },
+    });
+    mount(source);
+    await opened();
+    await source.insertDocuments("tasks", [{ text: "x" }]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(rows().some((r) => cells(r)[COL.level] === "event")).toBe(false);
+  });
+
+  test("a line's details say who started the request and the resources it used", async () => {
+    mount();
+    await opened();
+    const user = userEvent.setup();
+    // a line that ends an execution: it carries the usage and the identity
+    const end = rows().find((r) => /^(success|failure)/.test(cells(r)[COL.outcome]!))!;
+    await user.click(within(end).getAllByRole("gridcell")[COL.message]!);
+    const panel = await screen.findByRole("complementary");
+    expect(within(panel).getByText("Started by")).toBeDefined();
+    expect(within(panel).getByText(/^(User|System)$/)).toBeDefined();
+    const used = within(panel).getByRole("region", { name: "Resources used" });
+    expect(within(used).getByText(/^\d+ MB for \d+\.\d\d s$/)).toBeDefined();
+    expect(within(used).getByText(/ read, .* written$/)).toBeDefined();
+    await expectAccessible();
+  });
+});
+
+describe("usage and identity", () => {
+  test("the request's usage is summed over its executions; memory is the most one used", () => {
+    const end = (id: string, durationMs: number, usage: object) =>
+      ({ ...line({ id }), execution: { status: "success", durationMs, usage } }) as LogEntry;
+    expect(
+      sumUsage([
+        end("1", 100, { memoryMb: 16, databaseReadBytes: 10, returnBytes: 5 }),
+        line({ id: "2" }),
+        end("3", 50, { memoryMb: 128, databaseReadBytes: 20 }),
+      ]),
+    ).toEqual({ executions: 2, runtimeMs: 150, memoryMb: 128, databaseReadBytes: 30, returnBytes: 5 });
+    expect(sumUsage([line({})])).toBeNull();
+  });
+
+  test("the mock: a runner's run is an admin's, or an admin's acting as a user", async () => {
+    const source = mockSource();
+    const newestEnd = async () =>
+      (await source.listLogs({ numItems: 20, cursor: null })).page.find((e) => e.execution)!.execution!;
+    await source.runFunction("tasks:list", {});
+    expect((await newestEnd()).identity).toBe("admin");
+    await source.runFunction("tasks:list", {}, { identity: { subject: "u", issuer: "i" } });
+    expect((await newestEnd()).identity).toBe("acting_as_user");
+    expect((await newestEnd()).usage?.memoryMb).toBe(16);
   });
 });

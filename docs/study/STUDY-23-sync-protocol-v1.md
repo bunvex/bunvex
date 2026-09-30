@@ -258,6 +258,40 @@ per commit.
   - The catalog work (STUDY-04) already supports system tables.
 - `maxObservedTimestamp` check: refuse `Connect` when it exceeds `visibleTs`.
 
+**As built (step 4).** `packages/core/src/session-requests.ts` and `Engine.sessionMutation`:
+
+- The record has Convex's fields:
+  - `{sessionId, requestId (int64), outcome: {type: "mutation", result (JSON text), logLines}, identity}`;
+  - `identity` is `"unknown"` until auth;
+  - index `by_session_id_and_request_id`.
+- The lookup runs at the start of every attempt and is in the read-set. Two concurrent runs of one
+  request therefore conflict, and the loser replays the winner's outcome.
+- Only a successful run is recorded, in its own transaction. A failed one wrote nothing and simply runs
+  again when resent.
+- A connection without `Connect` has no session and gets no idempotency, as in Convex.
+- App code cannot read the table: `System table _session_requests is not accessible here.`
+- Retention (`packages/server/src/session-cleanup.ts`), as Convex's `SystemTableCleanupWorker`:
+  - a random wait of up to 30 min per run;
+  - deletes records by `_creationTime` older than the window;
+  - 64 per transaction, at most 256/s;
+  - the window is `MAX_SESSION_CLEANUP_DURATION_HOURS` (default 2 weeks, 0 = forever), or
+    `sessionRequestRetentionMs` in `createServer`.
+- **The replay's ts (P13).** Convex answers a resend with the original commit's ts, read from the
+  record's version. bunvex's `Persistence` does not expose a version's ts, so a replay answers the ts of
+  the snapshot that saw the record, which is at or after the commit.
+  - The client uses this ts only to wait for a transition at ≥ it and as `maxObservedTimestamp`. Both
+    stay correct, and the wait may just end one transition later.
+  - Apps cannot observe it.
+- **Cost.** Every session mutation also writes one record document with 3 indexes, as in Convex.
+  `packages/server/bench/sync-mutations.ts` has 64 connections doing a read and an insert:
+
+  | Store | No session | With a session |
+  |---|---|---|
+  | memory | 27k/s | 16.7k/s |
+  | local Postgres | 8.6k/s | 4.3k/s |
+
+  HTTP mutations are unaffected.
+
 bunvex ts is a counter resumed from persistence (STUDY-06 D9), so it is monotonic across restarts; the
 check still holds.
 
@@ -334,6 +368,7 @@ first.
 | P10 | Identity in execution keys | per-query (only those that read `ctx.auth`, needs tracking) / all queries | **all queries** first (correct and simple), refine later |
 | P11 | Client telemetry `Event` messages | accept and ignore / log | **accept and ignore** |
 | P12 | Actions over WS | with v1 / later | **with v1**: the official client sends actions over the socket |
+| P13 | A replayed session mutation's `ts` (step 4, **open**) | (a) the snapshot that saw the record (≥ the commit); (b) the original commit ts, as Convex, which needs `Persistence` to return a version's ts (a PERSIST-01 change) | **(a)** for now: same client behavior, no contract change while PERSIST-01 C7 is in flight; (b) if something ever needs the exact value |
 
 ## 7. Open questions
 

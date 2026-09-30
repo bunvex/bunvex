@@ -70,6 +70,12 @@ export function withoutLogs<T>(fn: () => T): T {
   return current.exit(fn);
 }
 
+/** The lines the current invocation has logged so far (none outside an invocation). */
+export function currentLogLines(): string[] {
+  const e = current.getStore();
+  return e ? logLinesOf(e) : [];
+}
+
 function logLinesOf(execution: Execution): string[] {
   const lines: string[] = [];
   const walk = (e: Execution) => {

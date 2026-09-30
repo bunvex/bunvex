@@ -2,7 +2,7 @@
 // with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
-import { type Engine, stringifyValue, type Tx } from "@bunvex/core";
+import { type Engine, type SessionRequestId, type SessionRequestOutcome, stringifyValue, type Tx } from "@bunvex/core";
 import {
   checkValue,
   displayValue,
@@ -14,7 +14,7 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
-import { perAttempt } from "./logs.ts";
+import { currentLogLines, perAttempt } from "./logs.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -164,6 +164,25 @@ export class Functions {
     return this.engine.mutationWithTs(
       perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
       name,
+    );
+  }
+
+  /**
+   * A sync session's mutation (STUDY-23 §4.3): run at most once per request. A resend of a request that
+   * already committed answers the recorded result and log lines (`replayed`) without running again.
+   */
+  runSessionMutation(
+    name: string,
+    args: unknown,
+    request: SessionRequestId,
+  ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
+    const f = this.fn(name, "mutation", true);
+    return this.engine.sessionMutation(
+      perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
+      name,
+      request,
+      // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
+      (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
     );
   }
 

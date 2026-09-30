@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clampWidth, mergeColumnOrder, moveColumn } from "@bunvex/ui/lib/column-state";
+import { clampWidth, mergeColumnOrder, moveColumn, moveColumnBefore } from "@bunvex/ui/lib/column-state";
 
 describe("column state", () => {
   test("the saved order wins; a new column lands after its natural predecessor", () => {
@@ -28,6 +28,14 @@ describe("column state", () => {
     expect(moveColumn(["a", "b", "c"], "b", 1)).toEqual(["a", "c", "b"]);
     expect(moveColumn(["a", "b", "c"], "a", -1)).toEqual(["a", "b", "c"]);
     expect(moveColumn(["a", "b", "c"], "c", 1)).toEqual(["a", "b", "c"]);
+  });
+
+  test("moving before another column, or to the end; hidden ones keep their places", () => {
+    expect(moveColumnBefore(["a", "b", "c", "d"], "d", "b")).toEqual(["a", "d", "b", "c"]);
+    expect(moveColumnBefore(["a", "b", "c", "d"], "a", null)).toEqual(["b", "c", "d", "a"]);
+    expect(moveColumnBefore(["a", "b", "c"], "a", "b")).toEqual(["a", "b", "c"]); // onto its right neighbour
+    expect(moveColumnBefore(["a", "b", "c"], "b", "b")).toEqual(["a", "b", "c"]);
+    expect(moveColumnBefore(["a", "b"], "x", "a")).toEqual(["a", "b"]);
   });
 
   test("widths are clamped", () => {
