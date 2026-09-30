@@ -947,7 +947,7 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
   runner is open, the screen keeps room to scroll past it.
 - Shown only when the source has `runFunction` and the credential has `runFunctions`. A read-only
   credential runs queries only.
-- Not yet (STUDY-12 L6): live (subscribed) query results, run history, "act as a user", custom test
+- Not yet (STUDY-12 L6): "act as a user", custom test
   queries. (Argument validation came with §15.1.)
 
 ## 14. Amendment — loading, and the deployment's other screens (30 Sep 2026)
@@ -1162,6 +1162,30 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   execution is marked "this line". `logs/call-tree.ts` builds it from the loaded lines (a caller not
   loaded: its call stands at the top; no outcome yet: running). The **Outcome** is now the line's own
   execution's, not another call's in the same request.
+
+
+## 16. Amendment — the runner and the logs, second pass (30 Sep 2026)
+
+### 16.1 A query stays subscribed (STUDY-12 §10.1, R1)
+
+- **Contract**: optional `watchFunction(path, args, onResult, onError)`: the query's `FunctionRun`
+  (asynchronously), then a new one whenever its result may have changed; `runFunction`'s permissions and
+  errors, to `onError`; a mutation or an action is `invalid_request`. **Contract suite** (with `run`): the
+  first run arrives, never inside the call; a mutation is refused.
+- **Mock**: the query runs again when its module's table changes (`tasks:list` when `tasks` does), each run
+  logged like any other.
+- **Runner**: a query, when the source can watch it, has no Run button: it is subscribed with the current
+  arguments while they are valid ("Subscribed: the result updates as the data changes."), shows the last
+  result until the next, and pauses when they are not ("The result is paused until the arguments are
+  fixed."). Without `watchFunction` a query runs once with Run, as before.
+
+### 16.2 Run history (STUDY-12 §10.2, R2)
+
+- A mutation's or an action's last **25** runs, newest first, in this browser per deployment and function
+  (`bunvex:run-history:<scope>:<path>`, `runner/history.ts`); the same arguments twice in a row are one
+  entry. **Previous arguments** / **Next arguments** beside the editor fill it with them. A query keeps none
+  — watched, it follows its arguments; run once (without `watchFunction`), it still keeps none, as Convex's
+  queries.
 
 ## 17. Amendment — Settings → General, narrow screens, the design system (30 Sep 2026)
 

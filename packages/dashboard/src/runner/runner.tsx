@@ -2,14 +2,16 @@
 // write its arguments as a JavaScript literal (the code editor, as for documents), run it once with the Run
 // button or Ctrl+Enter, and read its value, or its error, with the lines it logged. A read-only credential
 // runs queries only. A function that declares an arguments validator starts from a template of it, and the
-// arguments are checked against it as they are typed (STUDY-12 V1), as Convex's runner does.
+// arguments are checked against it as they are typed (STUDY-12 V1), as Convex's runner does. A query, when the
+// source can watch one (`watchFunction`), is not run but subscribed, as in Convex (STUDY-12 §10, R1): its result
+// follows the arguments while they are valid, and updates as the data changes; with invalid ones it pauses.
 import { Button } from "@bunvex/ui/components/button";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { Play, X } from "lucide-react";
-import { useId, useState } from "react";
+import { ArrowLeft, ArrowRight, Play, X } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
 import {
@@ -23,6 +25,7 @@ import { formatLiteral, parseLiteralLocated, UNSET } from "../database/literal.t
 import { describeFunction } from "../functions/tree.ts";
 import { formatDuration } from "../logs/log-list.tsx";
 import { defaultValueFor, validateValue } from "../validators.ts";
+import { appendRunHistory, type RunHistoryEntry, readRunHistory } from "./history.ts";
 
 type Args =
   | { ok: true; args: Record<string, Value> }
@@ -74,13 +77,54 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
   const args = parseArgs(text, fn?.args);
   const readOnly = caps?.readOnly ?? false;
   const blocked = fn !== undefined && readOnly && fn.kind !== "query";
+  const live = fn?.kind === "query" && typeof scope.source.watchFunction === "function";
+  const argsKey = args.ok ? JSON.stringify(args.args) : null;
+  const [waiting, setWaiting] = useState(false);
+  // a mutation's or an action's past arguments (a query follows its own): Previous / Next step through them
+  const [history, setHistory] = useState<RunHistoryEntry[]>(() =>
+    fn && fn.kind !== "query" ? readRunHistory(scope.scope, fn.path) : [],
+  );
+  const [historyAt, setHistoryAt] = useState(0);
+  const showHistory = (i: number) => {
+    const entry = history[i];
+    if (!entry || !fn) return;
+    const t = formatLiteral(entry.args, "  ");
+    setText(t);
+    drafts.set(fn.path, t);
+    setHistoryAt(i);
+  };
+
+  // a watched query: subscribed with the current (valid) arguments; the last result stays until the next
+  // biome-ignore lint/correctness/useExhaustiveDependencies: argsKey stands for args.args
+  useEffect(() => {
+    if (!live || !fn || !args.ok) return;
+    setWaiting(true);
+    return scope.source.watchFunction!(
+      fn.path,
+      args.args,
+      (run) => {
+        setOutcome({ run });
+        setWaiting(false);
+      },
+      (e) => {
+        setOutcome({ failed: e.message });
+        setWaiting(false);
+      },
+    );
+  }, [live, fn?.path, argsKey, scope.source]);
 
   // the shell keys the runner by path: another function starts afresh, with its own draft
   const pick = (path: string) => props.onPath(path);
 
   const run = async () => {
-    if (!fn || !args.ok || blocked || !scope.source.runFunction) return;
+    // a watched query is not run: it follows its arguments
+    if (!fn || !args.ok || blocked || live || !scope.source.runFunction) return;
     setRunning(true);
+    // a query keeps none, even run once (without watchFunction)
+    if (fn.kind !== "query") {
+      setHistory(appendRunHistory(scope.scope, fn.path, { args: args.args, startedAt: Date.now() }));
+      setHistoryAt(0);
+    }
     try {
       setOutcome({ run: await scope.source.runFunction(fn.path, args.args) });
     } catch (e) {
@@ -137,6 +181,30 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
             void run();
           }}
         >
+          {!live && history.length > 0 && (
+            <div className="flex items-center justify-end gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Previous arguments"
+                disabled={historyAt + 1 >= history.length}
+                onClick={() => showHistory(historyAt + 1)}
+              >
+                <ArrowLeft aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Next arguments"
+                disabled={historyAt <= 0}
+                onClick={() => showHistory(historyAt - 1)}
+              >
+                <ArrowRight aria-hidden="true" />
+              </Button>
+            </div>
+          )}
           <CodeEditor
             label="Arguments"
             multiline
@@ -153,23 +221,33 @@ export function FunctionRunner(props: { path?: string; onPath: (path: string) =>
           />
           <p id={checkId} aria-live="polite" className="min-h-5 text-sm">
             {!args.ok ? (
-              <span className="text-destructive">{args.error}</span>
+              <span className="text-destructive">
+                {args.error}
+                {live && " The result is paused until the arguments are fixed."}
+              </span>
+            ) : live ? (
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <span aria-hidden="true" className="size-2 rounded-full bg-success motion-safe:animate-pulse" />
+                Subscribed: the result updates as the data changes.
+              </span>
             ) : blocked ? (
               <span className="text-muted-foreground">A read-only credential runs queries only.</span>
             ) : (
               <span className="text-muted-foreground">Ctrl+Enter runs it.</span>
             )}
           </p>
-          <div>
-            <Button type="submit" size="sm" disabled={!fn || !args.ok || blocked || running}>
-              <Play aria-hidden="true" />
-              {running ? "Running…" : `Run ${fn?.kind ?? "function"}`}
-            </Button>
-          </div>
+          {!live && (
+            <div>
+              <Button type="submit" size="sm" disabled={!fn || !args.ok || blocked || running}>
+                <Play aria-hidden="true" />
+                {running ? "Running…" : `Run ${fn?.kind ?? "function"}`}
+              </Button>
+            </div>
+          )}
         </form>
-        <div className="min-h-0 overflow-y-auto p-4" aria-live="polite" aria-busy={running}>
+        <div className="min-h-0 overflow-y-auto p-4" aria-live="polite" aria-busy={running || waiting}>
           {!outcome ? (
-            <p className="text-sm text-muted-foreground">The result shows here.</p>
+            <p className="text-sm text-muted-foreground">{live && waiting ? "Loading…" : "The result shows here."}</p>
           ) : "failed" in outcome ? (
             <p role="alert" className="text-sm text-destructive">
               {outcome.failed}

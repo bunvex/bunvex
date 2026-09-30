@@ -387,6 +387,19 @@ export interface DashboardDataSource extends DeploymentFeatures, DeploymentState
    */
   runFunction?(path: string, args: Record<string, Value>, opts?: CallOptions): Promise<FunctionRun>;
 
+  /**
+   * Keeps a query subscribed, as Convex's runner does (STUDY-12 §10, R1): `onResult` gets its run
+   * (asynchronously, never inside the call), then a new one each time the result may have changed. Same
+   * permissions and errors as `runFunction`, delivered to `onError`; a mutation or an action is
+   * `invalid_request`. Optional; without it, the runner runs a query once.
+   */
+  watchFunction?(
+    path: string,
+    args: Record<string, Value>,
+    onResult: (run: FunctionRun) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe;
+
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;
   /** Live tail: entries created after the call, in id order, matching the filter. Never synchronously. */
   watchLogs(

@@ -355,7 +355,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
 | L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
-| L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), later — a query runs once for now; the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`) |
+| L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10 (live query results built there, §10.1) |
 
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
@@ -494,6 +494,53 @@ functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tab
 | F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **decided** (30 Sep 2026): images only, as Convex |
 | H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | follows the data |
 | H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |
+
+## 10. The runner and the logs, second pass (added 30 Sep 2026)
+
+What Convex's function runner and log screen do beyond what §7 built, and how bunvex follows. Sources are in
+`npm-packages/dashboard-common/src/features/functionRunner` and `features/logs` of the Convex repository.
+
+### 10.1 Live query results (R1)
+
+A **query** in Convex's runner is not run: `QueryResult.tsx` subscribes it with the current arguments
+(`convex.watchQuery(…)`, `onUpdate`, `localQueryResult`, `localQueryLogs`), shows the last result while the
+next one loads, and says "This query is subscribed to updates" with a blinking dot. With invalid arguments it
+is **paused** ("The arguments are invalid. Fix the argument errors to continue."). Mutations and actions keep
+the Run button (`FunctionTester.tsx`, `useFunctionResult`). bunvex: an optional `watchFunction(path, args,
+onResult, onError)` in the contract, a query only (a mutation or an action is `invalid_request`); the runner
+subscribes a query when the source has it and falls back to Run once when it has not.
+**Status: decided** (30 Sep 2026, the owner: now), built.
+
+### 10.2 Run history (R2)
+
+`RunHistory.tsx`: for each function, the arguments of its last **25** runs (with the identity acted as), newest
+first, kept in the browser per deployment (`useGlobalLocalStorage("runHistory/<deployment>/<function>")`);
+the same arguments twice in a row are one entry. **Previous arguments** / **Next arguments** buttons step
+through them, filling the editor. Only mutations and actions have it: a query follows its arguments.
+**Status: built**, as Convex (no divergence; the entry keeps the arguments, the identity comes with §10.3).
+
+### 10.3 Acting as a user (R3)
+
+`FunctionTester.tsx`: an **Act as a user** checkbox (allowed with the `ActAsUser` operation) opens an editor
+for the identity — `subject` and `issuer` required, the OpenID claims optional (`name`, `email`, …), and
+`customClaims` (`parseImpersonatedUser`). Runs and subscriptions then carry it (the client's admin auth with an
+acting identity); the history keeps the identity with the arguments. **Status: planned**, as Convex.
+
+### 10.4 Deployment events in the log list (L8)
+
+`lib/interleaveLogs.ts` merges the execution log lines with the deployment's audit-log events by time
+(`DeploymentEventListItem.tsx` shows one as a line of its own: who did what), and a "cleared" marker.
+bunvex: the Logs list interleaves the audit log's events (§9) when the source has `listAuditEvents` and the
+credential may read it. **Status: planned**, as Convex.
+
+### 10.5 Usage and identity in a line's details (L9)
+
+`LogMetadata.tsx`: for an execution or a whole request, **Resources used** — compute (memory × time), database
+I/O read / written, file bandwidth, text and vector search, the bytes returned, summed across the executions
+("Total resources used across N executions") — and who started it (`FunctionIdentity`: Admin, User, Admin
+(acting as user), System, Unknown) and the environment (Convex's isolate or Node.js). bunvex: optional
+`usage`, `identity` and `environment` on an execution's last line in the contract; the details show them.
+**Status: planned**, as Convex.
 
 ## 11. Settings → General, narrow screens, the design system (added 30 Sep 2026)
 
