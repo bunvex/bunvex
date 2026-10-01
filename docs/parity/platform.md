@@ -303,7 +303,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
 | Capturing `console.*` from functions (up to 256 lines, 32 KiB per line; docs say 4 KiB) | `crates/isolate/environment/helpers`; `crates/common/log_lines.rs` | done (STUDY-20) | Also still printed to the server's stdout. |
-| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | partial (STUDY-20) | HTTP `logLines` and WebSocket mutation `l`; subscriptions and cached query results carry none yet (STUDY-20 D2, D3). |
+| Returning log lines to the client (dev console) and `REDACT_LOGS_TO_CLIENT` | sync protocol `logLines`; `local_backend/config.rs` | done (STUDY-20, STUDY-23) | HTTP (cache hits too, DV-74), sync v1 queries, mutations and actions; `REDACT_LOGS_TO_CLIENT` enables on any non-empty value, as Convex (DV-79). |
 | Function execution log (per call: type, path, duration, error, cache hit, usage) | `crates/application/function_log.rs` | missing | |
 | `GET /api/stream_function_logs?cursor=` and `/api/stream_udf_execution` | `crates/local_backend/logs.rs` | missing | |
 | Log sinks: Datadog, Axiom, Webhook, Sentry, PostHog, S3 export, local file (`--local-log-sink`) | `crates/log_streaming/sinks/*`; `crates/model/log_sinks` | missing | Event formats V1 and V2. Topics: console, function_execution, audit_log, scheduler_stats, and others. |

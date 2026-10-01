@@ -109,8 +109,8 @@ WebSocket:
 | D2 | `ConvexError` data is lost: only `String(e.message)` is sent (HTTP and WS); there is no `errorData` | OBSERVABLE | Apps that branch on `err.data` (the documented way to return app errors) break | owner |
 | D3 | Error message shape: the bare message vs `[Request ID: …] Server Error\nUncaught Error: …`, with no redaction mode | OBSERVABLE | Tests and UI that show or match messages differ. There is also no production redaction: internal messages always leak to clients | owner |
 | D4 | No `$integer`/`$bytes`/`$float` decoding of arguments, no `format`, no clean/encoded output | OBSERVABLE | bigint and bytes cannot cross the wire, and special floats are lost (STUDY-10 D1/D2) | owner |
-| D5 | Non-Convex return values are coerced (`Date` → string, `Map` → `{}`) or throw an untyped error (bigint) | OBSERVABLE | Convex fails the call with a clear error | owner |
-| D6 | Function-not-found text: "function not found: x" (500) vs "Could not find public function for 'x'." | OBSERVABLE | Message differs | owner |
+| D5 | Non-Convex return values are coerced (`Date` → string, `Map` → `{}`) or throw an untyped error (bigint) | OBSERVABLE | Convex fails the call with a clear error | resolved in #21 (DV-70) |
+| D6 | Function-not-found text: "function not found: x" (500) vs "Could not find public function for 'x'." | OBSERVABLE | Message differs | resolved: Convex's messages (owner, 2026-09-30; DV-71) |
 | D7 | No `logLines` in responses | OBSERVABLE | `console.log` in functions does not reach the client/CLI (ARCHITECTURE "logs", M) | owner |
 | D8 | WS `res` has no commit `ts` and no request/session identity | OBSERVABLE | The client cannot wait for its queries to catch up (STUDY-08 D5), and a mutation cannot be deduplicated after a reconnect (STUDY-06 D7) | owner |
 

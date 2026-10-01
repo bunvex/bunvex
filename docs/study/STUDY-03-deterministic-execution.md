@@ -62,7 +62,7 @@
 |---|---|---|---|
 | D1 | `Math.random` is sfc32, not ChaCha12 | Neither is cryptographic. A seeded PRNG is enough, and sfc32 is fast in JS. | accepted (#4) |
 | D2 | Not a sandbox: code that captured `Date.now` before the install, or that reaches a non-global API such as `Bun.sleep`, escapes | One process, no isolate | accepted (#4) |
-| D3 | `performance.now()` is fixed in queries and incrementing in mutations, rounded down to 0.1 ms, as Convex (implemented, `fix/performance-now`). What remains different: `performance.timeOrigin` is the process's, not a module import time, and there is no import phase where `now()` is 0 | bunvex has no separate import phase (modules are imported once, at server start) | open (owner): accept the `timeOrigin` difference |
+| D3 | `performance.now()` is fixed in queries and incrementing in mutations, rounded down to 0.1 ms, as Convex (implemented, `fix/performance-now`). What remains different: `performance.timeOrigin` is the process's, not a module import time, and there is no import phase where `now()` is 0 | bunvex has no separate import phase (modules are imported once, at server start) | accepted: not possible exactly without isolates (owner, 2026-09-30; DV-52) |
 | D4 | No idempotency key for client resends | Belongs to protocol v1 | open |
 
 ## 5. Tests
