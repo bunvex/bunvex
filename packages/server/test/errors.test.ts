@@ -111,6 +111,27 @@ test("redaction hides the details and the log lines, never the BunvexError data"
   expect(o.body).toEqual({ status: "success", value: 1 });
 });
 
+test("a missing function answers Convex's message, alone: no Uncaught, no frames", async () => {
+  const { call } = await serve({ ok: query(() => 1) });
+  const r = await call("query", "m:missing");
+  expect(r.body.errorMessage).toMatch(
+    /^\[Request ID: [0-9a-f]{16}\] Server Error\nCould not find public function for 'm:missing'\.\n$/,
+  );
+});
+
+test("a cached query result answers the log lines of the run that filled the cache", async () => {
+  const { call } = await serve({
+    logs: query(() => {
+      console.log("computed");
+      return 1;
+    }),
+  });
+  const first = await call("query", "m:logs");
+  const hit = await call("query", "m:logs");
+  expect(first.body.logLines).toEqual(["[LOG] 'computed'"]);
+  expect(hit.body).toEqual(first.body);
+});
+
 test("the redaction default comes from REDACT_LOGS_TO_CLIENT", async () => {
   const fns = {
     f: query(() => {
@@ -122,6 +143,10 @@ test("the redaction default comes from REDACT_LOGS_TO_CLIENT", async () => {
     process.env.REDACT_LOGS_TO_CLIENT = "true";
     const on = await serve(fns, { redactLogsToClient: undefined });
     expect((await on.call("query", "m:f")).body.errorMessage).not.toContain("detail");
+    // As Convex's entry script: any non-empty value turns it on, even "false".
+    process.env.REDACT_LOGS_TO_CLIENT = "false";
+    const alsoOn = await serve(fns, { redactLogsToClient: undefined });
+    expect((await alsoOn.call("query", "m:f")).body.errorMessage).not.toContain("detail");
     delete process.env.REDACT_LOGS_TO_CLIENT;
     const off = await serve(fns, { redactLogsToClient: undefined });
     expect((await off.call("query", "m:f")).body.errorMessage).toContain("Uncaught Error: detail");

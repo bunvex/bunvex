@@ -11,6 +11,7 @@ export {
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {
+  type CacheCompanion,
   Engine,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,

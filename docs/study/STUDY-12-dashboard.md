@@ -254,7 +254,7 @@ columns, add documents).
 | D10 | Columns are reordered by **dragging a header**, as Convex (dnd-kit there, pointer events here), **and** from a **Columns** panel (keyboard-first) | the panel is the keyboard and screen-reader way | **decided** (30 Sep 2026): both — dragging added (UI-01 §17.3), the panel kept |
 | D11 | Not yet built: custom query, metrics per table. **Generate schema** added 30 Sep 2026: the schema panel's Saved / Generated tabs, as Convex's `ShowSchema.tsx` and `GenerateSchema.tsx` (Convex infers "shapes" on the server over every document, `/api/shapes2`; bunvex asks the source's optional `inferDocumentType(table)`, which the mock computes over its whole table). **Create table** added 30 Sep 2026 (also on a deployment with no tables at all: `/database` shows "There are no tables here yet" and Create table, as Convex's `EmptyData.tsx`) (the sidebar's name box, as Convex's `DataSidebar.tsx`, `validateConvexIdentifier`; the contract's optional `createTable`, which Convex does with `_system/frontend/createTable`, inserting and deleting a document). The cell menu is complete (§1.4.1): **View value** (Space) and **Delete document** added 30 Sep 2026, and **Go to reference** (Cmd/Ctrl+G) through the contract's optional `tableOfId` (what Convex reads off an id with its table mapping) | scope | follow-up |
 | D13 | **Delete document** from a cell's menu asks first ("Delete 1 document?"), as Delete selected does; Convex deletes at once, and asks only on a production deployment (`TableContextMenu.tsx`, `isProtectedDeployment`) | a delete cannot be undone, and bunvex has no production/development distinction yet | **decided** (30 Sep 2026): keep asking, since bunvex will have production deployments too; `CONFIRM_DELETE_FROM_CELL_MENU` in `database/screen.tsx` switches it, to become a check of the deployment's kind (ask on production only, as Convex) once deployments have one |
-| D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | follow-up |
+| D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | **closed on the mock** (30 Sep 2026): the Health screen keeps the engine's counters and adds Convex's function metrics from the contract's optional metrics methods (§12, UI-01 §18.1); a server fills them once it measures them |
 
 ## 5. Tests
 
@@ -569,4 +569,35 @@ one runtime) and text / vector search (bunvex has neither yet). **Status: built*
 | # | bunvex | why | status |
 |---|---|---|---|
 | G1 | The URLs (client, HTTP actions) and the deployment's name, version and persistence sit on **Settings → General**, next to pausing; Convex shows the URLs with the Health summary (cloud only) | self-hosted has no cloud page for them; General is where a self-hosted reader looks for "what is this deployment" | **decided** (30 Sep 2026): the owner asked for them in Settings |
+
+## 12. Metrics (added 30 Sep 2026)
+
+### 12.1 How Convex does it
+
+- **Routes** (`crates/local_backend/src/app_metrics.rs`), each with a `window` = `{ start, end, num_buckets }`
+  and series of `[time, value | null]`: `udf_rate` (a function's `invocations`, `errors`, `cacheHits`,
+  `cacheMisses`), `cache_hit_percentage`, `latency_percentiles` (asked percentiles, one series each),
+  `function_call_count_top_k`, `failure_percentage_top_k`, `cache_hit_percentage_top_k` (the top `k`
+  functions plus `_rest`), `table_rate` (`rowsRead`, `rowsWritten`), `scheduled_job_lag`. They need the
+  `ViewMetrics` operation (`crates/keybroker/src/operations.rs`).
+- **Dashboard** (`npm-packages/dashboard-common/src/lib/appMetrics.ts`): Health (`features/health/components/
+  HealthView.tsx`) shows **Function Calls** (top 5 lines), **Failure Rate** and **Cache Hit Rate** (top-k
+  lines, or a heatmap view), over the last hour, refreshed every minute. A function's **Statistics** tab
+  (`features/functions/components/PerformanceGraphs.tsx`): Function Calls, Errors, Execution Time (p50, p90,
+  p95, p99), Cache Hit Rate. A table's **Metrics** tool (`features/data/components/TableMetrics.tsx`, from
+  `useToolPopup.tsx`): Reads and Writes.
+
+### 12.2 What bunvex does
+
+The contract gains optional methods in Convex's shapes (`data-source-metrics.ts`): `functionRate`,
+`cacheHitPercentage`, `latencyPercentiles`, `topFunctions(measure)` (the three top-k routes as one method),
+`tableRate`, `scheduledJobLag`, all behind `viewMetrics`. The mock measures them from its own log history,
+so charts and the Logs screen agree. Charts are bunvex's own SVG line chart (`@bunvex/ui/components/
+line-chart`), validated colours (dataviz), a keyboard crosshair and a table view.
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
+| M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
+| M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
