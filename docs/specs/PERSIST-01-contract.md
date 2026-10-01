@@ -9,7 +9,8 @@
 > acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed.
 > **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7.
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
-> STUDY-29). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> STUDY-29). **v2.6, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention needs) and
+> K26–K28, from STUDY-33. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -53,8 +54,8 @@ For a snapshot `T`:
   keys that share a full-length prefix (`splitKey` / `splitPages` in `@bunvex/core/persistence`).
 - Rows with `ts > T` MUST NOT influence the answer, even if they are already stored (the committer
   applies a group before it is durable; readers at an older snapshot must not see it).
-- A snapshot older than the newest one still answers from the versions it saw (history is kept until
-  retention, which is out of scope for v1).
+- A snapshot older than the newest one still answers from the versions it saw. History is kept until
+  retention prunes it (C13): the engine never reads below the window it pruned at.
 
 ## C4 — writes and durability
 
@@ -262,6 +263,42 @@ document version rewrites its `by_id` entry), and a backfill commit writes index
 Optional in the interface (a third-party driver without it behaves as before); required of the first-party
 drivers, which all implement it: memory, sqlite, postgres, mysql and mongodb. Conformance K25.
 
+## C12 — the document log by timestamp
+
+`readDocumentLog(afterTs, upToTs, limit)` returns `{ ts, table, id, deleted }[]`: the stored document
+versions of the commits with `afterTs < ts ≤ min(upToTs, M)`, in ts order, with C11's rules (durable only,
+whole commits, at most `limit` commits, a read that needs no lease). Retention reads it to find the
+document versions a newer one supersedes (STUDY-33 R2). Every driver keeps an index on `documents.ts`,
+created as C11's: with the tables, or for an existing store when the lease is acquired (MongoDB at open).
+
+## C13 — pruning
+
+`pruneIndexes(entries, through)` and `pruneDocuments(entries, through)` delete, for each entry, every
+stored version of one index key `(index, key)` or one document `(table, id)` at or below the entry's `ts`
+(Convex's `ts <= X` deletes), and return how many rows went. `through` is how far the caller read the
+log; a driver that keeps its log apart from its rows (memory) may forget the log up to there.
+
+- **What the engine deletes.** Only versions that no snapshot at or above its window can see (STUDY-33):
+  for a row of the log at or below the window, a live row supersedes the versions below it (`ts − 1`), and a
+  tombstone takes itself too (`ts`). A store must answer every snapshot at or above that window exactly as
+  before. Below it, reads (and the logs, C11/C12) return what is left.
+- **Idempotent.** Pruning the same entries again deletes nothing; a remote store may run a prune once more
+  after a lost connection (C9).
+- **Only the lease holder** prunes. A prune by a process without the lease throws `LeaseLostError` and
+  deletes nothing. Remote stores check the epoch without locking the lease row, so a flush is never held up
+  by a prune; a takeover between the check and the delete can let one batch through, which removes only
+  versions superseded below a window the old holder had already published.
+
+## C14 — persistence globals
+
+`getGlobal(key)` returns a JSON value or null; `setGlobal(key, value)` stores one, durable when it returns,
+and only for the lease holder (`LeaseLostError` otherwise). They are Convex's `persistence_globals`: SQL
+stores keep them in that table (with `layout_version`), MongoDB in a `persistence_globals` collection, the
+memory driver as records of its log. Retention keeps its windows and cursors there.
+
+C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
+required of the first-party drivers, which all implement them. Conformance K26–K28.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -289,6 +326,9 @@ drivers, which all implement it: memory, sqlite, postgres, mysql and mongodb. Co
 | K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
 | K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
 | K25 | the log by timestamp (C11) | 300 random commits on a fresh store (sparse timestamps, removed entries, index-only commits, keys longer than 2500 bytes) flushed in groups. `readLog` over the whole log, over 300 random windows (bounds on commits, inside gaps and outside the log; empty windows; limits from 0 up) and paged by 7 equals the reference model: whole commits in ts order, exact write sets, an unbroken `prevTs` chain. A group applied but not flushed is not returned; the log is the same after a reopen. Through the engine, the log between two snapshots is exactly the committer's commits and their write sets; a background index backfill's chunks (index-only commits, STUDY-29) are in the log, unbroken in the `prevTs` chain, and their entries cover every document |
+| K26 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order |
+| K27 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
+| K28 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

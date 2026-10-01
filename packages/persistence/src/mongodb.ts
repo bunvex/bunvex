@@ -16,6 +16,11 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `meta` {_id: "layout", version} and
 // `meta` {_id: "read_only"}. Open checks both before writing anything (index builds included) and refuses a
 // foreign, future or read-only store; a new store's version record is written under the lease.
+// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (a `{ts: 1}` index);
+// prunes are `ts <= X` deletes per key, one unordered bulk write per batch; globals are documents of
+// `persistence_globals` ({_id: key, v: JSON}). Each prune or global write first reads the lease and is
+// refused unless it carries our epoch; a takeover in between can let one batch through, which deletes only
+// versions superseded below a window the old holder had already published.
 // Timeouts (STUDY-25 L3). Convex has no MongoDB driver; this one follows its Postgres driver: every call is
 // bounded on the client side (30 s by default), per round trip, and a connection whose call timed out is
 // never reused. The bound is the driver's own (socketTimeoutMS: a connection that waits longer for an answer
@@ -36,8 +41,11 @@ import {
   checkLayoutVersion,
   checkUnversionedTables,
   DatabaseTimeoutError,
+  type DocLogRow,
+  type DocPrune,
   type DocWrite,
   groupLog,
+  type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
@@ -49,6 +57,7 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
+  type Retention,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -121,7 +130,7 @@ export function operational(e: unknown): boolean {
   return false;
 }
 
-export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
+export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, Retention {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
   /** Our lease's epoch, 0 when we hold none. */
@@ -141,6 +150,8 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
      *  failover could still roll back. */
     private idxMajority: Collection<IdxRow>,
     private metaMajority: Collection<any>,
+    private docsMajority: Collection<DocRow>,
+    private globals: Collection<{ _id: string; v: string }>,
   ) {}
 
   /**
@@ -182,6 +193,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
           // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
           const want: [Collection<any>, Record<string, 1 | -1>][] = [
             [docs, { t: 1, i: 1, ts: -1 }],
+            [docs, { ts: 1 }], // the document log (PERSIST-01 C12)
             [idx, { x: 1, k: 1, ts: -1 }],
             [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
             [idx, { ts: 1 }], // the log by ts (PERSIST-01 C11)
@@ -205,6 +217,8 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             timeoutMs,
             db.collection<IdxRow>("indexes", majority),
             db.collection<any>("meta", majority),
+            db.collection<DocRow>("documents", majority),
+            db.collection<{ _id: string; v: string }>("persistence_globals", majority),
           );
         });
       return await retryOnce(init, (e) => e instanceof DatabaseTimeoutError);
@@ -609,6 +623,93 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         .toArray();
       return groupLog(rows, prev?.ts ?? 0);
     });
+  }
+
+  /** PERSIST-01 C12: as readLog, over `documents`. */
+  async readDocumentLog(afterTs: number, upToTs: number, limit: number): Promise<DocLogRow[]> {
+    if (limit <= 0) return [];
+    return this.read(async (progress) => {
+      const lease = await this.metaMajority.findOne({ _id: "lease" });
+      progress();
+      const durable = (lease?.maxTs as number | undefined) ?? (await this.metaMajority.findOne({ _id: "commit" }))?.ts;
+      progress();
+      const hi = Math.min(upToTs, durable ?? upToTs);
+      if (hi <= afterTs) return [];
+      const out: DocLogRow[] = [];
+      let commits = 0;
+      let lastTs = -1;
+      const cursor = this.docsMajority
+        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, t: 1, i: 1, ts: 1, j: 1 } })
+        .sort({ ts: 1 })
+        .batchSize(Math.min(Math.max(limit * 4 + 1, 101), 10_000));
+      try {
+        for await (const r of cursor) {
+          progress();
+          if (r.ts !== lastTs) {
+            if (commits === limit) break;
+            commits++;
+            lastTs = r.ts;
+          }
+          out.push({ ts: r.ts, table: r.t, id: r.i, deleted: r.j === null });
+        }
+      } finally {
+        await cursor.close();
+      }
+      return out;
+    });
+  }
+
+  /** Refused unless the lease carries our epoch (a plain read: see the header). */
+  private async assertEpoch() {
+    const lease = await this.read(() => this.meta.findOne({ _id: "lease" }));
+    if (!this.epoch || lease?.epoch !== this.epoch) throw new LeaseLostError();
+  }
+
+  /** PERSIST-01 C13. */
+  async pruneIndexes(entries: IndexPrune[]) {
+    if (!entries.length) return 0;
+    await this.assertEpoch();
+    const r = await this.call(() =>
+      this.idx.bulkWrite(
+        entries.map((e) => ({ deleteMany: { filter: { x: e.index, k: hex(e.key), ts: { $lte: e.ts } } } })),
+        { ordered: false, writeConcern: { w: "majority" } },
+      ),
+    );
+    return r.deletedCount;
+  }
+
+  async pruneDocuments(entries: DocPrune[]) {
+    if (!entries.length) return 0;
+    await this.assertEpoch();
+    const r = await this.call(() =>
+      this.docs.bulkWrite(
+        entries.map((e) => ({ deleteMany: { filter: { t: e.table, i: e.id, ts: { $lte: e.ts } } } })),
+        { ordered: false, writeConcern: { w: "majority" } },
+      ),
+    );
+    return r.deletedCount;
+  }
+
+  /** PERSIST-01 C14. */
+  async getGlobal(key: string): Promise<unknown> {
+    const d = await this.read(() => this.globals.findOne({ _id: key }));
+    return d ? JSON.parse(d.v) : null;
+  }
+
+  async setGlobal(key: string, value: unknown) {
+    await this.assertEpoch();
+    await this.call(() =>
+      this.globals.updateOne(
+        { _id: key },
+        { $set: { v: JSON.stringify(value) } },
+        { upsert: true, writeConcern: { w: "majority" } },
+      ),
+    );
+  }
+
+  async auditRowCount() {
+    const [docs, idx] = await this.read(() => Promise.all([this.docs.countDocuments({}), this.idx.countDocuments({})]));
+    return { docs, idx };
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease document's maxTs, which every fenced flush sets; for a

@@ -252,8 +252,10 @@ New optional capabilities, each with conformance cases:
   `documents` ts index.
 - **`deleteIndexRows(entries)` and `deleteDocumentRows(entries)`:** each entry is `{…key, ts}` and deletes
   rows at or below `ts`. They are fenced and return the number of rows deleted.
-- **Layout 2:** the new `documents` ts index raises `LAYOUT_VERSION`, and stores written at layout 1 are
-  refused as now (DV-56; no data to keep).
+- **No new layout.** The `documents` ts index is created with the tables, and an existing store gets it
+  when the lease is acquired (MongoDB at open), as C11's `indexes` ts index. An added index is idempotent
+  DDL, not a layout change (PERSIST-01 C10), so `LAYOUT_VERSION` stays 1 and existing stores keep opening.
+  This replaces the layout bump the first draft proposed.
 
 Conformance:
 
@@ -265,7 +267,7 @@ Conformance:
 ### 3.4 PRs
 
 1. PERSIST-01, on every driver and in the conformance suite:
-   - layout 2 with the `documents` ts index;
+   - the `documents` ts index (no layout change);
    - `readDocumentLog`;
    - fenced `deleteIndexRows` / `deleteDocumentRows`;
    - globals;
@@ -282,7 +284,7 @@ Conformance:
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | R1 | Index retention reads the index log (rows by ts) and deletes, per key, what a newer row in the window supersedes. Convex derives the same entries from the document log's revision pairs, recomputing each index key | Same rows deleted, so not observable. The ts index on `indexes` already exists on every driver (C11), and no document is decoded and no index definition needed. Convex's way would need `prev_ts` (DV-66), a per-document write, before index retention could start | **accepted** (owner, 2026-10-01) |
-| R2 | Document retention reads `documents` by ts and, per id, deletes what a newer version in the window supersedes, without a `prev_ts` column. It needs a new ts index (layout 2) | Same rows deleted. `prev_ts` (DV-66) stays for export and log streaming, which need it, and it would need every write to know its previous version's ts | **accepted** (owner, 2026-10-01) |
+| R2 | Document retention reads `documents` by ts and, per id, deletes what a newer version in the window supersedes, without a `prev_ts` column. It needs a new ts index (created as C11's, with no layout change) | Same rows deleted. `prev_ts` (DV-66) stays for export and log streaming, which need it, and it would need every write to know its previous version's ts | **accepted** (owner, 2026-10-01) |
 | R3 | The memory driver prunes old versions in RAM, but its durable log file is not compacted. On reopen the old versions come back until retention runs again | The log is an append-only replay file for development and tests. Compaction would mean rewriting it under the lock. Convex has no such driver | **accepted** (owner, 2026-10-01) |
 | R4 | `DOCUMENT_RETENTION_DELAY` defaults to Convex's knob, **14 days**. Convex's self-hosted docker-compose sets 2 days | follow Convex's binary default; settable by the env variable | **accepted** (owner, 2026-10-01) |
 

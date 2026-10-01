@@ -42,8 +42,12 @@ export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder }
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
   DatabaseTimeoutError,
+  type DocLogRow,
+  type DocPrune,
   type DocWrite,
   hasLease,
+  hasRetention,
+  type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
   LayoutError,
@@ -56,6 +60,7 @@ export {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
+  type Retention,
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
