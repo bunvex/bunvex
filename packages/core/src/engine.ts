@@ -32,6 +32,7 @@ import {
   ConflictError,
   type FlushRetryOptions,
   type Interval,
+  type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
 import {
@@ -168,6 +169,8 @@ export class Engine {
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
        */
       flushRetry?: FlushRetryOptions;
+      /** The soft caps on what one flush carries (default: Convex's 64 documents / 64 KiB; DV-62). */
+      writeBatch?: Partial<WriteBatchLimits>;
     } = {},
   ) {
     installDeterminism();
@@ -177,7 +180,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry);
+    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
