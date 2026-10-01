@@ -59,6 +59,7 @@ export {
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
+export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export {
   type DeclaredTable,
   type Doc,
