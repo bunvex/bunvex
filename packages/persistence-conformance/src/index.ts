@@ -3,7 +3,8 @@
 //
 //   K1 byte order          K2 snapshots          K3 no lost update       K4 cache invalidation
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
-// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K18.
+// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K18; for drivers with the log by
+// timestamp (C11, `readLog`), K25.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -24,6 +25,7 @@ import {
   type Persistence,
   type ScanDocs,
 } from "@bunvex/core";
+import { logChecks } from "./log.ts";
 import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
@@ -32,9 +34,15 @@ export type DriverModule = {
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
   writerInsideFlush?(): Promise<boolean>;
+  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
+  dropLogIndex?(): Promise<void>;
+  /** Whether the store has its ts index (K25: it is built once the lease is held). */
+  hasLogIndex?(): Promise<boolean>;
+  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
+  strayLogRow?(ts: number): Promise<void>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10"; // K3 also runs K4–K5; K10 runs K10–K18
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K25"; // K3 also runs K4–K5; K10 runs K10–K18
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -46,6 +54,8 @@ export type ConformanceOptions = {
   log?: (line: string) => void;
   /** The driver claims PERSIST-01 C7 (single writer): its absence is a failure, not a skip. */
   requireLease?: boolean;
+  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
+  requireReadLog?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -737,6 +747,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (leased) await st.releaseLease();
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
+  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();

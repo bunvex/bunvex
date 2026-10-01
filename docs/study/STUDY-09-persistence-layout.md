@@ -64,6 +64,31 @@ line 609) and `crates/mysql/src/sql`.
 - **Document versions** are kept for `DOCUMENT_RETENTION_DELAY` (14 days), then deleted.
 - Snapshots older than the retention window cannot be read.
 
+### 1.5 Reading the log by timestamp
+
+Read for D6 on 2026-10-01 (same commit).
+
+- **The API.** `PersistenceReader::load_documents(range: TimestampRange, order, page_size, …)`
+  (`crates/common/src/persistence/mod.rs:562`) streams `DocumentLogEntry { ts, id, value, prev_ts }`
+  (`mod.rs:61`): one entry per document version, `value: None` for a delete. `load_documents_from_table`
+  is the same for one table.
+- **`prev_ts` is per document**: the ts of the previous version of the same document, not of the previous
+  commit. It drives `load_revision_pairs` (`mod.rs:586`), `previous_revisions_of_documents` and retention.
+  It does not tell a reader that it missed a commit.
+- **The bound.** `RepeatablePersistence::load_documents` (`mod.rs:774`) intersects the range with
+  `TimestampRange::snapshot(upper_bound)`, a *repeatable* ts: nothing that is not durable and final is
+  read.
+- **Postgres** (`load_docs_by_ts_page_asc`, `crates/postgres/src/sql.rs:269`): keyset paging on the
+  primary key, `WHERE (ts, table_id, id) > ($1, $2, $3) AND ts < $4 ORDER BY ts, table_id, id LIMIT $5`.
+  A page may end inside a commit; the stream continues from the last row.
+- **Callers.** Streaming export's `document_deltas` (`crates/database/src/database.rs:2190`) reads
+  `(cursor, ∞)` up to the transaction's begin ts and, once over its row budget, still returns every
+  document of the last ts it started (it never splits a commit). Retention reads it too
+  (`crates/database/src/retention.rs:859`).
+- **The write log is not rebuilt from it.** On startup the in-memory write log starts empty at the
+  persistence snapshot (`new_write_log(*ts)`, `crates/database/src/database.rs:1106`), as bunvex's
+  `Committer.resume(maxTs)` does.
+
 ## 2. What an app can observe
 
 This layer is internal, except through:
@@ -115,8 +140,10 @@ Common to all drivers:
   version ≤ ts" rather than by exact `ts`.
 - There is no retention: every version and tombstone is kept forever. The memory driver keeps
   everything in RAM, and its `visible()` walks a key's version list linearly.
-- There is no by-ts log read (`load_documents`), which retention, backfill, export and a future
-  write-log rebuild will need.
+- There was no by-ts log read (`load_documents`), which retention, backfill, export and a future
+  write-log rebuild will need. **Built on 2026-10-01 on `indexes`** (PERSIST-01 C11, STUDY-24 H11; see
+  §4 D6): `readLog(afterTs, upToTs, limit)` returns whole commits in ts order, each with its index write
+  set and a per-commit `prevTs`, never above the durable prefix, with a ts index on every driver.
 - The conformance suite (`packages/persistence-conformance/src/index.ts`, K1/K2) scans with limits of
   1 000 or more over at most 60 ids, so the over-fetch bugs never trigger in it.
 
@@ -129,7 +156,7 @@ Common to all drivers:
 | D3 | MySQL `key varbinary(512)`; Postgres full key in the primary key (about 2.7 KB max); no prefix/sha256 split | BUG | Indexing a long string makes the flush fail, and with STUDY-06 D1 the failed commit even becomes visible. Convex splits keys at 2 500 bytes plus a SHA-256 | owner |
 | D4 | The conformance suite does not exercise small limits with many versions and tombstones | BUG (test gap) | D1/D2 pass K1–K7. The suite should include them | owner |
 | D5 | No retention of old versions or tombstones | INTERNAL | Storage and memory grow without bound; scans slow down as tombstones accumulate. Not observable in results. Convex keeps index versions 4 min and documents 14 days | owner |
-| D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | owner |
+| D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | **partially built** (DV-66): the by-ts log read on `indexes`, with a ts index on every driver (PERSIST-01 C11; the log is `indexes` by ts, STUDY-24 H11, owner 2026-10-01). Its `prevTs` is per commit, for gap detection, not Convex's per-document `prev_ts` (§1.5). Still missing: `prev_ts` and documents by ts (retention, export) |
 | D7 | Documents are joined by "newest ≤ ts" per id, not by exact `ts` from the index entry | INTERNAL | Same answer, one extra ordered lookup per row | owner |
 | D8 | Column types: `id text`/`varchar(64)`, `table_id int`, JSON as text, vs Convex's `BYTEA` ids and binary JSON | INTERNAL | Follows from STUDY-01. `varchar(64)` must fit the final id format | owner |
 | D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | owner |

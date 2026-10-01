@@ -21,3 +21,25 @@ export async function writerInsideFlush() {
   await c.close();
   return ops.length > 0;
 }
+
+/** K25: a store written before PERSIST-01 C11 has no ts index. */
+export async function dropLogIndex() {
+  const c = new MongoClient(process.env.MONGO_URL!);
+  await c.connect();
+  await c.db().collection("indexes").dropIndex("ts_1");
+  await c.close();
+}
+export async function hasLogIndex() {
+  const c = new MongoClient(process.env.MONGO_URL!);
+  await c.connect();
+  const have = await c.db().collection("indexes").listIndexes().toArray();
+  await c.close();
+  return have.some((i) => JSON.stringify(i.key) === JSON.stringify({ ts: 1 }));
+}
+/** K25: an index row above the durable prefix, written behind the driver's back. */
+export async function strayLogRow(ts: number) {
+  const c = new MongoClient(process.env.MONGO_URL!);
+  await c.connect();
+  await c.db().collection("indexes").insertOne({ x: 960, k: "ff", ts, d: "stray" });
+  await c.close();
+}

@@ -292,7 +292,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural. |
+| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural; the by-ts log read exists on `indexes` (PERSIST-01 C11), the documents side does not yet. |
 | `json_schemas`, `get_table_column_names`, `test_streaming_export_connection` | same | missing | |
 | Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | missing | |
 | Fivetran source/destination connectors | `crates/fivetran_source`, `fivetran_destination` | missing | Separate programs; low priority. |
@@ -342,6 +342,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Docker image, docker-compose, credentials bootstrap (`read_credentials.sh`) | `self-hosted/docker*` | missing | ARCHITECTURE marks docker/ M. |
 | SSRF proxy for action `fetch` and OIDC (`--convex-http-proxy`) | `crates/local_backend/config.rs` | missing | |
 | Beacon / telemetry (hourly, `DISABLE_BEACON`), Sentry | `crates/local_backend/beacon.rs` | missing | Divergence? bunvex probably shouldn't ship one. |
+| Reading the commit log by timestamp (`load_documents` over a `TimestampRange`, bounded by the repeatable ts; Postgres pages `documents` by `(ts, table_id, id)`) | `crates/common/src/persistence/mod.rs:562`, `:774`; `crates/postgres/src/sql.rs:269` | partial | PERSIST-01 C11 (STUDY-24 H11, owner 2026-10-01): `readLog(afterTs, upToTs, limit)` on every driver reads **`indexes`** by ts (each commit's index write set, whole commits, a per-commit `prevTs` for gap detection, never above the durable prefix), with a ts index everywhere. Documents by ts and `prev_ts` (retention, export) are not built (DV-66). |
 | In-place database migrations between versions (`migrations_model`) | `crates/migrations_model` | missing | bunvex needs a persistence format version story. |
 | OpenAPI specs (`/api/public_openapi.json`, `/api/dashboard_openapi.json`, `/api/v1/openapi.json`) | `crates/local_backend/router.rs` | missing | |
 
@@ -386,9 +387,9 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Status | Count |
 |---|---|
 | done | 2 |
-| partial | 11 |
+| partial | 12 |
 | missing | 224 |
 
 - The two done rows are system indexes and database selection.
-- The eleven partial rows are: the persistence lease (PERSIST-01 C7: every driver), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
+- The twelve partial rows are: the persistence lease (PERSIST-01 C7: every driver), the log by timestamp (PERSIST-01 C11: on `indexes`), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

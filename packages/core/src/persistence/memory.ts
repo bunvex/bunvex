@@ -5,7 +5,7 @@ import { fdatasyncSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import BTree from "sorted-btree";
 import { compareKeys } from "../keyenc.ts";
-import type { DocWrite, IndexWrite, Lease, LeaseAcquire, Persistence } from "./index.ts";
+import type { DocWrite, IndexWrite, Lease, LeaseAcquire, LogCommit, Persistence } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import { ProcessLock } from "./lock.ts";
 
@@ -39,6 +39,11 @@ export class MemoryPersistence implements Persistence, Lease {
   }
 
   private lastTs = 0;
+  /** The highest ts made durable by a flush (or replayed from the log): readLog's bound (PERSIST-01 C11). */
+  private durableTs = 0;
+  /** The log by ts (C11): every commit that wrote index entries, in ts order (apply is called in ts order).
+   *  The write arrays are the ones `apply` received, shared with the B-trees' keys: no copy. */
+  private commits: { ts: number; writes: IndexWrite[] }[] = [];
 
   static async open(logPath: string | null, opts: { durable: boolean }) {
     const m = new MemoryPersistence(opts);
@@ -100,6 +105,7 @@ export class MemoryPersistence implements Persistence, Lease {
       good += enc.encode(line).length + 1;
       pos = nl + 1;
     }
+    this.durableTs = this.lastTs;
     if (good < enc.encode(text).length) {
       const { truncate } = await import("node:fs/promises");
       await truncate(logPath, good);
@@ -141,6 +147,7 @@ export class MemoryPersistence implements Persistence, Lease {
 
   private applyMemory(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
     this.lastTs = ts;
+    if (idx.length) this.commits.push({ ts, writes: idx });
     for (const d of docs) {
       const k = `${d.table}:${d.id}`;
       const vs = this.docs.get(k);
@@ -158,17 +165,44 @@ export class MemoryPersistence implements Persistence, Lease {
   // One write + one fdatasync per group, OFF the JS thread (libuv/Bun thread pool): while the disk works,
   // the event loop keeps serving reads and the next group accumulates.
   async flush() {
-    if (this.fh === null || this.pending.length === 0) return;
+    const top = this.lastTs;
+    if (this.fh === null || this.pending.length === 0) {
+      this.durableTs = top;
+      return;
+    }
     const buf = Buffer.concat(this.pending);
     this.pending = [];
     if (SYNC_LOG) {
       // Diagnostic path (BUNVEX_SYNC_LOG=1): write + fdatasync on the JS thread.
       writeSync(this.fh.fd, buf);
       if (this.durable) fdatasyncSync(this.fh.fd);
-      return;
+    } else {
+      await this.fh.write(buf);
+      if (this.durable) await this.fh.datasync();
     }
-    await this.fh.write(buf);
-    if (this.durable) await this.fh.datasync();
+    this.durableTs = top;
+  }
+
+  /** PERSIST-01 C11: a binary search for the first commit after `afterTs`, then a walk. Bounded by what a
+   *  flush made durable: a group applied but still being written is not returned. */
+  readLog(afterTs: number, upToTs: number, limit: number): LogCommit[] {
+    const out: LogCommit[] = [];
+    if (limit <= 0) return out;
+    const hi = Math.min(upToTs, this.durableTs);
+    const cs = this.commits;
+    let lo = 0;
+    let n = cs.length;
+    while (lo < n) {
+      const mid = (lo + n) >>> 1;
+      if (cs[mid].ts <= afterTs) lo = mid + 1;
+      else n = mid;
+    }
+    let prevTs = lo > 0 ? cs[lo - 1].ts : 0;
+    for (let i = lo; i < cs.length && cs[i].ts <= hi && out.length < limit; i++) {
+      out.push({ ts: cs[i].ts, prevTs, writes: cs[i].writes.slice() });
+      prevTs = cs[i].ts;
+    }
+    return out;
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {

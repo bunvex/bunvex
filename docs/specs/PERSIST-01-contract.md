@@ -1,7 +1,7 @@
 # PERSIST-01 — the persistence contract
 
 > v1, 29 Sep 2026 (written as STORAGE-01; renamed by ARCH-01 D2 — "storage" is the FILE API, as in
-> Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5. **1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -122,6 +122,39 @@ unless the engine was given a wait (`lease.waitMs`): it then retries until the l
 runs out. The lease is renewed every TTL/3; `LeaseLostError`, or a renewal still failing when the TTL
 runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` releases it.
 
+## C11 — the log by timestamp
+
+The store's commits, read in ts order: what a follower, a catch-up after a dropped stream, retention and
+export read (STUDY-24 §4.3, decided as H11 by the owner on 2026-10-01; STUDY-09 D6). The log is the
+**`indexes`** collection by ts, not `documents`: every commit the engine makes writes index entries (each
+document version rewrites its `by_id` entry), and a backfill commit writes index entries only.
+
+`readLog(afterTs, upToTs, limit)` returns `LogCommit[]`, `{ ts, prevTs, writes }`:
+
+- **The window.** Exactly the commits with `afterTs < ts ≤ min(upToTs, M)`, where `M` is the durable
+  prefix (C4/C7: `maxTs()`), in increasing ts order. A commit applied but not yet made durable by its
+  `flush()`, or a group in flight, is never returned, whatever `upToTs` says. Neither is a row above `M`
+  (the remains of an interrupted flush, before recovery deletes them).
+- **Whole commits.** At most `limit` commits, never part of one: a commit's entries all come back, or the
+  commit is left for the next call. `limit ≤ 0` returns nothing.
+- **`writes`** is the commit's index write set, `(index, key, id | null)` as `apply` received it (`null`:
+  the entry was removed), which is the committer's `LogEntry.writes`. The order inside a commit is
+  unspecified. Keys come back whole, however the store splits them (C3).
+- **`prevTs`** is the ts of the commit just before this one in the log, or 0 if there is none: for the
+  first commit returned, the newest commit with `ts ≤ afterTs`. Timestamps are sparse (C1), so a reader
+  cannot tell a gap from `ts` alone: it checks `prevTs` against the last ts it holds, and catches up with
+  `readLog(last, …)` when they differ. Paging is `readLog(lastTsOfThePreviousPage, upTo, n)`.
+- **Cost.** Every driver keeps an index on `indexes.ts` (memory: the commits in an array, appended in ts
+  order). A call reads the index and the rows it returns, never a scan of the store (STUDY-24 §4.3.1
+  has the numbers). It needs no lease and writes nothing.
+- **The ts index on an existing store.** It is created with the tables. A store written before C11 gets it
+  as an upgrade would: Postgres, MySQL and SQLite build it when the lease is acquired (a plain index build
+  blocks writers, so only the holder does it, before it writes); MongoDB at open, like its other indexes
+  (STUDY-25 L1), since its index builds do not block writers.
+
+Optional in the interface (a third-party driver without it behaves as before); required of the first-party
+drivers, which all implement it: memory, sqlite, postgres, mysql and mongodb. Conformance K25.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -144,6 +177,7 @@ runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` r
 | K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
 | K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
 | K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
+| K25 | the log by timestamp (C11) | 300 random commits on a fresh store (sparse timestamps, removed entries, index-only commits, keys longer than 2500 bytes) flushed in groups. `readLog` over the whole log, over 300 random windows (bounds on commits, inside gaps and outside the log; empty windows; limits from 0 up) and paged by 7 equals the reference model: whole commits in ts order, exact write sets, an unbroken `prevTs` chain. A group applied but not flushed is not returned; the log is the same after a reopen. Through the engine, the log between two snapshots is exactly the committer's commits and their write sets |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

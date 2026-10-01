@@ -20,6 +20,8 @@ for (const name of drivers) {
     checks: process.env.CHECKS?.split(",") as Check[] | undefined,
     // The first-party drivers that implement PERSIST-01 C7 (single writer); the others follow.
     requireLease: ["memory", "sqlite", "postgres", "mysql", "mongodb"].includes(name),
+    // PERSIST-01 C11 (the log by timestamp): every first-party driver has readLog.
+    requireReadLog: true,
   });
   failures += r.failures;
 }

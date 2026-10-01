@@ -34,6 +34,7 @@ export {
   type LeaseAcquire,
   LeaseHeldError,
   LeaseLostError,
+  type LogCommit,
   type Persistence,
   type ScanDocs,
 } from "./persistence/index.ts";
