@@ -2,7 +2,8 @@
 
 - **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
-- **bunvex code read:** `main` at `f60e934`; for D10 (§1.6, §7), `main` at `9c9bd14` (2026-10-01)
+- **bunvex code read:** `main` at `f60e934`; for D10 (§1.6, §7), `main` at `9c9bd14` (2026-10-01); for D11
+  (§1.7, §8), `feat/occ-time-window` at `da84195` (#118)
 - **Related:**
   - [STUDY-02](STUDY-02-read-own-writes.md) and [STUDY-03](STUDY-03-deterministic-execution.md): not
     repeated here.
@@ -46,8 +47,8 @@
 
 - Each commit is stored as its index-key writes, computed from the old and new document for **every
   index** (`index_keys_from_full_documents`).
-- The writes are grouped per index (`by_database_index`), so a read interval is checked with a range
-  lookup rather than a scan.
+- The writes are grouped per index (`by_database_index`), then by commit ts, so a read-set is checked
+  index by index over the commits in its window rather than over the whole log. Details in §1.7.
 - `is_stale(reads, reads_ts, ts)` reports any write in `(reads_ts, ts]` that falls inside a read
   interval.
 - Retention is by time and size, never by count; a transaction older than the retained log fails with
@@ -162,6 +163,58 @@ versions the snapshot manager keeps in memory:
 idle. The bump pushes a snapshot version and appends an empty write to the log, which moves `current_ts`
 for both windows forward without adding entries.
 
+### 1.7 How the write log is indexed for conflict checks
+
+Studied for D11 (owner, 2026-10-01: "match Convex (to be built)"), at the same commit.
+
+**The published log.** `crates/database/src/write_log.rs`:
+
+- `WriteLog` (`:561-566`) holds `by_database_index` and `by_text_index`, each a `WritesByIndex`
+  (`:497-558`): an `OrdMap<TabletIndexName, OrdSet<ArcWriteInIndex>>`, persistent (`imbl`) maps so that a
+  snapshot of the log is a cheap clone.
+- An `ArcWriteInIndex` (`:442-494`) is one commit's writes into one index: `WriteInIndex { ts,
+  index_updates, write_source }`. Its `Eq`/`Ord` compare **the ts only** (`:472-493`), so each index's set
+  is ordered by commit ts, not by key. Nothing in the published log is ordered by key.
+- `WriteLogManager::append` (`:346-373`) inserts each index's `WriteInIndex` into that index's set (and the
+  index into `min_ts_to_index` the first time it appears). Trimming (`enforce_retention_policy`,
+  `:395-441`) pops the oldest `(ts, index)` from the binary heap `min_ts_to_index` (`:306-315`) and calls
+  `remove_at_ts` (`:530-550`), which drops that commit's entry from the index's set and pushes the index's
+  next minimum, or removes the index when its set is empty.
+
+**The check.** `WriteLog::is_stale` (`:600-618`) calls `ReadSet::writes_overlap_by_index`
+(`crates/database/src/reads.rs:167-221`):
+
+- For each index the transaction read (`ReadSet.indexed`, a `BTreeMap<TabletIndexName, IndexReads>`,
+  `reads.rs:98`, so in index order), it looks the index up in the log, takes
+  `updates.range((Excluded(from), Included(to)))`, and for every key of every update in those commits
+  asks `index_reads.intervals.contains(key)`. The first hit is the conflict: its `write_ts`, the index,
+  the document id and the commit's `write_source`. So Convex reports the **oldest** conflicting commit in
+  the **first** index read that has one.
+- `IntervalSet` (`crates/common/src/interval/interval_set.rs:28-37`) is a `BTreeMap<start, end>` of
+  intervals kept "non-intersecting, non-adjacent, and non-empty" (merged on `add`, `:150-…`); `contains`
+  (`:242-249`) looks at the single interval preceding the key, `O(log i)`.
+- Text-index reads are checked the same way against `by_text_index` (`:198-219`).
+- **Complexity:** `O(Σ over the indexes read of (log n + w × log i))`, where `w` is the number of keys
+  written into that index by commits in `(from, to]` and `i` the number of read intervals on it. Writes into
+  indexes the transaction did not read, and commits outside its window, are never looked at. A transaction
+  that read an index many commits wrote during its window still pays for each of those keys.
+- `refresh_token` (`:621-638`) uses the same `is_stale`, so subscription and cache revalidation pay the
+  same.
+
+**Pending writes.** `committer.rs:1007-1020` (`commit_has_conflict`) checks the published log first, then
+`PendingWrites::is_stale` (`write_log.rs:1095-1100`): the commits validated but not yet published. Those
+are indexed differently: per index a `BTreeMap<key, PendingKeyWriter { ts, document_id }>`
+(`PendingKeysInIndex`, `:928-972`), filled by `push_back` / `index_by_key` (`:1010-1071`) and emptied by
+`pop_first` (`:1156-1187`). `overlaps` (`:961-972`) probes the smaller side against the other (each pending
+key against the intervals, or each interval as a key range of the map), so it reports the conflicting key
+**lowest in key order**, not the oldest. Text reads against pending writes are a linear scan
+(`:1124-1146`): tokenizing on the committer thread is too costly.
+
+**Pre-validation off the committer.** `pre_validate_batch` (`committer.rs:227-262`) runs `is_stale` on a
+cloned `WriteLogSnapshot` outside the committer's loop up to the log's `max_ts`; the committer then only
+checks `(validated_through, commit_ts]` (`validate_commit`, `:888-905`). This is concurrency, not indexing:
+it moves most of the work off the single committer thread.
+
 ## 2. What an app can observe
 
 1. **Serializable mutations.** A conflict is invisible unless it persists through 5 attempts. The app
@@ -192,7 +245,8 @@ for both windows forward without adding entries.
 - **Timestamps:** `appliedTs = max(appliedTs + 1, wall clock in µs)`, resumed from `maxTs()` (D9, as Convex).
 - **Validation:** `validate` checks the pending commit's intervals against each `LogEntry` with
   `ts > snapshot`, linearly (`overlaps`). The log holds commits already *applied* in the current or
-  previous group, so it plays the role of Convex's `pending_writes` too.
+  previous group, so it plays the role of Convex's `pending_writes` too. (Since D11, through the log
+  indexed per index: §8.)
   - Since D10 (this section describes `main` before it): the log was trimmed to `logWindow = 20 000`
     commits, and a snapshot older than the window was treated as a conflict, retried against the OCC budget.
 - **Group commit:** everything queued while a flush runs forms the next group, with no size cap. For
@@ -232,7 +286,7 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
 | D8 | No `db.vars.commitTs` | OBSERVABLE | Missing API | owner |
 | D9 | Commit timestamps are a counter, not nanosecond wall-clock values | ~~INTERNAL~~ observable since sync protocol v1 (transition and mutation `ts`, `maxObservedTimestamp`) | A recreated store restarts the counter at 1 and refuses clients that saw a higher ts; `maxTs` errors reuse a ts (STUDY-24 S2) | **Decided (owner, 2026-09-30): as Convex.** `ts = max(last + 1, wall clock)`, in **microseconds** internally (a JS number is exact only to 2^53) and × 1000 on the wire, so clients see Convex's wall-clock nanoseconds at µs resolution. The write log's window is tracked explicitly (`purgedTs`), since timestamps are sparse |
 | D10 | The write log is trimmed by count (20 000 commits), not by time or size, and a snapshot outside it is a retried conflict, not `OutOfRetention` | INTERNAL | Very long mutations fail differently; rare. Under load the count runs out in well under a second (STUDY-24 §4.2: 60 % of lagged attempts conflicted) | **Decided (owner, 2026-10-01): as Convex.** Built: see §7. One open question, a hard byte cap Convex does not have (DV-128) |
-| D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4) | owner |
+| D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4). With D10 the log holds seconds of commits (~50k entries at 500 ms of full load), so the scan matters | **Decided (owner, 2026-10-01): as Convex.** Built: see §8 |
 | D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only | owner |
 
 ## 5. Tests
@@ -315,10 +369,94 @@ Notes:
 
 - With the count window a lagged snapshot fails as soon as 20 000 commits pass: ~170 ms at full load.
 - Under the lag scenario the noise rate falls (122k → 78k/s at 500 ms): lagged commits are now validated
-  against up to ~50 000 entries each, linearly (D11, DV-61), where they used to be refused at once.
+  against up to ~50 000 entries each, linearly (D11, DV-61), where they used to be refused at once. Since
+  D11 they are validated through the indexed log and the noise rate is back to ~125k/s (§8).
 - **Memory.** Convex's 30 s floor has no byte bound. At bunvex's commit rates it is gigabytes: ~1.1 GiB at
   the engine's 95k inserts/s, ~4 GiB for the raw committer. The memory driver already keeps every version
   (DV-65), so the log is a fraction of RSS there; on SQLite or a remote driver it would be most of it. The
   committer has an optional `hardMaxBytes` (off by default, so behaviour is Convex's) for the owner to decide
   on: **DV-128** (pending).
+
+## 8. D11 as built: the write log indexed per index
+
+`packages/core/src/write-log-index.ts` (`WritesByIndex`), used by `packages/core/src/committer.ts`:
+
+- **The structure, as Convex's `WritesByIndex`.** Per index id, the writes into that index in commit order:
+  two parallel arrays, the commit ts and the write (`{ index, key, id }`, the same object the log entry
+  holds), from a moving head. Convex keeps one `WriteInIndex` per commit and index in an `OrdSet` by ts;
+  bunvex keeps one slot per write in an array, which is ordered by ts because commits are appended in ts
+  order. The write source is not copied per index: on a conflict it is found by binary search in the log.
+- **Append** happens where the commit enters the log (right after `persistence.apply`), so the next commits
+  of the same group are checked against it.
+- **Trim.** `enforceRetention` drops the oldest log entry, then removes its writes from the head of each
+  index's column (asserting they are there), deletes a column that becomes empty, and compacts a column when
+  its dropped prefix is the larger part. bunvex already walks its log oldest first, so it needs no
+  `min_ts_to_index` heap.
+- **The check, as `writes_overlap_by_index`.** The read-set is grouped per index and each index's
+  intervals are sorted and merged (non-intersecting, non-adjacent, non-empty, like `IntervalSet`), the
+  indexes in ascending id order. For each, a binary search finds the first write with ts above the
+  snapshot, and each write up to the upper bound is tested with a binary search over the intervals. The
+  first hit is reported with its ts, index, document id and write source.
+- **Published, then pending, as `commit_has_conflict`.** `validate` checks `(snapshot, visibleTs]` first,
+  then `(max(snapshot, visibleTs), appliedTs]`, the commits of the current group applied but not yet
+  flushed. bunvex keeps one structure for both. The only difference is which write is *named* when several
+  pending ones conflict: bunvex names the oldest (as for published commits), Convex's key-ordered
+  `PendingKeysInIndex` the lowest key. Whether there is a conflict is the same; the name only reaches the
+  OCC error's write source and the retry's wait for the conflicting ts. Before D11 bunvex named the newest
+  conflicting commit.
+- **`changedBetween`** (subscriptions, the sync worker; Convex's `refresh_token`) runs the same check over
+  `(from, to]`.
+- **Size estimate.** `logEntryBytes` counts each write's two column slots: 104 bytes per write instead of 80
+  (`bench/write-log.ts calibrate`, now through a committer: ~650 estimated vs ~670 measured per three-index
+  insert, ~590 before).
+- **Not modelled: pre-validation off the committer.** bunvex runs on one JavaScript thread, so there is no
+  other thread to validate on; the whole window is checked in `validate`.
+- **Text indexes:** bunvex has none yet; their reads will need the same per-index treatment.
+- **Not shared with the subscription index (DV-64, #119).** That one indexes the other direction: the
+  registered read intervals, queried by a commit's written keys (an interval tree). This one indexes
+  written keys by ts, queried by a read-set. Convex keeps them separate too. A later cleanup could share the
+  read-set normalization (`intervalSetsByIndex`).
+
+**Tests.** `packages/core/test/occ-validation.test.ts`: 150 seeded runs of random commits (four indexes,
+deletes, write sources) through the real committer with small retention windows (so the log is trimmed by
+time and by size), random read-sets (points, ranges, overlapping, empty and reversed intervals) and random
+snapshots, including ones between sparse timestamps and ones just past the log. Against a linear oracle (the
+validator this replaced) every commit must be accepted or refused as the oracle says, the conflict named must
+be a real conflicting write chosen as Convex chooses it, `changedBetween` must agree, and the index must hold
+exactly the writes and indexes of the retained log (~600 000 assertions, ~0.5 s). Sabotage, each turns it
+red: an interval's end inclusive, its start exclusive, the window's lower bound inclusive, its upper bound
+exclusive, trimmed writes not removed, empty columns kept, the committer not appending or not trimming,
+pending commits ignored, published-first order dropped, a wrong write source, a merge that shrinks an
+interval.
+
+**Measured** (a laptop with 8 cores and 16 GiB, Bun 1.4.2; "before" is #118's committer, run through
+`COMMITTER=`):
+
+`bun bench/occ-validation.ts`: one validation against a log of N three-index inserts, µs, after / before:
+
+| Log entries | Point read, index nobody wrote | Point read on `by_id` (all wrote it), whole log | 10 ranges on a written index, whole log | Conflict with the oldest commit | Point read on `by_id`, last 100 commits |
+|---|---|---|---|---|---|
+| 1 000 | 0.6 / 13 | 9 / 18 | 14 / 66 | 0.5 / 37 | 1.6 / 2.4 |
+| 10 000 | 0.2 / 170 | 54 / 199 | 122 / 730 | 0.9 / 343 | 1.5 / 1.8 |
+| 50 000 | 0.2 / 2 250 | 945 / 2 480 | 1 860 / 5 220 | 0.3 / 3 380 | 0.7 / 1.8 |
+| 200 000 | 0.2 / 11 560 | 5 660 / 13 270 | 9 950 / 25 230 | 0.3–1 / 18 460 | 0.7 / 1.8 |
+
+What remains linear is Convex's too: the keys written, during the transaction's window, into an index it
+read. A transaction that only spans recent commits (the last column) pays for those, whatever the log's
+size.
+
+`bun bench/write-log.ts lag` (64 noise writers at full rate, a lagged transaction every 5 ms reading an
+index the noise does not write; two runs each):
+
+| Lag | Noise commits/s, after / before | Lagged commit latency p50 / p99, after | before | Lagged commits in 10 s, after / before |
+|---|---|---|---|---|
+| 500 ms | 125–127k / 80–81k | 0.5 / 1.0–1.3 ms | 4.1 / 7.2–7.6 ms | 1 569–1 586 / 980–982 |
+| 2 s | 124–126k / 64k | 0.5 / 1.2–1.6 ms | 10.2–10.3 / 24.4–24.6 ms | 1 301–1 305 / 474–475 |
+
+The noise rate is back to what it is without lagged transactions. None failed, before or after.
+
+`bun bench/write-log.ts throughput` (64 writers, no reads, 10 s, two runs): the cost of maintaining the
+index on append and trim. Memory driver 124–128k commits/s after vs 129k before; null driver 352–361k vs
+364–372k (−1 to −5 %, within run-to-run noise for the memory driver). Heap per retained entry 660 vs
+590 bytes (+12 %).
 
