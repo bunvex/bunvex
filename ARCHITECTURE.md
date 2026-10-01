@@ -100,6 +100,7 @@ bunvex/
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
+│   │   ├── schema                   the schema as a diagram: tables, references (STUDY-12 §14)     ✅
 │   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
 │   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
 │   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
