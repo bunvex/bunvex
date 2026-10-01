@@ -5,7 +5,9 @@
 // Single writer (PERSIST-01 C7): one row in `bunvex_lease` (epoch, holder, expires_at on the server's clock,
 // max_ts). Each flush's FIRST statement updates the lease row only if our epoch is current, and records the
 // group's top as the durable prefix; the rest of the group runs only if it matched. MySQL has no data-
-// modifying CTE, so the fence costs one statement (a round trip) per flush.
+// modifying CTE, so the fence costs one statement (a round trip) per flush. A flush is a write batch of whole
+// commits (bounded by the committer: DV-62) in one transaction, its rows sent in INSERTs of at most 10 MiB, as
+// Convex's `fill_chunks` (MYSQL_MAX_CHUNK_BYTES), to stay under `max_allowed_packet` on a large commit.
 //
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version') and
 // `read_only`, Convex's table names. Open checks both before writing anything and refuses a foreign, future
@@ -31,6 +33,7 @@
 import {
   checkLayoutVersion,
   checkUnversionedTables,
+  chunkRows,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -44,6 +47,7 @@ import {
   type LeaseAcquire,
   LeaseLostError,
   type LogCommit,
+  MYSQL_MAX_CHUNK_BYTES,
   type OpenOptions,
   type Persistence,
   ReadOnlyError,
@@ -66,6 +70,11 @@ import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 type IdxRow = [number, Buffer, Buffer | null, Buffer, number, boolean, string | null];
+/** A row's bytes in the INSERT's SQL text, bounded above: a string character is at most 3 UTF-8 bytes (an
+ *  escaped one 2), a buffer is sent as X'hex' (2 per byte), plus the numbers, quotes and separators. */
+const docRowBytes = (r: DocRow) => 64 + 3 * r[1].length + (r[3] === null ? 0 : 3 * r[3].length);
+const idxRowBytes = (r: IdxRow) =>
+  80 + 2 * (r[1].length + (r[2]?.length ?? 0) + r[3].length) + (r[6] === null ? 0 : 3 * r[6].length);
 type Conn = mysqlDriver.PoolConnection;
 
 /** Destroy a connection: out of the pool, and its socket closed at once (a frozen server never answers a
@@ -537,14 +546,14 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         ])) as any;
         if (f.affectedRows !== 1) throw new LeaseLostError();
         progress();
-        // `values ?` with a nested array expands to a multi-row insert. Chunked to stay under
-        // max_allowed_packet on big groups (the seed).
-        for (let i = 0; i < docs.length; i += 2000) {
-          await c.query(`insert into documents values ?`, [docs.slice(i, i + 2000)]);
+        // `values ?` with a nested array expands to a multi-row insert. Filled up to 10 MiB of SQL each, as
+        // Convex's `fill_chunks`, to stay under max_allowed_packet whatever the commit's size (DV-62).
+        for (const chunk of chunkRows(docs, Infinity, MYSQL_MAX_CHUNK_BYTES, docRowBytes)) {
+          await c.query(`insert into documents values ?`, [chunk]);
           progress();
         }
-        for (let i = 0; i < idx.length; i += 2000) {
-          await c.query(`insert into indexes values ?`, [idx.slice(i, i + 2000)]);
+        for (const chunk of chunkRows(idx, Infinity, MYSQL_MAX_CHUNK_BYTES, idxRowBytes)) {
+          await c.query(`insert into indexes values ?`, [chunk]);
           progress();
         }
         await c.commit();

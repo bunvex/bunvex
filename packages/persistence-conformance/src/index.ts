@@ -7,8 +7,9 @@
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
 // (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
-// driver; for drivers with the log by timestamp (C11, `readLog`), K25; for drivers with retention (C12–C14:
-// the document log, pruning, globals), K26–K28.
+// driver; for drivers with the log by timestamp (C11, `readLog`), K25; K26 (bounded flushes: a group written
+// in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
+// log, pruning, globals), K27–K29.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -39,6 +40,7 @@ import {
   type ScanDocs,
 } from "@bunvex/core";
 import { fromJsonValue } from "@bunvex/values";
+import { batchChecks } from "./batch.ts";
 import { logChecks } from "./log.ts";
 import { freezableProxy } from "./proxy.ts";
 import { retentionChecks } from "./retention.ts";
@@ -83,7 +85,7 @@ export type DriverModule = {
   strayLogRow?(ts: number): Promise<void>;
 };
 
-// K3 also runs K4–K5; K10 runs K10–K19; K26 runs K26–K28
+// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29
 export type Check =
   | "K1"
   | "K2"
@@ -99,7 +101,8 @@ export type Check =
   | "K23"
   | "K24"
   | "K25"
-  | "K26";
+  | "K26"
+  | "K27";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -1301,10 +1304,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K3")) await k3to5(await mod.open(true));
   if (want("K24")) await k24();
   if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
-  if (want("K26"))
-    await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K26–K28 threw: ${e}`));
+  if (want("K27"))
+    await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K27–K29 threw: ${e}`));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
+  if (want("K26"))
+    await batchChecks(mod, opts.driverModule, check, log, Math.max(2, Math.ceil((opts.kills ?? 8) / 2)), CHILD_TTL_MS);
   if (want("K7")) await k7();
   if (want("K10")) {
     if (leased) await leaseChecks();

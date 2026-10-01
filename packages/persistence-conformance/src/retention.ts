@@ -1,8 +1,8 @@
-// K26–K28 — what retention needs from a store (PERSIST-01 C12–C14, STUDY-33):
-//   K26 the document log by timestamp (`readDocumentLog`), against a reference model;
-//   K27 pruning: deleting what retention computes for a window leaves every snapshot at or above it
+// K27–K29 — what retention needs from a store (PERSIST-01 C12–C14, STUDY-33):
+//   K27 the document log by timestamp (`readDocumentLog`), against a reference model;
+//   K28 pruning: deleting what retention computes for a window leaves every snapshot at or above it
 //       answering exactly as before, removes exactly the superseded rows, and is idempotent;
-//   K28 persistence globals (durable across a reopen), and the fence: a writer without the lease can
+//   K29 persistence globals (durable across a reopen), and the fence: a writer without the lease can
 //       neither prune nor set a global.
 import {
   type DocPrune,
@@ -62,8 +62,8 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const opened = await mod.open(true);
   if (!hasRetention(opened)) {
     await opened.close();
-    if (required) check(false, "K26–K28 the driver claims PERSIST-01 C12–C14 but has no retention methods");
-    else log("skip K26–K28: the driver has no retention methods (PERSIST-01 C12–C14 are optional)");
+    if (required) check(false, "K27–K29 the driver claims PERSIST-01 C12–C14 but has no retention methods");
+    else log("skip K27–K29: the driver has no retention methods (PERSIST-01 C12–C14 are optional)");
     return;
   }
   let st: Store = opened;
@@ -135,7 +135,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   }
   const last = commitTs[commitTs.length - 1];
 
-  // K26: the document log, whole and in random windows.
+  // K27: the document log, whole and in random windows.
   const docLog = async (s: Store, a: number, b: number, n: number) =>
     (await s.readDocumentLog(a, b, n)).map((r) => ({ ts: r.ts, id: r.id, deleted: r.deleted, t: r.table }));
   const expectDocLog = (a: number, b: number, n: number) => {
@@ -170,16 +170,16 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
       const got = await docLog(st, a, b, n);
       if (!same(canon(got), canon(expectDocLog(a, b, n)))) {
         if (bad++ < 3)
-          log(`  K26 readDocumentLog(${a}, ${b}, ${n}): ${got.length} rows, want ${expectDocLog(a, b, n).length}`);
+          log(`  K27 readDocumentLog(${a}, ${b}, ${n}): ${got.length} rows, want ${expectDocLog(a, b, n).length}`);
       }
     }
     check(
       bad === 0,
-      `K26 readDocumentLog returns the document versions of whole commits in ts order (${all.length} rows; 200 random windows)`,
+      `K27 readDocumentLog returns the document versions of whole commits in ts order (${all.length} rows; 200 random windows)`,
     );
   }
 
-  // K27: prune at two successive windows, as retention does (the second continues from the first).
+  // K28: prune at two successive windows, as retention does (the second continues from the first).
   const snapshotAnswers = async (s: Store, at: number[]) => {
     const out: unknown[] = [];
     for (const t of at) {
@@ -239,22 +239,22 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     };
     check(
       same(before, after),
-      `K27 after pruning at ${w}, ${at.length} snapshots at or above it answer exactly as before (scans asc/desc/limited, gets)`,
+      `K28 after pruning at ${w}, ${at.length} snapshots at or above it answer exactly as before (scans asc/desc/limited, gets)`,
     );
     if (rowsBefore && rowsAfter)
       check(
         same(rowsAfter, wantRows) && deleted === rowsBefore.docs + rowsBefore.idx - rowsAfter.docs - rowsAfter.idx,
-        `K27 exactly the superseded rows are gone (${JSON.stringify(rowsBefore)} → ${JSON.stringify(rowsAfter)}, want ${JSON.stringify(wantRows)}; ${deleted} reported)`,
+        `K28 exactly the superseded rows are gone (${JSON.stringify(rowsBefore)} → ${JSON.stringify(rowsAfter)}, want ${JSON.stringify(wantRows)}; ${deleted} reported)`,
       );
-    else log("  K27 row counts not checked: the driver has no auditRowCount");
+    else log("  K28 row counts not checked: the driver has no auditRowCount");
     const again = await pruneInChunks(st, indexPrunes(ixLog), docPrunes(dLog), w);
     check(
       again === 0 && same(await snapshotAnswers(st, at), before),
-      `K27 pruning the same window again deletes nothing`,
+      `K28 pruning the same window again deletes nothing`,
     );
     check(
       same(await above(st), logAbove) && same(await docLog(st, w, MAX, 1_000_000), docLogAbove),
-      `K27 the logs above the window are untouched`,
+      `K28 the logs above the window are untouched`,
     );
     cursor = w;
   }
@@ -267,25 +267,25 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     check(
       (await st.get(TABLE, "after", t)) === `{"v":1}` &&
         (await st.scan(BY_ID, FULL_LO, FULL_HI, t, 100_000, false)).includes("after"),
-      `K27 a commit after pruning reads back`,
+      `K28 a commit after pruning reads back`,
     );
   }
 
-  // K28: globals.
+  // K29: globals.
   const g0 = await st.getGlobal("k28_missing");
-  await st.setGlobal("k28", { x: 1, s: "é", n: [1, 2] });
-  const g1 = await st.getGlobal("k28");
-  await st.setGlobal("k28", 42);
-  const g2 = await st.getGlobal("k28");
+  await st.setGlobal("k29", { x: 1, s: "é", n: [1, 2] });
+  const g1 = await st.getGlobal("k29");
+  await st.setGlobal("k29", 42);
+  const g2 = await st.getGlobal("k29");
   check(
     g0 === null && same(g1, { x: 1, s: "é", n: [1, 2] }) && g2 === 42,
-    "K28 a global reads back as set; an unset one is null",
+    "K29 a global reads back as set; an unset one is null",
   );
   if (hasLease(st)) await st.releaseLease();
   await st.close();
   st = (await mod.open(false)) as Store;
-  await lease(st, "k28");
-  check((await st.getGlobal("k28")) === 42, "K28 a global survives a reopen");
+  await lease(st, "k29");
+  check((await st.getGlobal("k29")) === 42, "K29 a global survives a reopen");
 
   // The fence: once the lease is released, pruning and setting a global are refused.
   if (hasLease(st)) {
@@ -298,17 +298,17 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
       }
     };
     const untouched = async (s: Store) =>
-      (await s.get(TABLE, "after", MAX)) === `{"v":1}` && (await s.getGlobal("k28")) === 42;
+      (await s.get(TABLE, "after", MAX)) === `{"v":1}` && (await s.getGlobal("k29")) === 42;
     await st.releaseLease();
     const r1 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId("after"), ts: MAX }], MAX));
     const r2 = await refused(() => st.pruneDocuments([{ table: TABLE, id: "after", ts: MAX }], MAX));
-    const r3 = await refused(() => st.setGlobal("k28", 7));
+    const r3 = await refused(() => st.setGlobal("k29", 7));
     await st.close();
     st = (await mod.open(false)) as Store;
     await lease(st, "k28-again");
     check(
       r1 && r2 && r3 && (await untouched(st)),
-      "K28 without the lease, pruneIndexes, pruneDocuments and setGlobal throw LeaseLostError and change nothing",
+      "K29 without the lease, pruneIndexes, pruneDocuments and setGlobal throw LeaseLostError and change nothing",
     );
     // A TTL lease taken over by another holder: the old one is refused too.
     if ((st as { leaseScope?: string }).leaseScope !== "process") {
@@ -325,10 +325,10 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
         if (!got) await Bun.sleep(100);
       }
       const r4 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId("after"), ts: MAX }], MAX));
-      const r5 = await refused(() => st.setGlobal("k28", 8));
+      const r5 = await refused(() => st.setGlobal("k29", 8));
       check(
         got && r4 && r5 && (await untouched(other)),
-        "K28 a holder whose TTL lease was taken over cannot prune or set a global",
+        "K29 a holder whose TTL lease was taken over cannot prune or set a global",
       );
       if (hasLease(other)) await other.releaseLease();
       await other.close();

@@ -54,7 +54,7 @@ export interface Persistence {
   auditLiveDocs?(table: number, ts: number): number | Promise<number>;
   /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
   auditRowsAt?(ts: number): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
-  /** AUDIT ONLY (conformance K26): every stored row, every version and tombstone included. */
+  /** AUDIT ONLY (conformance K27): every stored row, every version and tombstone included. */
   auditRowCount?(): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
   close(): void | Promise<void>;
 }
@@ -170,6 +170,7 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export {
   checkLayoutVersion,
   checkUnversionedTables,

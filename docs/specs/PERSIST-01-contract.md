@@ -9,8 +9,9 @@
 > acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed.
 > **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7.
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
-> STUDY-29). **v2.6, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention needs) and
-> K26–K28, from STUDY-33. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
+> and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
+> needs) and K27–K29, from STUDY-33. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -63,6 +64,13 @@ For a snapshot `T`:
   before one `flush()`.
 - `flush()` returns once **every applied commit is durable**. The engine acknowledges a commit to its
   client only after the `flush()` covering it resolves.
+- **Bounded flushes (DV-62, as Convex's write batcher).** The committer applies and flushes a group of
+  commits in *write batches*: whole commits, each batch closed once it holds 64 document versions or 64 KiB
+  (soft caps: a commit is never split, so one above the caps is flushed whole), one `flush()` per batch, one
+  after the other in ts order. A driver therefore sees at most one batch per `flush()`, except for one large
+  commit, whose rows a remote driver splits into several statements of the same transaction (Postgres ≤1 024
+  rows per statement, MySQL ≤10 MiB per `INSERT`: `chunkRows` in `@bunvex/core/persistence`), so no statement
+  exceeds the store's packet or parameter limits.
 - **Crash atomicity.** After a crash, the durable state is the state after some **prefix** of the
   applied commits: every commit up to some `ts = M` is fully present (its document versions AND its index
   entries), and nothing with `ts > M` is visible. `M ≥` the last acknowledged commit. A torn commit (some
@@ -297,7 +305,7 @@ stores keep them in that table (with `layout_version`), MongoDB in a `persistenc
 memory driver as records of its log. Retention keeps its windows and cursors there.
 
 C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
-required of the first-party drivers, which all implement them. Conformance K26–K28.
+required of the first-party drivers, which all implement them. Conformance K27–K29.
 
 ## Conformance (`@bunvex/persistence-conformance`)
 
@@ -326,9 +334,10 @@ required of the first-party drivers, which all implement them. Conformance K26�
 | K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
 | K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
 | K25 | the log by timestamp (C11) | 300 random commits on a fresh store (sparse timestamps, removed entries, index-only commits, keys longer than 2500 bytes) flushed in groups. `readLog` over the whole log, over 300 random windows (bounds on commits, inside gaps and outside the log; empty windows; limits from 0 up) and paged by 7 equals the reference model: whole commits in ts order, exact write sets, an unbroken `prevTs` chain. A group applied but not flushed is not returned; the log is the same after a reopen. Through the engine, the log between two snapshots is exactly the committer's commits and their write sets; a background index backfill's chunks (index-only commits, STUDY-29) are in the log, unbroken in the `prevTs` chain, and their entries cover every document |
-| K26 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order |
-| K27 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
-| K28 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
+| K26 | bounded flushes (C4, DV-62) | through the engine: 64 writers of 2 KiB documents and one 1 100-document commit, under an injected limit that fails any flush breaking the batch rule (everything before its last commit under 64 documents and 64 KiB): groups are split, no flush is over, the large commit is visible whole at its ts, every document stored; flushes of split groups failing transiently (before the store, or after it with the answer lost) are retried: every commit acknowledged once and stored once, in ts order; SIGKILL in the middle of split groups (a child announces each flush's timestamps before it starts): `maxTs` ≥ the last acknowledged commit, no torn commit, and every announced commit at or below `maxTs` is in `readLog` (a prefix) |
+| K27 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order |
+| K28 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
+| K29 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
@@ -354,5 +363,9 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   timeout, so the MongoDB module opens with a 1 s heartbeat for K20.
 - K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
   moment lands inside the flush often enough, and the takeover must still finish in time.
+- K26 was sabotaged three ways (STUDY-06 §10.5): no batch bound (all five drivers red: the injected limit stops
+  the committer; on a real MySQL with `max_allowed_packet` = 1 MiB the same group fails with the packet error);
+  a commit torn across two batches (red: "torn commit"); batches flushed in swapped pairs (red: `maxTs` below
+  the last acknowledged commit, flushed commits missing below `maxTs`).
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.

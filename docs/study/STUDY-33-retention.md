@@ -259,10 +259,10 @@ New optional capabilities, each with conformance cases:
 
 Conformance:
 
-- **K26:** after random writes, deleting what retention computes for a window leaves every snapshot at or
+- **K27:** after random writes, deleting what retention computes for a window leaves every snapshot at or
   above the window answering exactly as before, and leaves fewer rows (`auditRowsAt`).
-- **K27:** deletes and global writes from a holder that lost the lease are refused.
-- **K28:** the document log in ts order, with exact limits.
+- **K28:** deletes and global writes from a holder that lost the lease are refused.
+- **K29:** the document log in ts order, with exact limits.
 
 ### 3.4 PRs
 
@@ -271,7 +271,7 @@ Conformance:
    - `readDocumentLog`;
    - fenced `deleteIndexRows` / `deleteDocumentRows`;
    - globals;
-   - K26–K28.
+   - K27–K29.
 2. The engine's `Retention`:
    - the windows, both deleters and the checkpoints;
    - read validation and the knobs;
@@ -320,7 +320,7 @@ Conformance:
 - `minDocumentTs ≤ minIndexTs` always holds;
 - a process without the lease does not run retention.
 
-**Conformance:** K26–K28 on memory, SQLite, Postgres, MySQL and MongoDB.
+**Conformance:** K27–K29 on memory, SQLite, Postgres, MySQL and MongoDB.
 
 **Property test:** random churn while retention runs. Every query at a snapshot inside the window
 answers exactly as it would with retention off.

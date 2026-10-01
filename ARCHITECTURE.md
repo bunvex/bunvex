@@ -37,7 +37,7 @@ bunvex/
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
 │   │   ├── schema                   declared tables + indexes, Convex name rules ✅ · document validation N
 │   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, index states ✅
-│   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
+│   │   ├── committer                timestamps, group commit in write batches, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M
@@ -77,9 +77,10 @@ bunvex/
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
-│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    M
-│   │   ├── local                    local disk
-│   │   └── s3                       S3 / R2 / MinIO / compatible
+│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    🟡
+│   │   ├── local                    local disk (STUDY-32)                                      ✅
+│   │   ├── s3                       S3 / R2 / MinIO / compatible, Bun's S3Client (STUDY-32)    ✅
+│   │   └── conformance              the suite every backend passes                             ✅
 │   │
 │   ├── auth/                        @bunvex/auth
 │   │   ├── jwt                      verify JWT / OIDC (JWKS), STUDY-27                        ✅

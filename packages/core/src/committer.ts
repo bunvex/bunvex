@@ -154,6 +154,34 @@ export class CommitterStoppedError extends Error {
 export const WRITE_RETRY_INITIAL_BACKOFF_MS = 100;
 export const WRITE_RETRY_MAX_BACKOFF_MS = 10_000;
 
+/**
+ * Convex's write batcher's soft caps (crates/common/src/knobs.rs `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS` = 64,
+ * `COMMITTER_MAX_WRITE_BATCH_BYTES` = 64 KiB; STUDY-06 §10): a flush carries whole commits, and stops taking
+ * more once it holds this many document versions or this many bytes. A commit is never split, so one commit
+ * above the caps is flushed with what preceded it in its batch, on its own after a full one.
+ */
+export const WRITE_BATCH_MAX_DOCUMENTS = 64;
+export const WRITE_BATCH_MAX_BYTES = 64 * 1024;
+
+export type WriteBatchLimits = {
+  /** Document versions at which a flush takes no more commits (default 64). */
+  maxDocuments: number;
+  /** Bytes (`commitWriteBytes`) at which a flush takes no more commits (default 64 KiB). */
+  maxBytes: number;
+};
+
+/**
+ * The bytes one commit writes to persistence, as Convex sizes a write batch (`DocumentLogEntry::size` and
+ * `PersistenceIndexEntry::size`): per document version its ts, id and JSON; per index entry its ts, index id,
+ * key and document id. Characters count as bytes (ids are ASCII; JSON is close enough for a soft cap).
+ */
+export function commitWriteBytes(docs: readonly DocWrite[], idx: readonly IndexWrite[]): number {
+  let n = 0;
+  for (const d of docs) n += 12 + d.id.length + (d.json === null ? 0 : d.json.length);
+  for (const e of idx) n += 12 + e.key.byteLength + (e.id === null ? 0 : e.id.length);
+  return n;
+}
+
 /** How a failed flush is retried (STUDY-25 L4). */
 export type FlushRetryOptions = {
   /** First backoff, in ms (default: Convex's 100). */
@@ -189,11 +217,14 @@ const defaultOnRetry = (e: unknown, failures: number, delayMs: number) =>
   );
 
 export class Committer {
-  /** Highest ts applied to persistence (possibly not yet durable). */
+  /** Highest ts assigned to a commit (not necessarily applied to persistence or durable yet). */
   appliedTs = 0;
   /** Highest ts that is DURABLE: new transactions read at this snapshot. */
   visibleTs = 0;
+  /** Groups committed: the commits queued while the previous group was being written. */
   groups = 0;
+  /** Flushes made: a group is written as one or more write batches (DV-62). */
+  batches = 0;
   conflicts = 0;
   /** Commits refused because their snapshot was older than the write log (OutOfRetentionError). */
   outOfRetention = 0;
@@ -205,6 +236,7 @@ export class Committer {
   /** The approximate heap size of the retained log (`logEntryBytes`), as Convex's `WriteLogManager.size`. */
   logBytes = 0;
   private retention: WriteLogRetention;
+  private writeBatch: WriteBatchLimits;
   private queue: PendingCommit[] = [];
   private running = false;
   private listeners: ((e: LogEntry[]) => void)[] = [];
@@ -228,7 +260,13 @@ export class Committer {
     private clockUs: () => number = wallClockUs,
     /** How a flush that failed with a transient error is retried (STUDY-25 L4). */
     private retry: FlushRetryOptions = {},
+    /** The soft caps on what one flush carries (default: Convex's 64 documents / 64 KiB; DV-62). */
+    writeBatch: Partial<WriteBatchLimits> = {},
   ) {
+    this.writeBatch = {
+      maxDocuments: writeBatch.maxDocuments ?? WRITE_BATCH_MAX_DOCUMENTS,
+      maxBytes: writeBatch.maxBytes ?? WRITE_BATCH_MAX_BYTES,
+    };
     const r = { ...DEFAULT_RETENTION };
     for (const [k, v] of Object.entries(retention)) if (v !== undefined) (r as Record<string, unknown>)[k] = v;
     // The hard cap is off for `null`/`0` (and `Infinity`); the comparison below wants a number.
@@ -388,60 +426,110 @@ export class Committer {
     while (this.queue.length) {
       const group = this.queue;
       this.queue = [];
+      // Validate the whole group and assign its timestamps, as Convex validates against its pending writes:
+      // a commit is checked against the ones before it in the group although they are not durable yet.
       const accepted: [PendingCommit, LogEntry][] = [];
-      try {
-        for (const p of group) {
-          const refused = this.validate(p);
-          if (refused instanceof OutOfRetentionError) {
-            this.outOfRetention++;
-            p.reject(refused);
-            continue;
-          }
-          if (refused) {
-            this.conflicts++;
-            p.reject(new ConflictError(refused));
-            continue;
-          }
-          // As Convex's `next_commit_ts`: the wall clock, but always above the last timestamp assigned, so
-          // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
-          const ts = Math.max(this.appliedTs + 1, this.clockUs());
-          this.appliedTs = ts;
-          const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
-          const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };
-          accepted.push([p, entry]);
-          this.persistence.apply(ts, p.docs, p.idx);
-          this.log.push(entry); // seen by the validation of the NEXT commits of this group
-          this.byIndex.append(entry);
-          this.logBytes += logEntryBytes(entry);
+      for (const p of group) {
+        const refused = this.validate(p);
+        if (refused instanceof OutOfRetentionError) {
+          this.outOfRetention++;
+          p.reject(refused);
+          continue;
         }
-        if (!accepted.length) continue;
-      } catch (e) {
-        // A throwing apply: nothing of this group becomes visible, and the group, and
-        // everything queued behind it, is refused.
-        this.stop(e);
-        for (const [p] of accepted) p.reject(this.stopped);
-        return;
+        if (refused) {
+          this.conflicts++;
+          p.reject(new ConflictError(refused));
+          continue;
+        }
+        // As Convex's `next_commit_ts`: the wall clock, but always above the last timestamp assigned, so
+        // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
+        const ts = Math.max(this.appliedTs + 1, this.clockUs());
+        this.appliedTs = ts;
+        const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
+        const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };
+        accepted.push([p, entry]);
+        this.log.push(entry); // seen by the validation of the NEXT commits of this group
+        this.byIndex.append(entry);
+        this.logBytes += logEntryBytes(entry);
       }
-      try {
-        await this.flushWithRetries();
-      } catch (e) {
-        // Nothing of this group becomes visible: visibleTs stays where it was, and readers ignore versions
-        // above it. The group, and everything queued behind it, is refused. Whether the group reached the store
-        // is unknown (its last attempt may have committed before the error), as Convex says it.
-        this.stop(e, "write failed, unsure if the group committed to disk");
-        for (const [p] of accepted) p.reject(this.stopped);
-        return;
+      if (!accepted.length) continue;
+      // Then write it as Convex's write batcher does (DV-62): batches of whole commits, each closed once it
+      // holds `maxDocuments` document versions or `maxBytes` bytes, so a flush stays bounded whatever the
+      // group's size. Each batch is one flush, fenced, that moves the durable prefix to its last commit, one
+      // after the other (PERSIST-01 C4, C7): the durable state is always a prefix of whole commits. A batch's
+      // commits are published as soon as it is durable, in ts order, as Convex publishes each commit once its
+      // write is acknowledged.
+      for (let from = 0; from < accepted.length; ) {
+        const to = this.batchEnd(accepted, from);
+        if (!(await this.writeBatchOf(accepted, from, to))) return;
+        from = to;
       }
       this.groups++;
-      this.visibleTs = accepted[accepted.length - 1][1].ts;
-      for (const [p, e] of accepted) p.onVisible?.(e.ts);
-      const entries = accepted.map(([, e]) => e);
-      for (const l of this.listeners) l(entries);
-      for (const [p, e] of accepted) p.resolve(e.ts);
-      this.wakeVisible();
-      // As Convex, once the commits are published to subscriptions, relative to the latest of them.
-      this.enforceRetention(this.visibleTs);
     }
+  }
+
+  /** The end (exclusive) of the write batch that starts at `accepted[from]` (Convex's `Batch::is_full`). */
+  private batchEnd(accepted: [PendingCommit, LogEntry][], from: number): number {
+    const { maxDocuments, maxBytes } = this.writeBatch;
+    let docs = 0;
+    let bytes = 0;
+    let to = from;
+    while (to < accepted.length && (to === from || (docs < maxDocuments && bytes < maxBytes))) {
+      const [p] = accepted[to++];
+      docs += p.docs.length;
+      bytes += commitWriteBytes(p.docs, p.idx);
+    }
+    return to;
+  }
+
+  /**
+   * Apply `accepted[from, to)` to persistence, flush it and publish it. On a persistence failure the committer
+   * stops: this batch and every later one of the group are refused (and false is returned); the batches before
+   * it stay acknowledged, as they are durable.
+   */
+  private async writeBatchOf(accepted: [PendingCommit, LogEntry][], from: number, to: number): Promise<boolean> {
+    const refuseRest = () => {
+      for (let i = from; i < accepted.length; i++) accepted[i][0].reject(this.stopped);
+    };
+    // Stopped from outside (a lost lease) while an earlier batch was being written: write nothing more.
+    if (this.stopped) {
+      refuseRest();
+      return false;
+    }
+    try {
+      for (let i = from; i < to; i++) {
+        const [p, e] = accepted[i];
+        this.persistence.apply(e.ts, p.docs, p.idx);
+      }
+    } catch (e) {
+      // A throwing apply: nothing of this batch becomes visible, and it, the rest of the group and
+      // everything queued behind it are refused.
+      this.stop(e);
+      refuseRest();
+      return false;
+    }
+    try {
+      await this.flushWithRetries();
+    } catch (e) {
+      // Nothing of this batch becomes visible: visibleTs stays where it was, and readers ignore versions
+      // above it. The batch, the rest of the group and everything queued behind it are refused. Whether the
+      // batch reached the store is unknown (its last attempt may have committed before the error), as Convex
+      // says it.
+      this.stop(e, "write failed, unsure if the group committed to disk");
+      refuseRest();
+      return false;
+    }
+    this.batches++;
+    const batch = accepted.slice(from, to);
+    this.visibleTs = batch[batch.length - 1][1].ts;
+    for (const [p, e] of batch) p.onVisible?.(e.ts);
+    const entries = batch.map(([, e]) => e);
+    for (const l of this.listeners) l(entries);
+    for (const [p, e] of batch) p.resolve(e.ts);
+    this.wakeVisible();
+    // As Convex, once the commits are published to subscriptions, relative to the latest of them.
+    this.enforceRetention(this.visibleTs);
+    return true;
   }
 
   /**
