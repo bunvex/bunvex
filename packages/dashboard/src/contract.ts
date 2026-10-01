@@ -11,6 +11,7 @@ import { type DeploymentContractOptions, describeDeploymentContract } from "./co
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
+import { describeTopologyContract } from "./contract-topology.ts";
 import {
   type DashboardDataSource,
   DataSourceError,
@@ -559,6 +560,7 @@ export function describeDataSourceContract(
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
     describeDeploymentStateContract({ make, test, opts });
     describeMetricsContract({ make, test });
+    describeTopologyContract({ make, test, watchTimeoutMs });
     describeAuthContract({ make, test });
     describeSnapshotContract({ make, test, opts });
 

@@ -20,7 +20,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
 import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
-import { validateLogsSearch } from "./logs/log-filter.ts";
+import { type LogsSearch, validateLogsSearch } from "./logs/log-filter.ts";
 import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
 import { ErrorState } from "./shell/error-state.tsx";
@@ -41,14 +41,18 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** The Functions screen's URL state: the open function (`module:name`), as in Convex. */
 /** The open function, and its log filters (as the Logs screen's `type` and `q`). */
-export type FunctionsSearch = { function?: string; type?: string; q?: string; tab?: "statistics" | "logs" };
+export type FunctionsSearch = {
+  function?: string;
+  tab?: "statistics" | "logs";
+} & Pick<LogsSearch, "type" | "q" | "range" | "from" | "to">;
 
 export function validateFunctionsSearch(input: Record<string, unknown>): FunctionsSearch {
   const fn = str(input.function);
-  const { type, q } = validateLogsSearch(input);
+  // one function's lines: no function or kind filter (UI-01 §22.4)
+  const { type, q, range, from, to } = validateLogsSearch(input);
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
   const tab = input.tab === "statistics" || input.tab === "logs" ? input.tab : undefined;
-  return { function: fn, type, q, tab };
+  return { function: fn, type, q, range, from, to, tab };
 }
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
@@ -80,6 +84,10 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 /** Files (UI-01 §14.3): the order, a day range (`YYYY-MM-DD`, the viewer's zone), the open file. */
 /** The table open in the Schema screen's side panel (STUDY-12 §14). */
 export type SchemaSearch = { table?: string };
+
+/** The Topology screen's open node (UI-01 §22). */
+export type TopologySearch = { node?: string };
+export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
 export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
@@ -115,6 +123,7 @@ const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Ove
 const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
 const EmptyDatabase = lazyRouteComponent(() => import("./database/empty.tsx"), "EmptyDatabase");
 const SchemaScreen = lazyRouteComponent(() => import("./schema/screen.tsx"), "SchemaScreen");
+const TopologyScreen = lazyRouteComponent(() => import("./topology/screen.tsx"), "TopologyScreen");
 const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
@@ -172,6 +181,13 @@ export const tableRoute = createRoute({
     await queryClient.ensureInfiniteQueryData(documentsQuery(scope, params.table, filter)).catch(() => {});
   },
   component: DatabaseScreen,
+});
+
+export const topologyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "topology",
+  validateSearch: validateTopologySearch,
+  component: TopologyScreen,
 });
 
 export const schemaRoute = createRoute({
@@ -270,6 +286,7 @@ export const cronsRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   healthRoute,
+  topologyRoute,
   databaseRoute,
   tableRoute,
   schemaRoute,

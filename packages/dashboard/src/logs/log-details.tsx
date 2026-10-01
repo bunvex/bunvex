@@ -1,9 +1,11 @@
-// A log line's details (STUDY-12 §7): the line, its function, its execution's outcome and duration, every
-// loaded line of the same request, oldest first, and — when the request ran more than one function — the
-// functions it called, as a tree (Convex's "Functions Called"; STUDY-12 L6). "Filter by this request" puts
-// the request id in the text filter.
+// A log line's details (STUDY-12 §7, UI-01 §22.4): when it was (ISO, local and relative), its level, its
+// function, its execution's outcome and duration, the resources it used and who started it, the message,
+// every loaded line of the same request, oldest first, and — when the request ran more than one function —
+// the functions it called, as a tree (Convex's "Functions Called"; STUDY-12 L6); last, the line as raw JSON.
+// "Filter by this request" puts the request id in the text filter.
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
+import { JsonView } from "@bunvex/ui/components/json-view";
 import { cn } from "@bunvex/ui/lib/utils";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 import { useId } from "react";
@@ -52,12 +54,30 @@ function CallItem({ node, current }: { node: CallNode; current?: string }) {
   );
 }
 
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["day", 86_400_000],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+  ["second", 1_000],
+];
+const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+/** "58 seconds ago", "3 minutes ago", "now". */
+export function timeAgo(ms: number, now: number): string {
+  const d = ms - now;
+  for (const [unit, size] of UNITS)
+    if (Math.abs(d) >= size || unit === "second") return relative.format(Math.trunc(d / size), unit);
+  return "now";
+}
+
 export function LogDetails(props: {
   line: LogEntry;
   /** The loaded lines, to find the rest of the request. */
   lines: LogEntry[];
   onFilterByRequest?: (requestId: string) => void;
   onClose: () => void;
+  /** For "58 seconds ago" (tests pin it). */
+  now?: number;
 }) {
   const { line } = props;
   const callsId = useId();
@@ -71,8 +91,31 @@ export function LogDetails(props: {
   const startedBy = end?.execution?.identity;
   const usageId = useId();
   return (
-    <Panel title={<span className="font-mono text-sm">{formatLogTime(line.time)}</span>} onClose={props.onClose}>
+    <Panel
+      kind="logs-details"
+      focusOnOpen={false}
+      title={<span className="font-mono text-sm">{formatLogTime(line.time)}</span>}
+      onClose={props.onClose}
+    >
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+        <dt className="text-muted-foreground">Time</dt>
+        <dd className="min-w-0">
+          <time dateTime={new Date(line.time).toISOString()} className="block font-mono text-xs break-all">
+            {new Date(line.time).toISOString()}
+          </time>
+          <span className="block text-xs text-muted-foreground">
+            {new Date(line.time).toLocaleString()} · {timeAgo(line.time, props.now ?? Date.now())}
+          </span>
+        </dd>
+        <dt className="text-muted-foreground">Level</dt>
+        <dd
+          className={cn(
+            "font-mono text-xs leading-5 uppercase",
+            line.level === "error" ? "text-destructive" : line.level === "warn" && "text-warning",
+          )}
+        >
+          {line.level}
+        </dd>
         {line.function && (
           <>
             <dt className="text-muted-foreground">Function</dt>
@@ -205,6 +248,8 @@ export function LogDetails(props: {
           </ol>
         </>
       )}
+      <h3 className="mt-5 mb-2 text-sm font-medium">Raw JSON</h3>
+      <JsonView value={line} label="This line as JSON" className="text-xs [&_pre]:p-3 [&_pre]:text-xs" />
     </Panel>
   );
 }

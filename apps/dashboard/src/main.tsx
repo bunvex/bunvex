@@ -22,6 +22,8 @@ const source = new MockDataSource({
   // about ten calls a minute over the six hours of history, so the Health charts read as traffic;
   // ?tasks=100000&executions=… for volume, to see how the screens hold up (UI-01 §19.3)
   executions: Number(params.get("executions") ?? 4000),
+  // ?nodes=4: a leader and three followers on the Topology screen (UI-01 §22); one node by default, as today
+  nodes: Number(params.get("nodes") ?? 1),
   ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
 });
 

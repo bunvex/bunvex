@@ -188,14 +188,17 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
   const search = functionsRoute.useSearch();
   const navigate = functionsRoute.useNavigate();
   // Statistics first, as Convex; a link with log filters opens the logs
-  const tab = search.tab ?? (search.type || search.q ? "logs" : "statistics");
-  // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
-  // the list is only this function's, so there is no function filter
+  const tab = search.tab ?? (search.type || search.q || search.range || search.from ? "logs" : "statistics");
+  // the log filters in the URL (`?function=<the open one>&type=&q=&range=` or `&from=&to=`) and kept in this
+  // browser per function; the list is only this function's, so there is no function or kind filter
   const [view, setView] = useLogViewInUrl(
     `bunvex:function-logs:${scope.scope}:${fn.path}`,
-    { type: search.type, q: search.q },
-    ({ type, q }, replace) =>
-      navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q, tab }), replace }),
+    { type: search.type, q: search.q, range: search.range, from: search.from, to: search.to },
+    ({ type, q, range, from, to }, replace) =>
+      navigate({
+        search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q, range, from, to, tab }),
+        replace,
+      }),
   );
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
@@ -235,8 +238,17 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
       <TabsContent value="statistics" className="p-4 md:p-6">
         <FunctionStats fn={fn} />
       </TabsContent>
-      <TabsContent value="logs" className="flex min-h-0 flex-1">
-        <LogsView key={fn.path} label={`Log lines of ${fn.path}`} logs={logs} view={view} onView={setView} />
+      {/* a screen's height of its own, as the Logs screen's: the list scrolls inside (UI-01 §22.4) */}
+      <TabsContent value="logs" className="mt-3 flex h-[calc(100svh-3rem)] min-h-0 flex-none border-t">
+        <LogsView
+          key={fn.path}
+          label={`Log lines of ${fn.path}`}
+          logs={logs}
+          view={view}
+          onView={setView}
+          widthKey="bunvex-dashboard:function-logs-filters-width"
+          exportPrefix={`logs-${fn.path.replace(/[^\w.-]+/g, "_")}`}
+        />
       </TabsContent>
     </Tabs>
   );

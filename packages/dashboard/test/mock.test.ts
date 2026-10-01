@@ -11,6 +11,10 @@ const small = { ...fast, documents: { tasks: 80, messages: 30, users: 12, import
 
 describeDataSourceContract("MockDataSource", () => new MockDataSource(small));
 describeDataSourceContract("MockDataSource with latency", () => new MockDataSource({ ...small, latencyMs: 2 }));
+describeDataSourceContract(
+  "MockDataSource, four nodes",
+  () => new MockDataSource({ ...small, nodes: 4, topologyIntervalMs: 5 }),
+);
 // a fresh source per test, so the writes may fill and empty a table
 describeDataSourceContract("MockDataSource, writes", () => new MockDataSource({ ...small, snapshotStepMs: 1 }), {
   snapshots: { export: true, import: { table: "scratch" } },

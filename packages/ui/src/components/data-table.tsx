@@ -78,6 +78,8 @@ export type DataGridOptions<TData> = {
   activateOnClick?: boolean;
   /** The current cell moved to another row or column (arrows, a click) — e.g. an open details panel follows. */
   onCellFocus?: (row: TData, columnId: string) => void;
+  /** Any single click on a cell (not one that edits it), even on the current cell. */
+  onCellClick?: (row: TData, columnId: string) => void;
   /**
    * The items of a cell's context menu (DropdownMenu items). `edit` starts editing the cell (when it can
    * be edited). Without it, there is no context menu.
@@ -149,6 +151,11 @@ type DataTableProps<TData extends RowData> = {
   highlightChanges?: boolean | HighlightOptions;
   /** Height used before the scroll container is measured (and in environments without layout). */
   initialHeight?: number;
+  /**
+   * Fill the parent (a flex column): no frame of its own, its height the parent's, its footer pinned to its
+   * bottom edge — with few rows the rest is the grid's own background (a screen whose grid is the page).
+   */
+  fill?: boolean;
   className?: string;
 };
 
@@ -180,6 +187,7 @@ function DataTable<TData extends RowData>({
   onColumnStateChange,
   defaultColumnWidth = 180,
   className,
+  fill = false,
 }: DataTableProps<TData>) {
   // ---------------------------------------------------------------- selection: the checkbox column
 
@@ -611,7 +619,7 @@ function DataTable<TData extends RowData>({
     <section
       ref={scroller}
       data-slot="data-table"
-      className={cn("relative max-h-[70vh] overflow-auto border", className)}
+      className={cn("relative overflow-auto", fill ? "flex min-h-0 flex-1 flex-col" : "max-h-[70vh] border", className)}
       aria-labelledby={captionId}
       onFocus={() => {
         hasFocus.current = true;
@@ -624,7 +632,7 @@ function DataTable<TData extends RowData>({
       tabIndex={grid && rows.length > 0 ? undefined : 0}
     >
       <table
-        className="group/grid min-w-full table-fixed border-collapse text-sm"
+        className={cn("group/grid min-w-full table-fixed border-collapse text-sm", fill && "shrink-0")}
         // fixed layout: the widths below are the columns' widths; a wider view stretches them evenly
         style={{ width: columnIds.reduce((sum, id) => sum + widthOf(id), 0) }}
         role={grid ? "grid" : undefined}
@@ -813,7 +821,9 @@ function DataTable<TData extends RowData>({
                             setFocus({ rowId: row.id, col });
                           }}
                           onClick={() => {
-                            if (grid.activateOnClick && !isEditing && !grid.canEdit?.(row.original, cell.column.id))
+                            if (isEditing) return;
+                            grid.onCellClick?.(row.original, cell.column.id);
+                            if (grid.activateOnClick && !grid.canEdit?.(row.original, cell.column.id))
                               grid.onCellActivate?.(row.original, cell.column.id);
                           }}
                           onDoubleClick={() => !isEditing && startEdit(item.index, col)}
@@ -842,7 +852,17 @@ function DataTable<TData extends RowData>({
           )}
         </tbody>
       </table>
-      {footer && <div className="border-t px-3 py-2 text-sm text-muted-foreground">{footer}</div>}
+      {footer && (
+        <div
+          className={cn(
+            "border-t px-3 py-2 text-sm text-muted-foreground",
+            fill && "sticky bottom-0 left-0 z-10 mt-auto bg-background",
+          )}
+          data-slot="data-table-footer"
+        >
+          {footer}
+        </div>
+      )}
       {grid?.cellMenu && (
         <DropdownMenu
           open={menu !== null && menuRow !== undefined}

@@ -172,4 +172,14 @@ describe("groups and layout", () => {
     // top to bottom: a table is drawn below the one it points at… or above; either way the layers differ
     expect(new Set(["a", "b", "c"].map((t) => layout.nodes[t]!.y)).size).toBe(3);
   });
+
+  test("inside a group box the layers are as far apart as outside: room for the reference lines", async () => {
+    const g = buildSchemaGraph(chain(["a", "b", "c"]), [])!;
+    const layout = await computeLayout(g, computeClusters(g));
+    const boxes = ["a", "b", "c"].map((t) => layout.nodes[t]!).sort((p, q) => p.y - q.y);
+    for (let i = 1; i < boxes.length; i++) {
+      const gap = boxes[i]!.y - (boxes[i - 1]!.y + boxes[i - 1]!.height);
+      expect(gap).toBeGreaterThanOrEqual(90);
+    }
+  });
 });
