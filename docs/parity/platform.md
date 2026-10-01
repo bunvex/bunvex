@@ -349,7 +349,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500. Still no `format`, no auth header. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; the others missing. |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
@@ -371,6 +371,8 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
 | Page size / query operators / index key prefix | 1024 / 256 / 2500 bytes | missing | |
 | OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | done (STUDY-21) | Same budget and full-jitter backoff, plus the wait for the conflicting write. The knobs are `Engine` options. |
+| Write-log retention (how old a mutation's snapshot may be at commit) | 30 s floor, 300 s, 50 MiB soft (`WRITE_LOG_MIN_RETENTION_SECS`, `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`) | done (STUDY-06 D10) | Past it: `OutOfRetention`, HTTP 503 / close 1013, not retried as OCC. Knobs are the `Engine` option `writeLogRetention`. A hard byte cap is proposed (DV-128). |
+| Transaction begin window | 10 s (`MAX_TRANSACTION_WINDOW`) | done (STUDY-06 D10) | Only `/api/query_at_ts` begins in the past; further back answers 503. |
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |

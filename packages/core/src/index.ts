@@ -7,7 +7,14 @@ export {
   firstOverlap,
   type Interval,
   type LogEntry,
+  logEntryBytes,
+  MAX_TRANSACTION_WINDOW_US,
+  OutOfRetentionError,
   overlaps,
+  WRITE_LOG_MAX_RETENTION_US,
+  WRITE_LOG_MIN_RETENTION_US,
+  WRITE_LOG_SOFT_MAX_SIZE_BYTES,
+  type WriteLogRetention,
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {

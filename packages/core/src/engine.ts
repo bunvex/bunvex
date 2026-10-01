@@ -17,7 +17,14 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, type Conflict, ConflictError, type Interval, overlaps } from "./committer.ts";
+import {
+  Committer,
+  type Conflict,
+  ConflictError,
+  type Interval,
+  overlaps,
+  type WriteLogRetention,
+} from "./committer.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -137,6 +144,8 @@ export class Engine {
        * another process holds before failing with `LeaseHeldError`.
        */
       lease?: { ttlMs?: number; waitMs?: number };
+      /** The committer's write-log retention (default: Convex's 30 s / 300 s / 50 MiB; STUDY-06 D10). */
+      writeLogRetention?: Partial<WriteLogRetention>;
     } = {},
   ) {
     installDeterminism();
@@ -146,7 +155,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence);
+    this.committer = new Committer(persistence, opts.writeLogRetention);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
       if (this.cache.size === 0) return;
@@ -499,6 +508,8 @@ export class Engine {
             );
         return withTs ? { value, ts } : value;
       } catch (e) {
+        // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
+        // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
         if (failures >= maxRetries) throw this.occError(e.conflict, source);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
