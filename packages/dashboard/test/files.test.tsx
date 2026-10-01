@@ -127,7 +127,7 @@ describe("the Files screen", () => {
     await waitFor(() => expect(rows().some((r) => ids.includes(idOf(r)!))).toBe(false));
   });
 
-  test("look up a file by its storage ID; an unknown one says so", async () => {
+  test("look up a file by its storage ID; one that is not an ID, or a deleted one, says so", async () => {
     const { history, source } = mount("/files");
     await loaded();
     const target = (await all(source))[5]!;
@@ -138,6 +138,10 @@ describe("the Files screen", () => {
     await within(panel).findByText(target.sha256);
     await user.clear(screen.getByRole("textbox", { name: "Look up by storage ID" }));
     await user.type(screen.getByRole("textbox", { name: "Look up by storage ID" }), "nope{Enter}");
+    await within(panel).findByText(/is not a storage ID/);
+    // A well-formed ID with no file (deleted): there is no such file.
+    await user.clear(screen.getByRole("textbox", { name: "Look up by storage ID" }));
+    await user.type(screen.getByRole("textbox", { name: "Look up by storage ID" }), `${"0".repeat(32)}{Enter}`);
     await within(panel).findByText(/There is no file/);
   });
 

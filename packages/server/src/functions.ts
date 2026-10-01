@@ -28,7 +28,7 @@ import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
-import { SYSTEM_QUERIES } from "./system-functions.ts";
+import { SYSTEM_MUTATIONS, SYSTEM_QUERIES } from "./system-functions.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -275,7 +275,19 @@ export class Functions {
       throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
     const msg = checkValue(v.object(q.args), a as Value, this.tableOf);
     if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
-    return this.engine.query((db) => q.handler(db, a as never));
+    return this.engine.query((db) => q.handler(db, a as never, { files: this.fileStorage }));
+  }
+
+  /** A dashboard system mutation (`_system/frontend/*`), as an admin; one transaction, as Convex's. */
+  async runSystemMutation(name: string, args: unknown = {}): Promise<unknown> {
+    const m = SYSTEM_MUTATIONS[name];
+    if (!m) throw new FunctionPathError(`Could not find public function for '${name}'.`);
+    const a = args ?? {};
+    if (!isSimpleObject(a))
+      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    const msg = checkValue(v.object(m.args), a as Value, this.tableOf);
+    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    return this.engine.mutation((db) => m.handler(db, a as never, { files: this.fileStorage }), name);
   }
 
   /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */

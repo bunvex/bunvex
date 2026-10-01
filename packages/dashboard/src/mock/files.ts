@@ -107,6 +107,7 @@ export class MockFiles {
 
   async get(id: string): Promise<StoredFile | null> {
     await this.ready;
+    checkId(id);
     const e = this.entries.find((x) => x.meta.id === id);
     return e ? this.file(e) : null;
   }
@@ -123,8 +124,13 @@ export class MockFiles {
     return this.add(blob, now, true);
   }
 
+  /** All or nothing, as Convex's `deleteFiles`. */
   async delete(ids: string[]) {
     await this.ready;
+    for (const id of ids) checkId(id);
+    for (const id of ids)
+      if (!this.entries.some((e) => e.meta.id === id))
+        throw new DataSourceError("not_found", `storage id ${id} not found`);
     const gone = new Set(ids);
     const before = this.entries.length;
     for (const e of this.entries) if (gone.has(e.meta.id) && e.url?.startsWith("blob:")) URL.revokeObjectURL(e.url);
@@ -143,4 +149,9 @@ export class MockFiles {
       for (const w of this.watchers) w();
     }, 0);
   }
+}
+
+/** The mock's storage ids (32 characters of its id alphabet); anything else is not a storage id. */
+function checkId(id: string) {
+  if (!/^[0-9a-hjkmnp-tv-z]{32}$/.test(id)) throw new DataSourceError("invalid_request", `Invalid ID "${id}"`);
 }
