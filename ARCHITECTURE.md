@@ -77,9 +77,10 @@ bunvex/
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
-│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    M
-│   │   ├── local                    local disk
-│   │   └── s3                       S3 / R2 / MinIO / compatible
+│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    🟡
+│   │   ├── local                    local disk (STUDY-32)                                      ✅
+│   │   ├── s3                       S3 / R2 / MinIO / compatible, Bun's S3Client (STUDY-32)    ✅
+│   │   └── conformance              the suite every backend passes                             ✅
 │   │
 │   ├── auth/                        @bunvex/auth
 │   │   ├── jwt                      verify JWT / OIDC (JWKS), STUDY-27                        ✅
