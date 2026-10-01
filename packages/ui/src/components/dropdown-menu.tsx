@@ -1,7 +1,7 @@
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { cn } from "@bunvex/ui/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
   return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
@@ -92,8 +92,35 @@ function DropdownMenuItem({
   );
 }
 
-function DropdownMenuSub({ ...props }: MenuPrimitive.SubmenuRoot.Props) {
-  return <MenuPrimitive.SubmenuRoot data-slot="dropdown-menu-sub" {...props} />;
+/**
+ * A submenu. Base UI focuses the parent menu's popup when the pointer leaves an item — including the
+ * submenu's own trigger on the way into the submenu — and the submenu then closes as "focus-out" before it
+ * can be clicked (seen in Chrome when the pointer moves quickly). Focus that stays inside this menu tree is
+ * not "out": that close is ignored; hovering a sibling item, Escape, a click outside or picking an item still
+ * close it.
+ */
+function DropdownMenuSub({ open: openProp, defaultOpen, onOpenChange, ...props }: MenuPrimitive.SubmenuRoot.Props) {
+  const [uncontrolled, setUncontrolled] = React.useState(defaultOpen ?? false);
+  const open = openProp ?? uncontrolled;
+  return (
+    <MenuPrimitive.SubmenuRoot
+      data-slot="dropdown-menu-sub"
+      {...props}
+      open={open}
+      onOpenChange={(next, details) => {
+        if (!next && details.reason === "focus-out") {
+          const to = (details.event as FocusEvent | undefined)?.relatedTarget;
+          if (
+            to instanceof Element &&
+            to.closest('[data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"]')
+          )
+            return;
+        }
+        onOpenChange?.(next, details);
+        if (openProp === undefined) setUncontrolled(next);
+      }}
+    />
+  );
 }
 
 function DropdownMenuSubTrigger({

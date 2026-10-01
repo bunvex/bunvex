@@ -49,7 +49,8 @@ export function PauseSection() {
           <div>
             <ConfirmButton
               label={`${verb} deployment`}
-              variant={paused ? "default" : "destructive"}
+              // reversible but disruptive: outlined in the destructive colour; its confirmation keeps the strong one (UX-10)
+              variant={paused ? "default" : "destructive-outline"}
               confirmVariant={paused ? "default" : "destructive"}
               disabled={!allowed}
               title={`${verb} ${name}?`}

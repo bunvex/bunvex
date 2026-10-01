@@ -98,7 +98,7 @@ forever. `drain` now re-checks the queue when it finishes. A test covers it.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | The message has no `See https://docs.convex.dev/error#1` suffix | bunvex never links to Convex's docs (project rule) | accepted (owner, 2026-09-30; DV-81) |
-| D2 | A WebSocket mutation that exhausts its budget gets an error result; Convex ends the connection, and the client re-sends the mutation after reconnecting | Ending the connection only makes sense with protocol v1's idempotent re-send (session + request ids); without it, a re-send could run twice | resolved to match Convex (owner, 2026-09-30) with protocol v1 in #50 (DV-82) |
+| D2 | A WebSocket mutation that exhausts its budget gets an error result; Convex ends the connection, and the client re-sends the mutation after reconnecting | Ending the connection only makes sense with protocol v1's idempotent re-send (session + request ids); without it, a re-send could run twice | resolved with protocol v1: close 1013 and the client re-sends (#50, #63; DV-82) |
 | D3 | `TooManyWrites` is not retried within the budget | bunvex has no write-throughput limit yet | revisit with the limits (a gap in the [ledger](../parity/divergences.md#gaps-recorded-in-studies)) |
 
 ## 5. Tests

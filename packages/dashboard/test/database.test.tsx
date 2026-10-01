@@ -123,7 +123,8 @@ describe("the Database screen", () => {
     await user.click(within(row).getAllByRole("gridcell")[2]!);
     await user.keyboard("{ArrowLeft}{Enter}"); // the _id cell: not editable, so Enter opens the document
     const panel = await screen.findByRole("complementary", { name: id });
-    expect(within(panel).getByLabelText(`Document ${id}`).textContent).toContain(`"_id": "${id}"`);
+    // a JavaScript literal, as everywhere else (UX-1): bare keys
+    expect(within(panel).getByLabelText(`Document ${id}`).textContent).toContain(`_id: "${id}"`);
     expect(history.location.search).toContain(`doc=${id}`);
     await expectAccessible();
     await user.keyboard("{Escape}");
@@ -338,5 +339,24 @@ describe("editing in the grid", () => {
     await user.type(screen.getByRole("textbox"), '"Ada!"{Enter}');
     expect((await screen.findByRole("alert")).textContent).toBe("document too large");
     expect(screen.getByRole("textbox", { name: "Edit name" })).toBeDefined();
+  });
+
+  test("the document panel shows int64 and other values as literals, not the wire form (UX-1)", async () => {
+    const src = mockSource();
+    const [doc] = (await src.listDocuments({ table: "users", numItems: 1, cursor: null })).page;
+    mount(`/database/users?doc=${doc!._id}`, src);
+    const panel = await screen.findByRole("complementary", { name: new RegExp(doc!._id) });
+    const text = (await within(panel).findByLabelText(`Document ${doc!._id}`)).textContent ?? "";
+    expect(text).not.toContain("$integer");
+    expect(text).toMatch(/credits: -?\d+n,/);
+  });
+
+  test("the ⋯ menu also opens the panels (the toolbar hides their buttons on a phone, UX-20)", async () => {
+    const { history } = mount("/database/users");
+    await heading("users");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "More actions on users" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Indexes" }));
+    await waitFor(() => expect(history.location.search).toContain("panel=indexes"));
   });
 });

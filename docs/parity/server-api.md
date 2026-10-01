@@ -252,7 +252,7 @@ Key bunvex facts behind the statuses:
 | `ctx.auth.getUserIdentity()` returns `UserIdentity \| null` in queries, mutations, actions and HTTP actions | server/authentication.ts | partial (STUDY-27) | Queries, mutations and actions (actions pass it to `runQuery` / `runMutation`); HTTP actions do not exist yet. |
 | `UserIdentity` fields (tokenIdentifier, subject, issuer, name, email, emailVerified, …, custom claims) | server/authentication.ts | done (STUDY-27) | `@bunvex/auth` `identityFromOidc` / `identityFromCustomJwt`, with Convex's dropped claims and custom-JWT flattening. |
 | `auth.config.ts` providers: OIDC `{ domain, applicationID }` and `customJwt` `{ issuer, jwks, algorithm RS256/ES256 }` | server/authentication.ts (`AuthConfig`) | done (STUDY-27) | `createServer({ auth })` with `bunvex/auth.config.ts`'s default export (DV-100). |
-| Query cache and subscriptions scoped by identity | crates/application | partial (STUDY-27) | The query cache keys a result by identity only if the run read it (B13 fixed); sync comes next. |
+| Query cache and subscriptions scoped by identity | crates/application | done (STUDY-27) | A result is keyed by identity only if the run read it, in the query cache and in sync's shared executions (B13). |
 
 ### 13. File storage (`ctx.storage`)
 

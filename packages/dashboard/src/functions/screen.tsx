@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/
 import { cn } from "@bunvex/ui/lib/utils";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
@@ -94,6 +94,14 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   const [query, setQuery] = useState("");
   const searchId = useId();
   const tree = useMemo(() => buildFunctionTree(matchFunctions(functions, query)), [functions, query]);
+  // the open function in view inside the tree: stacked on a phone, the tree is short, and the open row
+  // otherwise showed as a sliver at its bottom edge (UX-19)
+  const list = useRef<HTMLUListElement>(null);
+  // a block body: scrollIntoView returns a Promise in recent browsers, and an effect may only return a cleanup
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the open function changes
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
   return (
     <nav
       aria-label="Functions"
@@ -111,7 +119,7 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <ul className="flex-1 overflow-y-auto pb-3">
+      <ul ref={list} className="flex-1 overflow-y-auto pb-3">
         {tree.map((n) => (
           <Branch
             key={n.kind === "folder" ? n.path : n.module}
@@ -129,6 +137,34 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   );
 }
 
+/** Up to this many lines show at once; a longer validator scrolls, and says so (UX-13). */
+const VALIDATOR_LINES = 12;
+
+/** A validator's code: long lines wrap with a hanging indent (UX-12); past 12 lines it scrolls, with a note. */
+export function ValidatorCode({ code }: { code: string }) {
+  const lines = code.split("\n").length;
+  const noteId = useId();
+  const long = lines > VALIDATOR_LINES;
+  return (
+    <>
+      <pre
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
+        tabIndex={0}
+        aria-describedby={long ? noteId : undefined}
+        // 12 lines of text-xs (1rem each) plus the padding
+        className="max-h-[13rem] overflow-auto border bg-muted/40 p-2 pl-6 -indent-4 font-mono text-xs break-words whitespace-pre-wrap"
+      >
+        {code}
+      </pre>
+      {long && (
+        <p id={noteId} className="mt-1 text-xs text-muted-foreground">
+          {lines} lines: scroll for the rest.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** The declared arguments and return validators, as the `v.*` code (STUDY-12 V1). */
 function FunctionValidators({ fn }: { fn: FunctionInfo }) {
   const shown = [
@@ -140,14 +176,7 @@ function FunctionValidators({ fn }: { fn: FunctionInfo }) {
       {shown.map(({ title, v, none }) => (
         <section key={title} aria-label={`${title} validator`} className="min-w-0">
           <h2 className="mb-1 text-sm font-medium">{title}</h2>
-          {v ? (
-            // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
-            <pre tabIndex={0} className="max-h-40 overflow-auto border bg-muted/40 p-2 font-mono text-xs">
-              {displayValidator(v)}
-            </pre>
-          ) : (
-            <p className="text-sm text-muted-foreground">{none}</p>
-          )}
+          {v ? <ValidatorCode code={displayValidator(v)} /> : <p className="text-sm text-muted-foreground">{none}</p>}
         </section>
       ))}
     </div>
@@ -188,7 +217,7 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
           </span>
           <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
             <code className="font-mono text-xs break-all">{fn.path}</code>
-            <CopyButton text={fn.path} label="Copy the function's path" />
+            <CopyButton text={fn.path} label="Copy function path" iconOnly />
             {runner.available && (
               <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
                 <Play aria-hidden="true" />

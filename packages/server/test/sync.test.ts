@@ -7,6 +7,7 @@ import { BunvexError, v } from "@bunvex/values";
 import { action, Functions, mutation, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 import { canonicalizeUdfPath } from "../src/sync.ts";
+import { add, v1Client as client, updated } from "./v1-client.ts";
 
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -60,51 +61,6 @@ async function setup() {
   return { engine, sync, runs, url: `ws://127.0.0.1:${server!.port}/api/1.0.0/sync` };
 }
 
-/** A bare v1 client: sends messages, records what the server sends. */
-async function client(url: string, sessionId: string | null = crypto.randomUUID(), maxObservedTimestamp?: bigint) {
-  const ws = new WebSocket(url);
-  const got: v1.ServerMessage[] = [];
-  ws.onmessage = (m) => got.push(v1.parseServerMessage(String(m.data)));
-  const closed = new Promise<CloseEvent>((r) => (ws.onclose = r));
-  await new Promise((r) => (ws.onopen = r));
-  const send = (m: v1.ClientMessage) => ws.send(v1.encodeClientMessage(m));
-  if (sessionId !== null)
-    send({
-      type: "Connect",
-      sessionId,
-      connectionCount: 0,
-      lastCloseReason: null,
-      clientTs: 0,
-      ...(maxObservedTimestamp === undefined ? {} : { maxObservedTimestamp }),
-    });
-  let querySet = 0;
-  const modify = (modifications: (v1.AddQuery | v1.RemoveQuery)[]) =>
-    send({ type: "ModifyQuerySet", baseVersion: querySet, newVersion: ++querySet, modifications });
-  const transitions = () => got.filter((m): m is v1.Transition => m.type === "Transition");
-  const until = async <T>(f: () => T | undefined) => {
-    for (let i = 0; i < 400; i++) {
-      const x = f();
-      if (x) return x;
-      await Bun.sleep(5);
-    }
-    throw new Error(`timed out; got ${JSON.stringify(got, (_, x) => (typeof x === "bigint" ? `${x}n` : x))}`);
-  };
-  /** The next transition after the first `n` ones. */
-  const transition = (n: number) => until(() => transitions()[n]);
-  return { ws, got, closed, send, modify, transitions, transition, until };
-}
-
-const add = (queryId: number, udfPath: string, args: Record<string, unknown> = {}): v1.AddQuery => ({
-  type: "Add",
-  queryId,
-  udfPath,
-  args: [args as v1.JSONValue],
-});
-const updated = (t: v1.Transition) =>
-  Object.fromEntries(
-    t.modifications.flatMap((m) => (m.type === "QueryUpdated" ? [[m.queryId, m.value]] : [])),
-  ) as Record<number, unknown>;
-
 describe("sync protocol v1", () => {
   test("adding queries: one transition from the initial version with every result", async () => {
     const { url } = await setup();
@@ -130,6 +86,40 @@ describe("sync protocol v1", () => {
     expect(r.success && t.endVersion.ts >= r.ts).toBe(true);
     // No transition ever shows one of them updated without the other.
     for (const x of c.transitions()) expect(Object.keys(updated(x)).length % 2).toBe(0);
+  });
+
+  test("a transition carries the server's send time in ns and the client's clock skew", async () => {
+    const { url } = await setup();
+    const ws = new WebSocket(url);
+    const frames: Record<string, unknown>[] = [];
+    ws.onmessage = (m) => frames.push(JSON.parse(String(m.data)));
+    await new Promise((r) => (ws.onopen = r));
+    const clientTs = Date.now() - 5000; // a client clock 5 s behind
+    ws.send(
+      v1.encodeClientMessage({
+        type: "Connect",
+        sessionId: crypto.randomUUID(),
+        connectionCount: 0,
+        lastCloseReason: null,
+        clientTs,
+      }),
+    );
+    const before = Date.now();
+    ws.send(
+      v1.encodeClientMessage({
+        type: "ModifyQuerySet",
+        baseVersion: 0,
+        newVersion: 1,
+        modifications: [add(1, "m:count", { table: "a" })],
+      }),
+    );
+    for (let i = 0; i < 200 && frames.length === 0; i++) await Bun.sleep(5);
+    const t = frames[0];
+    expect(typeof t.serverTs).toBe("number");
+    expect((t.serverTs as number) / 1e6).toBeGreaterThanOrEqual(before - 1);
+    expect((t.serverTs as number) / 1e6).toBeLessThanOrEqual(Date.now() + 1);
+    expect(t.clientClockSkew as number).toBeLessThan(-4000);
+    ws.close();
   });
 
   test("versions are gapless: each transition starts where the previous one ended", async () => {
