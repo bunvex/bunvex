@@ -1321,6 +1321,20 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
   same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
 
+## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
+
+### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+- **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
+  `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,
+  in the config's order. Needs `viewData` and `viewEnvironmentVariables`. **Contract suite**: when offered and
+  allowed, every provider is well-formed (`isAuthProvider`).
+- **Page** (`settings/auth.tsx`, lazy): a list item per provider named by its kind and domain / issuer, its
+  values as code with copy buttons; none → "This deployment has no authentication providers yet." and where they
+  are declared (Convex links its docs; bunvex has no docs site yet); without both operations the page says why and asks nothing of the source; a source without the method
+  gets the "not offered" screen.
+- **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens

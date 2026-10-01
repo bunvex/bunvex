@@ -2,7 +2,15 @@
 // with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
-import { type Engine, type SessionRequestId, type SessionRequestOutcome, stringifyValue, type Tx } from "@bunvex/core";
+import type { UserIdentity } from "@bunvex/auth";
+import {
+  type Caller,
+  type Engine,
+  type SessionRequestId,
+  type SessionRequestOutcome,
+  stringifyValue,
+  type Tx,
+} from "@bunvex/core";
 import {
   checkValue,
   displayValue,
@@ -20,12 +28,24 @@ import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
 
-export type QueryCtx = { db: Tx };
-export type MutationCtx = { db: Tx };
+/** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
+export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
+export type QueryCtx = { db: Tx; auth: Auth };
+export type MutationCtx = { db: Tx; auth: Auth };
 export type ActionCtx = {
+  auth: Auth;
   runQuery: (name: string, args?: unknown) => Promise<unknown>;
   runMutation: (name: string, args?: unknown) => Promise<unknown>;
 };
+
+/** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
+export const callerOf = (identity: UserIdentity | null): Caller =>
+  identity === null ? { identity: null, key: "" } : { identity, key: stringifyValue(identity) };
+const copy = <T>(x: T): T => (x === null ? x : structuredClone(x));
+/** A transaction's `ctx.auth`: reading the identity marks the result as the caller's (the query cache). */
+const txAuth = (db: Tx): Auth => ({
+  getUserIdentity: async () => copy(db.readIdentity() as UserIdentity | null),
+});
 
 /** `args`: an object of field validators or a validator (Convex's `asObjectValidator`). */
 export type ArgsValidator = PropertyValidators | GenericValidator;
@@ -152,37 +172,45 @@ export class Functions {
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true) {
     const f = this.fn(name, "query", fromClient);
-    return async (db: Tx) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)));
+    return async (db: Tx) => this.checkReturns(f, await f.handler({ db, auth: txAuth(db) }, this.checkArgs(f, args)));
   }
 
-  async runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
-    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args), cachedQueryLogs);
+  /** The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's. */
+  private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown) {
+    return perAttempt(async (db: Tx) =>
+      this.checkReturns(f, await f.handler({ db, auth: txAuth(db) }, this.checkArgs(f, args))),
+    );
+  }
+
+  async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
+    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args), cachedQueryLogs, caller);
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored, with its log lines). */
-  async runQueryJson(name: string, args: unknown): Promise<string> {
-    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args), cachedQueryLogs);
+  async runQueryJson(name: string, args: unknown, caller?: Caller): Promise<string> {
+    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args), cachedQueryLogs, caller);
   }
 
   /** A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Never cached. */
-  async runQueryAtJson(name: string, args: unknown, ts: number): Promise<string> {
-    const r = await this.engine.queryTracked(this.queryBody(name, args, true), {}, ts);
+  async runQueryAtJson(name: string, args: unknown, ts: number, caller?: Caller): Promise<string> {
+    const r = await this.engine.queryTracked(this.queryBody(name, args, true), {}, ts, caller);
     if (!r.ok) throw r.error;
     return stringifyValue(r.value);
   }
 
-  async runMutation(name: string, args: unknown, fromClient = true): Promise<unknown> {
-    return (await this.runMutationWithTs(name, args, fromClient)).value;
+  async runMutation(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
+    return (await this.runMutationWithTs(name, args, fromClient, caller)).value;
   }
 
   /** The same, with the commit ts (what the sync protocol's MutationResponse carries). */
-  runMutationWithTs(name: string, args: unknown, fromClient = true): Promise<{ value: unknown; ts: number }> {
+  runMutationWithTs(
+    name: string,
+    args: unknown,
+    fromClient = true,
+    caller?: Caller,
+  ): Promise<{ value: unknown; ts: number }> {
     const f = this.fn(name, "mutation", fromClient);
-    // perAttempt: a retried run's console lines replace the aborted attempt's (logs.ts).
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
-    return this.engine.mutationWithTs(
-      perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
-      name,
-    );
+    return this.engine.mutationWithTs(this.mutationBody(f, args), name, caller);
   }
 
   /**
@@ -193,22 +221,27 @@ export class Functions {
     name: string,
     args: unknown,
     request: SessionRequestId,
+    caller?: Caller,
   ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
     const f = this.fn(name, "mutation", true);
     return this.engine.sessionMutation(
-      perAttempt(async (db) => this.checkReturns(f, await f.handler({ db }, this.checkArgs(f, args)))),
+      this.mutationBody(f, args),
       name,
       request,
       // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
       (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
+      caller,
     );
   }
 
-  async runAction(name: string, args: unknown): Promise<unknown> {
+  /** An action; the queries and mutations it runs act as its caller (Convex passes the identity on). */
+  async runAction(name: string, args: unknown, caller?: Caller): Promise<unknown> {
     const f = this.fn(name, "action", true);
+    const identity = (caller?.identity ?? null) as UserIdentity | null;
     const ctx: ActionCtx = {
-      runQuery: (n, a) => this.runQuery(n, a, false),
-      runMutation: (n, a) => this.runMutation(n, a, false),
+      auth: { getUserIdentity: async () => copy(identity) },
+      runQuery: (n, a) => this.runQuery(n, a, false, caller),
+      runMutation: (n, a) => this.runMutation(n, a, false, caller),
     };
     const a = this.checkArgs(f, args);
     return Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r));

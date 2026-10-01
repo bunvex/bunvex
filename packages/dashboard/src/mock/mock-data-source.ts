@@ -6,6 +6,7 @@
 import {
   type AuditEvent,
   type AuditEventQuery,
+  type AuthProvider,
   type CallOptions,
   type Capabilities,
   type CronJob,
@@ -50,6 +51,7 @@ import { tableNameProblem } from "../database/table-name.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
 import { MockAudit } from "./audit.ts";
+import { SAMPLE_AUTH_PROVIDERS } from "./auth.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
@@ -80,6 +82,8 @@ export type MockDataSourceOptions = FixtureOptions & {
   sampleFiles?: boolean;
   /** Start with a few past audit events (deploys, index builds, variables). Default true. */
   sampleAudit?: boolean;
+  /** The configured authentication providers (UI-01 §19.1). Default: an OIDC one and a custom JWT one. */
+  authProviders?: AuthProvider[];
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -831,6 +835,17 @@ export class MockDataSource implements DashboardDataSource {
         const action = c.value === null ? "delete" : had.has(c.name) ? "update" : "create";
         this.record(`${action}_environment_variable`, { variable_name: c.name });
       }
+    });
+  }
+
+  // ---------------------------------------------------------------- authentication (§19.1)
+
+  listAuthProviders(opts?: CallOptions): Promise<AuthProvider[]> {
+    return this.call(opts?.signal, () => {
+      const ops = this.opts.capabilities.operations;
+      if (!ops.includes("viewData") || !ops.includes("viewEnvironmentVariables"))
+        throw new DataSourceError("unauthorized", "this credential cannot view the authentication configuration");
+      return structuredClone(this.opts.authProviders ?? SAMPLE_AUTH_PROVIDERS);
     });
   }
 
