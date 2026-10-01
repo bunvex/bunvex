@@ -25,6 +25,12 @@ export class DatabaseTimeoutError extends Error {
  * per round trip, as a per-statement timeout would bound it. When the timer fires, `onTimeout` runs (the
  * driver drops the connection) and the call rejects with `DatabaseTimeoutError` at once; whatever `fn`
  * settles with later is ignored. `ms` of 0 or less, or Infinity, disables the timeout.
+ *
+ * A call that timed out is abandoned, and must issue nothing more: from then on `progress()` throws
+ * `DatabaseTimeoutError`, so a driver that calls it before each statement stops at the next one (a
+ * transaction rolls back instead of sending its next statement or its COMMIT). Without that, the abandoned
+ * attempt of a flush keeps going once the store answers again, and races the committer's retry of the same
+ * group (STUDY-25 §3.5; MongoDB's `withTransaction` even reran its callback on a new transaction).
  */
 export function withTimeout<T>(
   store: string,
@@ -35,9 +41,11 @@ export function withTimeout<T>(
   if (!(ms > 0 && ms < Infinity)) return fn(() => {});
   return new Promise<T>((resolve, reject) => {
     let done = false;
+    let timedOut = false;
     const timer = setTimeout(() => {
       if (done) return;
       done = true;
+      timedOut = true;
       try {
         onTimeout?.();
       } finally {
@@ -53,6 +61,7 @@ export function withTimeout<T>(
     let p: Promise<T>;
     try {
       p = fn(() => {
+        if (timedOut) throw new DatabaseTimeoutError(store, ms);
         if (!done) timer.refresh();
       });
     } catch (e) {
