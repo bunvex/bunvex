@@ -34,6 +34,13 @@ describe("the dev host's mock knobs", () => {
     expect(replaced).toEqual(["/database"]);
   });
 
+  test("volume knobs (tasks, executions) are knobs too", () => {
+    const { env: e, replaced } = env("http://localhost:5173/database/tasks?tasks=100000&executions=4000&panel=schema");
+    const k = takeDevKnobs(e);
+    expect([k.get("tasks"), k.get("executions")]).toEqual(["100000", "4000"]);
+    expect(replaced).toEqual(["/database/tasks?panel=schema"]);
+  });
+
   test("an address with only knobs keeps just its path", () => {
     const { env: e, replaced } = env("http://localhost:5173/logs?fail=0.5");
     expect(takeDevKnobs(e).get("fail")).toBe("0.5");

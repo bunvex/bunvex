@@ -58,6 +58,12 @@ export function describeEvent(e: AuditEvent): string {
       return `Canceled ${n(m.count, "scheduled run")}${m.function ? ` of ${str(m.function)}` : ""}`;
     case "push_config":
       return "Deployed functions";
+    case "request_export":
+      return `Requested a snapshot export${m.include_storage === true ? ", with the stored files" : ""}`;
+    case "snapshot_import":
+      return `Imported ${typeof m.count === "number" ? n(m.count, "document") : "a snapshot"}${
+        Array.isArray(m.table_names) && m.table_names.length > 0 ? ` into ${m.table_names.join(", ")}` : ""
+      }${m.import_mode === "replace" || m.import_mode === "replaceAll" ? " (replacing)" : ""}`;
     case "pause_deployment":
       return "Paused the deployment";
     case "unpause_deployment":
