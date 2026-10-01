@@ -9,14 +9,22 @@ const HEADER = 44;
 const ROW = 26;
 /** Rows a node shows before "N more"; the side panel has them all. */
 export const MAX_ROWS = 12;
+/** Indexes a node lists before "N more indexes", as Convex's `MAX_VISIBLE_INDEXES`. */
+export const MAX_INDEXES = 5;
+const INDEX_HEADER = 28;
 
 export type Size = { width: number; height: number };
 export type Box = { x: number; y: number; width: number; height: number };
 export type Layout = { nodes: Record<string, Box>; clusters: Record<string, Box> };
 
+/** The indexes a table card lists: its own, not the system ones (`by_id`, `by_creation_time`), as Convex. */
+export const userIndexes = (n: SchemaNode) => n.indexes.filter((ix) => !ix.system);
+
 export function nodeSize(n: SchemaNode): Size {
   const rows = Math.max(1, Math.min(n.fields.length, MAX_ROWS) + (n.fields.length > MAX_ROWS ? 1 : 0));
-  return { width: NODE_WIDTH, height: HEADER + rows * ROW + 8 };
+  const ix = userIndexes(n).length;
+  const indexRows = ix === 0 ? 0 : INDEX_HEADER + (Math.min(ix, MAX_INDEXES) + (ix > MAX_INDEXES ? 1 : 0)) * ROW + 4;
+  return { width: NODE_WIDTH, height: HEADER + rows * ROW + 8 + indexRows };
 }
 
 type ElkNode = {

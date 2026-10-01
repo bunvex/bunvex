@@ -774,7 +774,7 @@ which Convex's does not.
   the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
   the query with the route's own search, so only their three keys are taken out.
 
-### 12.5.6 Columns and room for the table
+### 12.5.6 Columns and room for the table (its side-panel rule superseded by §22.1)
 
 - **Columns, per table, kept in this browser** (`localStorage`, per deployment `scope` and table): the
   order and hidden columns from a **Columns** side panel (a checkbox and move up / move down per column,
@@ -1558,3 +1558,32 @@ then diagram only, laid out like the Schema screen, with each node's query cache
   the Cache tab, the docked events lighting a node, permission, not offered; axe; the contract for 1 and 4
   nodes. e2e (real Chromium): nodes, edges, labels, particles and cache strips in both themes, hover dimming,
   the Cache tab, none under reduced motion, the phone layout; Topology in the axe sweep with contrast.
+
+### 22.1 Side panels are docked and resizable (the owner's call, 1 Oct 2026)
+
+Supersedes §12.5.6's rule ("a drawer over the table below 2xl, beside it above"). Every side panel — Database
+(document, schema, indexes, columns, metrics, add documents), Logs details, Files, Schedules (a run, a cron),
+History, Schema's table, Topology's node — is the one `Panel` (`shell/panel.tsx`):
+
+- **Docked**: part of the layout beside the screen's content, which shrinks to make room; never floating over
+  it. At most 45 % of its row, so the content keeps the rest. Below `md` (a phone) there is no room side by
+  side: a full-screen sheet.
+- **Resizable** by dragging its left edge — `ResizeHandle` (the window-splitter pattern, now with a left-edge
+  mode: Left widens, Right narrows, Shift for 64 px, Enter or a double-click puts the default back), 288–760
+  px, default 416 — its width kept in this browser **per kind of panel** (`bunvex-dashboard:panel-width:<kind>`).
+- A complementary landmark named by its title; Escape or the close button closes it; on open it takes the focus
+  (its heading) and on close gives it back to what had it, unless the screen keeps the focus (Logs: the list,
+  whose current line the details follow).
+- Tests: the shared panel (landmark, focus in and back, a screen that keeps it, resize by keyboard within
+  bounds, the width kept per kind); Database's layout classes; e2e: docked beside the content on Database and
+  Topology at 1440 (content ends where the panel starts; dragging the edge widens it and narrows the content),
+  a full-screen sheet at 390.
+
+### 22.2 Schema: indexes on the cards, going to a relation (1 Oct 2026)
+
+As Convex's `TableNode.tsx`: each card shows a table icon (`Table2`, as the tables list) left of its name, its
+fields, then an **Indexes** section — each index's name and fields; system indexes (`by_id`,
+`by_creation_time`) left out; at most 5, then "+N more indexes" — sized into the layout. A field whose type
+references a table (`Id<"users">`) is a button: it **pans to that table, lights it a moment and focuses it**
+(instant under reduced motion), without opening its panel; the panel's references do the same and open it.
+Both canvases fit never past 100 % zoom and share their controls and dot grid.

@@ -57,6 +57,36 @@ describe("the Schema screen", () => {
     await waitFor(() => expect(history.location.search).toBe("?table=tasks"));
   });
 
+  test("a card: the table icon, its fields, then its own indexes (no system ones), as Convex's", async () => {
+    mount("/schema");
+    await heading();
+    await waitFor(() => expect(document.querySelectorAll(".react-flow__node-table").length).toBe(4));
+    const tasks = document.querySelector<HTMLElement>('.react-flow__node-table[data-id="tasks"]')!;
+    expect(tasks.querySelector("svg.lucide-table-2, svg.lucide-table2")).not.toBeNull();
+    const indexes = tasks.querySelector<HTMLElement>("[data-indexes]")!;
+    const rows = within(indexes)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(rows).toEqual(["by_ownerowner", "by_done_prioritydone, priority", "by_texttext"]);
+    expect(indexes.textContent).not.toContain("by_creation_time");
+    expect(indexes.textContent).not.toContain("by_id");
+  });
+
+  test('an Id<"users"> type goes to the users table: lit a moment and focused, the panel unchanged', async () => {
+    const { history } = mount("/schema");
+    await heading();
+    await waitFor(() => expect(document.querySelectorAll(".react-flow__node-table").length).toBe(4));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: 'owner: Id<"users">, go to table users' }));
+    const users = document.querySelector<HTMLElement>('.react-flow__node-table[data-id="users"]')!;
+    await waitFor(() => expect(users.querySelector(":scope > div")!.className).toContain("ring-info"));
+    await waitFor(() => expect(document.activeElement === users).toBe(true));
+    expect(history.location.search).toBe("");
+    await waitFor(() => expect(users.querySelector(":scope > div")!.className).not.toContain("ring-info"), {
+      timeout: 2500,
+    });
+  });
+
   test("an undeclared table is flagged and typed from its documents", async () => {
     mount("/schema?table=imports");
     const panel = await screen.findByRole("complementary", { name: "imports" });

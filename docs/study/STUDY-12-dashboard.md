@@ -686,6 +686,14 @@ search, minimap, controls and side panel. The open table is in the URL (`?table=
 | SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
 | SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
 
+### 14.5 Indexes on the cards and going to a relation (added 1 Oct 2026)
+
+Convex's `TableNode.tsx` lists a table's indexes under its fields (name and fields, at most
+`MAX_VISIBLE_INDEXES` = 5, then "+N more"), and a reference type (`Id<table>`) links to the referenced table:
+`SchemaFlow.tsx` centres it (`setCenter`) and highlights it; `SchemaSidePanel.tsx` links its references the same
+way. bunvex now does both (UI-01 §22.2) — no divergence. Also new, not in Convex: a table icon on each card (the
+owner's request). The side panel became docked and resizable on every screen (UI-01 §22.1, the owner's call).
+
 ## 15. Topology (a bunvex addition, added 1 Oct 2026)
 
 **Convex has no such view** — not in self-hosted, not in the cloud dashboard (Convex Cloud's own topology,

@@ -19,18 +19,31 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { Link2, RotateCcw } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Link2, ListTree, RotateCcw, Table2 } from "lucide-react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQueryScope } from "../context.tsx";
 import { type SchemaSearch, schemaRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { FlowBackground, FlowControls } from "../shell/flow-controls.tsx";
 import { type Cluster, computeClusters } from "./clusters.ts";
 import type { SchemaGraph, SchemaNode } from "./graph.ts";
-import { CLUSTER_TOP, computeLayout, type Layout, MAX_ROWS } from "./layout.ts";
+import { CLUSTER_TOP, computeLayout, type Layout, MAX_INDEXES, MAX_ROWS, userIndexes } from "./layout.ts";
 import { TablePanel } from "./panel.tsx";
 
-type TableData = { node: SchemaNode; dimmed: boolean; linked: boolean };
+type TableData = { node: SchemaNode; dimmed: boolean; linked: boolean; flash: boolean };
+
+/** Go to a referenced table: what a card's `Id<"t">` type does (set by the diagram). */
+const GoToContext = createContext<(table: string) => void>(() => {});
 type GroupData = { label: string; count: number };
 type FlowNode = Node<TableData, "table"> | Node<GroupData, "cluster">;
 
@@ -52,16 +65,20 @@ function useDark(): boolean {
 function TableNodeView({ data, selected }: NodeProps<Node<TableData, "table">>) {
   const { node } = data;
   const shown = node.fields.slice(0, MAX_ROWS);
+  const indexes = userIndexes(node);
+  const goTo = useContext(GoToContext);
   return (
     <div
       className={[
         "w-[272px] border bg-card text-card-foreground shadow-sm transition-opacity",
         selected ? "border-primary ring-2 ring-primary/40" : data.linked ? "border-primary/60" : "",
+        data.flash ? "ring-4 ring-info" : "",
         data.dimmed ? "opacity-35" : "",
       ].join(" ")}
     >
       <Handle type="target" position={Position.Top} className="!size-1.5 !min-w-0 !border-0 !bg-muted-foreground" />
       <div className="flex h-11 items-center gap-2 border-b px-3">
+        <Table2 aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-mono text-sm font-semibold">{node.table}</span>
         {node.notInSchema && (
           <span
@@ -84,9 +101,25 @@ function TableNodeView({ data, selected }: NodeProps<Node<TableData, "table">>) 
               {f.optional && <span className="text-muted-foreground">?</span>}
             </span>
             {f.references.length > 0 && <Link2 aria-hidden="true" className="size-3 shrink-0 text-primary" />}
-            <span title={f.fullType ?? f.type} className="ml-auto min-w-0 truncate text-right text-muted-foreground">
-              {f.type}
-            </span>
+            {f.references.length > 0 ? (
+              // a reference goes to its table, as Convex's: the type is the link
+              <button
+                type="button"
+                title={f.fullType ?? f.type}
+                aria-label={`${f.name}: ${f.type}, go to table ${f.references[0]}`}
+                className="nodrag nopan ml-auto min-w-0 cursor-pointer truncate text-right text-primary underline-offset-2 outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goTo(f.references[0]!);
+                }}
+              >
+                {f.type}
+              </button>
+            ) : (
+              <span title={f.fullType ?? f.type} className="ml-auto min-w-0 truncate text-right text-muted-foreground">
+                {f.type}
+              </span>
+            )}
           </li>
         ))}
         {node.fields.length > MAX_ROWS && (
@@ -95,6 +128,27 @@ function TableNodeView({ data, selected }: NodeProps<Node<TableData, "table">>) 
           </li>
         )}
       </ul>
+      {indexes.length > 0 && (
+        <div className="border-t pb-1" data-indexes="">
+          <p className="px-3 text-xs leading-7 text-muted-foreground">Indexes</p>
+          <ul className="font-mono text-xs">
+            {indexes.slice(0, MAX_INDEXES).map((ix) => (
+              <li key={ix.name} className="flex h-[26px] items-center gap-2 px-3">
+                <ListTree aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 shrink truncate">{ix.name}</span>
+                <span className="ml-auto min-w-0 truncate text-right text-muted-foreground">
+                  {ix.fields.join(", ")}
+                </span>
+              </li>
+            ))}
+            {indexes.length > MAX_INDEXES && (
+              <li className="h-[26px] px-3 leading-[26px] text-muted-foreground">
+                +{indexes.length - MAX_INDEXES} more {indexes.length - MAX_INDEXES === 1 ? "index" : "indexes"}
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
       <Handle type="source" position={Position.Bottom} className="!size-1.5 !min-w-0 !border-0 !bg-muted-foreground" />
     </div>
   );
@@ -160,6 +214,8 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   const clusters = useMemo(() => (grouped ? computeClusters(graph) : []), [graph, grouped]);
   const [layout, setLayout] = useState<Layout>();
   const [query, setQuery] = useState("");
+  /** A table lit a moment after going to it. */
+  const [flash, setFlash] = useState<string>();
   const hits = useMemo(() => search(graph, clusters, query), [graph, clusters, query]);
   const matching = useMemo(() => (query.trim() ? new Set(hits.map((h) => h.table)) : undefined), [hits, query]);
   const searchId = useId();
@@ -219,7 +275,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
         position: { x: b.x, y: b.y },
         width: b.width,
         height: b.height,
-        data: { node: n, dimmed: false, linked: false },
+        data: { node: n, dimmed: false, linked: false, flash: false },
         ariaLabel: `Table ${n.table}: ${n.fields.length} fields${refs.length ? `, references ${[...new Set(refs)].join(", ")}` : ""}${n.notInSchema ? ", not in the schema" : ""}`,
       };
     });
@@ -234,10 +290,15 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
         return {
           ...n,
           selected: n.id === selected,
-          data: { ...n.data, dimmed: matching ? !matching.has(n.id) : false, linked: linked.has(n.id) },
+          data: {
+            ...n.data,
+            dimmed: matching ? !matching.has(n.id) : false,
+            linked: linked.has(n.id),
+            flash: n.id === flash,
+          },
         };
       }),
-    [nodes, selected, matching, linked],
+    [nodes, selected, matching, linked, flash],
   );
 
   const edges = useMemo<Edge[]>(
@@ -270,12 +331,27 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   useEffect(() => {
     if (!layout || fitted.current || nodes.length === 0) return;
     fitted.current = true;
-    requestAnimationFrame(() => void flow.fitView({ padding: 0.15, duration: 0 }));
+    // never past 100 %: a small schema would otherwise fill the canvas with oversized cards
+    requestAnimationFrame(() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 0 }));
   }, [layout, nodes.length, flow]);
 
+  // go to a referenced table: pan to it, light it a moment, give it the focus (instant under reduced motion)
+  const goTo = useCallback(
+    (table: string) => {
+      void flow.fitView({ nodes: [{ id: table }], padding: 0.6, maxZoom: 1, duration });
+      setFlash(table);
+      setTimeout(() => setFlash((f) => (f === table ? undefined : f)), 1200);
+      setTimeout(
+        () => document.querySelector<HTMLElement>(`.react-flow__node-table[data-id="${CSS.escape(table)}"]`)?.focus(),
+        duration,
+      );
+    },
+    [flow, duration],
+  );
+  /** From the panel (a reference, a search hit): open the table too. */
   const focusTable = (table: string) => {
     select(table);
-    void flow.fitView({ nodes: [{ id: table }], padding: 0.6, maxZoom: 1.2, duration });
+    goTo(table);
   };
 
   return (
@@ -352,70 +428,72 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
             }
           }}
         >
-          <ReactFlow
-            nodes={shown}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onNodeClick={(_, n) => n.type === "table" && select(n.id)}
-            onPaneClick={() => selected && select(undefined)}
-            colorMode={dark ? "dark" : "light"}
-            minZoom={0.1}
-            maxZoom={2}
-            nodesConnectable={false}
-            edgesFocusable={false}
-            elementsSelectable={false}
-            nodesFocusable
-            onlyRenderVisibleElements={graph.nodes.length > 60}
-            proOptions={{ hideAttribution: true }}
-            className="[--xy-background-color:var(--color-background)] [--xy-edge-label-background-color:var(--color-background)] [--xy-edge-label-color:var(--color-foreground)] [--xy-minimap-background-color:var(--color-card)] [--xy-node-border-radius:0]"
-          >
-            <FlowBackground />
-            <MiniMap
-              pannable
-              zoomable
-              ariaLabel="Minimap of the schema"
-              nodeColor={(n) =>
-                n.type === "cluster"
-                  ? "transparent"
-                  : n.id === selected
-                    ? "var(--color-primary)"
-                    : "var(--color-muted-foreground)"
-              }
-              nodeStrokeColor={(n) => (n.type === "cluster" ? "var(--color-border)" : "transparent")}
-              maskColor="color-mix(in oklab, var(--color-background) 70%, transparent)"
-              className="!hidden border md:!block"
-            />
-            <FlowControls
-              onZoomIn={() => void flow.zoomIn({ duration })}
-              onZoomOut={() => void flow.zoomOut({ duration })}
-              onFit={() => void flow.fitView({ padding: 0.15, duration })}
+          <GoToContext.Provider value={goTo}>
+            <ReactFlow
+              nodes={shown}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange}
+              onNodeClick={(_, n) => n.type === "table" && select(n.id)}
+              onPaneClick={() => selected && select(undefined)}
+              colorMode={dark ? "dark" : "light"}
+              minZoom={0.1}
+              maxZoom={2}
+              nodesConnectable={false}
+              edgesFocusable={false}
+              elementsSelectable={false}
+              nodesFocusable
+              onlyRenderVisibleElements={graph.nodes.length > 60}
+              proOptions={{ hideAttribution: true }}
+              className="[--xy-background-color:var(--color-background)] [--xy-edge-label-background-color:var(--color-background)] [--xy-edge-label-color:var(--color-foreground)] [--xy-minimap-background-color:var(--color-card)] [--xy-node-border-radius:0]"
             >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Reset layout"
-                onClick={() => setGeneration((g) => g + 1)}
+              <FlowBackground />
+              <MiniMap
+                pannable
+                zoomable
+                ariaLabel="Minimap of the schema"
+                nodeColor={(n) =>
+                  n.type === "cluster"
+                    ? "transparent"
+                    : n.id === selected
+                      ? "var(--color-primary)"
+                      : "var(--color-muted-foreground)"
+                }
+                nodeStrokeColor={(n) => (n.type === "cluster" ? "var(--color-border)" : "transparent")}
+                maskColor="color-mix(in oklab, var(--color-background) 70%, transparent)"
+                className="!hidden border md:!block"
+              />
+              <FlowControls
+                onZoomIn={() => void flow.zoomIn({ duration })}
+                onZoomOut={() => void flow.zoomOut({ duration })}
+                onFit={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration })}
               >
-                <RotateCcw aria-hidden="true" />
-              </Button>
-              <label className="flex items-center gap-1.5 px-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={grouped}
-                  onChange={(e) => {
-                    setGrouped(e.target.checked);
-                    try {
-                      localStorage.setItem(groupsKey(scope), e.target.checked ? "on" : "off");
-                    } catch {
-                      // storage off: the choice lasts for this visit
-                    }
-                  }}
-                />
-                Group related tables
-              </label>
-            </FlowControls>
-          </ReactFlow>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Reset layout"
+                  onClick={() => setGeneration((g) => g + 1)}
+                >
+                  <RotateCcw aria-hidden="true" />
+                </Button>
+                <label className="flex items-center gap-1.5 px-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={grouped}
+                    onChange={(e) => {
+                      setGrouped(e.target.checked);
+                      try {
+                        localStorage.setItem(groupsKey(scope), e.target.checked ? "on" : "off");
+                      } catch {
+                        // storage off: the choice lasts for this visit
+                      }
+                    }}
+                  />
+                  Group related tables
+                </label>
+              </FlowControls>
+            </ReactFlow>
+          </GoToContext.Provider>
         </section>
       </div>
       {selected && (

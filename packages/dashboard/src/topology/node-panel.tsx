@@ -26,7 +26,7 @@ export function NodePanel({
 }) {
   const span = n.history.length > 1 ? Math.round((n.history.at(-1)!.time - n.history[0]!.time) / 1000) : 0;
   return (
-    <Panel title={<span className="font-mono">{n.id}</span>} onClose={onClose}>
+    <Panel kind="topology-node" title={<span className="font-mono">{n.id}</span>} onClose={onClose}>
       <Tabs defaultValue="overview">
         <TabsList variant="line">
           <TabsTrigger value="overview" className="text-sm">

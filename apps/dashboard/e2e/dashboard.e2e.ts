@@ -370,6 +370,60 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("side panels are docked beside the content (it shrinks), resizable; a full-screen sheet on a phone", async () => {
+    for (const [path, name, content] of [
+      ["/database/users?panel=indexes", "Indexes of users", '[data-slot="data-table"]'],
+      ["/topology?nodes=4&node=node-b", "node-b", '[aria-label="Topology diagram"]'],
+    ] as const) {
+      const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
+      const panel = page.getByRole("complementary", { name });
+      await panel.waitFor();
+      await page.locator(content).first().waitFor();
+      const p = (await panel.boundingBox())!;
+      const c = (await page.locator(content).first().boundingBox())!;
+      // side by side: the content ends where the panel starts, nothing under the panel
+      expect(c.x + c.width).toBeLessThanOrEqual(p.x + 1);
+      expect(p.x + p.width).toBeGreaterThanOrEqual(1439);
+      // drag its edge 100 px right: the panel narrows, the content widens to match (it never passes 45 % of its row)
+      const handle = panel.getByRole("separator", { name: "Resize the panel" });
+      const h = (await handle.boundingBox())!;
+      await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(h.x + h.width / 2 + 100, h.y + h.height / 2, { steps: 5 });
+      await page.mouse.up();
+      await expect_(async () => expect((await panel.boundingBox())!.width).toBeCloseTo(p.width - 100, -1));
+      const c2 = (await page.locator(content).first().boundingBox())!;
+      expect(c2.width).toBeGreaterThan(c.width + 50);
+      expect(c2.x + c2.width).toBeLessThanOrEqual((await panel.boundingBox())!.x + 1);
+      expect(errors).toEqual([]);
+      await close();
+    }
+    const phone = await open("/database/users?panel=indexes", { viewport: { width: 390, height: 844 } });
+    const sheet = phone.page.getByRole("complementary", { name: "Indexes of users" });
+    await sheet.waitFor();
+    const s = (await sheet.boundingBox())!;
+    expect([Math.round(s.x), Math.round(s.width)]).toEqual([0, 390]);
+    expect(await sheet.getByRole("separator").isVisible()).toBe(false);
+    await phone.close();
+  });
+
+  test('Schema: an Id<"users"> type pans to users, lights it and focuses it', async () => {
+    const { page, errors, close } = await open("/schema");
+    await heading(page, "Schema");
+    const users = page.locator('.react-flow__node-table[data-id="users"]');
+    await users.waitFor();
+    await page.getByRole("button", { name: 'owner: Id<"users">, go to table users' }).click();
+    await expect_(async () => expect(await users.locator(":scope > div").getAttribute("class")).toContain("ring-info"));
+    await expect_(async () => expect(await users.evaluate((n) => n === document.activeElement)).toBe(true));
+    const box = (await users.boundingBox())!;
+    const canvas = (await page.locator(".react-flow").first().boundingBox())!;
+    // in view after the pan
+    expect(box.x).toBeGreaterThanOrEqual(canvas.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");
