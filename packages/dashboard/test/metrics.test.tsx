@@ -3,6 +3,7 @@ import { Dashboard, REST } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { lastHour, topSeries } from "../src/metrics/metrics.ts";
 import { executionsOf } from "../src/mock/metrics.ts";
 import { expectAccessible } from "./axe.ts";
@@ -84,5 +85,54 @@ describe("Health: the last hour's function metrics", () => {
     (src as { topFunctions?: unknown }).topFunctions = undefined;
     mount(src);
     expect(await screen.findByText("This deployment does not report metrics.")).toBeDefined();
+  });
+});
+
+describe("Functions: a function's Statistics tab", () => {
+  const open = (path: string, src: MockDataSource = source()) => {
+    const history = createMemoryHistory({ initialEntries: [path] });
+    render(<Dashboard dataSource={src} history={history} />);
+    return history;
+  };
+
+  test("a query: calls, errors, execution time percentiles labelled at their ends, cache hit rate", async () => {
+    open("/functions?function=tasks:list");
+    const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
+    const charts = await within(panel).findAllByRole("region");
+    expect(charts.map((c) => c.getAttribute("aria-labelledby") && c.querySelector("h3")?.textContent)).toEqual([
+      "Function calls",
+      "Errors",
+      "Execution time",
+      "Cache hit rate",
+    ]);
+    const latency = within(panel).getByRole("region", { name: "Execution time" });
+    await within(latency).findByRole("figure");
+    const labels = [...latency.querySelectorAll("svg text")].map((t) => t.textContent);
+    for (const p of ["p50", "p90", "p95", "p99"]) expect(labels).toContain(p);
+    await expectAccessible();
+  });
+
+  test("a mutation has no cache hit rate", async () => {
+    open("/functions?function=tasks:create");
+    const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
+    await within(panel).findByRole("region", { name: "Errors" });
+    expect(within(panel).queryByRole("region", { name: "Cache hit rate" })).toBeNull();
+  });
+
+  test("a credential that may not view metrics is told so on the tab", async () => {
+    open(
+      "/functions?function=tasks:list",
+      source({ capabilities: { operations: ["viewData", "viewLogs"], readOnly: true } }),
+    );
+    const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
+    expect(await within(panel).findByText("This credential may not view metrics.")).toBeDefined();
+  });
+
+  test("the tab is in the URL; a link with log filters opens the logs", async () => {
+    const history = open("/functions?function=tasks:list&type=failure");
+    expect((await screen.findByRole("tab", { name: "Logs" })).getAttribute("aria-selected")).toBe("true");
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Statistics" }));
+    expect(new URLSearchParams(history.location.search).get("tab")).toBe("statistics");
+    expect(new URLSearchParams(history.location.search).get("type")).toBe("failure"); // the filters stay
   });
 });

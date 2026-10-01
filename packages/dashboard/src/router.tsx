@@ -37,13 +37,14 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** The Functions screen's URL state: the open function (`module:name`), as in Convex. */
 /** The open function, and its log filters (as the Logs screen's `type` and `q`). */
-export type FunctionsSearch = { function?: string; type?: string; q?: string };
+export type FunctionsSearch = { function?: string; type?: string; q?: string; tab?: "statistics" | "logs" };
 
 export function validateFunctionsSearch(input: Record<string, unknown>): FunctionsSearch {
   const fn = str(input.function);
   const { type, q } = validateLogsSearch(input);
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  return { function: fn, type, q };
+  const tab = input.tab === "statistics" || input.tab === "logs" ? input.tab : undefined;
+  return { function: fn, type, q, tab };
 }
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
