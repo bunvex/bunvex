@@ -28,7 +28,16 @@ export type UncaughtError = { message: string; data?: JSONValue };
  * of Convex's `JsError` display. A `BunvexError` also carries its data as JSON; a `BunvexError` whose data
  * is not a value becomes an error about that instead, with no data (Convex does the same).
  */
+/**
+ * An error the runtime reports with its message alone (no `Uncaught`, no frames), as Convex's
+ * `JsError::from_message`: a function that does not exist, or of another kind.
+ */
+export class FunctionPathError extends Error {
+  override name = "FunctionPathError";
+}
+
 export function describeUncaught(e: unknown): UncaughtError {
+  if (e instanceof FunctionPathError) return { message: `${e.message}\n` };
   if (!(e instanceof Error)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
     return { message: `Uncaught ${what}\n` };
