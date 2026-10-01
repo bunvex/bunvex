@@ -12,8 +12,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether the change touches anything but documentation. A docs-only PR (docs/, *.md, .changeset/,
+  # LICENSE, NOTICE) still runs the site's tests, which read README.md, ARCHITECTURE.md and docs/; the
+  # rest is skipped. Skipped jobs count as passed for the required checks, so the merge queue still
+  # gets its statuses (a workflow skipped by `paths-ignore` would never report them). A push to main
+  # always runs everything.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) base="${{ github.event.pull_request.base.sha }}" ;;
+            merge_group) base="${{ github.event.merge_group.base_sha }}" ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          files=$(git diff --name-only "$base" HEAD)
+          echo "$files"
+          if printf '%s\n' "$files" | grep -vE '^(docs/|\.changeset/)|\.md$|^(LICENSE|NOTICE)$' | grep -q .; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: lint · typecheck · dependency rules · tests
+    needs: changes
+    # Fail safe: if `changes` itself failed, its output is empty and everything runs.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,19 +53,30 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bun run lint
-      - run: bun run typecheck
-      - run: bun run check:deps
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run lint
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run typecheck
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run check:deps
       # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite,
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
-      - run: bun run test
-      - run: bun run build:dashboard
-      - run: bun run build:site
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run test
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run build:dashboard
+      - if: needs.changes.outputs.code != 'false'
+        run: bun run build:site
+      # A docs-only change: the site's tests read the docs (roadmap phases, links to repository files).
+      - if: needs.changes.outputs.code == 'false'
+        run: bun run --cwd apps/site test
 
   # The dashboard in a real browser (UI-01 §12.5.10): Monaco, layout, contrast, reduced motion — what the
   # DOM tests cannot see. Not a required check (yet): the owner decides once it has proved stable.
   e2e:
     name: e2e · dashboard in Chromium
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +94,8 @@ jobs:
   # One job per external store, in parallel; `conformance` below keeps the required check's name.
   conformance-postgres:
     name: conformance · Postgres
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -76,6 +121,8 @@ jobs:
 
   conformance-mysql:
     name: conformance · MySQL
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -101,6 +148,8 @@ jobs:
 
   conformance-mongodb:
     name: conformance · MongoDB
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     services:
       mongodb:
@@ -124,11 +173,12 @@ jobs:
   conformance:
     name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
     if: always()
-    needs: [conformance-postgres, conformance-mysql, conformance-mongodb]
+    needs: [changes, conformance-postgres, conformance-mysql, conformance-mongodb]
     runs-on: ubuntu-latest
     steps:
-      - name: all three stores passed
+      - name: all three stores passed (or a docs-only change)
         run: |
+          if [ "${{ needs.changes.outputs.code }}" = false ]; then echo "docs-only change: conformance not needed"; exit 0; fi
           echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }} mongodb=${{ needs.conformance-mongodb.result }}"
           test "${{ needs.conformance-postgres.result }}" = success
           test "${{ needs.conformance-mysql.result }}" = success
