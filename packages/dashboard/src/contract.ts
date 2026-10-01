@@ -6,6 +6,7 @@
 // Reads need one table with at least 3 documents. WRITES RUN ONLY when `writes.table` names a table the
 // suite may fill and empty — never point it at data you want to keep.
 import { test as bunTest, describe, expect } from "bun:test";
+import { describeAuthContract } from "./contract-auth.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
@@ -556,6 +557,7 @@ export function describeDataSourceContract(
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
     describeDeploymentStateContract({ make, test, opts });
     describeMetricsContract({ make, test });
+    describeAuthContract({ make, test });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;
