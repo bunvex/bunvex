@@ -19,6 +19,9 @@ const source = new MockDataSource({
   liveWritesMs: Number(params.get("writes") ?? 3000),
   // ?tables=0: a deployment with no tables yet
   tables: params.get("tables") !== "0",
+  // ?tasks=100000&executions=4000: volume, to see how the screens hold up (UI-01 §19.3)
+  ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
+  ...(params.has("executions") && { executions: Number(params.get("executions")) }),
 });
 
 createRoot(document.getElementById("root")!).render(

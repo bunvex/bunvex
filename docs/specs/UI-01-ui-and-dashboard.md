@@ -1315,3 +1315,24 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   booleans are read as such, empty cells left out; `request_export` and `snapshot_import` go to the audit log
   (History says them in words).
 
+### 19.3 Volume
+
+Measured in headless Chrome against the production build (`vite preview`), with the dev host's new volume
+knobs `?tasks=100000&executions=4000` (100 000 tasks; ~10 000 log lines): the Database screen opened on
+`tasks`, then scrolled to the end 15 times (16 pages, 1 600 rows); a field filter (`done = true`); the Logs
+screen scrolled until ~8 450 lines were loaded, then 10 characters typed in its filter. "Long tasks" are the
+browser's (> 50 ms on the main thread).
+
+| | before | after |
+|---|---|---|
+| Database: long tasks while loading 15 more pages | 16, max 186 ms, total 2 779 ms | **1, 71 ms** |
+| Database: first rows | 594 ms | 483 ms |
+| Logs: long tasks while scrolling to ~8 450 lines, and while filtering them | none | none |
+
+- The cost was the **mock's** `listDocuments`: every page filtered, sorted with a key built per comparison,
+  and cloned every matching document — 170 ms a page at 100 000 documents (in Bun). It now builds each key
+  once and clones only the page: **13 ms** a page. The dashboard's own work (the grid, virtualized; React)
+  stays under the long-task line; a profile of the scrolling shows the rest is React rendering the new rows.
+- Left as is: opening the page with 100 000 tasks has one ~260 ms task — the mock generating them, in the
+  dev host only. A real server pages from an index.
+
