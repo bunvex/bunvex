@@ -34,6 +34,12 @@ describe("the dev host's mock knobs", () => {
     expect(replaced).toEqual(["/database"]);
   });
 
+  test("nodes is a knob too", () => {
+    const { env: e, replaced } = env("http://localhost:5173/topology?nodes=4&node=node-b");
+    expect(takeDevKnobs(e).get("nodes")).toBe("4");
+    expect(replaced).toEqual(["/topology?node=node-b"]);
+  });
+
   test("volume knobs (tasks, executions) are knobs too", () => {
     const { env: e, replaced } = env("http://localhost:5173/database/tasks?tasks=100000&executions=4000&panel=schema");
     const k = takeDevKnobs(e);

@@ -294,6 +294,26 @@ describe("the dashboard in a browser", () => {
     expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
   });
 
+  test("Topology: one node today; with four, the lanes, a follower's lag and its details", async () => {
+    const one = await open("/topology");
+    await heading(one.page, "Topology");
+    await one.page.getByText("Followers appear here when bunvex runs more than one node.").waitFor();
+    expect(await one.page.getByRole("region", { name: "Followers" }).count()).toBe(0);
+    await one.close();
+    const { page, errors, close } = await open("/topology?nodes=4");
+    await heading(page, "Topology");
+    const followers = page.getByRole("region", { name: "Followers" });
+    expect(await followers.getByRole("button").count()).toBe(3);
+    expect(await followers.getByRole("button").first().textContent()).toMatch(/ms behind/);
+    await followers.getByRole("button").first().click();
+    const panel = page.getByRole("complementary", { name: "node-b" });
+    await panel.getByText(/^Lag, last \d+ s$/).waitFor();
+    await page.keyboard.press("Escape");
+    await panel.waitFor({ state: "detached" });
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");
@@ -473,6 +493,8 @@ describe("the dashboard in a browser", () => {
         ["/settings/general", "Settings"],
         ["/settings/authentication", "Settings"],
         ["/settings/snapshots", "Settings"],
+        ["/topology?nodes=4", "Topology"],
+        ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

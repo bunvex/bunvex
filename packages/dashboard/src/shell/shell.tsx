@@ -17,6 +17,7 @@ import {
   Play,
   ScrollText,
   Settings,
+  Waypoints,
 } from "lucide-react";
 import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
@@ -102,6 +103,12 @@ export function Shell() {
               <DashLink link={{ to: "/", activeOptions: { exact: true } }} className={NAV_LINK}>
                 <Activity className={ICON} aria-hidden="true" />
                 Health
+              </DashLink>
+            </li>
+            <li>
+              <DashLink link={{ to: "/topology" }} className={NAV_LINK}>
+                <Waypoints className={ICON} aria-hidden="true" />
+                Topology
               </DashLink>
             </li>
             <li>

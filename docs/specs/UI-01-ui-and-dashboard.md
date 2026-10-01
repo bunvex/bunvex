@@ -1501,3 +1501,26 @@ a table), lazy like the other screens.
   from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
   grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
 
+## 22. Amendment — Topology (1 Oct 2026)
+
+A **bunvex addition** (STUDY-12 §15): who is running and how it connects, after STUDY-24's roles.
+
+- **Contract** (`data-source-topology.ts`): optional `getTopology()` and `watchTopology(onTopology, onError)`,
+  needing `viewMetrics`. A `Topology` is the leader first then followers by id (role, state `ok` / `lagging` /
+  `down`, version, uptime, CPU, memory, connections, subscriptions, cache hit rate, a follower's lag in
+  commits and ms, the leader's commits per second, who runs the scheduler, actions running, a minute of
+  samples), the **store** (driver, single-node or not, lease holder, expiry and TTL, latency, size,
+  connections) and recent **events** newest first. The contract suite checks the shape (`contract-topology.ts`).
+- **Mock** (`mock/topology.ts`): `nodes` (default 1, as today; the dev host's `?nodes=4`) — with several, the
+  store is Postgres, clients connect to followers, and one follower drifts behind and catches up, emitting
+  events. Its own clock, so a fixed `now` stays consistent.
+- **Screen** (`/topology`, lazy): a one-line summary ("Leader node-a · 3 followers · 881 clients · max lag 680
+  ms · Postgres OK"); lanes by role, left to right — **Clients** (connections per serving node), **Followers**
+  (cards with state as icon + word, lag in words and as a bar against a 1 s scale), **Leader** (commits/s,
+  "streams to N followers", "Runs the scheduler"), **Store** (lease holder and renewal, or "One node: a file
+  lock keeps a second one out"); one node shows Clients → Node → Store and where followers will appear. Lanes
+  are regions with lists; every link is also said in words; on a phone they stack. **Events** below. A node
+  opens a side panel (`?node=`) with all its vitals and CPU and lag (or connections) sparklines.
+- Tests: the words (summary, lag, uptime, events), one node, four nodes, a lagging follower, the events feed,
+  the panel in the URL and Escape, no permission, not offered; axe; the contract for 1 and 4 nodes; an e2e
+  case and Topology in the e2e axe sweep (contrast, both themes).

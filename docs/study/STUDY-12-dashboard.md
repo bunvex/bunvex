@@ -686,3 +686,32 @@ search, minimap, controls and side panel. The open table is in the URL (`?table=
 | SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
 | SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
 
+## 15. Topology (a bunvex addition, added 1 Oct 2026)
+
+**Convex has no such view** — not in self-hosted, not in the cloud dashboard (Convex Cloud's own topology,
+Usher and funrun, is internal). The owner asked for one as a bunvex addition (1 Oct 2026), inspired by their
+minivex work but designed from scratch on STUDY-24's roles; it is recorded here as an owner-decided addition,
+not a divergence.
+
+### 15.1 What it shows
+
+STUDY-24 settles how bunvex scales out: one **leader** commits, holds the **lease** on the store (TTL on the
+store's clock, graceful release, H5), runs the **scheduler** (H6) and pushes the **commit stream**;
+**followers** hold the clients' WebSockets and serve queries and subscriptions, catching up by commit
+timestamp, and a follower too far behind waits and then refuses new connections (H9); actions run on any node
+after an owner-tagged claim (H6); memory and SQLite keep one node behind a file lock (H7). The screen draws
+exactly that, in lanes by role (the owner's choice among four layouts): Clients → Followers ← Leader → Store.
+
+### 15.2 Decisions (owner, 1 Oct 2026)
+
+| # | What | Decided |
+|---|---|---|
+| T1 | Its own nav entry, **Topology**, next to Health | yes |
+| T2 | Lanes by role (not a free canvas, a table, or a hybrid); links said in words on the cards | yes |
+| T3 | v1: nodes, roles, state and lag; store and lease; per-node vitals; an events feed | yes |
+| T4 | One node (bunvex today) shows the node and its store, and says where followers will appear | yes |
+| T5 | The contract's optional `getTopology` / `watchTopology`, needing `viewMetrics` (no new operation) | my call, owner can veto |
+| T6 | Topology events are their own list in the picture (joined, left, leader changed, lease taken or expired, fell behind, caught up), not the audit log: the audit log records what people did, these are what the system did | my call, owner can veto |
+
+Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
+own clock for the lease; per-node logs.
