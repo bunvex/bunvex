@@ -69,8 +69,11 @@ function Cell({ field, value }: { field: string; value: Document[string] | undef
   const c = cellText(field, value);
   return (
     <span
-      title={c.kind === "json" || c.kind === "string" || c.kind === "bytes" ? c.text : undefined}
+      title={c.kind === "json" || c.kind === "string" || c.kind === "bytes" || c.kind === "int64" ? c.text : undefined}
+      // a block that truncates with an ellipsis; numbers right-aligned so magnitudes line up (UX-21)
       className={cn(
+        "block truncate",
+        (c.kind === "number" || c.kind === "int64") && "text-right",
         (c.kind === "id" || c.kind === "json" || c.kind === "boolean" || c.kind === "int64" || c.kind === "bytes") &&
           "font-mono text-xs",
         (c.kind === "null" || c.kind === "json") && "text-muted-foreground",
@@ -286,6 +289,7 @@ function TableView({ info }: { info: TableInfo }) {
             <Button
               variant="ghost"
               size="sm"
+              className="hidden sm:inline-flex"
               aria-pressed={search.panel === "schema" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "schema" ? undefined : "schema" })}
             >
@@ -294,6 +298,7 @@ function TableView({ info }: { info: TableInfo }) {
             <Button
               variant="ghost"
               size="sm"
+              className="hidden sm:inline-flex"
               aria-pressed={search.panel === "indexes" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "indexes" ? undefined : "indexes" })}
             >
@@ -302,12 +307,22 @@ function TableView({ info }: { info: TableInfo }) {
             <Button
               variant="ghost"
               size="sm"
+              className="hidden sm:inline-flex"
               aria-pressed={search.panel === "columns" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "columns" ? undefined : "columns" })}
             >
               Columns
             </Button>
-            <TableMenu table={table} count={info.documentCount} canClear={can.clear} onDone={afterWrite} />
+            <TableMenu
+              table={table}
+              count={info.documentCount}
+              canClear={can.clear}
+              onDone={afterWrite}
+              panels={(["schema", "indexes", "columns"] as const).map((panel) => ({
+                label: panel[0]!.toUpperCase() + panel.slice(1),
+                open: () => setSearch({ doc: undefined, panel }),
+              }))}
+            />
           </span>
         </div>
         {notice && (
