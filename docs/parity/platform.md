@@ -9,7 +9,7 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
   - query, mutation and action definitions, and internal functions;
   - `POST /api/{query,mutation,action,query_ts,query_at_ts}`, the sync WebSocket at `/api/{version}/sync`,
     `GET /version` and `GET /stats` (JSON);
-  - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration.
+  - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration, and the database call timeouts `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` / `MONGODB_TIMEOUT_SECONDS`.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
 - `ctx.auth` exists (STUDY-27); there is no ctx.storage and no ctx.scheduler.
 
@@ -338,6 +338,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Backend flags: `--port` 3210, `--site-proxy-port` 3211, `--interface`, `--convex-origin`, `--convex-site`, `--instance-name`, `--instance-secret`, `--local-storage`, `--s3-storage`, `--do-not-require-ssl`, `--disable-beacon`, `--redact-logs-to-client`, `--local-log-sink`, `--convex-http-proxy` | `crates/local_backend/config.rs` | partial | bunvex has a port option, defaulting to 3210, plus `PERSISTENCE*`, `DATA`, `DURABLE` and `POOL`. The rest are missing. |
 | Database selection: SQLite by default, `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL`; database name derived from the instance name | `self-hosted/docker-build/run_backend.sh`; `crates/postgres`, `mysql`, `sqlite` | partial | bunvex covers the same stores plus memory and MongoDB, with its own env names (`PERSISTENCE`, `PERSISTENCE_URL`). Decided (owner, 2026-10-01), to be built: Convex's names are accepted as aliases (DV-88); Postgres gets Convex's defaults, TLS required (`sslmode=require`, can be turned off) and `target_session_attrs=read-write` (STUDY-25 L8, DV-109). **Divergence (DV-110):** the database is the one the URL names, not derived from the instance name. |
 | Single writer per database: the persistence lease (`leases` table; the newest process wins at once, the loser exits on its next write with `LeaseLostError`; `SELECT … FOR SHARE` before COMMIT fences writes) | `crates/postgres/src/lib.rs:1745-1893`, `sql.rs:721-755`; `crates/mysql/src/v6/persistence.rs` (SQLite: none) | partial | PERSIST-01 C7 (STUDY-24 H8): Postgres and MySQL have it; SQLite and memory+log hold an exclusive OS lock for the process's life — **a deliberate divergence: Convex's SQLite has no lock and loses writes with two processes** (STUDY-25 L9, owner 2026-09-30); MongoDB has it as a transaction per flush on a replica set (owner 2026-09-30; Convex has no MongoDB driver). **Divergence (owner, 2026-09-30, STUDY-24 H5):** bunvex's lease has a TTL on the store's clock and a graceful release, and a live lease is never taken — a second process fails to open with `LeaseHeldError` (or waits, with `lease.waitMs`), where Convex's newest process wins at once. The fence is an epoch checked inside each flush's first statement (Postgres: a data-modifying CTE, no extra round trip; MySQL: a first `UPDATE`, one round trip). |
+| Client-side timeouts on database calls: Postgres 30 s (`POSTGRES_TIMEOUT_SECONDS`), MySQL 19 s (`MYSQL_TIMEOUT_SECONDS`), per round trip (connection, statement, BEGIN, COMMIT); a timed-out connection is never reused | `crates/postgres/src/connection.rs:108-135, 209-220`; `crates/mysql/src/connection.rs:143-153, 280-318`; `crates/common/src/knobs.rs:1197` | done | As Convex (STUDY-25 L3, PERSIST-01 C8, conformance K20), same defaults and env names; MongoDB 30 s (`MONGODB_TIMEOUT_SECONDS`, no Convex counterpart). **Divergence? (pending, DV-122):** Postgres retires its whole pool on a timeout (postgres.js exposes no single connection). Lease renewals are bounded by TTL/4 (bunvex's lease, DV-14). Retries after a transient error (L4, L5) are still missing. |
 | S3 env (`AWS_*`, `S3_ENDPOINT_URL`, `S3_STORAGE_{EXPORTS,SNAPSHOT_IMPORTS,MODULES,FILES,SEARCH}_BUCKET`, `AWS_S3_FORCE_PATH_STYLE`, `AWS_S3_DISABLE_SSE/CHECKSUMS`) | `crates/aws_s3`, `aws_utils` | missing | Planned `FILE_STORAGE=`. |
 | Knob env overrides (every knob is an env var) | `crates/common/knobs.rs`; `self-hosted/advanced/knobs.md` | missing | |
 | Docker image, docker-compose, credentials bootstrap (`read_credentials.sh`) | `self-hosted/docker*` | missing | ARCHITECTURE marks docker/ M. |
@@ -386,10 +387,10 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 
 | Status | Count |
 |---|---|
-| done | 2 |
+| done | 3 |
 | partial | 11 |
 | missing | 224 |
 
-- The two done rows are system indexes and database selection.
+- The three done rows are system indexes, database selection and the client-side timeouts on database calls.
 - The eleven partial rows are: the persistence lease (PERSIST-01 C7: every driver), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

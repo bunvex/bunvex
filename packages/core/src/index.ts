@@ -27,6 +27,7 @@ export {
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DatabaseTimeoutError,
   type DocWrite,
   hasLease,
   type IndexWrite,
