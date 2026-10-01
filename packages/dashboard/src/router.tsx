@@ -31,7 +31,11 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 // ------------------------------------------------------------------ search params
 
 /** The Database screen's URL state (UI-01 §12.3): the applied filter, the open document, the open panel. */
-export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "indexes" | "add" | "columns" };
+export type TableSearch = {
+  filter?: string;
+  doc?: string;
+  panel?: "schema" | "indexes" | "add" | "columns" | "metrics";
+};
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
@@ -55,7 +59,13 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
   const doc = str(input.doc);
   if (filter) out.filter = filter;
   if (doc) out.doc = doc;
-  if (input.panel === "schema" || input.panel === "indexes" || input.panel === "add" || input.panel === "columns")
+  if (
+    input.panel === "schema" ||
+    input.panel === "indexes" ||
+    input.panel === "add" ||
+    input.panel === "columns" ||
+    input.panel === "metrics"
+  )
     out.panel = input.panel;
   return out;
 }

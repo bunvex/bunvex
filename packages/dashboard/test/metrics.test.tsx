@@ -136,3 +136,42 @@ describe("Functions: a function's Statistics tab", () => {
     expect(new URLSearchParams(history.location.search).get("type")).toBe("failure"); // the filters stay
   });
 });
+
+describe("Database: a table's metrics", () => {
+  const open = (path: string, src: MockDataSource = source()) => {
+    const history = createMemoryHistory({ initialEntries: [path] });
+    render(<Dashboard dataSource={src} history={history} />);
+    return history;
+  };
+
+  test("Metrics opens the panel: rows read and written per minute, in the URL", async () => {
+    const history = open("/database/tasks");
+    await screen.findByRole("heading", { level: 1, name: "tasks" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Metrics" }));
+    expect(new URLSearchParams(history.location.search).get("panel")).toBe("metrics");
+    const panel = await screen.findByRole("complementary", { name: "Metrics of tasks" });
+    const figure = await within(panel).findByRole("figure", { name: /Rows read and written/ });
+    expect(figure).toBeDefined();
+    expect(
+      within(within(panel).getByRole("list"))
+        .getAllByRole("listitem")
+        .map((l) => l.textContent),
+    ).toEqual(["Reads", "Writes"]);
+    await expectAccessible();
+  });
+
+  test("a credential that may not view metrics is told so in the panel", async () => {
+    open("/database/tasks?panel=metrics", source({ capabilities: { operations: ["viewData"], readOnly: true } }));
+    const panel = await screen.findByRole("complementary", { name: "Metrics of tasks" });
+    expect(await within(panel).findByText("This credential may not view metrics.")).toBeDefined();
+    expect(within(panel).queryByRole("figure")).toBeNull();
+  });
+
+  test("a source without table metrics has no Metrics button", async () => {
+    const src = source();
+    (src as { tableRate?: unknown }).tableRate = undefined;
+    open("/database/tasks", src);
+    await screen.findByRole("button", { name: "Indexes" }); // the toolbar is there
+    expect([...document.querySelectorAll("button")].map((b) => b.textContent)).not.toContain("Metrics");
+  });
+});

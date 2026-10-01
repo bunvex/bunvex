@@ -1314,3 +1314,10 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   **Function calls**, **Errors**, **Execution time** (p50, p90, p95, p99 — one blue, light to dark,
   labelled at the lines' ends) and, for a query, **Cache hit rate**. Without metrics it says why.
 
+### 18.3 A table's metrics (STUDY-12 §12)
+
+- **Metrics** beside Schema and Indexes on the Database screen (shown when the source has `tableRate`)
+  opens the side panel (`?panel=metrics`), as Convex's table **Metrics** tool (`TableMetrics.tsx`): the rows
+  the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
+  same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
+
