@@ -1,6 +1,6 @@
 # STUDY-08 — Query cache and subscriptions
 
-- **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
+- **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D8–D10 to match Convex, gaps tracked in docs/parity (DV-57, DV-63, DV-64). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -126,17 +126,17 @@ resolving only once its effect is visible" as open "N" items.
 
 | # | Divergence | Class | Why / impact | Decision |
 |---|---|---|---|---|
-| D1 | After an error, a subscription whose value returns to its pre-error value is never republished (`subscriptions.ts` `run`: `s.value` is kept on error) | BUG | The client stays on the error until the value changes to something new | owner |
-| D2 | A subscription whose first run throws never re-runs (`reads` stays `null`; `onCommit` skips it) | BUG | A permanently stuck subscription (e.g. subscribed before the data it needs exists) | owner |
-| D3 | The query cache returns results by reference (`engine.ts` `query`) | BUG | An action (`ctx.runQuery`) or future in-process caller that mutates a result corrupts the cache for everyone. Convex hands out serialized copies | owner |
-| D4 | No per-client consistent transitions: each subscription is pushed independently, at its own snapshot | OBSERVABLE | Two queries of one client can show different points in time (torn UI), which Convex never does. Known "N" item | owner |
-| D5 | A mutation resolves before the client's subscriptions reflect it (no ts in `res`, no client-side wait) | OBSERVABLE | Breaks Convex's read-your-writes-after-await guarantee. Known "N" item | owner |
-| D6 | The cache key and subscription key have no identity | BUG (latent) | Harmless today (no auth). The moment `ctx.auth` lands, one user's cached or subscribed result would be served to another unless identity is added, as in Convex's `observed_identity` rule | owner |
-| D7 | The cache/subscription key depends on argument field order (`JSON.stringify(args)`) | INTERNAL | Duplicate entries and executions; no wrong results | owner |
-| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | owner |
-| D9 | Invalidation is a linear scan over subscriptions × writes × intervals, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | owner |
-| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | owner |
-| D11 | `err` has no `errorData` | OBSERVABLE | `ConvexError` data is lost (STUDY-11) | owner |
+| D1 | After an error, a subscription whose value returns to its pre-error value is never republished (`subscriptions.ts` `run`: `s.value` is kept on error) | BUG | The client stays on the error until the value changes to something new | **fixed in #11** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B8) |
+| D2 | A subscription whose first run throws never re-runs (`reads` stays `null`; `onCommit` skips it) | BUG | A permanently stuck subscription (e.g. subscribed before the data it needs exists) | **fixed in #11** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B8) |
+| D3 | The query cache returns results by reference (`engine.ts` `query`) | BUG | An action (`ctx.runQuery`) or future in-process caller that mutates a result corrupts the cache for everyone. Convex hands out serialized copies | **fixed in #13** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B10) |
+| D4 | No per-client consistent transitions: each subscription is pushed independently, at its own snapshot | OBSERVABLE | Two queries of one client can show different points in time (torn UI), which Convex never does. Known "N" item | resolved to match Convex (owner, 2026-09-30) in #50 (DV-44) |
+| D5 | A mutation resolves before the client's subscriptions reflect it (no ts in `res`, no client-side wait) | OBSERVABLE | Breaks Convex's read-your-writes-after-await guarantee. Known "N" item | resolved to match Convex (owner, 2026-09-30) in #50 (DV-44) |
+| D6 | The cache key and subscription key have no identity | BUG (latent) | Harmless today (no auth). The moment `ctx.auth` lands, one user's cached or subscribed result would be served to another unless identity is added, as in Convex's `observed_identity` rule | **fixed for the HTTP query cache in #103**; the sync path is next ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B13) |
+| D7 | The cache/subscription key depends on argument field order (`JSON.stringify(args)`) | INTERNAL | Duplicate entries and executions; no wrong results | resolved to match Convex in #21 (DV-45) |
+| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-63) |
+| D9 | Invalidation is a linear scan over subscriptions × writes × intervals, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-64) |
+| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-57) |
+| D11 | `err` has no `errorData` | OBSERVABLE | `ConvexError` data is lost (STUDY-11) | resolved to match Convex in #32 (DV-49) |
 
 ## 5. Tests
 

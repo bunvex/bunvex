@@ -1,7 +1,7 @@
-// Runs @bunvex/persistence-conformance (PERSIST-01, K1–K7) against every first-party driver.
+// Runs @bunvex/persistence-conformance (PERSIST-01, K1–K23) against every first-party driver.
 //   bun bench/conformance.ts                    memory + sqlite (+ postgres/mysql/mongodb when their URL is set)
 //   DRIVERS=sqlite,postgres PG_URL=… bun bench/conformance.ts
-//   KILLS=8 (K6 cycles)   CHECKS=K1,K2,K3,K6,K7,K22 (subset; K3 covers K3–K5, K10 covers K10–K19)
+//   KILLS=8 (K6 cycles)   CHECKS=K1,K2,K3,K6,K7,K20,K22 (subset; K3 covers K3–K5, K10 covers K10–K19)
 // Remote drivers need an EMPTY scratch database: the suite drops its tables. Exit code 1 on any violation.
 import { type Check, runConformance } from "@bunvex/persistence-conformance";
 
@@ -22,6 +22,8 @@ for (const name of drivers) {
     requireLease: ["memory", "sqlite", "postgres", "mysql", "mongodb"].includes(name),
     // ... and PERSIST-01 C10 (layout version, read-only flag).
     requireLayout: ["memory", "sqlite", "postgres", "mysql", "mongodb"].includes(name),
+    // The remote stores bound every call on the client side (STUDY-25 L3): K20 must run.
+    requireTimeouts: ["postgres", "mysql", "mongodb"].includes(name),
   });
   failures += r.failures;
 }

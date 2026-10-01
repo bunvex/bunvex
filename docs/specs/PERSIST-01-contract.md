@@ -2,8 +2,9 @@
 
 > v1, 29 Sep 2026 (written as STORAGE-01; renamed by ARCH-01 D2 — "storage" is the FILE API, as in
 > Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5.
-> **v2.3, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7 (C8/C9 and
-> K20/K21 are STUDY-25 L3–L5). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> **v2.1, 30 Sep 2026:** C8 (liveness: client-side call timeouts) and K20, from STUDY-25 L3.
+> **v2.3, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7 (C9 and
+> K21 are STUDY-25 L4/L5). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -121,8 +122,30 @@ tail) runs only under the lock. Convex's SQLite store has no lock and loses writ
 The engine side (`@bunvex/core`): `init()` acquires the lease with `holder = host:pid:random` and the
 TTL (default 5 s). A live lease fails `init()` with `LeaseHeldError` (who holds it, when it expires),
 unless the engine was given a wait (`lease.waitMs`): it then retries until the lease is free or the wait
-runs out. The lease is renewed every TTL/3; `LeaseLostError`, or a renewal still failing when the TTL
-runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` releases it.
+runs out. The lease is renewed every TTL/3; `LeaseLostError`, or a renewal still failing (or still waiting
+for the store, C8) when the TTL runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` releases it.
+
+## C8 — liveness: client-side call timeouts (remote stores)
+
+A remote store can stop answering without closing anything: a frozen server, a paused VM, a network that
+drops packets. C1–C7 say nothing about time, so a driver that waits for an answer forever is correct and
+useless: startup, a query or a commit hangs with it. A driver for a remote store therefore (STUDY-25 L3,
+as Convex):
+
+- **bounds every call on the client side**, per round trip: getting or opening a connection, each
+  statement, BEGIN and COMMIT. A call that gets no answer within the timeout rejects with
+  `DatabaseTimeoutError` (`@bunvex/core/persistence`; `withTimeout` implements the rule). The first-party
+  defaults are Convex's: Postgres 30 s, MySQL 19 s; MongoDB 30 s. Each driver takes `timeoutMs` at open.
+- **never reuses the connection of a timed-out call.** Its answer may still arrive, or never; the
+  connection is closed (Postgres: the driver retires its whole pool, since postgres.js exposes no single
+  connection).
+- **bounds a lease renewal by a quarter of the TTL** (or the call timeout, if shorter; `renewTimeoutMs`), so
+  a renewal stuck on a dead connection fails before the next one is due, and that one runs on a fresh
+  connection.
+
+A `flush()` that times out is a failed flush: whether its group committed is unknown, and the committer
+stops (fail-stop, C4/C5). The engine also stops when a lease renewal is still pending once the TTL has run
+out, whatever the driver does. Embedded stores (memory, SQLite) make no network calls and have no timeout.
 
 ## C10 — layout version and read-only flag
 
@@ -174,6 +197,7 @@ are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_V
 | K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
 | K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
 | K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
+| K20 | a store that stops answering (C8, remote stores) | a TCP proxy between the driver and the store stops forwarding both ways without closing anything: a read and a flush fail within the timeout (1.5 s in the suite), a renewal within TTL/4; the client closes every connection those calls waited on; once the proxy forwards again the same store answers without a reopen; through the engine, a commit whose flush times out stops the committer. The driver module exports `target()` and `openThrough(via, { timeoutMs })` |
 | K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
 | K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
 
@@ -182,6 +206,9 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   that loses all its index entries leaves the index counts equal to each other.
 - K11–K14 test expiry and paused holders: they do not apply to a process-scoped lease (an OS lock has
   neither), which K10, K16–K19 cover.
+- K20 was sabotaged by disabling `withTimeout`: every call hung past the suite's guard (8 × the timeout).
+  MongoDB's server monitor is not a call; its streaming check waits up to the heartbeat plus the connect
+  timeout, so the MongoDB module opens with a 1 s heartbeat for K20.
 - K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
   moment lands inside the flush often enough, and the takeover must still finish in time.
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit

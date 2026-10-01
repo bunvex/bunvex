@@ -11,7 +11,7 @@ import type { LogEntry } from "../data-source.ts";
 import { formatBytes } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
-import { formatDuration, formatLogTime, isFailure } from "./log-list.tsx";
+import { formatDuration, formatLogTime, isFailure, KIND_LETTER } from "./log-list.tsx";
 import { IDENTITY_TEXT, sumUsage } from "./usage.ts";
 
 function CallItem({ node, current }: { node: CallNode; current?: string }) {
@@ -76,17 +76,23 @@ export function LogDetails(props: {
         {line.function && (
           <>
             <dt className="text-muted-foreground">Function</dt>
-            <dd className="min-w-0 truncate font-mono text-xs leading-5">
-              {line.function.path} <span className="text-muted-foreground">({line.function.kind})</span>
+            <dd className="flex min-w-0 items-center gap-2 leading-5">
+              <abbr
+                title={line.function.kind}
+                className="shrink-0 border px-1 font-mono text-[10px] leading-4 text-muted-foreground no-underline"
+              >
+                {KIND_LETTER[line.function.kind]}
+              </abbr>
+              <span className="truncate font-mono text-xs">{line.function.path}</span>
             </dd>
           </>
         )}
         {line.requestId && (
           <>
             <dt className="text-muted-foreground">Request</dt>
-            <dd className="flex min-w-0 items-center gap-1 font-mono text-xs">
-              <span className="truncate">{line.requestId}</span>
-              <CopyButton text={line.requestId} label="Copy the request id" />
+            <dd className="flex min-w-0 items-center gap-1">
+              <span className="truncate font-mono text-xs">{line.requestId}</span>
+              <CopyButton text={line.requestId} label="Copy request ID" iconOnly />
             </dd>
           </>
         )}
@@ -99,10 +105,8 @@ export function LogDetails(props: {
         {startedBy && (
           <>
             <dt className="text-muted-foreground">Started by</dt>
-            <dd>
-              {IDENTITY_TEXT[startedBy][0]}
-              <span className="block text-xs text-muted-foreground">{IDENTITY_TEXT[startedBy][1]}</span>
-            </dd>
+            {/* the explanation as a tooltip, not a second line saying the same (UX-24) */}
+            <dd title={IDENTITY_TEXT[startedBy][1]}>{IDENTITY_TEXT[startedBy][0]}</dd>
           </>
         )}
       </dl>

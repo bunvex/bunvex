@@ -68,3 +68,15 @@ export async function foreignIntact() {
     return Number(rows[0].n) === 1 && Number(rows[0].g) === 0 && Number(rows[0].ours) === 0;
   });
 }
+
+/** K20: where the store listens, and an open through a proxy with a given call timeout. */
+export function target() {
+  const u = new URL(process.env.MYSQL_URL!);
+  return { host: u.hostname, port: Number(u.port || 3306) };
+}
+export async function openThrough(via: { host: string; port: number }, opts: { timeoutMs: number }) {
+  const u = new URL(process.env.MYSQL_URL!);
+  u.hostname = via.host;
+  u.port = String(via.port);
+  return MysqlPersistence.open(u.toString(), 16, { timeoutMs: opts.timeoutMs });
+}
