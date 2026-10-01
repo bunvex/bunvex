@@ -1,0 +1,202 @@
+// The dashboard's system functions for schedules and crons (STUDY-30 §3.5), as Convex's
+// npm-packages/system-udfs/convex/_system/frontend: same names, arguments and result shapes. Their results
+// are Convex's private documents (`_scheduled_jobs`, `_scheduled_job_args`, `_cron_jobs`, `_cron_next_run`,
+// `_cron_job_logs`): times in ns as int64, args as bytes, `state.type`. bunvex stores these differently
+// (S2), so the documents are built on the way out.
+//
+// Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
+// name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
+import {
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  cancelJob,
+  type Engine,
+  type JobDoc,
+  type PaginationOptions,
+  type PaginationResult,
+  SCHEDULED_FUNCTIONS_TABLE,
+  stringifyValue,
+  type Tx,
+} from "@bunvex/core";
+import { type GenericValidator, type Value, v } from "@bunvex/values";
+import { paginationOptsValidator } from "./pagination.ts";
+
+/** Convex's paginationLimits.ts. */
+const maximumRowsRead = 10000;
+const maximumBytesRead = 5000000;
+
+const ns = (ms: number) => BigInt(Math.round(ms * 1_000_000));
+/** Convex keeps arguments as the bytes of their JSON array. */
+const argsBytes = (args: Value[]) => new TextEncoder().encode(stringifyValue(args as Value)).buffer as ArrayBuffer;
+const canonical = (udfPath: string) => {
+  const i = udfPath.lastIndexOf(":");
+  const [m, f] = i === -1 ? [udfPath, "default"] : [udfPath.slice(0, i), udfPath.slice(i + 1)];
+  return `${m.endsWith(".js") ? m : `${m}.js`}:${f}`;
+};
+
+/** A job as Convex's `_scheduled_jobs` document. The args live with the job here, so `argsId` is its id. */
+function scheduledJobDoc(d: JobDoc) {
+  const state =
+    d.state.kind === "inProgress"
+      ? { type: "inProgress", requestId: d.state.requestId, executionId: d.state.executionId }
+      : d.state.kind === "failed"
+        ? { type: "failed", error: d.state.error }
+        : { type: d.state.kind };
+  return {
+    _id: d._id,
+    _creationTime: d._creationTime,
+    udfPath: d.name,
+    argsId: d._id,
+    state,
+    ...(d.nextTs === undefined ? {} : { nextTs: ns(d.nextTs) }),
+    ...(d.completedTime === undefined ? {} : { completedTs: ns(d.completedTime) }),
+    originalScheduledTs: ns(d.scheduledTime),
+    ...(d.systemErrors === undefined ? {} : { attempts: { systemErrors: BigInt(d.systemErrors), occErrors: 0n } }),
+  };
+}
+
+type Doc = Record<string, unknown> & { _id: string; _creationTime: number };
+const cronJobDoc = (d: Doc) => {
+  const spec = d.cronSpec as { udfPath: string; udfArgs: Value[]; cronSchedule: unknown };
+  return {
+    _id: d._id,
+    _creationTime: d._creationTime,
+    name: d.name,
+    cronSpec: { udfPath: spec.udfPath, udfArgs: argsBytes(spec.udfArgs), cronSchedule: spec.cronSchedule },
+  };
+};
+const cronLogDoc = (d: Doc) => ({
+  _id: d._id,
+  _creationTime: d._creationTime,
+  name: d.name,
+  ts: ns(d.ts as number),
+  udfPath: d.udfPath,
+  udfArgs: argsBytes(d.udfArgs as Value[]),
+  status:
+    (d.status as { type: string }).type === "canceled"
+      ? { type: "canceled", num_canceled: BigInt((d.status as { num_canceled: number }).num_canceled) }
+      : d.status,
+  logLines: d.logLines,
+  executionTime: d.executionTime,
+});
+const cronNextRunDoc = (d: Doc) => ({
+  _id: d._id,
+  _creationTime: d._creationTime,
+  cronJobId: d.cronJobId,
+  state: d.state,
+  prevTs: d.prevTs === null ? null : ns(d.prevTs as number),
+  nextTs: ns(d.nextTs as number),
+});
+
+/** A system query: its argument validators (checked as Convex's) and its handler. */
+export type SystemQuery = {
+  args: Record<string, GenericValidator>;
+  handler: (db: Tx, args: never) => Promise<unknown>;
+};
+const componentId = v.optional(v.union(v.string(), v.null()));
+
+export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  "_system/frontend/paginatedScheduledJobs": {
+    args: { componentId, paginationOpts: paginationOptsValidator, udfPath: v.optional(v.string()) },
+    handler: async (db, { paginationOpts, udfPath }: { paginationOpts: PaginationOptions; udfPath?: string }) => {
+      const opts = { ...paginationOpts, maximumRowsRead, maximumBytesRead };
+      const r: PaginationResult = await db.asSystem(() =>
+        udfPath === undefined
+          ? db
+              .query(SCHEDULED_FUNCTIONS_TABLE)
+              .withIndex("by_next_ts", (q) => q.gt("nextTs", null))
+              .order("asc")
+              .paginate(opts)
+          : db
+              .query(SCHEDULED_FUNCTIONS_TABLE)
+              .withIndex("by_udf_path_and_next_event_ts", (q) => q.eq("name", canonical(udfPath)).gt("nextTs", null))
+              .order("asc")
+              .paginate(opts),
+      );
+      return { ...r, page: r.page.map((d) => scheduledJobDoc(d as unknown as JobDoc)) };
+    },
+  },
+  "_system/frontend/scheduler:getArgs": {
+    args: { componentId, argsId: v.string() },
+    handler: async (db, { argsId }: { argsId: string }) => {
+      const id = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, argsId));
+      const d = id && ((await db.asSystem(() => db.get(SCHEDULED_FUNCTIONS_TABLE, id))) as unknown as JobDoc | null);
+      return d ? { _id: d._id, _creationTime: d._creationTime, args: argsBytes(d.args) } : null;
+    },
+  },
+  "_system/frontend/listCronJobs": {
+    args: { componentId },
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const jobs = (await db.query(CRON_JOBS_TABLE).collect()) as unknown as Doc[];
+        const out = [];
+        for (const job of jobs) {
+          const lastRun = (await db
+            .query(CRON_JOB_LOGS_TABLE)
+            .withIndex("by_name_and_ts", (q) => q.eq("name", job.name as string))
+            .order("desc")
+            .first()) as unknown as Doc | null;
+          const nextRun = (await db
+            .query(CRON_NEXT_RUN_TABLE)
+            .withIndex("by_cron_job_id", (q) => q.eq("cronJobId", job._id))
+            .first()) as unknown as Doc | null;
+          if (nextRun === null) throw new Error("No next run found for cron job");
+          out.push({ ...cronJobDoc(job), lastRun: lastRun && cronLogDoc(lastRun), nextRun: cronNextRunDoc(nextRun) });
+        }
+        return out;
+      }),
+  },
+  "_system/frontend/listCronJobRuns": {
+    args: { componentId },
+    handler: async (db) =>
+      ((await db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect())) as unknown as Doc[]).map(cronLogDoc),
+  },
+};
+
+/** Convex's MAX_JOBS_CANCEL_BATCH: `cancel_all_jobs` cancels this many per transaction, until a batch is short. */
+export const MAX_JOBS_CANCEL_BATCH = 1000;
+
+/** Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. */
+export async function cancelScheduledJob(engine: Engine, id: string) {
+  await engine.mutation(async (db) => {
+    const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, id));
+    if (!jobId) throw new Error(`Invalid ID "${id}" for table _scheduled_jobs`);
+    await cancelJob(db, jobId, Date.now());
+  }, "cancel_job");
+}
+
+/**
+ * Convex's `POST /api/cancel_all_jobs` (admin, WriteData): cancel every pending or running job, or one
+ * function's, optionally only those with `startNextTs ≤ nextTs < endNextTs` (ns), in batches.
+ */
+export async function cancelAllScheduledJobs(
+  engine: Engine,
+  opts: { udfPath?: string; startNextTs?: bigint; endNextTs?: bigint } = {},
+): Promise<number> {
+  const lo = opts.startNextTs === undefined ? null : Number(opts.startNextTs) / 1_000_000;
+  const hi = opts.endNextTs === undefined ? null : Number(opts.endNextTs) / 1_000_000;
+  let total = 0;
+  for (;;) {
+    const n = await engine.mutation(async (db) => {
+      const jobs = (await db.asSystem(() =>
+        (opts.udfPath === undefined
+          ? db.query(SCHEDULED_FUNCTIONS_TABLE).withIndex("by_next_ts", (q) => {
+              const b = lo === null ? q.gt("nextTs", null) : q.gte("nextTs", lo);
+              return hi === null ? b : b.lt("nextTs", hi);
+            })
+          : db.query(SCHEDULED_FUNCTIONS_TABLE).withIndex("by_udf_path_and_next_event_ts", (q) => {
+              const b0 = q.eq("name", canonical(opts.udfPath!));
+              const b = lo === null ? b0.gt("nextTs", null) : b0.gte("nextTs", lo);
+              return hi === null ? b : b.lt("nextTs", hi);
+            })
+        ).take(MAX_JOBS_CANCEL_BATCH),
+      )) as unknown as JobDoc[];
+      const now = Date.now();
+      for (const j of jobs) await cancelJob(db, j._id, now);
+      return jobs.length;
+    }, "cancel_all_jobs");
+    total += n;
+    if (n < MAX_JOBS_CANCEL_BATCH) return total;
+  }
+}

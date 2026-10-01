@@ -4,9 +4,15 @@ import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } 
 import { type Caller, type Engine, OccError, parseValue, stringifyValue } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
+import { TooManyConcurrentRequestsError } from "./action-permits.ts";
+import { type Crons, cronSpecs } from "./cron.ts";
+import { CronJobExecutor } from "./cron-executor.ts";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
+import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { checkRouter, type HttpRouter } from "./router.ts";
+import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import {
   fromWireTs,
@@ -52,6 +58,32 @@ export type ServerOptions = {
   auth?: AuthConfig;
   /** `fetch` for OIDC discovery and JWKS (tests point it at an in-process issuer). */
   authFetch?: typeof fetch;
+  /**
+   * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
+   * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
+   */
+  scheduler?: SchedulerOptions;
+  /**
+   * The deployment's cron jobs (STUDY-30 S1): the default export of the app's `crons.ts`, as Convex's
+   * `convex/crons.ts`. Checked at start (an invalid one throws here) and diffed with the stored ones by name.
+   * The splay is `CRON_SPLAY_SECONDS` (60; 0 turns it off), as Convex.
+   */
+  crons?: Crons;
+  /**
+   * The deployment's HTTP actions (STUDY-31 H1): the default export of the app's `http.ts`, as Convex's
+   * `convex/http.ts`. Checked at start. Served under `/http/…` on this port and at every path of the site
+   * port.
+   */
+  http?: HttpRouter;
+  /**
+   * The site port, where HTTP actions answer at every path (Convex's `--site-proxy-port`). Default: `port`
+   * + 1 (3211 next to 3210); a random one when `port` is 0; null serves no site port.
+   */
+  sitePort?: number | null;
+  /** The largest request body accepted, in bytes (H3). Default: Bun's (128 MiB). */
+  maxRequestBodySize?: number;
+  /** No response head from an HTTP action by then answers 408 (Convex: 300 s). For tests. */
+  httpActionHeadTimeoutMs?: number;
   /**
    * Splaying of wide invalidations (STUDY-08 §3.5). Defaults: Convex's knobs from the environment
    * (`SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`), else
@@ -100,6 +132,34 @@ export function createServer(opts: ServerOptions) {
       throw e;
     }
   };
+  /**
+   * An HTTP action's caller (STUDY-31): the same verification, but a failure never rejects the request —
+   * it is kept, and `ctx.auth.getUserIdentity()` throws it (Convex's `Identity::Unknown(error)`).
+   */
+  const identifyHttpAction = async (req: Request): Promise<{ caller: Caller; error: Error | null }> => {
+    const header = req.headers.get("authorization");
+    const none = callerOf(null);
+    if (header === null) return { caller: none, error: null };
+    if (header.length < 7) return { caller: none, error: new Error("Invalid authentication header") };
+    const scheme = header.slice(0, 7).toLowerCase();
+    if (scheme === "bunvex ") return { caller: none, error: new Error("Admin keys are not supported yet") };
+    if (scheme !== "bearer " || header.length === 7) return { caller: none, error: new Error("Invalid admin key") };
+    try {
+      return { caller: callerOf((await verifier.verify(header.slice(7).trim())).identity), error: null };
+    } catch (e) {
+      if (e instanceof AuthenticationError) return { caller: none, error: new Error(e.message) };
+      throw e;
+    }
+  };
+  const router = opts.http === undefined ? undefined : checkRouter(opts.http);
+  const serveHttpAction = httpActionServer({
+    functions,
+    router,
+    identify: identifyHttpAction,
+    redact,
+    headTimeoutMs: opts.httpActionHeadTimeoutMs,
+  });
+
   /** A failed function run, for a client: the message (without its request id) and the app's data. */
   const formatError = (e: unknown): { error: string; data?: string } => {
     if (isSystemError(e)) return { error: INTERNAL_SERVER_ERROR_MESSAGE };
@@ -133,6 +193,9 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
+    if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
+      return requestError(429, r.error.code, r.error.message);
     if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
     if (isSystemError(r.error))
       return requestError(isTryAgainError(r.error) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
@@ -152,6 +215,15 @@ export function createServer(opts: ServerOptions) {
     splay: splayOptions(opts.subscriptionSplay),
     verifyToken: (token) => verifier.verify(token),
   });
+  const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
+  scheduler.start();
+  const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
+  const splay = process.env.CRON_SPLAY_SECONDS;
+  const cronExecutor = new CronJobExecutor(engine, functions, specs, {
+    ...(splay === undefined || splay === "" ? {} : { cronSplaySeconds: Number(splay) }),
+  });
+  /** Resolves once the crons are registered (the diff with what was stored). */
+  const cronsReady = cronExecutor.start();
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
@@ -160,6 +232,7 @@ export function createServer(opts: ServerOptions) {
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
     idleTimeout: 120,
+    ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
     websocket: {
       maxPayloadLength: 8 * 1024 * 1024,
       idleTimeout: 960,
@@ -181,6 +254,12 @@ export function createServer(opts: ServerOptions) {
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");
+      // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
+      // idle timeout (the 408 at 300 s is the HTTP action's own).
+      if (url.pathname === "/http" || url.pathname.startsWith("/http/")) {
+        srv.timeout(req, 0);
+        return serveHttpAction(req, url.pathname.slice(5) || "/", url.search);
+      }
       if (url.pathname === "/stats") {
         const c = engine.committer;
         return json({
@@ -235,18 +314,53 @@ export function createServer(opts: ServerOptions) {
       );
     },
   });
+  // The site port (Convex's site proxy): HTTP actions at every path; `/version` first, as Convex's meta route.
+  const sitePort =
+    opts.sitePort === undefined
+      ? server.port === undefined
+        ? null
+        : opts.port === 0
+          ? 0
+          : server.port + 1
+      : opts.sitePort;
+  const site =
+    sitePort === null
+      ? null
+      : Bun.serve({
+          port: sitePort,
+          idleTimeout: 120,
+          ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+          fetch(req, srv) {
+            const url = new URL(req.url);
+            if (url.pathname === "/version") return new Response("bunvex");
+            srv.timeout(req, 0);
+            return serveHttpAction(req, url.pathname, url.search);
+          },
+        });
   return {
     server,
+    /** The site port's server (HTTP actions), if any. */
+    site,
+    /** The site's origin, as Convex's `CONVEX_SITE_URL` default. */
+    siteUrl: site ? `http://127.0.0.1:${site.port}` : null,
     sync,
+    scheduler,
+    cronsReady,
     stop: () => {
+      void scheduler.stop();
+      void cronExecutor.stop();
       stopCleanup();
       sync.stop();
+      site?.stop(true);
       server?.stop(true);
     },
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      await scheduler.stop();
+      await cronExecutor.stop();
       sync.stop();
+      site?.stop(true);
       server?.stop(true);
       await engine.close();
     },

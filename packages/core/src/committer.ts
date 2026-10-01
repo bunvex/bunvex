@@ -156,7 +156,7 @@ export const WRITE_RETRY_MAX_BACKOFF_MS = 10_000;
 
 /**
  * Convex's write batcher's soft caps (crates/common/src/knobs.rs `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS` = 64,
- * `COMMITTER_MAX_WRITE_BATCH_BYTES` = 64 KiB; STUDY-06 §9): a flush carries whole commits, and stops taking
+ * `COMMITTER_MAX_WRITE_BATCH_BYTES` = 64 KiB; STUDY-06 §10): a flush carries whole commits, and stops taking
  * more once it holds this many document versions or this many bytes. A commit is never split, so one commit
  * above the caps is flushed with what preceded it in its batch, on its own after a full one.
  */

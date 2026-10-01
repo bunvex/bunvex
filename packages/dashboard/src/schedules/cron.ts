@@ -4,7 +4,9 @@ import type { CronSchedule } from "../data-source.ts";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const pad = (n: number) => String(n).padStart(2, "0");
-const at = (h: number, m: number) => `${pad(h)}:${pad(m)} UTC`;
+/** A time of day; without a minute, the hour (the server picks a minute within it). */
+const at = (h: number, m: number | undefined) =>
+  m === undefined ? `some time in ${pad(h)}:00–${pad(h)}:59 UTC` : `${pad(h)}:${pad(m)} UTC`;
 const ordinal = (n: number) => {
   const s = n % 100 >= 11 && n % 100 <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
   return `${n}${s}`;
@@ -31,7 +33,7 @@ export function describeSchedule(s: CronSchedule): string {
     case "interval":
       return every(s.seconds);
     case "hourly":
-      return `Hourly at minute ${s.minuteUTC}`;
+      return s.minuteUTC === undefined ? "Hourly, at a minute the server picks" : `Hourly at minute ${s.minuteUTC}`;
     case "daily":
       return `Daily at ${at(s.hourUTC, s.minuteUTC)}`;
     case "weekly":
@@ -87,7 +89,8 @@ function nextCron(expr: string, after: number): number {
 /** When the schedule fires next, strictly after `after` (ms). */
 export function nextRunAfter(s: CronSchedule, after: number): number {
   const d = new Date(after);
-  const utc = (y: number, mo: number, day: number, h: number, m: number) => Date.UTC(y, mo, day, h, m);
+  // Without a minute, the hour's start (the server's own minute is not known here).
+  const utc = (y: number, mo: number, day: number, h: number, m: number | undefined) => Date.UTC(y, mo, day, h, m ?? 0);
   const [y, mo, day] = [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()];
   let t: number;
   switch (s.type) {

@@ -1,4 +1,4 @@
-// Statement chunking inside one flush (DV-62, STUDY-06 §9). The committer bounds what one flush carries to a
+// Statement chunking inside one flush (DV-62, STUDY-06 §10). The committer bounds what one flush carries to a
 // write batch of whole commits (Convex's 64 documents / 64 KiB), but never splits a commit, so one large
 // commit is still flushed whole, in one transaction. A remote driver then splits its rows into several
 // statements of that transaction, as Convex's drivers do: Postgres at 1 024 rows per statement

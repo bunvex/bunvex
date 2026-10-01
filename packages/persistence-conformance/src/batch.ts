@@ -1,4 +1,4 @@
-// K26 — bounded flushes (DV-62, STUDY-06 §9): the committer writes a group of commits as Convex's write batcher
+// K26 — bounded flushes (DV-62, STUDY-06 §10): the committer writes a group of commits as Convex's write batcher
 // does, in batches of whole commits each closed at 64 document versions or 64 KiB, one fenced flush per batch, in
 // ts order. On every driver, through the engine:
 //   - a group over the caps is split, every flush obeys the batch rule (an injected limit fails any flush that

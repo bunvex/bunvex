@@ -135,12 +135,12 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
       if (!one) throw new Error("the cancel tests need a pending scheduled run");
       await src.cancelScheduledFunction(one.id);
       expect((await allScheduled(src)).some((j) => j.id === one.id)).toBe(false);
-      await expectCode(src.cancelScheduledFunction(one.id), "not_found");
+      await src.cancelScheduledFunction(one.id); // already canceled: nothing happens (Convex)
       const fn = pending.find((j) => j.id !== one.id)?.function;
       if (fn !== undefined) {
         const { canceled } = await src.cancelAllScheduledFunctions(fn);
         expect(canceled).toBeGreaterThan(0);
-        expect((await allScheduled(src, fn)).filter((j) => j.state === "pending")).toEqual([]);
+        expect(await allScheduled(src, fn)).toEqual([]);
       }
       if (off) {
         const deadline = performance.now() + watchTimeoutMs;

@@ -1,4 +1,4 @@
-// Bounded flushes (DV-62, STUDY-06 §9), as Convex's write batcher: a group of commits is written in batches
+// Bounded flushes (DV-62, STUDY-06 §10), as Convex's write batcher: a group of commits is written in batches
 // of whole commits, each closed once it holds 64 document versions or 64 KiB, one fenced flush each, in ts
 // order; a commit is never split, however large. A batch's commits are acknowledged once it is durable.
 import { afterEach, describe, expect, test } from "bun:test";

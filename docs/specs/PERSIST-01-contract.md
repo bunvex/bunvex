@@ -10,7 +10,7 @@
 > **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7.
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
-> and K26, from STUDY-06 §9. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> and K26, from STUDY-06 §10. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -323,7 +323,7 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   timeout, so the MongoDB module opens with a 1 s heartbeat for K20.
 - K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
   moment lands inside the flush often enough, and the takeover must still finish in time.
-- K26 was sabotaged three ways (STUDY-06 §9.5): no batch bound (all five drivers red: the injected limit stops
+- K26 was sabotaged three ways (STUDY-06 §10.5): no batch bound (all five drivers red: the injected limit stops
   the committer; on a real MySQL with `max_allowed_packet` = 1 MiB the same group fails with the packet error);
   a commit torn across two batches (red: "torn commit"); batches flushed in swapped pairs (red: `maxTs` below
   the last acknowledged commit, flushed commits missing below `maxTs`).

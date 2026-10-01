@@ -1,6 +1,6 @@
 # STUDY-07 — Query semantics: withIndex, order, take/first/unique/collect, filter, paginate
 
-- **Status:** implemented / decided — D1–D4 fixed (#8, #10, #12; Phase 0 B1, B5, B12); D5–D8 resolved to match Convex (DV-40–DV-43). `.limit()` is still a gap. Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** implemented / decided — D1–D4 fixed (#8, #10, #12; Phase 0 B1, B5, B12); D5–D8 resolved to match Convex (DV-40–DV-43); the read-set of a scan that stops early ends at its last key, as Convex (STUDY-06 D3, #134, DV-57). `.limit()` is still a gap. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -37,6 +37,21 @@
   documents or 16 MiB, raising `TooManyDocumentsRead` / `TooManyBytesRead` (STUDY-06).
 - **Async iteration** (`for await (const doc of q)`) streams documents one at a time
   (`1.0/queryStreamNext`), and the read-set grows as it goes.
+- **What a query reads** (its read-set, for OCC and invalidation; details in
+  [STUDY-06 §1.1](STUDY-06-transactions-and-occ.md#11-read-set)): the index range from its start, in scan
+  order, up to the last key the scan returned, inclusive (`IndexRange::start_next`,
+  `crates/database/src/query/index_range.rs` l. 192–227; `Interval::split_after`,
+  `crates/common/src/interval/mod.rs` l. 128–157), or the whole range once the scan ran out (l. 246–261).
+  - `take(n)` is `limit(n).collect()` (`query_impl.ts` l. 323–327) and `Limit::next`
+    (`crates/database/src/query/limit.rs` l. 53–70) stops pulling after n rows: n rows read up to the n-th,
+    fewer read the whole range. `first()` (l. 329–332) and `unique()` (l. 334–344) are `take(1)` and
+    `take(2)`. `take(0)` reads nothing.
+  - Descending, the read-set is `[last key, end of range)`.
+  - `first()` on an empty range reads the whole range, so any insert into it is a conflict.
+  - `filter` (`crates/database/src/query/filter.rs` l. 53–72) pulls rows until one passes; the rows it
+    drops were returned by the range, so the prefix runs through them.
+  - A `for await` that breaks reads up to the last row it was given; a page, up to its last row
+    (STUDY-17).
 - `paginate({numItems, cursor, endCursor?, maximumRowsRead?, maximumBytesRead?})`:
   - calls `1.0/queryPage`;
   - returns `{page, isDone, continueCursor, splitCursor, pageStatus}`;
@@ -79,6 +94,8 @@ Values may be `undefined` (a `MaybeValue`), to match missing fields.
 3. `unique()`, `filter()`, `paginate()`, async iteration and `order()` exist, with the errors above.
 4. The default order is `_creationTime` ascending.
 5. A table that has never been written to reads as empty.
+6. A query that stops early (`take`, `first`, `unique`, a page, a `for await` that breaks) conflicts with,
+   and is re-run by, only the writes up to the last key it read (STUDY-06 D3).
 
 ## 3. How bunvex does it today
 
