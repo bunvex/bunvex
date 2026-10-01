@@ -2,9 +2,9 @@
 // exactly the durable commits in (afterTs, min(upToTs, maxTs)], in ts order, whole, each with its index
 // write set and the ts of the commit before it (`prevTs`), so a reader can detect a gap even though
 // timestamps are sparse.
-import { type Engine, encodeKey, hasLease, type IndexWrite, type LogCommit, type Persistence } from "@bunvex/core";
+import { Engine, encodeKey, hasLease, type IndexWrite, type LogCommit, type Persistence } from "@bunvex/core";
 import type { DriverModule } from "./index.ts";
-import { insertItem, newEngine } from "./workload.ts";
+import { insertItem, newEngine, schemaWithAmount } from "./workload.ts";
 
 type Check = (ok: boolean, what: string) => void;
 type ModelCommit = { ts: number; writes: IndexWrite[] };
@@ -248,6 +248,40 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     check(
       seen.length === 80 && same(shape(got), want),
       `K25 through the engine: the log between two snapshots is exactly the committer's commits and write sets (${got.length}/${seen.length})`,
+    );
+  }
+
+  // A background index backfill (STUDY-29, K24) commits chunks that write index entries only: they are
+  // commits like any other, so the log has them, and their entries cover every document.
+  {
+    let e: Engine = await newEngine(await mod.open(true));
+    const ids = new Set<string>();
+    for (let i = 0; i < 600; i += 200)
+      await e.mutation(async (db) => {
+        for (let j = 0; j < 200; j++) ids.add(String(await insertItem(`t${j % 4}`)(db)));
+      });
+    const from = e.committer.visibleTs;
+    await e.close();
+    e = await new Engine(schemaWithAmount, await mod.open(false), {
+      indexBackfill: { chunkSize: 100, chunkRate: 1000, readSize: 100 },
+    }).init();
+    await e.indexesReady();
+    const ix = e.catalog.table("items").indexes.get("by_amount")!.id;
+    const got = await read(e.persistence, from, e.committer.visibleTs, 1_000_000);
+    await e.close();
+    const backfilled = new Set<string>();
+    let chunks = 0;
+    let chain = true;
+    let prev = from;
+    for (const c of got) {
+      if (c.prevTs !== prev) chain = false;
+      prev = c.ts;
+      if (c.writes.length && c.writes.every((w) => w.index === ix)) chunks++;
+      for (const w of c.writes) if (w.index === ix && w.id) backfilled.add(w.id);
+    }
+    check(
+      chunks >= 6 && chain && backfilled.size === ids.size && [...ids].every((id) => backfilled.has(id)),
+      `K25 a background index backfill's index-only chunks are in the log (${chunks} chunk commits, ${backfilled.size}/${ids.size} documents, prevTs chain ${chain ? "unbroken" : "broken"})`,
     );
   }
 }

@@ -1,4 +1,5 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
+export { IndexBackfillingError, IndexStagedError, type IndexState } from "./catalog.ts";
 export {
   Committer,
   CommitterStoppedError,
@@ -17,6 +18,8 @@ export {
   type CacheCompanion,
   type Caller,
   Engine,
+  INDEX_BACKFILL_DEFAULTS,
+  type IndexBackfillOptions,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,
   OCC_MAX_RETRIES,
