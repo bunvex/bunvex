@@ -408,3 +408,30 @@ describe("sync protocol v1", () => {
     });
   });
 });
+
+describe("sync invalidation through the read-set index (STUDY-08 D9)", () => {
+  test("a commit re-runs only the executions it overlaps; removed queries and closed sessions leave nothing behind", async () => {
+    const { url, sync, engine } = await setup();
+    const c1 = await client(url);
+    const c2 = await client(url);
+    c1.modify([add(1, "m:count", { table: "a" }), add(2, "m:count", { table: "b" })]);
+    c2.modify([add(1, "m:count", { table: "a" })]);
+    await c1.transition(0);
+    await c2.transition(0);
+    expect(sync.reads.size).toBe(2); // two distinct executions, shared by the sessions
+    const before = sync.stats.executions;
+    await engine.mutation((db) => db.insert("a", {}));
+    await c1.until(() => c1.transitions().some((t) => updated(t)[1] === 1));
+    await c2.until(() => c2.transitions().some((t) => updated(t)[1] === 1));
+    expect(sync.stats.executions - before).toBe(1); // count(a) once for both sessions; count(b) not at all
+    c1.modify([{ type: "Remove", queryId: 2 }]);
+    await c1.until(() => c1.transitions().some((t) => t.modifications.some((m) => m.type === "QueryRemoved")));
+    expect(sync.reads.size).toBe(1);
+    c1.ws.close();
+    c2.ws.close();
+    await c1.closed;
+    await c2.closed;
+    await c1.until(() => sync.reads.size === 0 || undefined);
+    expect([sync.reads.size, sync.reads.intervalCount]).toEqual([0, 0]);
+  });
+});

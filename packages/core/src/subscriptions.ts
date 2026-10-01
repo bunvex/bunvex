@@ -2,16 +2,19 @@
 // same query shares ONE execution, and the result is handed to `publish`, which the transport (the
 // server's WebSocket pub/sub) fans out. The core knows no socket.
 //
-// Invariant: a Sub never misses a commit. Each durable commit is tested against every live Sub's read-set;
-// a Sub that is RUNNING when a commit arrives (its read-set is unknown or about to be replaced) is marked
-// dirty and re-runs once it finishes.
-import { type Interval, type LogEntry, overlaps } from "./committer.ts";
+// Invariant: a Sub never misses a commit. Each durable commit is matched against the live Subs' read-sets
+// through an index of them (STUDY-08 D9), so only the Subs it overlaps are touched; a Sub that is RUNNING
+// when a commit arrives (its read-set is unknown or about to be replaced) is marked dirty and re-runs once
+// it finishes.
+import type { LogEntry } from "./committer.ts";
 import { type Engine, type QueryJournal, stringifyValue, type TxBody } from "./engine.ts";
+import { ReadSetIndex } from "./read-set-index.ts";
 
 type Sub = {
   key: string;
   body: TxBody<unknown>;
-  reads: Interval[] | null;
+  /** Creation order: overlapping Subs re-run in this order, as they did when every Sub was scanned. */
+  seq: number;
   /** The last published result, and its identity (`v` + JSON of the value, or `e` + the error). */
   last: { msg: SubResult; id: string } | null;
   running: boolean;
@@ -34,6 +37,10 @@ const defaultFormatError: FormatError = (e) => ({ error: String((e as Error)?.me
 
 export class Subscriptions {
   private subs = new Map<string, Sub>();
+  /** The read-set of every live Sub that has run once. */
+  readonly reads = new ReadSetIndex<Sub>();
+  private running = new Set<Sub>();
+  private nextSeq = 0;
   stats = { reruns: 0, published: 0 };
 
   constructor(
@@ -45,18 +52,12 @@ export class Subscriptions {
   }
 
   private onCommit(entries: LogEntry[]) {
-    for (const s of this.subs.values()) {
-      if (s.running) {
-        s.dirty = true;
-        continue;
-      }
-      if (!s.reads) continue;
-      for (const e of entries)
-        if (overlaps(e.writes, s.reads)) {
-          void this.run(s);
-          break;
-        }
-    }
+    // Only live Subs: one still finishing after its key was unsubscribed (and maybe subscribed again) is not.
+    for (const s of this.running) if (this.subs.get(s.key) === s) s.dirty = true;
+    if (this.reads.size === 0) return;
+    const hit = [...this.reads.matchingEntries(entries)].filter((s) => !s.running);
+    if (hit.length > 1) hit.sort((a, b) => a.seq - b.seq);
+    for (const s of hit) void this.run(s);
   }
 
   private async run(s: Sub) {
@@ -65,6 +66,7 @@ export class Subscriptions {
       return;
     }
     s.running = true;
+    this.running.add(s);
     do {
       s.dirty = false;
       this.stats.reruns++;
@@ -73,7 +75,7 @@ export class Subscriptions {
       // A failed run keeps its reads too, so the next overlapping commit re-runs it (Convex re-evaluates
       // errors like any result). Errors and values share `last`, so a value that comes back after an
       // error is published again.
-      s.reads = r.reads;
+      if (this.subs.get(s.key) === s) this.reads.set(s, r.reads);
       const msg: SubResult = r.ok ? { value: stringifyValue(r.value) } : this.formatError(r.error);
       const id = "value" in msg ? `v${msg.value}` : `e${msg.data ?? ""}\u0000${msg.error}`;
       if (id !== s.last?.id) {
@@ -83,6 +85,7 @@ export class Subscriptions {
       }
     } while (s.dirty && this.subs.has(s.key));
     s.running = false;
+    this.running.delete(s);
   }
 
   /**
@@ -96,7 +99,16 @@ export class Subscriptions {
       s.refs++;
       return this.current(key);
     }
-    const created: Sub = { key, body, reads: null, last: null, running: false, dirty: false, refs: 1, journal: {} };
+    const created: Sub = {
+      key,
+      body,
+      seq: this.nextSeq++,
+      last: null,
+      running: false,
+      dirty: false,
+      refs: 1,
+      journal: {},
+    };
     this.subs.set(key, created);
     await this.run(created);
     return null;
@@ -109,7 +121,10 @@ export class Subscriptions {
 
   unsubscribe(key: string) {
     const s = this.subs.get(key);
-    if (s && --s.refs <= 0) this.subs.delete(key);
+    if (s && --s.refs <= 0) {
+      this.subs.delete(key);
+      this.reads.delete(s);
+    }
   }
 
   get size() {
