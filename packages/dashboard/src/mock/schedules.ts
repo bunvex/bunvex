@@ -160,17 +160,16 @@ export class MockScheduler {
 
   // ---------------------------------------------------------------- writes
 
+  /** As Convex's `cancel_job`: pending or running → canceled (gone from the list); otherwise nothing. */
   cancel(id: string) {
     const job = this.jobs.find((j) => j.id === id);
-    if (!job) throw new DataSourceError("not_found", `no scheduled run "${id}"`);
-    if (job.state !== "pending")
-      throw new DataSourceError("invalid_request", "this run has started: it can no longer be canceled");
+    if (!job) return;
     this.jobs = this.jobs.filter((j) => j !== job);
     this.changed();
   }
 
   cancelAll(fn?: string): { canceled: number } {
-    const gone = this.jobs.filter((j) => j.state === "pending" && (fn === undefined || j.function === fn));
+    const gone = this.jobs.filter((j) => fn === undefined || j.function === fn);
     this.jobs = this.jobs.filter((j) => !gone.includes(j));
     if (gone.length > 0) this.changed();
     return { canceled: gone.length };

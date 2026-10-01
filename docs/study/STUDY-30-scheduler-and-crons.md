@@ -227,7 +227,12 @@ It runs in the process that owns the committer (one per deployment, STUDY-24).
 
 ### 3.5 Dashboard
 
-Admin-only system functions for the dashboard session to build the screens on:
+Admin-only system functions for the dashboard session to build the screens on, with Convex's names, arguments
+and private document shapes (`_scheduled_jobs` / `_cron_*`: times in ns, args as bytes, `state.type`), built
+on the way out of bunvex's storage (S2). Until admin keys (Phase 3 item 6) they are called in-process
+(`functions.runSystemQuery`); clients cannot reach any `_system` name. The dashboard contract
+(`DeploymentFeatures`) follows Convex here too: a running job can be canceled, canceling a finished one is a
+no-op, and `minuteUTC` is optional.
 - **Schedules:** list pending and in-progress jobs, optionally by function; cancel one; cancel all.
 - **Crons:** list with last and next run; run history.
 

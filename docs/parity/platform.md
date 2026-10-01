@@ -92,7 +92,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | done (STUDY-30) | |
 | Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | partial (STUDY-30) | Parallelism 8 (env as Convex); pausing waits for the deployment state. Woken by commits, no polling. |
 | GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | done (STUDY-30) | `SCHEDULED_JOB_RETENTION` (seconds), as Convex. |
-| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | missing | |
+| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | partial (STUDY-30) | `_system/frontend/paginatedScheduledJobs` and `scheduler:getArgs` in Convex's shapes; cancel one / cancel all (batches of 1000, by function and `nextTs` range) as server operations. The HTTP routes come with admin keys; deleting the table is not done. |
 | Per-component scheduling | `crates/model/scheduled_jobs` (per namespace) | missing | Depends on components. |
 
 ### 5. Cron jobs
@@ -105,7 +105,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
 | Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex, `CRON_SPLAY_SECONDS` (0 turns it off). |
 | No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
-| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | missing | |
+| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | partial (STUDY-30) | Both system functions, in Convex's document shapes; reachable once admin keys exist. |
 
 ### 6. Full-text search
 
