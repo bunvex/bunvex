@@ -8,7 +8,7 @@
 // as possible), COMMITTER (module exporting `Committer`,
 // default @bunvex/core: point it at another build to compare), PERSIST (`memory`, default, or `null`: a
 // driver that keeps nothing, so the RSS is the committer's own), HARD_MAX_MB (the hard cap, default 256; 0 turns it off).
-import { encodeKey, type IndexWrite, type LogEntry, logEntryBytes, type Persistence } from "@bunvex/core";
+import { encodeKey, type IndexWrite, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 
 const W = Number(process.env.W ?? 64);
@@ -19,6 +19,10 @@ const { Committer } = (await import(process.env.COMMITTER ?? "@bunvex/core")) as
 const retention =
   process.env.HARD_MAX_MB !== undefined ? { hardMaxBytes: Number(process.env.HARD_MAX_MB) * 2 ** 20 } : {};
 const mb = (n: number) => Math.round(n / 2 ** 20);
+const pct = (xs: number[], p: number) =>
+  xs.length
+    ? Number([...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(p * xs.length))].toFixed(2))
+    : null;
 const open = async (): Promise<Persistence> =>
   process.env.PERSIST === "null"
     ? ({ apply() {}, async flush() {} } as unknown as Persistence)
@@ -77,6 +81,7 @@ async function lag() {
   let noise = 0;
   let attempts = 0;
   let failed = 0;
+  const latencies: number[] = []; // per lagged commit, ms (validation against the lag's worth of log)
   const t0 = performance.now();
   const end = t0 + SECS * 1000;
   const sampler = setInterval(() => history.push({ t: performance.now(), ts: c.visibleTs }), 1);
@@ -106,11 +111,13 @@ async function lag() {
       const k = encodeKey([name]);
       const reads = [{ index: 9, lo: k, hi: encodeKey([`${name}\u0000`]) }];
       attempts++;
+      const t = performance.now();
       try {
         await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: 9, key: k, id: `l${n}` }] });
       } catch {
         failed++;
       }
+      latencies.push(performance.now() - t);
     }
   })();
   await Promise.all([...noiseWriters, lagged]);
@@ -125,6 +132,8 @@ async function lag() {
       noise_commits_per_s: Math.round(noise / secs),
       lagged_attempts: attempts,
       lagged_failed_pct: Number(((100 * failed) / Math.max(1, attempts)).toFixed(1)),
+      lagged_commit_ms_p50: pct(latencies, 0.5),
+      lagged_commit_ms_p99: pct(latencies, 0.99),
       conflicts: c.conflicts,
       out_of_retention: (c as unknown as Stats).outOfRetention ?? null,
       rss_mb: mb(process.memoryUsage().rss),
@@ -132,26 +141,34 @@ async function lag() {
   );
 }
 
-function calibrate() {
+async function calibrate() {
+  // Through a committer on a driver that keeps nothing: the heap that remains is the write log, with the
+  // per-index columns validation looks writes up in (STUDY-06 D11).
   const N = 200_000;
-  const keep: LogEntry[] = [];
+  const c = new Committer({ apply() {}, async flush() {} } as unknown as Persistence, {
+    minRetentionUs: 3.6e9,
+    maxRetentionUs: 3.6e9,
+    softMaxBytes: 2 ** 40,
+  });
   Bun.gc(true);
   const before = process.memoryUsage().heapUsed;
-  let estimate = 0;
-  for (let i = 0; i < N; i++) {
-    const { idx } = itemWrite(`t${i % 64}`, 1.79e12 + i);
-    const e: LogEntry = { ts: i, writes: idx.map((w) => ({ index: w.index, key: w.key, id: w.id })) };
-    keep.push(e);
-    estimate += logEntryBytes(e);
+  for (let i = 0; i < N; i += 1000) {
+    const batch: Promise<number>[] = [];
+    for (let j = i; j < i + 1000; j++) {
+      const { idx } = itemWrite(`t${j % 64}`, 1.79e12 + j);
+      batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs: [], idx }));
+    }
+    await Promise.all(batch);
   }
   Bun.gc(true);
   const real = process.memoryUsage().heapUsed - before;
+  const s = c as unknown as Stats;
   console.log(
     JSON.stringify({
       bench: "calibrate",
-      entries: keep.length,
+      entries: s.logLength,
       real_bytes_per_entry: Math.round(real / N),
-      estimated_bytes_per_entry: Math.round(estimate / N),
+      estimated_bytes_per_entry: Math.round((s.logBytes ?? 0) / N),
     }),
   );
 }
@@ -159,5 +176,5 @@ function calibrate() {
 const which = process.argv[2] ?? "throughput";
 if (which === "throughput") await throughput();
 else if (which === "lag") await lag();
-else if (which === "calibrate") calibrate();
+else if (which === "calibrate") await calibrate();
 else throw new Error(`unknown bench ${which}`);

@@ -10,10 +10,15 @@
 // WRITE_LOG_MIN_RETENTION while the log is over WRITE_LOG_SOFT_MAX_SIZE. A transaction whose snapshot is
 // older than what the log still holds cannot be validated: it fails with OutOfRetentionError, Convex's
 // `OutOfRetention`, which is a system error ("try again later"), not an OCC conflict.
+//
+// Validation looks the read-set up in the log indexed per index (`WritesByIndex`, STUDY-06 D11), as
+// Convex's `is_stale`: only the indexes read, only the writes in the snapshot's window, and each key tested
+// against the read intervals by binary search.
 
 import { outsideExecution, wallClockUs } from "./determinism.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
+import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
 
 export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
 /**
@@ -86,8 +91,9 @@ const DEFAULT_RETENTION: WriteLogRetention = {
 /**
  * The approximate heap size of a log entry, as Convex sums `heap_size()` of what it keeps: the entry and its
  * `writes` array, and per write its object, key bytes and id (one byte per character: ids and function names
- * are ASCII, which JavaScriptCore stores as Latin-1). Calibrated on Bun 1.4 with `bench/write-log.ts
- * calibrate`: a three-index insert is estimated at ~580 bytes and measured at ~590.
+ * are ASCII, which JavaScriptCore stores as Latin-1), plus its two slots in the per-index columns validation
+ * uses (`WritesByIndex`, with the arrays' spare capacity). Calibrated on Bun 1.4 with `bench/write-log.ts
+ * calibrate`: a three-index insert is estimated at ~650 bytes and measured at ~670.
  */
 export function logEntryBytes(e: LogEntry): number {
   let n = ENTRY_OVERHEAD + (e.source === undefined ? 0 : e.source.length);
@@ -95,7 +101,8 @@ export function logEntryBytes(e: LogEntry): number {
   return n;
 }
 const ENTRY_OVERHEAD = 96;
-const WRITE_OVERHEAD = 80;
+/** The write's object (80) and its slots in the per-index columns (24). */
+const WRITE_OVERHEAD = 104;
 
 /**
  * A timestamp outside the write log's retention: a commit whose snapshot is older than what the log still
@@ -193,6 +200,8 @@ export class Committer {
   /** The write log, oldest first, from `log[logHead]` (trimmed by advancing the head; compacted now and then). */
   private log: LogEntry[] = [];
   private logHead = 0;
+  /** The same writes, per index in ts order, for conflict checks (Convex's `WritesByIndex`). */
+  private byIndex = new WritesByIndex();
   /** The approximate heap size of the retained log (`logEntryBytes`), as Convex's `WriteLogManager.size`. */
   logBytes = 0;
   private retention: WriteLogRetention;
@@ -257,10 +266,21 @@ export class Committer {
     if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
     if (from >= to) return false;
     if (from < this.purgedTs) return true; // Convex's `refresh_token`: out of retention, re-run
-    for (let i = this.log.length - 1; i >= this.logHead && this.log[i].ts > from; i--)
-      if (this.log[i].ts <= to && overlaps(this.log[i].writes, reads)) return true;
-    return false;
+    if (reads.length === 0) return false;
+    return this.byIndex.conflict(intervalSetsByIndex(reads), from, to, this.sourceAt) !== null;
   }
+
+  /** The write source of the commit at `ts` (in the log): a binary search, only to report a conflict. */
+  private sourceAt = (ts: number): string | undefined => {
+    let lo = this.logHead;
+    let hi = this.log.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.log[mid].ts < ts) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < this.log.length && this.log[lo].ts === ts ? this.log[lo].source : undefined;
+  };
 
   /** Subscribe to durable commits (the query cache and subscriptions). */
   onCommit(fn: (entries: LogEntry[]) => void) {
@@ -337,13 +357,15 @@ export class Committer {
     // As Convex's `is_stale`: a snapshot older than the log cannot be validated, whatever it read (this
     // holds with an empty log too: a snapshot from before the store was opened is refused; STUDY-24 S4).
     if (p.snapshot < this.purgedTs) return new OutOfRetentionError(p.snapshot, this.purgedTs);
-    if (p.reads.length === 0) return null;
-    for (let i = this.log.length - 1; i >= this.logHead && this.log[i].ts > p.snapshot; i--) {
-      const e = this.log[i];
-      const w = firstOverlap(e.writes, p.reads);
-      if (w) return { writeTs: e.ts, index: w.index, id: w.id, source: e.source };
-    }
-    return null;
+    if (p.reads.length === 0 || p.snapshot >= this.appliedTs) return null;
+    // As Convex's `commit_has_conflict`: any write in (snapshot, latest] inside the read-set, first among the
+    // published commits (`is_stale` on the write log), then among this group's commits applied but not yet
+    // flushed (Convex's `pending_writes`), which the log also holds.
+    const reads = intervalSetsByIndex(p.reads);
+    return (
+      this.byIndex.conflict(reads, p.snapshot, this.visibleTs, this.sourceAt) ??
+      this.byIndex.conflict(reads, Math.max(p.snapshot, this.visibleTs), this.appliedTs, this.sourceAt, true)
+    );
   }
 
   private async drain() {
@@ -389,6 +411,7 @@ export class Committer {
           accepted.push([p, entry]);
           this.persistence.apply(ts, p.docs, p.idx);
           this.log.push(entry); // seen by the validation of the NEXT commits of this group
+          this.byIndex.append(entry);
           this.logBytes += logEntryBytes(entry);
         }
         if (!accepted.length) continue;
@@ -439,6 +462,7 @@ export class Committer {
         break;
       this.purgedTs = e.ts;
       this.logBytes -= logEntryBytes(e);
+      this.byIndex.removeOldest(e);
       this.log[this.logHead++] = undefined as unknown as LogEntry; // release it now
     }
     // Compact once the dropped prefix is the larger part: amortized O(1) per commit.
