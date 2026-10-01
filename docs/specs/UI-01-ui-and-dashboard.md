@@ -1416,6 +1416,15 @@ pull requests.
   in the menu tree; a sibling item, Escape, a click outside or picking an item still close it. Reproduced and
   checked in Chrome.
 
+### 20.2 Logs
+
+- **UX-5** The Time column stays in view when a long message scrolls the list sideways: `DataTable`
+  gains `stickyColumn`.
+- **UX-6** On a phone the message comes right after the time (Time, Message, Level, Function, Outcome,
+  Request).
+- **UX-24** A line's details say who started the request once (the explanation is its tooltip), show the
+  function's kind as the list's Q/M/A badge, and keep the copy button in the body font.
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens
