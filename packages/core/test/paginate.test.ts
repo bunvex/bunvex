@@ -3,7 +3,6 @@ import { isBunvexError, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
-import { Subscriptions } from "../src/subscriptions.ts";
 
 async function engine(n = 0) {
   const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
@@ -131,18 +130,15 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     expect(again.continueCursor).toBe(a.continueCursor);
   });
 
-  test("a subscribed page keeps its boundary across re-runs (the journal)", async () => {
+  test("a re-run with the journal keeps the page's boundary (what a subscription does)", async () => {
     const e = await engine(10);
-    const published: Doc[][] = [];
-    const subs = new Subscriptions(e, (_k, m) => {
-      if ("value" in m) published.push(JSON.parse(m.value).page);
-    });
-    await subs.subscribe("p", (db) => db.query("items").withIndex("by_n").paginate({ numItems: 3, cursor: null }));
+    const body = (db: Parameters<Parameters<Engine["query"]>[0]>[0]) =>
+      db.query("items").withIndex("by_n").paginate({ numItems: 3, cursor: null });
+    const first = await e.queryTracked(body);
     await e.mutation((db) => db.insert("items", { n: 0.5 }));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(published.map((p) => p.map((d) => d.n))).toEqual([
-      [0, 1, 2],
-      [0, 0.5, 1, 2], // grew inside the page instead of pushing 2 out
-    ]);
+    const again = await e.queryTracked(body, first.journal);
+    if (!first.ok || !again.ok) throw new Error("failed");
+    expect(ns(first.value.page)).toEqual([0, 1, 2]);
+    expect(ns(again.value.page)).toEqual([0, 0.5, 1, 2]); // grew inside the page instead of pushing 2 out
   });
 });

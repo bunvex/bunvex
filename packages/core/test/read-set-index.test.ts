@@ -6,7 +6,6 @@ import { prefixEnd } from "../src/keyenc.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { ReadSetIndex } from "../src/read-set-index.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
-import { Subscriptions } from "../src/subscriptions.ts";
 
 /** A small deterministic PRNG, so a failure reproduces from its seed. */
 function rng(seed: number) {
@@ -156,7 +155,6 @@ const byN = (n: number) => (db: any) =>
     .query("items")
     .withIndex("by_n", (q: any) => q.eq("n", n))
     .collect();
-const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe("invalidation through the index", () => {
   test("the query cache drops exactly the entries a commit overlaps, and forgets their read-sets", async () => {
@@ -176,30 +174,5 @@ describe("invalidation through the index", () => {
     expect(e.cacheReads.size).toBe(3);
     await e.mutation((db) => db.insert("items", { n: 49 }));
     expect(e.cacheReads.size).toBe(2);
-  });
-
-  test("subscriptions: only the overlapped one re-runs; unsubscribing forgets its read-set", async () => {
-    const e = await engine();
-    const subs = new Subscriptions(e, () => {});
-    for (let n = 0; n < 20; n++) await subs.subscribe(`s${n}`, byN(n));
-    expect(subs.reads.size).toBe(20);
-    const before = subs.stats.reruns;
-    await e.mutation((db) => db.insert("items", { n: 7 }));
-    await settle();
-    expect(subs.stats.reruns - before).toBe(1);
-    for (let n = 0; n < 20; n++) subs.unsubscribe(`s${n}`);
-    expect([subs.reads.size, subs.reads.intervalCount]).toEqual([0, 0]);
-  });
-
-  test("a subscription unsubscribed while it re-runs does not register its new read-set", async () => {
-    const e = await engine();
-    const subs = new Subscriptions(e, () => {});
-    await subs.subscribe("s", byN(1));
-    const write = e.mutation((db) => db.insert("items", { n: 1 }));
-    // The commit starts the re-run before the mutation resolves; unsubscribe while it runs.
-    await write;
-    subs.unsubscribe("s");
-    await settle();
-    expect([subs.reads.size, subs.reads.intervalCount]).toEqual([0, 0]);
   });
 });

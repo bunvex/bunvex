@@ -61,6 +61,7 @@ describe("the Files screen", () => {
     const oldest = await all(source, "asc");
     await waitFor(() => expect(idOf(rows()[0]!)).toBe(oldest[0]!.id));
     fireEvent.change(screen.getByLabelText("Uploaded until"), { target: { value: "2020-01-01" } });
+    fireEvent.blur(screen.getByLabelText("Uploaded until")); // a typed day applies once complete (UX-15)
     await waitFor(() => expect(params(history)).toEqual({ order: "asc", to: "2020-01-01" }));
     await screen.findByText("No file was uploaded in these dates.");
   });

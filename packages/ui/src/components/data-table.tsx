@@ -132,6 +132,11 @@ type DataTableProps<TData extends RowData> = {
   /** When it changes, the list scrolls back to the top (a new sort or filter is a new list). */
   resetKey?: unknown;
   /**
+   * A column that stays in view at the left edge when the table scrolls sideways (e.g. a log's time, which
+   * people scan while reading a long message).
+   */
+  stickyColumn?: string;
+  /**
    * Keep the row at the top of the view in place when rows are added or removed above it (a live list).
    * Needs `getRowId`. Default true.
    */
@@ -166,6 +171,7 @@ function DataTable<TData extends RowData>({
   footer,
   initialHeight = 600,
   resetKey,
+  stickyColumn,
   anchorTopRow = true,
   highlightChanges,
   selection,
@@ -664,6 +670,7 @@ function DataTable<TData extends RowData>({
                   }
                   className={cn(
                     "relative h-9 truncate border-r border-b px-3 font-medium whitespace-nowrap last:border-r-0",
+                    header.column.id === stickyColumn && "sticky left-0 z-[1] bg-muted",
                     onColumnStateChange && header.column.id !== SELECT_COLUMN && "cursor-grab select-none",
                     "data-[dragging]:cursor-grabbing data-[dragging]:opacity-50",
                     // the drop indicator: a bar on the edge the column lands at
@@ -757,7 +764,11 @@ function DataTable<TData extends RowData>({
                           <td
                             key={cell.id}
                             data-changed={changed || undefined}
-                            className={cn("truncate border-r px-3 whitespace-nowrap last:border-r-0", flashing)}
+                            className={cn(
+                              "truncate border-r px-3 whitespace-nowrap last:border-r-0",
+                              cell.column.id === stickyColumn && "sticky left-0 z-[1] bg-background",
+                              flashing,
+                            )}
                           >
                             <table.FlexRender cell={cell} />
                           </td>
@@ -786,6 +797,7 @@ function DataTable<TData extends RowData>({
                           className={cn(
                             "cursor-default border-r px-3 whitespace-nowrap outline-none last:border-r-0",
                             cell.column.id === SELECT_COLUMN && "w-10",
+                            cell.column.id === stickyColumn && "sticky left-0 z-[1] bg-background",
                             isEditing ? "relative overflow-visible p-0" : "truncate",
                             // the current cell: strong while the grid has the focus, faint when it is elsewhere
                             selected && "ring-2 ring-ring/40 ring-inset group-focus-within/grid:ring-ring",
