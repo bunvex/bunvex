@@ -1,5 +1,6 @@
 // The History screen (UI-01 §14.5, STUDY-12 §9): the deployment's audit log, newest first, between two days
 // and for one action if asked; an event's details beside the list. Live: new events come in as recorded.
+
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { infiniteQueryOptions, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import { type AuditEvent, type AuditEventQuery, toDataSourceError } from "../dat
 import { formatLiteral } from "../database/literal.ts";
 import { formatTime } from "../database/values.ts";
 import { type HistorySearch, historyRoute } from "../router.tsx";
+import { formatCount } from "../screens/stats.ts";
 import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
@@ -90,7 +92,7 @@ function History() {
           <h1 className="text-xl font-semibold tracking-tight">History</h1>
           {allowed && !list.isPending && (
             <span className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
-              {`${events.length}${list.hasNextPage ? "+" : ""} ${events.length === 1 && !list.hasNextPage ? "event" : "events"}`}
+              {`${formatCount(events.length)}${list.hasNextPage ? "+" : ""} ${events.length === 1 && !list.hasNextPage ? "event" : "events"}`}
             </span>
           )}
         </div>
