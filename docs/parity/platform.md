@@ -10,7 +10,7 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
   - `POST /api/{query,mutation,action}`, WebSocket `/ws`, `GET /version` and `GET /stats` (JSON);
   - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
-- There are no system (`_`) tables, no ctx.auth, no ctx.storage and no ctx.scheduler.
+- `ctx.auth` exists (STUDY-27); there is no ctx.storage and no ctx.scheduler.
 
 Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes marks where bunvex may deliberately differ; the owner has to decide those.
 
@@ -20,22 +20,22 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source (file/crate) | bunvex status | Notes |
 |---|---|---|---|
-| `auth.config.ts` with OIDC providers `{domain, applicationID}` | `npm/convex/server/authentication.ts`; `crates/common/auth.rs` (`AuthInfo::Oidc`) | missing | `@bunvex/auth` is an empty stub. The module name is `auth.config.js`. |
-| Custom JWT provider `{type:"customJwt", issuer, jwks, algorithm RS256/ES256, applicationID?}` | `crates/common/auth.rs` (`AuthInfo::CustomJwt`) | missing | `jwks` may be a `data:` URL. The JWKS response must be `application/json` or `jwk-set+json`. |
+| `auth.config.ts` with OIDC providers `{domain, applicationID}` | `npm/convex/server/authentication.ts`; `crates/common/auth.rs` (`AuthInfo::Oidc`) | done (STUDY-27) | Validated at server start (DV-100), with Convex's checks and messages. |
+| Custom JWT provider `{type:"customJwt", issuer, jwks, algorithm RS256/ES256, applicationID?}` | `crates/common/auth.rs` (`AuthInfo::CustomJwt`) | done (STUDY-27) | Including `data:` JWKS URLs. |
 | Evaluating the auth config in a sandbox on push | `crates/isolate/environment/auth_config.rs`; `crates/application/lib.rs` `get_evaluated_auth_config` | missing | No Date/random/syscalls/imports. `process.env` is allowed, and a missing variable is an error. Can't be combined with legacy `convex.json` `authInfo`. |
 | `_auth` system table and auth diff on push | `crates/model/auth` | missing | The diff (added/removed providers) goes to the deploy audit log. |
 | Re-evaluating the auth config when env vars change | `crates/application/lib.rs` `reevaluate_existing_auth_config` | missing | An env var change that would break the auth config is rejected. |
-| OIDC discovery (`/.well-known/openid-configuration`) and JWKS fetch | `crates/authentication/lib.rs` `validate_id_token` | missing | OIDC accepts RS256 and EdDSA. Checks iss and aud; no nonce; multi-aud tokens rejected. |
-| JWKS / discovery caching | `crates/http_client` (`CachedHttpClient`, knob `HTTP_CACHE_SIZE` 16 MiB) | missing | Follows HTTP Cache-Control headers; there is no dedicated JWKS cache. |
-| Provider matching by `iss` / `aud` | `crates/common/auth.rs` `matches_token` | missing | Adds `https://` when there is no scheme, ignores trailing `/`, first match wins, `NoAuthProvider` if none. |
-| Clock skew and required `exp` (custom JWT) | `crates/authentication/lib.rs` | missing | 5 s leeway. |
-| `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | missing | `tokenIdentifier = "iss\|sub"`, `subject`, `issuer`, standard OIDC claims (name, email, pictureUrl, …) and custom claims. Nested custom claims are flattened to dotted keys. `jti`, `nbf` and `fva` are dropped so caching still works. |
+| OIDC discovery (`/.well-known/openid-configuration`) and JWKS fetch | `crates/authentication/lib.rs` `validate_id_token` | done (STUDY-27) | `@bunvex/auth` `TokenVerifier` (`jose`): RS256 / EdDSA, exact `iss` / `aud`. |
+| JWKS / discovery caching | `crates/http_client` (`CachedHttpClient`, knob `HTTP_CACHE_SIZE` 16 MiB) | done (STUDY-27) | By `Cache-Control`, plus a rate-limited refetch on an unknown `kid` (DV-101). |
+| Provider matching by `iss` / `aud` | `crates/common/auth.rs` `matches_token` | done (STUDY-27) |  |
+| Clock skew and required `exp` (custom JWT) | `crates/authentication/lib.rs` | done (STUDY-27) | 5 s leeway, `exp` required. |
+| `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | done (STUDY-27) |  |
 | Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | missing | |
 | Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
 | WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | missing | Protocol v0 has no auth message. Identity versioning (`baseVersion`) is part of the protocol. |
-| HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | missing | |
+| HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is refused until admin keys exist. |
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | missing | Belongs to the client, listed here because it drives the auth protocol. |
-| Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | missing | The bunvex cache key is `path + args` only, so adding auth needs identity in the key. |
+| Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |
 | Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | missing | Needs the `ActAsUser` operation. Used by `npx convex run --identity` and the dashboard runner. |
 | Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | missing | ARCHITECTURE lists clerk and auth0 as D. They are only OIDC configurations plus client glue. |
 

@@ -249,10 +249,10 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.auth.getUserIdentity()` returns `UserIdentity \| null` in queries, mutations, actions and HTTP actions | server/authentication.ts | missing | `@bunvex/auth` is empty. |
-| `UserIdentity` fields (tokenIdentifier, subject, issuer, name, email, emailVerified, …, custom claims) | server/authentication.ts | missing | |
-| `auth.config.ts` providers: OIDC `{ domain, applicationID }` and `customJwt` `{ issuer, jwks, algorithm RS256/ES256 }` | server/authentication.ts (`AuthConfig`) | missing | |
-| Query cache and subscriptions scoped by identity | crates/application | missing | |
+| `ctx.auth.getUserIdentity()` returns `UserIdentity \| null` in queries, mutations, actions and HTTP actions | server/authentication.ts | partial (STUDY-27) | Queries, mutations and actions (actions pass it to `runQuery` / `runMutation`); HTTP actions do not exist yet. |
+| `UserIdentity` fields (tokenIdentifier, subject, issuer, name, email, emailVerified, …, custom claims) | server/authentication.ts | done (STUDY-27) | `@bunvex/auth` `identityFromOidc` / `identityFromCustomJwt`, with Convex's dropped claims and custom-JWT flattening. |
+| `auth.config.ts` providers: OIDC `{ domain, applicationID }` and `customJwt` `{ issuer, jwks, algorithm RS256/ES256 }` | server/authentication.ts (`AuthConfig`) | done (STUDY-27) | `createServer({ auth })` with `bunvex/auth.config.ts`'s default export (DV-100). |
+| Query cache and subscriptions scoped by identity | crates/application | partial (STUDY-27) | The query cache keys a result by identity only if the run read it (B13 fixed); sync comes next. |
 
 ### 13. File storage (`ctx.storage`)
 

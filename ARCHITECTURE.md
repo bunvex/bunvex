@@ -69,7 +69,7 @@ bunvex/
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
-│   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            M
+│   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            🟡
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
@@ -80,7 +80,7 @@ bunvex/
 │   │   └── s3                       S3 / R2 / MinIO / compatible
 │   │
 │   ├── auth/                        @bunvex/auth
-│   │   ├── jwt                      verify JWT / OIDC (JWKS)                                  M
+│   │   ├── jwt                      verify JWT / OIDC (JWKS), STUDY-27                        ✅
 │   │   ├── clerk                                                                               D
 │   │   └── auth0                                                                               D
 │   │

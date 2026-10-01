@@ -91,6 +91,16 @@ type CacheEntry = { json: string; reads: Interval[]; extra?: unknown };
  * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
  * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
  */
+/**
+ * Who runs a transaction (STUDY-27): the server's identity object, opaque to the engine, and a stable string
+ * of it. A cached query result is keyed by that string only if the run read the identity, as Convex's query
+ * cache (`observed_identity`, crates/application/src/cache/mod.rs); otherwise it serves every caller.
+ */
+export type Caller = { identity: unknown; key: string };
+const ANONYMOUS: Caller = { identity: null, key: "" };
+/** Separates a cache key from its identity part; `*` is the identity-free entry. */
+const ID_SEP = "\u0001";
+
 export type CacheCompanion = {
   /** On a miss: the body to run instead, and what to store with its result afterwards. */
   wrap<T>(body: TxBody<T>): { body: TxBody<T>; capture(): unknown };
@@ -298,8 +308,8 @@ export class Engine {
   }
 
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
-  async query<T>(body: TxBody<T>, cacheKey?: string, companion?: CacheCompanion): Promise<T> {
-    const r = await this.cachedQuery(body, cacheKey, companion);
+  async query<T>(body: TxBody<T>, cacheKey?: string, companion?: CacheCompanion, caller?: Caller): Promise<T> {
+    const r = await this.cachedQuery(body, cacheKey, companion, caller);
     return "json" in r ? (parseValue(r.json) as T) : r.value;
   }
 
@@ -307,8 +317,13 @@ export class Engine {
    * The same, as the result's JSON: a cache hit goes straight to the transport without a parse or a
    * stringify (the HTTP API).
    */
-  async queryJson(body: TxBody<unknown>, cacheKey?: string, companion?: CacheCompanion): Promise<string> {
-    const r = await this.cachedQuery(body, cacheKey, companion);
+  async queryJson(
+    body: TxBody<unknown>,
+    cacheKey?: string,
+    companion?: CacheCompanion,
+    caller?: Caller,
+  ): Promise<string> {
+    const r = await this.cachedQuery(body, cacheKey, companion, caller);
     return "json" in r ? r.json : stringifyValue(r.value);
   }
 
@@ -316,9 +331,13 @@ export class Engine {
     body: TxBody<T>,
     cacheKey?: string,
     companion?: CacheCompanion,
+    caller: Caller = ANONYMOUS,
   ): Promise<{ json: string } | { value: T }> {
-    if (cacheKey !== undefined) {
-      const hit = this.cache.get(cacheKey);
+    // Two possible entries, most specific first: this caller's, then the one of a run that read no identity.
+    const precise = cacheKey === undefined ? undefined : `${cacheKey}${ID_SEP}${caller.key}`;
+    const shared = cacheKey === undefined ? undefined : `${cacheKey}${ID_SEP}*`;
+    if (precise !== undefined && shared !== undefined) {
+      const hit = this.cache.get(precise) ?? this.cache.get(shared);
       if (hit) {
         this.stats.cacheHits++;
         companion?.replay(hit.extra);
@@ -328,15 +347,16 @@ export class Engine {
     }
     const snapshot = this.committer.visibleTs;
     const wrapped = cacheKey !== undefined ? companion?.wrap(body) : undefined;
-    const { tx, value } = await this.execute("query", snapshot, wrapped?.body ?? body);
+    const { tx, value } = await this.execute("query", snapshot, wrapped?.body ?? body, false, caller);
     // Cache only if nothing committed after the snapshot (it would have been invalidated had it been
     // cached already — the same rule, checked at insertion). The caller keeps `value`; the cache keeps
     // its own serialized copy.
-    if (cacheKey !== undefined && this.committer.visibleTs === snapshot) {
+    if (precise !== undefined && this.committer.visibleTs === snapshot) {
       const max = this.opts.cacheMax ?? 1000;
       if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
       const json = stringifyValue(value);
-      this.cache.set(cacheKey, { json, reads: tx.reads, extra: wrapped?.capture() });
+      // Keyed by the caller only if the run read the identity (STUDY-27 §1.4).
+      this.cache.set(tx.identityObserved ? precise! : shared!, { json, reads: tx.reads, extra: wrapped?.capture() });
       return { json };
     }
     return { value };
@@ -352,16 +372,29 @@ export class Engine {
     journal: QueryJournal = {},
     /** Run at this snapshot (≤ visibleTs) instead of the latest: a sync transition runs all at one ts. */
     at?: number,
+    caller: Caller = ANONYMOUS,
   ): Promise<
-    ({ ok: true; value: T } | { ok: false; error: unknown }) & { reads: Interval[]; ts: number; journal: QueryJournal }
+    ({ ok: true; value: T } | { ok: false; error: unknown }) & {
+      reads: Interval[];
+      ts: number;
+      journal: QueryJournal;
+      /** Whether the run read the identity: its result is then the caller's alone. */
+      identityObserved: boolean;
+    }
   > {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.instanceSecret = this.instanceSecret;
+    tx.identity = caller.identity;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;
-    const out = () => ({ reads: tx.reads, ts: snapshot, journal: { endCursor: tx.nextEndCursor } });
+    const out = () => ({
+      reads: tx.reads,
+      ts: snapshot,
+      journal: { endCursor: tx.nextEndCursor },
+      identityObserved: tx.identityObserved,
+    });
     try {
       const value = await runDeterministic("query", now, () => body(tx));
       return { ok: true, value, ...out() };
@@ -375,16 +408,16 @@ export class Engine {
    * once the budget is spent. `source` names the mutation (e.g. "messages:send") in the conflict errors of
    * the transactions it beats.
    */
-  mutation<T>(body: TxBody<T>, source?: string): Promise<T> {
-    return this.runMutation(body, false, source, false);
+  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<T> {
+    return this.runMutation(body, false, source, false, caller);
   }
 
   /**
    * The same, with the commit timestamp (the snapshot, for a mutation that wrote nothing): what the sync
    * protocol's MutationResponse carries so a client can wait for its queries to reflect the write.
    */
-  mutationWithTs<T>(body: TxBody<T>, source?: string): Promise<{ value: T; ts: number }> {
-    return this.runMutation(body, false, source, true);
+  mutationWithTs<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<{ value: T; ts: number }> {
+    return this.runMutation(body, false, source, true, caller);
   }
 
   /**
@@ -400,6 +433,7 @@ export class Engine {
     source: string | undefined,
     request: SessionRequestId,
     outcome: (value: T) => SessionRequestOutcome,
+    caller?: Caller,
   ): Promise<{ ts: number } & ({ value: T } | { replayed: SessionRequestOutcome })> {
     const r = await this.runMutation(
       async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
@@ -412,6 +446,7 @@ export class Engine {
       false,
       source,
       true,
+      caller,
     );
     return { ...r.value, ts: r.ts };
   }
@@ -421,20 +456,33 @@ export class Engine {
     return this.runMutation((db) => deleteSessionRequestsBefore(db, cutoffMs, limit), true, "session_requests_cleanup");
   }
 
-  private runMutation<T>(body: TxBody<T>, system: boolean, source?: string, withTs?: false): Promise<T>;
+  private runMutation<T>(
+    body: TxBody<T>,
+    system: boolean,
+    source?: string,
+    withTs?: false,
+    caller?: Caller,
+  ): Promise<T>;
   private runMutation<T>(
     body: TxBody<T>,
     system: boolean,
     source: string | undefined,
     withTs: true,
+    caller?: Caller,
   ): Promise<{ value: T; ts: number }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
-  private async runMutation<T>(body: TxBody<T>, system: boolean, source?: string, withTs = false): Promise<unknown> {
+  private async runMutation<T>(
+    body: TxBody<T>,
+    system: boolean,
+    source?: string,
+    withTs = false,
+    caller: Caller = ANONYMOUS,
+  ): Promise<unknown> {
     const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system);
+      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
       if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
       const { docs, idx } = tx.toWrites();
       try {

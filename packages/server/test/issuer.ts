@@ -1,5 +1,5 @@
-// An in-process token issuer for tests: OIDC discovery and a JWKS served over HTTP, keys generated per issuer,
-// tokens signed on demand.
+// An in-process token issuer for the server's auth tests (the same as @bunvex/auth's): OIDC discovery and a
+// JWKS over HTTP, keys generated per issuer, tokens signed on demand.
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 
 export type Alg = "RS256" | "ES256" | "EdDSA";
