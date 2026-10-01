@@ -1336,3 +1336,14 @@ browser's (> 50 ms on the main thread).
 - Left as is: opening the page with 100 000 tasks has one ~260 ms task — the mock generating them, in the
   dev host only. A real server pages from an index.
 
+### 19.4 Every screen in the browser
+
+The e2e suite (`apps/dashboard/e2e`, against the production build in Chromium) now opens every screen: to the
+Database, Monaco, Schedules, Files, Settings → Environment variables, History, the design system's page and
+the phone-width pass already there, it adds **Health** (its counters, nothing fetched elsewhere),
+**Functions** (a function's page; its query subscribed in the runner), **Logs** (a line's details follow the
+arrows), **Settings → General** (pause, the banner on another screen, resume), **Authentication** (the
+providers, copyable) and **Snapshots** (export, download a real zip, import a file and confirm). The axe pass
+(colour contrast included, both themes) now also covers a function's page, Logs, General, Authentication and
+Snapshots. 22 tests, about a minute.
+
