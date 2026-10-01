@@ -9,6 +9,7 @@ import { test as bunTest, describe, expect } from "bun:test";
 import { describeAuthContract } from "./contract-auth.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
+import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import {
   type DashboardDataSource,
@@ -28,7 +29,8 @@ import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filte
 import { isValidatorJson, validateValue } from "./validators.ts";
 
 export type ContractOptions = DeploymentContractOptions &
-  DeploymentStateContractOptions & {
+  DeploymentStateContractOptions &
+  SnapshotContractOptions & {
     /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
     watchTimeoutMs?: number;
     /** Per test. Default 30 000 ms: a live server walks many pages. */
@@ -558,6 +560,7 @@ export function describeDataSourceContract(
     describeDeploymentStateContract({ make, test, opts });
     describeMetricsContract({ make, test });
     describeAuthContract({ make, test });
+    describeSnapshotContract({ make, test, opts });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;
