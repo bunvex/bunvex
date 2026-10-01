@@ -4,6 +4,7 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { ValidatorCode } from "../src/functions/screen.tsx";
 import { buildFunctionTree, describeFunction, splitPath } from "../src/functions/tree.ts";
 import { expectAccessible } from "./axe.ts";
 
@@ -164,5 +165,14 @@ describe("the Functions screen", () => {
     act(() => history.back());
     await waitFor(() => expect(params()).toEqual({ function: "tasks:list", tab: "logs" }));
     await screen.findByRole("button", { name: "Types: All types" });
+  });
+
+  test("a long validator scrolls past 12 lines and says so; a short one does not (UX-13)", () => {
+    const long = Array.from({ length: 20 }, (_, i) => `  f${i}: v.string(),`).join("\n");
+    const { unmount } = render(<ValidatorCode code={`v.object({\n${long}\n})`} />);
+    expect(screen.getByText("22 lines: scroll for the rest.")).toBeDefined();
+    unmount();
+    render(<ValidatorCode code="v.object({ a: v.string() })" />);
+    expect(screen.queryByText(/scroll for the rest/)).toBeNull();
   });
 });
