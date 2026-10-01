@@ -1304,6 +1304,16 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
   seconds (UX-18).
 
+### 18.2 A function's Statistics tab (STUDY-12 §12, L1)
+
+- The open function's header (name, kind, path, Run, validators) is followed by **Statistics** and **Logs**
+  tabs; Statistics comes first, as Convex's `FunctionsView.tsx`. The tab is in the URL (`?tab=statistics` /
+  `logs`); without it, a link with log filters (`type`, `q`) opens the logs, any other the statistics.
+  Changing the filters keeps the tab, so restoring a function's kept filters never switches it.
+- **Statistics** (`metrics/function-stats.tsx`), the last hour per minute, as Convex's `PerformanceGraphs.tsx`:
+  **Function calls**, **Errors**, **Execution time** (p50, p90, p95, p99 — one blue, light to dark,
+  labelled at the lines' ends) and, for a query, **Cache hit rate**. Without metrics it says why.
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens

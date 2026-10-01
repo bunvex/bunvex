@@ -74,6 +74,20 @@ describe("LineChart", () => {
     expect(screen.queryByRole("figure")).toBeNull();
   });
 
+  test("direct labels never overlap, even for lines that end together", () => {
+    const same = (id: string) => ({ id, label: id, points: pts(1, 5), color: "series-1" });
+    const { container } = render(
+      <LineChart label="Latency" series={[same("p50"), same("p90"), same("p99")]} directLabels />,
+    );
+    const ys = [...container.querySelectorAll("svg text")]
+      .filter((t) => /^p\d+$/.test(t.textContent ?? ""))
+      .map((t) => Number(t.getAttribute("y")))
+      .sort((a, b) => a - b);
+    expect(ys).toHaveLength(3);
+    expect(ys[1]! - ys[0]!).toBeGreaterThanOrEqual(12);
+    expect(ys[2]! - ys[1]!).toBeGreaterThanOrEqual(12);
+  });
+
   test("direct labels at the lines' ends", () => {
     const { container } = render(<LineChart label="Latency" series={two} directLabels />);
     const labels = [...container.querySelectorAll("svg text")].map((t) => t.textContent);
