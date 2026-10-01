@@ -1304,3 +1304,17 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
   seconds (UX-18).
 
+## 20. Amendment — UX review (30 Sep 2026)
+
+Every screen was captured in both themes at 1 440 px and at phone width and reviewed for consistency; the
+owner approved all 25 findings (UX-1…UX-25; UX-18 went to the Health redesign). They land in five grouped
+pull requests.
+
+### 20.2 Logs
+
+- **UX-5** The Time column stays in view when a long message scrolls the list sideways: `DataTable`
+  gains `stickyColumn`.
+- **UX-6** On a phone the message comes right after the time (Time, Message, Level, Function, Outcome,
+  Request).
+- **UX-24** A line's details say who started the request once (the explanation is its tooltip), show the
+  function's kind as the list's Q/M/A badge, and keep the copy button in the body font.

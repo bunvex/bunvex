@@ -3,7 +3,7 @@
 // line's details, which then follow the current line.
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { FunctionKind, LogEntry } from "../data-source.ts";
 import type { LogRow } from "./events.ts";
 
@@ -103,6 +103,24 @@ const columns: DataTableColumn<LogRow>[] = [
   }),
 ];
 
+/** On a phone the message comes right after the time: it is what a reader wants (UX-6). */
+const PHONE = "(max-width: 639px)";
+const PHONE_ORDER = ["time", "message", "level", "function", "outcome", "request"];
+const phoneColumns = PHONE_ORDER.map((id) => columns.find((c) => c.id === id)!);
+
+function useMatches(query: string) {
+  const [matches, setMatches] = useState(() => typeof matchMedia === "function" && matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const mq = matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [query]);
+  return matches;
+}
+
 const WIDTHS: Record<string, number> = { time: 176, request: 92, outcome: 124, level: 76, function: 200, message: 560 };
 
 export function LogList(props: {
@@ -119,11 +137,14 @@ export function LogList(props: {
   resetKey?: unknown;
   className?: string;
 }) {
+  const phone = useMatches(PHONE);
   return (
     <DataTable
       label={props.label}
       className={props.className}
-      columns={columns}
+      columns={phone ? phoneColumns : columns}
+      // the time stays in view when a long message scrolls the list sideways (UX-5)
+      stickyColumn="time"
       data={props.lines}
       getRowId={(e) => e.id}
       resetKey={props.resetKey}
