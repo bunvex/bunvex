@@ -284,14 +284,14 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | missing | |
-| `crons.interval(id, { seconds \| minutes \| hours }, fn, args)` | server/cron.ts | missing | |
-| `crons.hourly(id, { minuteUTC }?, fn, args)` | server/cron.ts | missing | |
-| `crons.daily(id, { hourUTC, minuteUTC }?, …)` | server/cron.ts | missing | |
-| `crons.weekly(id, { dayOfWeek, hourUTC, minuteUTC }, …)` | server/cron.ts | missing | |
-| `crons.monthly(id, { day, hourUTC, minuteUTC }, …)` | server/cron.ts | missing | |
-| `crons.cron(id, "unix cron string", …)` | server/cron.ts | missing | |
-| Unique cron identifiers; input validation (ranges for minute, hour and day) | server/cron.ts | missing | |
+| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | partial (STUDY-30) | `cronJobs()` as Convex; passed as `createServer({ crons })` until the CLI (S1). |
+| `crons.interval(id, { seconds \| minutes \| hours }, fn, args)` | server/cron.ts | done (STUDY-30) | |
+| `crons.hourly(id, { minuteUTC }?, fn, args)` | server/cron.ts | done (STUDY-30) | |
+| `crons.daily(id, { hourUTC, minuteUTC }?, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.weekly(id, { dayOfWeek, hourUTC, minuteUTC }, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.monthly(id, { day, hourUTC, minuteUTC }, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.cron(id, "unix cron string", …)` | server/cron.ts | done (STUDY-30) | saffron's grammar and semantics. |
+| Unique cron identifiers; input validation (ranges for minute, hour and day) | server/cron.ts | done (STUDY-30) | |
 
 ### 16. HTTP actions and router
 

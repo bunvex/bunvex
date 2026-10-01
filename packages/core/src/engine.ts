@@ -8,6 +8,9 @@ import {
   bootstrapCatalog,
   buildCatalog,
   type Catalog,
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -312,6 +315,13 @@ export class Engine {
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
+      { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
+      {
+        name: CRON_NEXT_RUN_TABLE,
+        indexes: { by_cron_job_id: ["cronJobId"], by_next_ts: ["nextTs"] },
+        document: v.any(),
+      },
+      { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }

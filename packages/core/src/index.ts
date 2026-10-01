@@ -1,5 +1,13 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
-export { IndexBackfillingError, IndexStagedError, type IndexState } from "./catalog.ts";
+export {
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  IndexBackfillingError,
+  IndexStagedError,
+  type IndexState,
+  SCHEDULED_FUNCTIONS_TABLE,
+} from "./catalog.ts";
 export {
   Committer,
   CommitterStoppedError,

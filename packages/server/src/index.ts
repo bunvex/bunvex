@@ -8,6 +8,7 @@ export {
   getFunctionName,
   makeFunctionReference,
 } from "@bunvex/protocol";
+export { type CronJob, Crons, cronJobs, type DayOfWeek, type Schedule } from "./cron.ts";
 export {
   type ActionCtx,
   type ArgsOf,
