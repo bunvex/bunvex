@@ -5,7 +5,9 @@ import { fdatasyncSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import BTree from "sorted-btree";
 import { compareKeys } from "../keyenc.ts";
-import type { DocWrite, IndexWrite, Persistence } from "./index.ts";
+import type { DocWrite, IndexWrite, Lease, LeaseAcquire, Persistence } from "./index.ts";
+import { LeaseLostError } from "./index.ts";
+import { ProcessLock } from "./lock.ts";
 
 /** Diagnostic switch: write + fdatasync on the JS thread instead of the thread pool. */
 const SYNC_LOG = process.env.BUNVEX_SYNC_LOG === "1";
@@ -19,7 +21,13 @@ function visible<T>(vs: Version<T>[] | undefined, ts: number): Version<T> | unde
   return undefined;
 }
 
-export class MemoryPersistence implements Persistence {
+export class MemoryPersistence implements Persistence, Lease {
+  /** PERSIST-01 C7 as an OS lock next to the log, held for the process's life (STUDY-25 L9). */
+  readonly leaseScope = "process";
+  /** The log's single-writer lock. Replaying (and truncating a torn tail) happens only under it: another
+   *  process's open must never cut the log of the one appending to it. */
+  private lock: ProcessLock | null = null;
+  private logPath: string | null = null;
   private docs = new Map<string, Version<string | null>[]>(); // `${table}:${id}` → versions
   private indexes = new Map<number, BTree<Uint8Array, Version<string | null>[]>>();
   private fh: FileHandle | null = null;
@@ -34,11 +42,34 @@ export class MemoryPersistence implements Persistence {
 
   static async open(logPath: string | null, opts: { durable: boolean }) {
     const m = new MemoryPersistence(opts);
-    if (logPath) {
-      await m.replay(logPath);
-      m.fh = await open(logPath, "a");
-    }
+    m.logPath = logPath;
+    // Load now if the log is free; if another process holds it, acquireLease loads once it is released.
+    if (logPath) await m.takeAndLoad();
     return m;
+  }
+
+  private async takeAndLoad() {
+    const lock = ProcessLock.tryTake(this.logPath!);
+    if (!lock) return false;
+    this.lock = lock;
+    await this.replay(this.logPath!);
+    this.fh = await open(this.logPath!, "a");
+    return true;
+  }
+
+  async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
+    if (!this.logPath) return { epoch: 1 }; // no log: nothing another process could share
+    if (!this.lock && !(await this.takeAndLoad()))
+      return { heldBy: ProcessLock.holderOf(this.logPath), expiresInMs: null };
+    this.lock!.recordHolder(opts.holder);
+    return { epoch: this.lock!.epoch };
+  }
+
+  async renewLease() {} // the OS holds the lock for as long as this process lives
+
+  async releaseLease() {
+    this.lock?.release();
+    this.lock = null;
   }
 
   /** Rebuild the in-memory state from the log (PERSIST-01 C5). A record is one line; a crash can leave
@@ -95,6 +126,7 @@ export class MemoryPersistence implements Persistence {
   }
 
   apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+    if (this.logPath && !this.lock) throw new LeaseLostError("another process holds this memory store's log");
     this.applyMemory(ts, docs, idx);
     if (this.fh !== null) {
       // The log record: ts + the writes. JSON keeps the prototype honest about bytes written; a real
@@ -167,5 +199,7 @@ export class MemoryPersistence implements Persistence {
 
   async close() {
     await this.fh?.close();
+    this.lock?.release();
+    this.lock = null;
   }
 }
