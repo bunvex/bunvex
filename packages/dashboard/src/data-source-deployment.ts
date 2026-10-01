@@ -22,13 +22,16 @@ export type ScheduledFunction = {
 /** Nearest first; optionally one function's. */
 export type ScheduledFunctionQuery = PageRequest & { function?: string };
 
-/** Convex's cron schedules; hours and minutes are UTC. */
+/**
+ * Convex's cron schedules; hours and minutes are UTC. Without `minuteUTC` the server picks a stable minute
+ * of the hour for the job (Convex's splay), so it runs some time within that hour.
+ */
 export type CronSchedule =
   | { type: "interval"; seconds: number }
-  | { type: "hourly"; minuteUTC: number }
-  | { type: "daily"; hourUTC: number; minuteUTC: number }
-  | { type: "weekly"; dayOfWeek: number; hourUTC: number; minuteUTC: number }
-  | { type: "monthly"; day: number; hourUTC: number; minuteUTC: number }
+  | { type: "hourly"; minuteUTC?: number }
+  | { type: "daily"; hourUTC: number; minuteUTC?: number }
+  | { type: "weekly"; dayOfWeek: number; hourUTC: number; minuteUTC?: number }
+  | { type: "monthly"; day: number; hourUTC: number; minuteUTC?: number }
   | { type: "cron"; cronExpr: string };
 
 /** One run of a cron job (Convex's `_cron_job_logs`). */
@@ -38,8 +41,13 @@ export type CronRun = {
   /** When it started (wall-clock ms). */
   time: number;
   function: string;
-  /** `skipped`: the previous run was still going (Convex's `canceled`). */
+  /**
+   * `skipped`: runs that fell due while the job could not run (it was behind, or the deployment was paused)
+   * and were dropped, never replayed (Convex's `canceled`, with how many in `skippedRuns`).
+   */
   status: "success" | "failure" | "skipped";
+  /** With `skipped`: how many runs were dropped. */
+  skippedRuns?: number;
   error?: string;
   durationMs: number;
   logLines: string[];
@@ -139,9 +147,12 @@ export interface DeploymentFeatures {
   listScheduledFunctions?(query: ScheduledFunctionQuery, opts?: CallOptions): Promise<Page<ScheduledFunction>>;
   /** Tells the caller the scheduled functions or the cron jobs changed. Never synchronously. */
   watchScheduledFunctions?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
-  /** A run that is not pending (running, or gone) is `invalid_request` / `not_found`. */
+  /**
+   * As Convex's `cancel_job`: a pending or running run becomes canceled (a running action finishes, but
+   * what it schedules afterwards is canceled too); one already finished, or unknown, is left as it is.
+   */
   cancelScheduledFunction?(id: string, opts?: CallOptions): Promise<void>;
-  /** Every pending run, or one function's. */
+  /** Every pending or running run, or one function's (Convex's `cancel_all_jobs`). */
   cancelAllScheduledFunctions?(fn?: string, opts?: CallOptions): Promise<{ canceled: number }>;
   /** Every cron job, by name, with its last run. */
   listCronJobs?(opts?: CallOptions): Promise<CronJob[]>;

@@ -1705,6 +1705,13 @@ Logs layout, and the Functions, Schema and Topology screens' top bars match it. 
   1440: History, Scheduled, Crons and Files — Bar 1, the filter header and the panel header on one line, the
   grid to the bottom, no page scroll, ↓ moves the open details; Functions' 44 px Bar 1 with its tabs.
 
+### 22.6 Schema: spacing inside a group box (1 Oct 2026)
+
+A group box (a cluster of linked tables, §15) lays its tables out with the root's spacing — 96 px between
+layers, 56 between tables. ELK reads its spacing options per parent, so the boxes had used its defaults: the
+tables sat 20 px apart and the reference lines ran along the cards' borders, between `tasks`, `messages` and
+`users`. Test: inside a box, consecutive layers are at least 90 px apart.
+
 ## 23. Design language: the section column (the owner's call, 1 Oct 2026)
 
 The owner showed Supabase-like screens as **layout references only**; bunvex keeps its own context and design

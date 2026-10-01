@@ -13,7 +13,7 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
     `POSTGRES_URL` / `MYSQL_URL` / `DATABASE_URL`, `DO_NOT_REQUIRE_SSL`, `PG_CA_FILE` / `MYSQL_CA_FILE`, and
     the database call timeouts `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` / `MONGODB_TIMEOUT_SECONDS`.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
-- `ctx.auth` exists (STUDY-27); there is no ctx.storage and no ctx.scheduler.
+- `ctx.auth` (STUDY-27) and `ctx.scheduler` (STUDY-30) exist; there is no ctx.storage yet.
 
 Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes marks where bunvex may deliberately differ; the owner has to decide those.
 
@@ -83,31 +83,31 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | missing | Mutations and actions only; function handles are allowed. |
-| Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | missing | The central guarantee. From actions, scheduling commits immediately. |
-| Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | missing | The function type is checked only when the job runs. |
-| Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | missing | Docs quote "1,000,000 outstanding" for cloud. |
-| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | missing | State kinds: `pending`, `inProgress`, `success`, `failed{error}`, `canceled`. Physical tables are `_scheduled_jobs` and `_scheduled_job_args`. |
-| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | missing | Pending or in-progress jobs become canceled. A running action keeps running, but what it schedules is inserted as canceled. Finished jobs are a no-op, although the TS doc says it throws. A mutation canceling itself raises an error. |
-| Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | missing | Success is written in the same transaction as the user mutation. OCC is retried with backoff (100 ms to 60 s). A user error gives `failed`. |
-| Scheduled actions run at most once | same | missing | Marked inProgress, then run. After a crash, a leftover inProgress job becomes failed ("Transient error"). Never retried. |
-| System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | missing | |
-| Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | missing | |
-| GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | missing | |
-| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | missing | |
+| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference or a name. Function handles come with components. |
+| Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | done (STUDY-30) | From actions, each call commits at once. |
+| Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
+| Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
+| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | done (STUDY-30) | A real system table, projected to the public shape through `db.system` (S2, DV-140); only `by_id` / `by_creation_time` are public. |
+| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | done (STUDY-30) | As Convex: no-op on finished jobs; self-cancel refused; what a canceled running action schedules is born canceled. |
+| Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | done (STUDY-30) | The job is finished in the mutation's transaction; OCC retried with backoff (100 ms to 60 s); a user error gives `failed`. |
+| Scheduled actions run at most once | same | done (STUDY-30) | A job found in progress that no one runs fails with "Transient error while executing action". |
+| System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | done (STUDY-30) | |
+| Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | partial (STUDY-30) | Parallelism 8 (env as Convex); pausing waits for the deployment state. Woken by commits, no polling. |
+| GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | done (STUDY-30) | `SCHEDULED_JOB_RETENTION` (seconds), as Convex. |
+| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | partial (STUDY-30) | `_system/frontend/paginatedScheduledJobs` and `scheduler:getArgs` in Convex's shapes; cancel one / cancel all (batches of 1000, by function and `nextTs` range) as server operations. The HTTP routes come with admin keys; deleting the table is not done. |
 | Per-component scheduling | `crates/model/scheduled_jobs` (per namespace) | missing | Depends on components. |
 
 ### 5. Cron jobs
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `cronJobs()` with `interval`, `hourly`, `daily`, `weekly`, `monthly`, `cron("m h dom mon dow")` | `npm/convex/server/cron.ts` | missing | All UTC. `monthly` days above 28 skip short months. Identifiers are printable ASCII and unique. |
-| Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | missing | Must target a mutation or action; queries and HTTP actions are rejected. |
-| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | missing | Keeps the last 5 logs per cron, with results and log lines truncated to 1000 chars. |
-| Diff on push (added / updated / deleted) | `CronModel::apply` | missing | A new interval cron runs immediately. A schedule change recomputes the next run, using a 30 s heuristic. |
-| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | missing | Without `minuteUTC`, runs get a stable random offset within the hour. Decided (owner, 2026-10-01): splay as Convex (DV-85). |
-| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | missing | Same exactly-once / at-most-once rules as the scheduler. |
-| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | missing | |
+| `cronJobs()` with `interval`, `hourly`, `daily`, `weekly`, `monthly`, `cron("m h dom mon dow")` | `npm/convex/server/cron.ts` | done (STUDY-30) | Convex's messages. Cron strings follow saffron exactly (its quirks included), checked against saffron itself on 7143 cases. |
+| Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | partial (STUDY-30) | `createServer({ crons })`, checked at start with Convex's messages (S1, DV-139); `crons.ts` discovery comes with the CLI. |
+| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | The last 5 logs per cron; results and log lines truncated to 1000 chars. |
+| Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
+| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
+| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
+| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | partial (STUDY-30) | Both system functions, in Convex's document shapes; reachable once admin keys exist. |
 
 ### 6. Full-text search
 
@@ -139,12 +139,16 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | missing | ARCHITECTURE marks it M. Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH. HEAD is served as GET. `/.files/` is reserved. |
-| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | missing | Uses the action ctx: runQuery, runMutation, runAction, scheduler, storage, auth, vectorSearch. |
-| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | missing | Decided (owner, 2026-10-01): as Convex, `/http/*` and a separate site origin on port 3211 (DV-86). |
-| Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | missing | |
-| CORS is left to the app (no backend CORS on `/http`) | `router.rs` | missing | |
+| `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | done (STUDY-31) | Passed as `createServer({ http })`, checked at start (H1, DV-143). |
+| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | partial (STUDY-31) | ctx: runQuery, runMutation, runAction, scheduler, auth; storage and vectorSearch come with their features. |
+| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | done (STUDY-31) | `/http/*` on the API port and the site port (`sitePort`, default the API port + 1; DV-86). The URL a handler sees is rebuilt from Host / X-Forwarded-Proto / Forwarded. |
+| Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | done (STUDY-31) | Responses cut past 20 MiB (logged), as Convex; requests capped by `maxRequestBodySize` (H3, DV-145). No body on GET, HEAD, OPTIONS. |
+| CORS is left to the app (no backend CORS on `/http`) | `router.rs` | done (STUDY-31) | |
 | Component HTTP mounts (`httpPrefix`) | `application_function_runner/http_routing.rs` | missing | |
+| Errors: 404 `No matching routes found` / not enabled, 405, 500 JSON `{code, trace?, data?}` with a fresh request id, 408 at 300 s, 429 past 64 concurrent actions | `action/mod.rs`, `redaction.rs`, `http_routing.rs`, `application_function_runner` | done (STUDY-31) | "not enabled" says "bunvex deployment"; the 429 message ends with how to raise the limit (DV-03). |
+| Auth from `Authorization` never rejects up front; `getUserIdentity()` throws the verification error | `http_actions.rs`, `task_executor.rs` | done (STUDY-31) | |
+| Request id header added to the request when missing | `common/src/http/mod.rs` `ExtractRequestId` | done (STUDY-31) | `bunvex-request-id` (H2, DV-144). |
+| Concurrent actions limited (64), a 10 s wait, then 429 `TooManyConcurrentRequests` | knob `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` | done (STUDY-31) | Every action (HTTP API, sync, scheduled, nested, HTTP actions), with Convex's knob names. |
 
 ### 9. Node.js actions ("use node")
 
