@@ -198,7 +198,7 @@ DV-90–DV-93, C6 under Gaps.
 | C3 | Function references live in `@bunvex/protocol` and are re-exported by `bunvex/server` (Convex: `convex/server`) | Both sides need them; the client may not pull the server | **accepted** |
 | C4 | No `reportDebugInfoToConvex` option and no `/api/debug_event` reporting; the client sends no `Event` messages | bunvex has no telemetry endpoint; the server ignores `Event` (P11) | **accepted** omitting |
 | C5 | `getMaxObservedTimestamp()` returns a `bigint`, not a `Long` | bunvex's values use bigint for 64-bit integers | **accepted** |
-| C6 | `setAuth`, paginated queries and the HTTP client come in later PRs (§3); until then `setAuth` is absent | They depend on `@bunvex/auth` and `@bunvex/react` | **accepted** this order |
+| C6 | `setAuth`, paginated queries and the HTTP client come in later PRs (§3); until then `setAuth` is absent | They depend on `@bunvex/auth` and `@bunvex/react` | **accepted** this order; all landed (`setAuth` with STUDY-27), the non-React paginated client is P2 |
 | C7 | The official `convex` npm package becomes a **dev dependency**, used only in tests as the protocol oracle: `ConvexClient` against a bunvex server | STUDY-23 P1 chose wire compatibility so this is possible; Apache-2.0, never shipped | **accepted** |
 
 ## 5. Tests
@@ -289,7 +289,7 @@ Recorded in [docs/parity/divergences.md](../parity/divergences.md): R1 under DV-
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
 | R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **accepted** |
-| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order |
+| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order; `usePaginatedQuery` and the auth helpers landed (STUDY-27) |
 
 ## 8. Paginated queries (`usePaginatedQuery`)
 

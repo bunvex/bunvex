@@ -1,6 +1,6 @@
 # STUDY-22 — Mutation order on one WebSocket connection
 
-- **Status:** implemented (this PR); D1 awaits the owner
+- **Status:** implemented; D1 decided by the owner (2026-10-01): match Convex, with protocol v1
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-08](STUDY-08-cache-and-subscriptions.md): the sync protocol.
@@ -59,7 +59,7 @@ WebSocket client sends each mutation at once and relies on the server's order.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | The overflow closes the socket without first sending a message. Convex sends none either for a rate-limit error, but its client recognises the close reason; bunvex has no client yet | Nothing to do until `@bunvex/client` exists | owner (with protocol v1) |
+| D1 | The overflow closes the socket without first sending a message. Convex sends none either for a rate-limit error, but its client recognises the close reason; bunvex has no client yet | Nothing to do until `@bunvex/client` exists | Decided (owner, 2026-10-01): match Convex (gap, to be built), with protocol v1 (DV-83) |
 
 No other divergence: bunvex has no WebSocket actions yet. When they come, they must run concurrently,
 outside this queue, as in Convex.

@@ -4,6 +4,7 @@ export {
   CommitterStoppedError,
   type Conflict,
   ConflictError,
+  type FlushRetryOptions,
   firstOverlap,
   type Interval,
   type LogEntry,
@@ -15,6 +16,8 @@ export {
   WRITE_LOG_MAX_RETENTION_US,
   WRITE_LOG_MIN_RETENTION_US,
   WRITE_LOG_SOFT_MAX_SIZE_BYTES,
+  WRITE_RETRY_INITIAL_BACKOFF_MS,
+  WRITE_RETRY_MAX_BACKOFF_MS,
   type WriteLogRetention,
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
@@ -35,6 +38,7 @@ export {
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DatabaseTimeoutError,
   type DocWrite,
   hasLease,
   type IndexWrite,
@@ -44,6 +48,7 @@ export {
   LeaseLostError,
   type Persistence,
   type ScanDocs,
+  UnsureCommitError,
 } from "./persistence/index.ts";
 export {
   type DeclaredTable,
@@ -64,5 +69,4 @@ export {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
-export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

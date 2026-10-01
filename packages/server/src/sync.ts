@@ -10,7 +10,10 @@
 //   identity) at the same ts awaits one execution, and a result stays valid at a later ts while no commit
 //   wrote into its reads (Convex's `extend_validity`). Per connection, only the frame is assembled.
 // - The connection's mutations run one at a time, in order; its actions run concurrently.
+
+import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
+  type Caller,
   type Engine,
   type Interval,
   type LogEntry,
@@ -22,7 +25,7 @@ import {
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
 import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
-import type { Functions } from "./functions.ts";
+import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
@@ -36,8 +39,12 @@ const HEARTBEAT_CHECK_MS = 1_000;
 const CLOSE_INTERNAL_ERROR = 1011;
 const CLOSE_TRY_AGAIN_LATER = 1013;
 
-/** Identity is part of every execution key (STUDY-23 P10); until auth lands the only identity is none. */
-const NO_IDENTITY = "none";
+/**
+ * An execution key ends with whose result it is: `*` for a run that read no identity (shared by every
+ * caller), `u:<identity>` for one that did (STUDY-27 §1.4, as the HTTP query cache; refines DV-12).
+ */
+const SHARED = "*";
+const idPartOf = (caller: Caller) => `u:${caller.key}`;
 
 export type SyncDeps = {
   engine: Engine;
@@ -47,6 +54,8 @@ export type SyncDeps = {
   formatError: (e: unknown) => { error: string; data?: string };
   /** Arguments in JSON form → values. */
   fromWire: (args: unknown) => unknown;
+  /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
+  verifyToken: (token: string) => Promise<VerifiedIdentity>;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -60,6 +69,8 @@ type Execution = {
   type: "QueryUpdated" | "QueryFailed";
   /** What the client has seen when its hash is equal: the result and its log lines (Convex's `hash_result`). */
   hash: string;
+  /** Whether the run read the caller's identity: then it is that caller's result alone. */
+  identityObserved: boolean;
 };
 
 type SessionQuery = {
@@ -67,7 +78,9 @@ type SessionQuery = {
   args: v1.JSONValue[];
   argsJson: string;
   journal: string | null;
+  /** The execution key: path, args, journal, then whose result (`idPart`). */
   key: string;
+  idPart: string;
   /** The last result sent to the client, its hash, and the ts up to which it is known to be valid. */
   exec: Execution | null;
   hash: string | null;
@@ -101,7 +114,7 @@ export class SyncHub {
   /** The newest execution of each watched key. */
   private latest = new Map<string, Execution>();
   /** Executions running, by `ts` + key: the single flight. */
-  private inflight = new Map<string, Promise<Execution>>();
+  private inflight = new Map<string, { p: Promise<{ exec: Execution; idPart: string }>; owner: string }>();
   private watchers = new Map<string, Set<SyncSession>>();
   readonly sessions = new Set<SyncSession>();
   stats = { executions: 0, reused: 0, transitions: 0 };
@@ -153,33 +166,72 @@ export class SyncHub {
     this.latest.delete(key);
   }
 
-  /** A result of `q` valid at `ts`: the latest one when no commit between the two changed its reads. */
-  resultAt(q: SessionQuery, ts: number): Promise<Execution> {
+  /**
+   * A result of `q` valid at `ts` for `caller`, and the key it lives under: the latest one (this caller's,
+   * else the shared one of a run that read no identity) when no commit between the two changed its reads.
+   */
+  resultAt(q: SessionQuery, ts: number, caller: Caller): Promise<{ exec: Execution; idPart: string }> {
     const committer = this.deps.engine.committer;
-    const l = this.latest.get(q.key);
-    if (l && !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts))) {
-      this.stats.reused++;
-      return Promise.resolve(l);
+    const mine = idPartOf(caller);
+    const valid = (l: Execution | undefined): l is Execution =>
+      l !== undefined && !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts));
+    // Where the query lives now, when that is shared or this caller's.
+    if (q.idPart === SHARED || q.idPart === mine) {
+      const l = this.latest.get(q.key);
+      if (valid(l)) {
+        this.stats.reused++;
+        return Promise.resolve({ exec: l, idPart: q.idPart });
+      }
+      // As Convex's `stored_key_hint`: a query stored shared runs at the shared key, so other callers wait
+      // for that run instead of starting their own.
+      if (q.idPart === SHARED) return this.flight(q, ts, caller, q.key);
     }
-    const flight = `${ts}\u0000${q.key}`;
-    let p = this.inflight.get(flight);
-    if (!p) {
-      p = this.execute(q, ts).then((e) => {
-        this.inflight.delete(flight);
-        this.adopt(q.key, e);
-        return e;
-      });
-      this.inflight.set(flight, p);
+    const base = baseKeyOf(q);
+    for (const idPart of [mine, SHARED]) {
+      const l = this.latest.get(`${base}\u0000${idPart}`);
+      if (valid(l)) {
+        this.stats.reused++;
+        return Promise.resolve({ exec: l, idPart });
+      }
     }
-    return p;
+    // Otherwise runs for different callers stay apart: nobody knows before running whether the identity is read.
+    const at = this.latest.has(`${base}\u0000${SHARED}`) ? SHARED : mine;
+    return this.flight(q, ts, caller, `${base}\u0000${at}`);
   }
 
-  private async execute(q: SessionQuery, ts: number): Promise<Execution> {
+  /** A run of `q` at `ts` for the key `at`, joined by every caller that asks for the same one meanwhile. */
+  private flight(
+    q: SessionQuery,
+    ts: number,
+    caller: Caller,
+    at: string,
+  ): Promise<{ exec: Execution; idPart: string }> {
+    const key = `${ts}\u0000${at}`;
+    const mine = idPartOf(caller);
+    let f = this.inflight.get(key);
+    if (!f) {
+      const base = at.slice(0, at.lastIndexOf("\u0000"));
+      const p = this.execute(q, ts, caller).then((exec) => {
+        this.inflight.delete(key);
+        const idPart = exec.identityObserved ? mine : SHARED;
+        this.adopt(`${base}\u0000${idPart}`, exec);
+        return { exec, idPart };
+      });
+      f = { p, owner: mine };
+      this.inflight.set(key, f);
+    }
+    if (f.owner === mine) return f.p;
+    // A run that read another caller's identity is not ours: run at our own key.
+    const own = `${at.slice(0, at.lastIndexOf("\u0000"))}\u0000${mine}`;
+    return f.p.then((r) => (r.idPart === SHARED ? r : this.flight(q, ts, caller, own)));
+  }
+
+  private async execute(q: SessionQuery, ts: number, caller: Caller): Promise<Execution> {
     this.stats.executions++;
     const { engine, functions, fromWire } = this.deps;
     const r = await collectLogs(async () => {
       const body = functions.queryBody(q.udfPath, fromWire(q.args));
-      return engine.queryTracked(body, parseJournal(q.journal), ts);
+      return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
     });
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
@@ -197,6 +249,7 @@ export class SyncHub {
         type: "QueryUpdated",
         fields: `,"value":${value}${tail}`,
         hash: `v${value}\u0000${lines}`,
+        identityObserved: run.identityObserved,
       };
     }
     const f = this.deps.formatError(run.error);
@@ -208,6 +261,7 @@ export class SyncHub {
       type: "QueryFailed",
       fields: `,"errorMessage":${JSON.stringify(withRequestId(f.error))}${tail}${data}`,
       hash: `e${f.data ?? ""}\u0000${f.error}\u0000${lines}`,
+      identityObserved: run.identityObserved,
     };
   }
 }
@@ -223,6 +277,11 @@ export class SyncSession {
   private queries = new Map<number, SessionQuery>();
   private pending: (v1.AddQuery | v1.RemoveQuery)[] = [];
   private identityChanged = false;
+  /** Who this connection acts as (STUDY-27), and when its token expires (seconds; none without a token). */
+  private caller: Caller = callerOf(null);
+  private expiresAt: number | undefined;
+  /** Client messages are handled one at a time, in order (an `Authenticate` waits for its verification). */
+  private inbox: Promise<void> = Promise.resolve();
   private scheduled = false;
   private updating = false;
   private closed = false;
@@ -289,6 +348,32 @@ export class SyncSession {
     } catch (e) {
       return this.fail({ fatal: (e as Error).message });
     }
+    this.inbox = this.inbox.then(() => (this.closed ? undefined : this.handle(m))).catch((e) => this.internalError(e));
+  }
+
+  /** End the connection with an `AuthError` (Convex: the error message, the identity version, no close frame). */
+  private authError(error: string, authUpdateAttempted: boolean) {
+    if (this.closed) return;
+    this.send(
+      v1.encodeServerMessage({ type: "AuthError", error, baseVersion: this.received.identity, authUpdateAttempted }),
+    );
+    this.ws?.close();
+    this.close();
+  }
+
+  /**
+   * The caller to run as now, or null once its token has expired, which ends the connection with
+   * `TokenExpired` (Convex's `SyncState::identity`, checked before every use of the identity).
+   */
+  private currentCaller(): Caller | null {
+    if (this.expiresAt !== undefined && Date.now() / 1000 >= this.expiresAt) {
+      this.authError("Token identity expired", false);
+      return null;
+    }
+    return this.caller;
+  }
+
+  private async handle(m: v1.ClientMessage) {
     switch (m.type) {
       case "Connect": {
         this.sessionId = m.sessionId;
@@ -317,27 +402,32 @@ export class SyncSession {
         return this.mutation(m);
       case "Action":
         return this.action(m);
-      case "Authenticate":
+      case "Authenticate": {
         if (m.baseVersion !== this.received.identity)
           return this.internalError(
             new Error(`identity base version ${m.baseVersion} does not match ${this.received.identity}`),
           );
-        // Until @bunvex/auth verifies tokens, only "no identity" is accepted (STUDY-23 P9).
-        if (m.tokenType !== "None") {
-          this.send(
-            v1.encodeServerMessage({
-              type: "AuthError",
-              error: "Authentication tokens are not supported by this server yet",
-              baseVersion: this.received.identity,
-              authUpdateAttempted: true,
-            }),
-          );
-          this.ws?.close();
-          return this.close();
+        // Admin keys come with Phase 3 item 6 (the dashboard's `Admin` tokens).
+        if (m.tokenType === "Admin") return this.authError("Admin keys are not supported yet", true);
+        if (m.tokenType === "User") {
+          let verified: VerifiedIdentity;
+          try {
+            verified = await this.hub.deps.verifyToken(m.value);
+          } catch (e) {
+            if (!(e instanceof AuthenticationError)) throw e;
+            // Convex's AuthUpdateFailed: the client refreshes its token and reconnects.
+            return this.authError(e.message, true);
+          }
+          this.caller = callerOf(verified.identity);
+          this.expiresAt = verified.expiresAt;
+        } else {
+          this.caller = callerOf(null);
+          this.expiresAt = undefined;
         }
         this.received.identity++;
         this.identityChanged = true;
         return this.schedule();
+      }
       case "Event":
         return; // client telemetry (STUDY-23 P11)
     }
@@ -365,6 +455,8 @@ export class SyncSession {
 
   private async transition() {
     const { engine } = this.hub.deps;
+    const caller = this.currentCaller();
+    if (caller === null) return;
     const modifications = new Map<number, string>();
     const querySet = this.received.querySet;
     const identity = this.received.identity;
@@ -383,6 +475,7 @@ export class SyncSession {
           argsJson: this.canonicalArgs(m.args),
           journal: m.journal ?? null,
           key: "",
+          idPart: SHARED,
           exec: null,
           hash: null,
           validAt: 0,
@@ -401,13 +494,14 @@ export class SyncSession {
     const stale = [...this.queries].filter(
       ([, q]) => !q.exec || engine.committer.changedBetween(q.exec.reads, q.validAt, ts),
     );
-    const results = await Promise.all(stale.map(([, q]) => this.hub.resultAt(q, ts)));
+    const results = await Promise.all(stale.map(([, q]) => this.hub.resultAt(q, ts, caller)));
     if (this.closed) return;
     stale.forEach(([id, q], i) => {
-      const e = results[i];
+      const { exec: e, idPart } = results[i];
       q.exec = e;
-      if (e.journal !== q.journal) {
+      if (e.journal !== q.journal || idPart !== q.idPart) {
         q.journal = e.journal;
+        q.idPart = idPart;
         q.key = keyOf(q);
         this.keysChanged = true;
         if (!this.watching.has(q.key)) {
@@ -429,7 +523,9 @@ export class SyncSession {
     this.send(
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
         `"modifications":[${[...modifications.values()].join(",")}],` +
-        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":null}`,
+        // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
+        // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
+        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`,
     );
     this.version = end;
     this.versionText = endText;
@@ -472,14 +568,21 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, fromWire } = this.hub.deps;
+        const caller = this.currentCaller();
+        if (caller === null) return;
         const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
         // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
         const session = this.sessionId;
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args))
-            : functions.runSessionMutation(path, fromWire(m.args), { sessionId: session, requestId: m.requestId }),
+            ? functions.runMutationWithTs(path, fromWire(m.args), true, caller)
+            : functions.runSessionMutation(
+                path,
+                fromWire(m.args),
+                { sessionId: session, requestId: m.requestId },
+                caller,
+              ),
         );
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
@@ -505,11 +608,15 @@ export class SyncSession {
   private action(m: v1.ActionRequest) {
     if (this.inflightActions >= MAX_INFLIGHT_ACTIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
+    const caller = this.currentCaller();
+    if (caller === null) return;
     this.inflightActions++;
     void (async () => {
       try {
         const { functions, fromWire } = this.hub.deps;
-        const r = await collectLogs(() => functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args)));
+        const r = await collectLogs(() =>
+          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args), caller),
+        );
         if (this.closed) return;
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
         this.send(this.response("ActionResponse", m.requestId, r));
@@ -540,7 +647,9 @@ export class SyncSession {
   }
 }
 
-const keyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}\u0000${NO_IDENTITY}`;
+/** Path, args and journal: what a run's result depends on besides the caller. */
+const baseKeyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
+const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
 /**
  * A commit ts as Convex's clients see it: wall-clock nanoseconds in a u64. bunvex counts microseconds (a JS

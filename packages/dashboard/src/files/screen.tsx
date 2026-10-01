@@ -167,7 +167,8 @@ function Files() {
                 onChange={(e) => setLookup(e.target.value)}
               />
             </label>
-            <Button type="submit" size="sm" variant="outline">
+            {/* as tall as its input (UX-16) */}
+            <Button type="submit" variant="outline" className="h-8">
               Open
             </Button>
           </form>
@@ -201,10 +202,13 @@ function Files() {
             />
           ))}
         </div>
-        <p role={outcome && !outcome.ok ? "alert" : "status"} className="min-h-5 text-sm">
-          <span className={outcome?.ok === false ? "text-destructive" : "text-muted-foreground"}>
-            {outcome?.message}
-          </span>
+        {/* no reserved line when there is nothing to say: one gap between the filters and the table (UX-17) */}
+        <p role={outcome && !outcome.ok ? "alert" : "status"} className="text-sm empty:-mt-3">
+          {outcome?.message && (
+            <span className={outcome.ok === false ? "text-destructive" : "text-muted-foreground"}>
+              {outcome.message}
+            </span>
+          )}
         </p>
         {liveError && <ErrorState error={liveError} />}
         {list.error ? (
@@ -229,7 +233,8 @@ function Files() {
                   ? "No file was uploaded in these dates."
                   : "No files yet. Upload one here, or store one from a function with ctx.storage."
             }
-            footer={<span aria-live="polite">{`${files(rows.length)}${list.hasNextPage ? " loaded" : ""}`}</span>}
+            // the count is next to the title; the footer only says when more are still to load (UX-14)
+            footer={list.hasNextPage ? <span aria-live="polite">{`${files(rows.length)} loaded`}</span> : undefined}
           />
         )}
       </div>
@@ -269,7 +274,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
             <dt className="text-muted-foreground">Storage ID</dt>
             <dd className="flex min-w-0 items-center gap-2">
               <code className="truncate font-mono text-xs">{file.id}</code>
-              <CopyButton text={file.id} label="Copy ID" size="xs" />
+              <CopyButton text={file.id} label="Copy storage ID" iconOnly />
             </dd>
             <dt className="text-muted-foreground">Size</dt>
             <dd>

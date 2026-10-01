@@ -1,6 +1,6 @@
 # STUDY-06 — Transactions, OCC and the committer
 
-- **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D3, D8, D11, D12 to match Convex, gaps tracked in docs/parity (DV-57, DV-59, DV-61, DV-62). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`; for D10 (§1.6, §7), `main` at `9c9bd14` (2026-10-01)
 - **Related:**
@@ -224,16 +224,16 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
 |---|---|---|---|---|
 | D1 | A failed `flush()` rejects the commit but leaves its writes applied, its ts consumed and its log entry in place; a later group makes them visible (`committer.ts` `drain`) | BUG | The client is told the mutation failed, yet its writes appear, and can become durable (SQLite commits them with the next group). Convex crashes and recovers from what persistence actually holds | **fixed in #9** |
 | D2 | An exception from `persistence.apply` in `drain()` is uncaught, and `running` stays true forever (`committer.ts`) | BUG | A driver whose `apply` does I/O can throw there. SQLite inserts inside `apply`, so `SQLITE_FULL` or `SQLITE_IOERR` would do it. Every commit after that hangs. The remote drivers only buffer in `apply` and fail in `flush` (D1) instead, e.g. with an index key over MySQL's `varbinary(512)` (STUDY-09) | **fixed in #9** |
-| D3 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix (`tx.ts` `run`) | OBSERVABLE | More OCC conflicts than Convex. A mutation that pops the head of a queue conflicts with every insert into the queue, so it can exhaust retries where Convex succeeds | owner |
-| D4 | Retries: 30 with ≤20 ms jittered backoff vs Convex's 4 retries (5 runs) at 100 ms–2 s (`engine.ts`) | OBSERVABLE | Different failure rate and latency under contention. Tests that expect an OCC error after hot-key contention behave differently | **as Convex** (owner): [STUDY-21](STUDY-21-occ-error-and-retries.md) |
-| D5 | OCC error: `Error("write conflict")` vs `OptimisticConcurrencyControlFailure` with "Documents read from or written to the "T" table changed…" (`committer.ts` `ConflictError`) | OBSERVABLE | Apps and tooling that match on the message or code differ | **as Convex**: [STUDY-21](STUDY-21-occ-error-and-retries.md) |
-| D6 | No transaction limits: reads (32k docs / 16 MiB), intervals (4 096), writes (16k docs / 16 MiB) | OBSERVABLE | Code that works on bunvex can fail on Convex, and unbounded transactions can exhaust memory or stall the single committer | owner |
-| D7 | No mutation idempotency: no session or request id, no recorded result | OBSERVABLE | A re-sent mutation after a reconnect runs twice. Needed with the client sync work | owner |
-| D8 | No `db.vars.commitTs` | OBSERVABLE | Missing API | owner |
-| D9 | Commit timestamps are a counter, not nanosecond wall-clock values | ~~INTERNAL~~ observable since sync protocol v1 (transition and mutation `ts`, `maxObservedTimestamp`) | A recreated store restarts the counter at 1 and refuses clients that saw a higher ts; `maxTs` errors reuse a ts (STUDY-24 S2) | **Decided (owner, 2026-09-30): as Convex.** `ts = max(last + 1, wall clock)`, in **microseconds** internally (a JS number is exact only to 2^53) and × 1000 on the wire, so clients see Convex's wall-clock nanoseconds at µs resolution. The write log's window is tracked explicitly (`purgedTs`), since timestamps are sparse |
-| D10 | The write log is trimmed by count (20 000 commits), not by time or size, and a snapshot outside it is a retried conflict, not `OutOfRetention` | INTERNAL | Very long mutations fail differently; rare. Under load the count runs out in well under a second (STUDY-24 §4.2: 60 % of lagged attempts conflicted) | **Decided (owner, 2026-10-01): as Convex.** Built: see §7. One open question, a hard byte cap Convex does not have (DV-128) |
-| D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4) | owner |
-| D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only | owner |
+| D3 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix (`tx.ts` `run`) | OBSERVABLE | More OCC conflicts than Convex. A mutation that pops the head of a queue conflicts with every insert into the queue, so it can exhaust retries where Convex succeeds | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-57) |
+| D4 | Retries: 30 with ≤20 ms jittered backoff vs Convex's 4 retries (5 runs) at 100 ms–2 s (`engine.ts`) | OBSERVABLE | Different failure rate and latency under contention. Tests that expect an OCC error after hot-key contention behave differently | **as Convex** (owner): [STUDY-21](STUDY-21-occ-error-and-retries.md); resolved to match Convex in #38 (DV-38) |
+| D5 | OCC error: `Error("write conflict")` vs `OptimisticConcurrencyControlFailure` with "Documents read from or written to the "T" table changed…" (`committer.ts` `ConflictError`) | OBSERVABLE | Apps and tooling that match on the message or code differ | **as Convex**: [STUDY-21](STUDY-21-occ-error-and-retries.md); resolved to match Convex in #38 (DV-38) |
+| D6 | No transaction limits: reads (32k docs / 16 MiB), intervals (4 096), writes (16k docs / 16 MiB) | OBSERVABLE | Code that works on bunvex can fail on Convex, and unbounded transactions can exhaust memory or stall the single committer | resolved to match Convex: read limits in #12, write limits in #35 (DV-39) |
+| D7 | No mutation idempotency: no session or request id, no recorded result | OBSERVABLE | A re-sent mutation after a reconnect runs twice. Needed with the client sync work | resolved to match Convex (owner, 2026-09-30): `_session_requests`, built in #63 (DV-31) |
+| D8 | No `db.vars.commitTs` | OBSERVABLE | Missing API | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-59) |
+| D9 | Commit timestamps are a counter, not nanosecond wall-clock values | ~~INTERNAL~~ observable since sync protocol v1 (transition and mutation `ts`, `maxObservedTimestamp`) | A recreated store restarts the counter at 1 and refuses clients that saw a higher ts; `maxTs` errors reuse a ts (STUDY-24 S2) | **Decided (owner, 2026-09-30): as Convex.** `ts = max(last + 1, wall clock)`, in **microseconds** internally (a JS number is exact only to 2^53) and × 1000 on the wire, so clients see Convex's wall-clock nanoseconds at µs resolution. The write log's window is tracked explicitly (`purgedTs`), since timestamps are sparse. Built in #64 (DV-30) |
+| D10 | The write log is trimmed by count (20 000 commits), not by time or size, and a snapshot outside it is a retried conflict, not `OutOfRetention` | INTERNAL | Very long mutations fail differently; rare. Under load the count runs out in well under a second (STUDY-24 §4.2: 60 % of lagged attempts conflicted) | **Decided (owner, 2026-10-01): as Convex.** Resolved to match Convex in #118 (DV-60): see §7. Plus a hard byte cap Convex does not have, **on by default at 256 MiB** (DV-128, decided by the owner on 2026-10-01; may be revisited) |
+| D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-61) |
+| D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-62) |
 
 ## 5. Tests
 
@@ -304,7 +304,7 @@ only makes bunvex more lenient by at most the bump delay, and it disappears if `
 | same, log | 20 000 entries (~12 MiB) | 2.2–2.3 M entries, ~1.2–1.3 GiB estimated (nothing is 30 s old yet) |
 | null driver (RSS is the committer's), 20 s | 357k/s, 115 MiB | 349k/s, 5 828 MiB |
 | null driver, 45 s (steady state) | 357k/s, 115 MiB | 285k/s, 7.4 M entries, 4.1 GiB heap |
-| null driver, 40 s, optional hard cap 256 MiB | | 337k/s, 462k entries, 262 MiB heap |
+| null driver, 40 s, hard cap 256 MiB (DV-128, now the default) | | 337k/s, 462k entries, 262 MiB heap |
 | lagged snapshots, noise at max rate, lag 500 ms: failed | **100 %** (1 635/1 635) | **0 %** (0/982) |
 | same, lag 2 s | 100 % | 0 % |
 | noise at 2 000 commits/s, lag 500 ms | 0 % | 0 % |
@@ -319,6 +319,25 @@ Notes:
 - **Memory.** Convex's 30 s floor has no byte bound. At bunvex's commit rates it is gigabytes: ~1.1 GiB at
   the engine's 95k inserts/s, ~4 GiB for the raw committer. The memory driver already keeps every version
   (DV-65), so the log is a fraction of RSS there; on SQLite or a remote driver it would be most of it. The
-  committer has an optional `hardMaxBytes` (off by default, so behaviour is Convex's) for the owner to decide
-  on: **DV-128** (pending).
+  committer therefore has a hard byte cap Convex does not have: **DV-128, decided by the owner on
+  2026-10-01** (approved as recommended; may be revisited).
+
+**The hard cap (DV-128).** `writeLogRetention.hardMaxBytes`, default `WRITE_LOG_HARD_MAX_BYTES` = 256 MiB.
+While the log's estimate is over it, the oldest commits are dropped whatever their age, so the 30 s floor
+no longer holds under extreme sustained load: at the engine's 95k inserts/s the capped log is ~7 s of
+commits, and a mutation (or `query_at_ts`) older than that gets `OutOfRetention` where Convex would still
+validate it. Below 256 MiB nothing changes. `null` or `0` (or `Infinity`) turns the cap off, which is
+Convex's exact rule (tested). Re-measured with the default (`bench/write-log.ts`, memory driver, 64 writers;
+"previous head" is this PR before the default, i.e. no cap):
+
+| | previous head (no cap) | cap on by default |
+|---|---|---|
+| 10 s: commits/s | 106.4k / 105.1k | 111.8k / 99.1k |
+| 10 s: log, RSS | 1.06 M entries, ~585 MiB; 1 912 / 1 949 MiB | 462k entries, 256 MiB; 1 971 / 1 798 MiB |
+| 40 s (past the 30 s floor): commits/s | 67.0k | 73.3k |
+| 40 s: log, RSS (the memory store dominates) | 1.54 M entries, 855 MiB; 2 954 MiB | 462k entries, 256 MiB; 3 524 MiB |
+| null driver, 10 s: commits/s, heap, RSS | 310.6k, 1 745 MiB, 3 255 MiB | 309.2k, 265 MiB, 1 158 MiB |
+
+Throughput is unchanged within noise. On the memory driver RSS is the store's (it keeps every version,
+DV-65) and swings by a few hundred MiB between runs; the null driver shows the committer's own share.
 

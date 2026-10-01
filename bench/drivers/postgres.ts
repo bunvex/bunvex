@@ -19,3 +19,15 @@ export async function writerInsideFlush() {
   await sql.end();
   return r.inside as boolean;
 }
+
+/** K20: where the store listens, and an open through a proxy with a given call timeout. */
+export function target() {
+  const u = new URL(process.env.PG_URL!);
+  return { host: u.hostname, port: Number(u.port || 5432) };
+}
+export async function openThrough(via: { host: string; port: number }, opts: { timeoutMs: number }) {
+  const u = new URL(process.env.PG_URL!);
+  u.hostname = via.host;
+  u.port = String(via.port);
+  return PostgresPersistence.open(u.toString(), 16, { timeoutMs: opts.timeoutMs });
+}
