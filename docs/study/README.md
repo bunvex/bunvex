@@ -62,6 +62,7 @@ to a spec.
 | [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H5, H7 and H8 decided (#62, #70); the rest await the owner; S1–S4 fixed or in review, S5 open |
 | [STUDY-25](STUDY-25-persistence-lifecycle.md) | Persistence lifecycle: open, schema and versioning, timeouts, retries, shutdown (with runs of the real Convex binary) | draft: L1–L12 await the owner (L9, L10 decided) |
 | [STUDY-26](STUDY-26-sync-client.md) | The sync client: base client, local and remote state, requests, optimistic updates, reconnect and backoff, `BunvexClient` | accepted: C3–C7 as recommended (owner, 2026-09-30) |
+| [STUDY-27](STUDY-27-auth.md) | Authentication: auth.config, JWT / OIDC verification, `ctx.auth`, identity-aware caching, sync and client auth, React helpers | draft: A1–A3, A5 await the owner |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
