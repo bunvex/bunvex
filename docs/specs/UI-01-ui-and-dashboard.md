@@ -1278,3 +1278,40 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   nothing to the dashboard's first load.
 - An e2e case loads it and runs axe, colour contrast included, over both themes at once.
 
+## 21. Amendment — the Schema screen (30 Sep 2026)
+
+STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens
+a table), lazy like the other screens.
+
+- **Model** (`schema/graph.ts`): `buildSchemaGraph(schema, tables, inferred)` — a node per table (declared ones,
+  plus tables with documents but no declaration, flagged `notInSchema` and typed from `inferDocumentType` when the
+  source has it; with no declared table, every table is inferred), fields with a compact TypeScript-style label
+  and the full one when it hides detail, `references` from every `v.id` (nested too), a union document type's
+  members and discriminator, and an edge per reference to a table that exists. `null`: nothing to draw.
+- **Groups** (`schema/clusters.ts`): linked tables form a group, named after the most linked one; a group of 8 or
+  more is split by modularity (Louvain's local moving); lone tables form none. On by default; the choice is kept
+  per deployment (`bunvex:schema-groups:<scope>`).
+- **Layout** (`schema/layout.ts`): ELK `layered`, top to bottom, groups as compound nodes; loaded on first use.
+  At 150 tables and ~280 references: the model and groups in under 6 ms, ELK about 1 s — "Laying out…" is said
+  meanwhile.
+- **Diagram** (`schema/diagram.tsx`, @xyflow/react 12.12.0): table nodes (at most 12 fields, then "N more"),
+  group boxes, smooth-step arrows (dashed when the field is optional; the open table's highlighted and labelled
+  with the field), a dotted background, a minimap (from `md`), zoom in / out, fit, Reset layout, Group related
+  tables. Search over groups, tables, fields and indexes: arrows move through the hits, Enter opens one, and the
+  diagram dims what does not match. Themed from the tokens (xyflow's CSS variables), following the page's theme;
+  reduced motion makes every zoom instant. Many tables: only the visible ones are rendered past 60.
+- **Keyboard**: every table node is focusable and named ("Table tasks: 5 fields, references users"); Enter or
+  Space opens it. The URL, not xyflow's selection, says which table is open (xyflow's selection re-opened a closed
+  panel), so nodes are not selectable.
+- **Side panel** (`schema/panel.tsx`, the shared `Panel`): Open in Database, the document count, a note for an
+  undeclared table, every field (a long type expands), a union's members one at a time with the discriminator
+  marked, the references in and out (each opens that table), and the indexes.
+- **States**: no tables — "This deployment doesn't have any tables", with how to declare a schema
+  (`bunvex/schema.ts`, `defineSchema`); no `viewData` — "You cannot view the schema"; errors with Retry; a
+  skeleton while loading.
+- **Size**: the screen's chunk is 203 kB (65 kB gzip) with xyflow; ELK is its own 1.43 MB (436 kB gzip) chunk,
+  fetched when the first layout runs. Neither reaches the shell (an e2e test checks the entry chunk).
+- Tested: the model, groups and layout (unit); the screen in happy-dom with axe (navigation, counts, the panel
+  from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
+  grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
+
