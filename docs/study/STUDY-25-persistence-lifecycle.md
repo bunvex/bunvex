@@ -197,7 +197,7 @@ Throwaway runs, 30 Sep 2026:
     calls go to a fresh pool, calls already running on the old one may finish, and whatever still waits
     after one more timeout is destroyed. Convex drops only the one connection (it does reconnect with a
     fresh connection on retry "in case other pooled connections are also stale"). **Divergence, pending:**
-    healthy idle connections are reopened after a timeout (DV-102).
+    healthy idle connections are reopened after a timeout (DV-122).
   - **MongoDB:** the driver's `socketTimeoutMS` (= the timeout) closes a connection that waits longer for an
     answer; `connectTimeoutMS`, `serverSelectionTimeoutMS` and `waitQueueTimeoutMS` bound the other waits.
     A guard around each call is still needed: the driver retries a timed-out read (`retryReads`) and a
@@ -229,7 +229,7 @@ Throwaway runs, 30 Sep 2026:
 |---|---|---|---|---|---|---|
 | L1 | DDL on every open | Guarded (`to_regclass`, table count, sentinel) | Guarded on Postgres (#62). **MySQL: unguarded `IF NOT EXISTS` on every open**; MongoDB: `createIndex` ×3 | A paused peer can wedge startup; MDL contention (MySQL bug 63144) | **Bug.** Guard MySQL (table count, as Convex v5) and MongoDB (index list) | owner |
 | L2 | First-start serialization | None | Advisory lock on Postgres | An improvement: concurrent first opens crashed without it (STUDY-24) | Keep; add the equivalent to MySQL (`GET_LOCK` around bootstrap DDL only) | owner |
-| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-102), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex** (fixed in the L3 PR); the Postgres pool retirement (DV-102) and the renewal bound await the owner |
+| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-122), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex** (fixed in the L3 PR); the Postgres pool retirement (DV-122) and the renewal bound await the owner |
 | L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff; an ambiguous commit is fatal | Fail-stop on any error | A network blip or database restart kills the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | owner |
 | L5 | Retries of reads and init | Once, on a fresh connection | None | Spurious query errors after a database restart | Bug (minor). One retry | owner |
 | L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
