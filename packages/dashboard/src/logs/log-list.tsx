@@ -1,5 +1,5 @@
-// Log lines as a data grid (STUDY-12 §7): newest first, one row per line — time, request, the execution's
-// outcome on its last line, level, function, message. Arrows move between lines; Enter or a click opens a
+// Log lines as a data grid (STUDY-12 §7): newest first, one row per line — time, level, function, the
+// execution's outcome on its last line, request, message. Arrows move between lines; Enter or a click opens a
 // line's details, which then follow the current line.
 
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
@@ -25,7 +25,7 @@ export const KIND_LETTER: Record<FunctionKind, string> = { query: "Q", mutation:
 /** A line that went wrong: an error, or the end of a failed execution. */
 export const isFailure = (e: LogEntry) => e.level === "error" || e.execution?.status === "failure";
 
-const columns: DataTableColumn<LogRow>[] = [
+const allColumns: DataTableColumn<LogRow>[] = [
   col.accessor((e) => e.time, {
     id: "time",
     header: "Time",
@@ -101,10 +101,12 @@ const columns: DataTableColumn<LogRow>[] = [
   }),
 ];
 
+const pick = (order: string[]) => order.map((id) => allColumns.find((c) => c.id === id)!);
+/** Who and how before what (UI-01 §22.4): the message, the widest, last. */
+const columns = pick(["time", "level", "function", "outcome", "request", "message"]);
 /** On a phone the message comes right after the time: it is what a reader wants (UX-6). */
 const PHONE = "(max-width: 639px)";
-const PHONE_ORDER = ["time", "message", "level", "function", "outcome", "request"];
-const phoneColumns = PHONE_ORDER.map((id) => columns.find((c) => c.id === id)!);
+const phoneColumns = pick(["time", "message", "level", "function", "outcome", "request"]);
 
 function useMatches(query: string) {
   const [matches, setMatches] = useState(() => typeof matchMedia === "function" && matchMedia(query).matches);
@@ -119,7 +121,7 @@ function useMatches(query: string) {
   return matches;
 }
 
-const WIDTHS: Record<string, number> = { time: 176, request: 92, outcome: 124, level: 76, function: 200, message: 560 };
+const WIDTHS: Record<string, number> = { time: 176, request: 92, outcome: 144, level: 76, function: 200, message: 560 };
 
 export function LogList(props: {
   label: string;
@@ -134,12 +136,15 @@ export function LogList(props: {
   footer?: ReactNode;
   resetKey?: unknown;
   className?: string;
+  /** Fills its container, edge to edge (UI-01 §22.4). */
+  fill?: boolean;
 }) {
   const phone = useMatches(PHONE);
   return (
     <DataTable
       label={props.label}
       className={props.className}
+      fill={props.fill}
       columns={phone ? phoneColumns : columns}
       // the time stays in view when a long message scrolls the list sideways (UX-5)
       stickyColumn="time"
