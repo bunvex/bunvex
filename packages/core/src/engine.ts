@@ -339,8 +339,6 @@ export class Engine {
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
-      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
-      { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
         name: CRON_NEXT_RUN_TABLE,
@@ -348,6 +346,8 @@ export class Engine {
         document: v.any(),
       },
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
+      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
+      { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }
