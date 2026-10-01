@@ -53,7 +53,7 @@ wrong.
 | B10 | **Fixed in #13.** The query cache hands out results by reference: a caller mutating a result corrupts it for others | STUDY-08 D3 |
 | B11 | **Fixed in #21.** Objects, arrays and bytes are not encodable in index keys (all objects encode equal) | STUDY-05 D6 |
 | B12 | **Fixed in #12** (with Convex's transaction read limits). `collect()` is silently capped at 8192 rows; `take(0)` or a negative `take` misbehaves on the memory driver | STUDY-07 D1/D2 |
-| B13 | **Fixed in the auth PR (HTTP query cache); sync next.** Once `ctx.auth` exists, cache and subscription keys would serve one user's results to another (latent) | STUDY-08 D6 |
+| B13 | **Fixed (STUDY-27).** Once `ctx.auth` exists, cache and subscription keys would serve one user's results to another. The query cache and sync's shared executions key a result by identity only when the run read it | STUDY-08 D6 |
 | B14 | **Fixed in #11.** One socket subscribing twice to the same key leaks a reference count | client-sync.md |
 
 ### Phase 1 — the core behaves like Convex
