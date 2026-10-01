@@ -147,6 +147,7 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-87 | `"use node"`: may collapse to "accept and ignore" since Bun has Node APIs | a separate Node runtime for those modules | yes | Parity "Divergence?" | [platform §9](platform.md#9-nodejs-actions-use-node) |
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
+| DV-102 | A database call that times out retires the whole Postgres pool: the next calls open fresh connections, calls in flight on the old pool may finish within one more timeout | only the timed-out connection is dropped (poisoned) | operational | postgres.js does not expose single connections; a timeout usually means the database or the path to it is in trouble, and Convex itself reconnects "in case other pooled connections are also stale" | [STUDY-25 L3](../study/STUDY-25-persistence-lifecycle.md#34-timeouts-on-database-calls-l3-as-convex); [PERSIST-01 C8](../specs/PERSIST-01-contract.md#c8--liveness-client-side-call-timeouts-remote-stores) |
 
 ## Gaps recorded in studies
 

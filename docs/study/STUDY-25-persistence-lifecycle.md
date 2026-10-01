@@ -1,6 +1,7 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
-- **Status:** draft. Divergences L1–L12 (§4) await the owner, except L9 and L10 (decided 2026-09-30).
+- **Status:** draft. Divergences L1–L12 (§4) await the owner, except L9 and L10 (decided 2026-09-30) and L3
+  (as Convex; built in the PR "fix(persistence): client-side timeouts on database calls", §3.4).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -75,7 +76,23 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
 
 - **Timeouts are on the client side** (`crates/postgres/src/connection.rs:108-135`, `knobs.rs:1197`):
   - Postgres wraps every call in 30 s (`POSTGRES_TIMEOUT_SECONDS`); MySQL uses 19 s (`MYSQL_TIMEOUT_SECONDS`).
-  - A timeout or a closed connection **poisons** the connection, so it is never reused.
+    Both are environment variables read once (`env_config`).
+  - **"Every call" is every round trip:** getting a pooled connection (which includes opening a new one,
+    `connection.rs:553`), `BEGIN`, each statement or prepare, each row of a streamed result
+    (`wrap_query_stream`, `:335-341`), and `COMMIT` (`:447`). A transaction of N statements can therefore take
+    up to N timeouts; no single wait exceeds one. MySQL is the same (`mysql/src/connection.rs:143-153`, call
+    sites `:352-614`, pool `:722`).
+  - The error is `DatabaseTimeoutError` ("Database Timeout (Postgres)", `common/src/errors.rs:841`), an
+    *operational* internal error, and transient (`is_transient_db_error`, `:857`).
+  - A timeout or a closed connection **poisons** the connection, so it is never reused
+    (`handle_error`, `postgres/src/connection.rs:209-220`; `Drop` does not return a poisoned connection to
+    the pool, `:382-397`). MySQL never retries after a timeout and discards the connection, because "the
+    mysql protocol doesn't support cancellation" (`mysql/src/connection.rs:280-318`; it is disconnected in
+    the background, since disconnecting can hang too).
+  - **Exception:** deferred `CREATE INDEX` statements at startup run without a timeout
+    (`batch_execute_no_timeout`, `postgres/src/lib.rs:887-903`).
+  - **MongoDB:** Convex has no MongoDB driver, so there is nothing to match; bunvex follows the Postgres
+    driver (§3.4).
 - **Transient errors** are a timeout or an "operational" error: IO, connection closed or lost, server
   shutdown, too many connections, read-only (`mysql/src/connection.rs:88-118`, `common/src/errors.rs:857`).
   Serialization failures and deadlocks are not classified; with one writer they are not expected.
@@ -147,7 +164,8 @@ Throwaway runs, 30 Sep 2026:
 
 ### 3.2 Timeouts, retries, shutdown
 
-- **No timeouts on database calls** (except `lock_timeout` in the Postgres bootstrap and lease acquisition).
+- **Timeouts on database calls** (L3): before §3.4 there were none (except `lock_timeout` in the Postgres
+  bootstrap and lease acquisition), and a hung connection hung startup, a query or a commit forever.
 - **Any flush error is fail-stop at once**: the committer stops and the server exits (`committer.ts`,
   `server.ts`). There is no retry of transient errors.
 - **Shutdown:**
@@ -163,13 +181,55 @@ Throwaway runs, 30 Sep 2026:
 - **Waiting for a paused holder is bounded by the server** (`lock_timeout 1s`), so no orphaned UPDATE can
   remain. An expired holder paused mid-flush has its sessions ended (conformance K13/K14).
 
+### 3.4 Timeouts on database calls (L3, as Convex)
+
+- **Every remote driver bounds every database call on the client side, per round trip**
+  (`withTimeout` in `@bunvex/core/persistence`; `progress()` re-arms the timer after each round trip of a
+  transaction, so a transaction is bounded per statement as in Convex). The call rejects with
+  `DatabaseTimeoutError` ("Database Timeout (Postgres): no answer within 30000 ms").
+- **Values, as Convex:** Postgres 30 s, MySQL 19 s. MongoDB 30 s (no Convex counterpart; the MongoDB
+  driver's own defaults for connecting and server selection are 30 s too). Each is an open option
+  (`timeoutMs`; 0 disables it), and the server reads `POSTGRES_TIMEOUT_SECONDS` and `MYSQL_TIMEOUT_SECONDS`
+  (Convex's names) and `MONGODB_TIMEOUT_SECONDS`.
+- **A timed-out connection is never reused:**
+  - **MySQL:** the connection is destroyed (out of the pool, socket closed), as Convex.
+  - **Postgres:** postgres.js does not expose its connections, so **the whole pool is retired**: the next
+    calls go to a fresh pool, calls already running on the old one may finish, and whatever still waits
+    after one more timeout is destroyed. Convex drops only the one connection (it does reconnect with a
+    fresh connection on retry "in case other pooled connections are also stale"). **Divergence, pending:**
+    healthy idle connections are reopened after a timeout (DV-102).
+  - **MongoDB:** the driver's `socketTimeoutMS` (= the timeout) closes a connection that waits longer for an
+    answer; `connectTimeoutMS`, `serverSelectionTimeoutMS` and `waitQueueTimeoutMS` bound the other waits.
+    A guard around each call is still needed: the driver retries a timed-out read (`retryReads`) and a
+    transaction (`withTransaction`, for up to 120 s) on its own. (The driver's `timeoutMS` would cover all
+    of it, but it is experimental.)
+- **Connecting** is bounded too: postgres.js `connect_timeout` (whole seconds), mysql2 `connectTimeout`.
+  `open()` (bootstrap DDL) and `close()` are bounded by the same timeout.
+- **A flush that times out is fail-stop**, unchanged: the committer stops and the process exits, as on any
+  flush error. That is what Convex does for a commit in doubt (its write retries end in "Unsure if
+  transaction committed to disk" when the commit may have landed).
+- **The lease (bunvex's own, L10 / DV-14)** needs two more rules, recommended here for the owner:
+  - **A renewal is bounded by a quarter of the TTL** (or the call timeout, if shorter; `renewTimeoutMs`).
+    With a 5 s TTL and a 30 s call timeout, a renewal stuck on a dead connection would otherwise wait 30 s
+    while the lease expires after 5 s. The engine renews every TTL/3, so a stuck renewal has failed, and
+    its connection is gone, before the next renewal is due; that one runs on a fresh connection, and the
+    lease survives one dead connection.
+  - **The engine stops when a renewal is still pending at the TTL** (before, only a *failed* renewal past
+    the TTL stopped it, and a renewal that never returned kept a deposed process serving). This holds for a
+    third-party driver without timeouts too.
+- **Tests:** conformance **K20** (a freezable TCP proxy between the driver and the real store; §5) and
+  `packages/core/test/timeout.test.ts`, `lease.test.ts` (a renewal that never returns).
+- **Not in this change** (follow-ups): retrying a flush after a transient error (L4), retrying a read once
+  on a fresh connection (L5; Convex's reads retry once after a timeout, so a read there can wait two
+  timeouts, where bunvex fails after one).
+
 ## 4. Divergences
 
 | # | Divergence | Convex | bunvex | Risk / why | Recommendation | Decision |
 |---|---|---|---|---|---|---|
 | L1 | DDL on every open | Guarded (`to_regclass`, table count, sentinel) | Guarded on Postgres (#62). **MySQL: unguarded `IF NOT EXISTS` on every open**; MongoDB: `createIndex` ×3 | A paused peer can wedge startup; MDL contention (MySQL bug 63144) | **Bug.** Guard MySQL (table count, as Convex v5) and MongoDB (index list) | owner |
 | L2 | First-start serialization | None | Advisory lock on Postgres | An improvement: concurrent first opens crashed without it (STUDY-24) | Keep; add the equivalent to MySQL (`GET_LOCK` around bootstrap DDL only) | owner |
-| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | None | A hung connection hangs startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | owner |
+| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-102), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex** (fixed in the L3 PR); the Postgres pool retirement (DV-102) and the renewal bound await the owner |
 | L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff; an ambiguous commit is fatal | Fail-stop on any error | A network blip or database restart kills the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | owner |
 | L5 | Retries of reads and init | Once, on a fresh connection | None | Spurious query errors after a database restart | Bug (minor). One retry | owner |
 | L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
@@ -185,8 +245,11 @@ Throwaway runs, 30 Sep 2026:
 ## 5. Tests
 
 - **L1:** open while another process holds a transaction open (paused), and open finishes.
-- **L3:** a database that stops answering (paused server, or a proxy that drops packets) makes a call fail
-  within the timeout.
+- **L3 (built: conformance K20):** a TCP proxy between the driver and the real store stops forwarding in
+  both directions without closing anything. A read, a flush and a lease renewal (within TTL/4) fail within
+  the timeout; the client closes the connections those calls waited on; once the proxy forwards again, the
+  same store answers without being reopened; through the engine, a commit whose flush times out stops the
+  committer. Sabotaged (timeouts disabled), every call hangs past the suite's guard.
 - **L4:** kill the database connection during a flush; the commit is retried and acknowledged once. Force
   an ambiguous commit; the process stops.
 - **L6:** open a store written by a future layout version; refuse with a clear error.

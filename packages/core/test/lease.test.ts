@@ -164,6 +164,23 @@ describe("the store's lease (PERSIST-01 C7)", () => {
     expect(a.committer.stopped?.cause).toBeInstanceOf(LeaseLostError);
   });
 
+  test("a renewal the store never answers stops the committer once the TTL runs out (STUDY-25 L3)", async () => {
+    const store = await Store.create();
+    const conn = store.connect();
+    const e = new Engine(schema, conn, { lease: { ttlMs: 150 } });
+    engines.push(e);
+    await e.init();
+    const fatal: Error[] = [];
+    e.committer.onFatal((err) => fatal.push(err));
+    conn.renewLease = () => new Promise<void>(() => {}); // a hung connection: no answer, no error
+    const t0 = Date.now();
+    while (!fatal.length && Date.now() - t0 < 2000) await sleep(10);
+    expect(fatal).toHaveLength(1);
+    expect(Date.now() - t0).toBeLessThan(150 + 2 * 50 + 100); // TTL + up to two renewal periods + slack
+    expect((fatal[0].cause as Error) instanceof LeaseLostError).toBe(true);
+    expect(await insert(e).catch((err) => err)).toBeInstanceOf(CommitterStoppedError);
+  });
+
   test("a driver without a lease opens as before", async () => {
     const e = new Engine(schema, await MemoryPersistence.open(null, { durable: false }));
     engines.push(e);
