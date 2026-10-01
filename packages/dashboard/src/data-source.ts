@@ -367,17 +367,20 @@ import type { DeploymentFeatures } from "./data-source-deployment.ts";
 export type FieldPatch = Value | { $unset: true };
 
 import type { AuthFeatures } from "./data-source-auth.ts";
+import type { MetricsFeatures } from "./data-source-metrics.ts";
 import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
 
 export * from "./data-source-auth.ts";
 export * from "./data-source-deployment.ts";
+export * from "./data-source-metrics.ts";
 export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
 
 export interface DashboardDataSource
   extends DeploymentFeatures,
     DeploymentStateFeatures,
+    MetricsFeatures,
     AuthFeatures,
     SnapshotFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
