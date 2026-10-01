@@ -59,10 +59,11 @@ to a spec.
 | [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1–D3 await the owner |
 | [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 awaits the owner |
 | [STUDY-23](STUDY-23-sync-protocol-v1.md) | Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | accepted: P1–P12 as recommended (owner, 2026-09-30); implementation in steps |
-| [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H5, H7 and H8 decided (#62, #70); the rest await the owner; S1–S4 fixed or in review, S5 open |
+| [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H5, H7 and H8 decided (#62, #70); the rest await the owner; S1–S4 fixed or in review, S5 fixed (STUDY-29) |
 | [STUDY-25](STUDY-25-persistence-lifecycle.md) | Persistence lifecycle: open, schema and versioning, timeouts, retries, shutdown (with runs of the real Convex binary) | draft: L1–L12 await the owner (L9, L10 decided) |
 | [STUDY-26](STUDY-26-sync-client.md) | The sync client: base client, local and remote state, requests, optimistic updates, reconnect and backoff, `BunvexClient` | accepted: C3–C7 as recommended (owner, 2026-09-30) |
 | [STUDY-27](STUDY-27-auth.md) | Authentication: auth.config, JWT / OIDC verification, `ctx.auth`, identity-aware caching, sync and client auth, React helpers | accepted: A1–A3, A5 as recommended (owner, 2026-09-30) |
+| [STUDY-29](STUDY-29-index-backfill.md) | Background index backfill: index states, staged indexes, the worker, checkpoints and resume, queries on a backfilling index | implemented; B1, B2 await the owner |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

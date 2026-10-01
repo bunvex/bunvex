@@ -109,6 +109,7 @@ Kept so the history is in one place.
 | DV-71 | Function-not-found text: "function not found: x" | Convex's messages, alone (no `Uncaught`, no frames): `Could not find public function for 'm:x'.` (also for an internal one called from a client), and `Trying to execute m.js:x as Query, but it is defined as Mutation.` | yes | owner, 2026-09-30 | [STUDY-11 D6](../study/STUDY-11-function-results-and-errors.md#4-divergences) |
 | DV-74 | A cached query result carries no `logLines` | A cache hit answers the log lines stored with the entry (`Engine` `CacheCompanion`) | yes | owner, 2026-09-30 | [STUDY-20 D2](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
 | DV-79 | `REDACT_LOGS_TO_CLIENT=false` or `0` leaves redaction off | As Convex: any non-empty value enables redaction, `false` too | operational | owner, 2026-09-30 | [STUDY-20 D7](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
+| DV-54 | Index backfill ran synchronously in `Engine.init()`, blocking startup, writes and failover until it ended | In the background, as Convex: a worker in the process holding the lease, chunks in batches while every write maintains the index, `backfilling` → `backfilled` → `enabled`, staged indexes, `_index_backfills` checkpoints and resume, Convex's knobs; `init()` returns at once and `indexesReady()` resolves when the schema change finishes. What still differs is DV-126 and DV-127 | operational | owner, 2026-10-01 (match Convex); built in the PR that adds STUDY-29 | [STUDY-04 D3](../study/STUDY-04-table-and-index-metadata.md#5-divergences), [STUDY-24 S5](../study/STUDY-24-horizontal-scaling.md#31-bugs-found-by-this-study-independent-of-scaling), [STUDY-29](../study/STUDY-29-index-backfill.md) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -121,8 +122,7 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | ID | bunvex | Convex | Observable | Note | Source |
 |---|---|---|---|---|---|
 | DV-53 | Tablet ids are small integers from a counter; `_tables`/`_index` have fixed ids | random 16-byte ids; persistence globals | no | PERSIST-01 stores integer ids | [STUDY-04 D1](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-54 | Index backfill runs synchronously at startup | in the background | operational | Marked "owner (gap)" | [STUDY-04 D3](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-55 | No `Backfilled`/staged index state, no namespaces (components) | has both | yes | Marked "owner (gap)" | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
+| DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29) | has them | yes | Marked "owner (gap)" | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-56 | Stores written by an older bunvex are not readable (no migrations) | migrates | operational | Pre-alpha, no production data; later PRs (#17, #21) repeat it | [STUDY-04 D5](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-57 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix; this also causes extra subscription re-runs | ends at the last key read | yes | More OCC conflicts (queue heads) | [STUDY-06 D3](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-08 D10](../study/STUDY-08-cache-and-subscriptions.md#4-divergences) |
 | DV-59 | No `db.vars.commitTs` / `v.commitTs()` | has them | yes | Missing API | [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-13 D2](../study/STUDY-13-validators.md#4-divergences) |
@@ -147,6 +147,8 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-87 | `"use node"`: may collapse to "accept and ignore" since Bun has Node APIs | a separate Node runtime for those modules | yes | Parity "Divergence?" | [platform §9](platform.md#9-nodejs-actions-use-node) |
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
+| DV-126 | No push gate: the new code runs as soon as `init()` returns, so until a new index is enabled a query on it fails with `IndexBackfillingError` and a changed index answers with its old definition (the failed lookup also reads the index's `_index` document so a subscription re-runs when it is enabled) | the push completes, and deploys the code, only once the indexes are ready (`wait_for_schema`), so deployed code never meets either | yes | No push yet: the schema is code loaded at open, and waiting in `init()` is what DV-54 removed. Recommendation: keep; a future `bunvex deploy` (or the server's start) waits on `indexesReady()` as Convex's CLI does | [STUDY-29 B1](../study/STUDY-29-index-backfill.md#4-divergences) |
+| DV-127 | A backfill chunk is a commit at a new ts, validated by OCC against the `by_id` range it scanned (redone at half size on a conflict); a resume starts at a new snapshot; the checkpoint is deleted when its index finishes | entries written directly at each document's own ts, below every live write; a resume continues at the stored snapshot | no | PERSIST-01 applies writes in ts order and has no per-document ts (DV-66). Recommendation: keep until DV-66 is built | [STUDY-29 B2](../study/STUDY-29-index-backfill.md#4-divergences) |
 
 ## Gaps recorded in studies
 
@@ -157,7 +159,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | Study row | Missing |
 |---|---|
 | [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | Existing documents are not re-checked when the schema changes (deploy/push flow) |
-| [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex`, `staged` (phase 4) |
+| [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex` (phase 4); staged database indexes are built (STUDY-29) |
 | [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |
 | [STUDY-12 D11, D12](../study/STUDY-12-dashboard.md#4-divergences) | Dashboard: custom query, per-table metrics; function metrics on the Health screen |

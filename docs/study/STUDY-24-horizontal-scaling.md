@@ -198,7 +198,9 @@ yet (ARCH-01 §6.3).
 **Status (30 Sep 2026):** S1 fixed on every driver by PERSIST-01 C7 (Postgres #62; MySQL #67; SQLite
 and memory #70, an OS lock; MongoDB #84, a transaction per flush on a replica set). S2 fixed with it (the
 durable prefix is recorded by each fenced flush). S3 fixed on Postgres (#62), MySQL (#67) and MongoDB
-(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 open.
+(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 fixed: decided as Convex
+(owner, 2026-10-01; DV-54), backfill now runs in the background ([STUDY-29](STUDY-29-index-backfill.md));
+`init()` and a failover no longer wait for it.
 
 S1 in detail:
 
@@ -470,7 +472,7 @@ mutations, half actions.
 | Scheduler and cron loops | Leader; action execution anywhere after a fenced, owner-tagged claim |
 | Mutation job / cron mutation | Wherever mutations run (the leader under A1) |
 | Retention | Leader only: it deletes beneath MVCC, and is fenced |
-| Index backfill | Leader, in the background (S5) |
+| Index backfill | Leader, in the background (S5): the `IndexWorker` is started by `init()`, so only by the process holding the lease (STUDY-29) |
 | `_session_requests` / `_scheduled_jobs` cleanup | Leader (idempotent, could be claimed) |
 | Catalog reconcile, instance secret | Leader |
 | Query cache, subscriptions, per-connection mutation queue | Per node |
