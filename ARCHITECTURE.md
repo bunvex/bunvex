@@ -54,7 +54,8 @@ bunvex/
 │   ├── persistence/                 @bunvex/persistence               ← external databases
 │   │   ├── postgres                 (optional peer: postgres)                                 ✅
 │   │   ├── mysql                    (optional peer: mysql2)                                   ✅
-│   │   └── mongodb                  (optional peer: mongodb)                                  ✅
+│   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
+│   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the K1–K7 suite, published ✅
 │   │
@@ -71,7 +72,7 @@ bunvex/
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
 │   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            🟡
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
-│   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
+│   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │

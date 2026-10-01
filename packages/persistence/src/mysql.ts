@@ -21,6 +21,7 @@ import {
 } from "@bunvex/core/persistence";
 import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
+import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 type IdxRow = [number, Buffer, Buffer | null, Buffer, number, boolean, string | null];
@@ -40,15 +41,38 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     private conn: string,
   ) {}
 
-  static async open(url: string, pool = 16) {
+  /**
+   * TLS (STUDY-25 L8, as Convex): required, with the CA and the host name verified, by default;
+   * `requireSsl: false` connects as the URL says (plain unless it asks for TLS or `caFile` is set).
+   * `caFile` adds a trusted CA.
+   */
+  static async open(url: string, pool = 16, opts: TlsOptions = {}) {
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+    const { uri, ssl } = mysqlTls(url, opts);
     const p = mysql.createPool({
-      uri: url,
+      uri,
+      ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
       connectionLimit: pool,
       multipleStatements: false,
       connectAttributes: { bunvex_conn: conn },
     });
+    try {
+      await MysqlPersistence.bootstrap(p);
+    } catch (e) {
+      await p.end().catch(() => {});
+      throw explainTlsError(e, "MySQL", "MYSQL_CA_FILE");
+    }
+    return new MysqlPersistence(p, conn);
+  }
+
+  private static async bootstrap(p: mysqlDriver.Pool) {
+    // A writable server only, as Convex's `require_leader` (crates/mysql/src/connection.rs:670-690), the
+    // counterpart of Postgres's target_session_attrs=read-write. Convex repeats it on every new connection;
+    // bunvex checks at open (a replica that becomes read-only later fails its writes).
+    const [ro] = (await p.query(`select (@@global.innodb_read_only or @@global.read_only) as ro`)) as any;
+    if (Number(ro[0].ro))
+      throw new Error("MySQL is read-only (read_only or innodb_read_only is on): bunvex needs the writable primary");
     // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
     // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
     const [have] = (await p.query(
@@ -71,7 +95,6 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
         c.release();
       }
     }
-    return new MysqlPersistence(p, conn);
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {

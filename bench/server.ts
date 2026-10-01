@@ -1,5 +1,6 @@
 // The convex-bench server: the benchmark's functions on a bunvex server, persistence chosen by env
-// (PERSISTENCE=memory|sqlite|postgres|mysql|mongodb, PERSISTENCE_URL, DATA, DURABLE, POOL, PORT).
+// (PERSISTENCE=memory|sqlite|postgres|mysql|mongodb, PERSISTENCE_URL, DATA, DURABLE, POOL, PORT; Convex's
+// POSTGRES_URL / MYSQL_URL too). TLS is required by default: DO_NOT_REQUIRE_SSL=1 for a local store without it.
 //   PERSISTENCE=sqlite bun bench/server.ts
 import { Engine } from "@bunvex/core";
 import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "bunvex/server";

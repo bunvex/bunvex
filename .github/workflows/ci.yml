@@ -67,12 +67,18 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      # The service container has no TLS, and bunvex requires TLS by default, as Convex (STUDY-25 L8).
       - name: conformance on Postgres
         env:
           DRIVERS: postgres
           KILLS: "4"
           PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      - name: TLS defaults on Postgres without TLS (refused by default; DO_NOT_REQUIRE_SSL connects)
+        env:
+          TLS_PG_PLAIN_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+        run: bun test packages/persistence/test/tls-db.test.ts
 
   conformance-mysql:
     name: conformance · MySQL
@@ -92,12 +98,18 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      # MySQL's auto-generated certificates do not verify, and bunvex verifies them by default, as Convex.
       - name: conformance on MySQL
         env:
           DRIVERS: mysql
           KILLS: "4"
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      - name: TLS defaults on MySQL with its own certificates (refused by default; DO_NOT_REQUIRE_SSL connects)
+        env:
+          TLS_MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+        run: bun test packages/persistence/test/tls-db.test.ts
 
   conformance-mongodb:
     name: conformance · MongoDB

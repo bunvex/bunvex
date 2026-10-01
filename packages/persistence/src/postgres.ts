@@ -23,6 +23,7 @@ import {
 } from "@bunvex/core/persistence";
 import type postgresDriver from "postgres";
 import { loadPeer } from "./peer.ts";
+import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 // index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
@@ -48,19 +49,38 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
    * `idleInTransactionMs`: how long the server keeps one of our transactions open while we are paused (a
    * stopped process, a GC pause) before aborting it and releasing its locks, so another process can take
    * the store over (PERSIST-01 C7). It must stay well under the lease TTL.
+   *
+   * TLS (STUDY-25 L8, as Convex): required and verified by default; `requireSsl: false` connects as the
+   * URL's `sslmode` says (TLS when the server offers it, by default). `caFile` adds a trusted CA. Every
+   * connection asks for a read-write session (`target_session_attrs=read-write`): never a standby.
    */
-  static async open(url: string, pool = 16, opts: { idleInTransactionMs?: number } = {}) {
+  static async open(url: string, pool = 16, opts: { idleInTransactionMs?: number } & TlsOptions = {}) {
     const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+    // The driver's own parse of the URL (hosts, ports, socket path, PG* environment); it connects nothing.
+    const target = postgres(url, { max: 1 }).options as unknown as Parameters<typeof postgresTls>[1];
+    const { ssl, target_session_attrs } = await postgresTls(url, target, opts);
     const sql = postgres(url, {
       max: pool,
       onnotice: () => {},
       prepare: true,
+      ssl: ssl as postgresDriver.Options<{}>["ssl"],
+      target_session_attrs,
       connection: {
         application_name: conn,
         idle_in_transaction_session_timeout: opts.idleInTransactionMs ?? 2500,
       },
     });
+    try {
+      await PostgresPersistence.bootstrap(sql);
+    } catch (e) {
+      await sql.end({ timeout: 1 }).catch(() => {});
+      throw explainTlsError(e, "Postgres", "PG_CA_FILE");
+    }
+    return new PostgresPersistence(sql, conn);
+  }
+
+  private static async bootstrap(sql: postgresDriver.Sql) {
     // DDL only when a table is missing: a `create … if not exists` still waits for locks another process
     // holds, so a paused process must not wedge every later open (STUDY-24 S3). Concurrent first opens are
     // serialized by an advisory lock (two concurrent `create table` race on the catalog and one fails).
@@ -80,7 +100,6 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
           create table if not exists bunvex_lease (id int primary key check (id = 1), epoch bigint not null,
             holder text, holder_conn text, expires_at timestamptz not null, max_ts bigint not null);`);
       });
-    return new PostgresPersistence(sql, conn);
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {

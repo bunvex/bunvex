@@ -23,7 +23,7 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
   - The database name is derived from the instance name, `-` → `_` (e.g. `convex_self_hosted`), and the URL
     must not name a database (`crates/clusters/src/lib.rs:53-66`).
   - `sslmode=require` and `target_session_attrs=read-write` are added (`:39-50`); `DO_NOT_REQUIRE_SSL`
-    turns SSL off.
+    turns SSL off. Detail in [§1.6](#16-database-selection-and-tls-l8).
   - The operator creates the database (`self-hosted/advanced/postgres_or_mysql.md:53-64`).
 - **MySQL** selects the database per connection. With `require_leader`, every new connection checks
   `@@global.innodb_read_only OR @@global.read_only` (`crates/mysql/src/connection.rs:670-690`).
@@ -112,6 +112,57 @@ Throwaway runs, 30 Sep 2026:
 | **Old process paused (SIGSTOP) holding `FOR SHARE` on the lease row** | The new process's lease `UPDATE` blocks. It gives up after the 30 s client timeout and exits, but **its UPDATE stays queued in Postgres**. When the old process resumes, its commit completes, then the orphaned UPDATE applies and the old process dies with `Lease Lost`. **No live backend remains**, and the outage lasts until a manual restart. |
 | **Startup DDL while the old process is paused (STUDY-24 S3)** | **No wedge.** The guarded DDL runs nothing on an existing schema; the only wait was the lease `UPDATE`. |
 
+### 1.6 Database selection and TLS (L8)
+
+**Which database (`self-hosted/docker-build/run_backend.sh:17-32`).**
+
+- The Docker image picks the driver from the environment, first match wins:
+  1. `POSTGRES_URL` → `--db postgres-v5`;
+  2. `MYSQL_URL` → `--db mysql-v5`;
+  3. `DATABASE_URL` → Postgres, with a printed warning that it is deprecated (`:24-27`; renamed when MySQL
+     arrived, `self-hosted/CHANGELOG.md:103-104`);
+  4. otherwise SQLite at `$SQLITE_DB` (`$DATA_DIR/db.sqlite3`, `:6`, `:28-31`).
+- "Set" means non-empty (`[ -n "$X" ]`). The binary itself takes the URL as a positional argument; the env
+  names exist only in the image (`self-hosted/docker/docker-compose.yml:29-38` passes them through).
+- The URL carries **no database name and no query string**: "the connection string without the db name and
+  query params" (`self-hosted/advanced/postgres_or_mysql.md:28-34`, `:59-60`, `:80`).
+  - Postgres refuses a URL with a path, "cluster url already contains db name"
+    (`crates/clusters/src/lib.rs:53-61`), and sets the path to the instance name with `-` → `_` (`:62`).
+  - MySQL selects that database per connection (`:69-82`).
+  - The default instance name is `convex-self-hosted`, so the database is `convex_self_hosted`
+    (`postgres_or_mysql.md:87-92`). The operator creates it.
+
+**TLS: required and verified unless turned off.**
+
+- The flag: `--do-not-require-ssl` (`crates/local_backend/src/config.rs:114-118`), passed by the image
+  when `DO_NOT_REQUIRE_SSL` is non-empty (`run_backend.sh:68`, `${DO_NOT_REQUIRE_SSL:+…}`), so `0` and
+  `false` turn TLS off too. `main.rs:152` passes `require_ssl: !do_not_require_ssl`. Its doc: "It would still
+  prefer SSL if available. This should only be set in tests."
+- **Postgres:**
+  - With the requirement, `sslmode=require` is appended to the URL (`crates/clusters/src/lib.rs:39-45`).
+    tokio-postgres reads query parameters in order, so it overrides a `sslmode` the URL set. It knows only
+    `disable`, `prefer` (its default) and `require` (tokio-postgres 0.7.13 `config.rs:582-587`).
+  - `prefer` uses TLS when the server answers the SSLRequest with `S`, plain when `N`; `require` fails
+    with "server does not support TLS" on `N` (tokio-postgres `connect_tls.rs`).
+  - Whenever TLS is used, rustls **verifies the chain and the host name** against the system roots
+    (rustls-native-certs) plus the PEM file in `PG_CA_FILE` (`crates/postgres/src/lib.rs:423-454`).
+    So `require` is libpq's `verify-full`, and even `prefer` fails on a certificate it cannot verify.
+  - `target_session_attrs=read-write` is appended (`clusters/src/lib.rs:46-50`) and set again on the
+    config, always (`crates/db_connection/src/lib.rs:161`; `require_leader` is `true`, `:77`).
+- **MySQL** (mysql_async 0.37 with rustls):
+  - With the requirement, `require_ssl=true&verify_ca=true` is appended (`clusters/src/lib.rs:69-77`).
+    `verify_identity` defaults to true (mysql_async `opts/mod.rs:1000-1007`), so the host name is verified
+    too unless the URL says `verify_identity=false`.
+  - Without it: plain, unless the URL says `require_ssl=true`.
+  - `MYSQL_CA_FILE` adds a root and **turns TLS on by itself**, unless the URL says `require_ssl=false`
+    (`crates/mysql/src/connection.rs:691-710`).
+  - The "leader" check: every new connection runs `SELECT @@global.innodb_read_only OR @@global.read_only`
+    and fails on a read-only server (`connection.rs:670-690`).
+  - The changelog says why local MySQL needs the flag: once certificates were verified, "you must set
+    `DO_NOT_REQUIRE_SSL` for running locally" (`CHANGELOG.md:97-99`). MySQL's auto-generated certificates
+    are self-signed: they never verify.
+- **MongoDB:** Convex has no MongoDB driver.
+
 ## 2. What an app can observe
 
 - **Nothing on the happy path.** How a store is opened, versioned, timed out or shut down is invisible to
@@ -141,7 +192,8 @@ Throwaway runs, 30 Sep 2026:
 - **SQLite** uses WAL, `synchronous=FULL|OFF`, no `busy_timeout` and no exclusive lock.
 - **memory+log** opens its log file with no lock.
 - **All drivers:**
-  - The URL is used as given; there is no database-name derivation and no SSL default.
+  - The URL is used as given; there is no database-name derivation. (Postgres and MySQL get Convex's TLS
+    defaults and env names: [§3.4](#34-database-selection-and-tls-l8-built).)
   - Pools are 16.
   - No layout version is stored and none is checked.
 
@@ -163,6 +215,56 @@ Throwaway runs, 30 Sep 2026:
 - **Waiting for a paused holder is bounded by the server** (`lock_timeout 1s`), so no orphaned UPDATE can
   remain. An expired holder paused mid-flush has its sessions ended (conformance K13/K14).
 
+### 3.4 Database selection and TLS (L8, built)
+
+Decided by the owner on 2026-10-01: Convex's TLS defaults (DV-109) and env names as aliases (DV-88); the
+URL decides the database (DV-110). Built in `packages/server/src/persistence.ts` (the environment) and
+`packages/persistence/src/tls.ts` (the drivers).
+
+- **Which database.** `PERSISTENCE` and `PERSISTENCE_URL` stay bunvex's names.
+  - When `PERSISTENCE` is not set, Convex's names select the driver with Convex's precedence:
+    `POSTGRES_URL`, then `MYSQL_URL`, then `DATABASE_URL` (Postgres, with a deprecation warning). Empty
+    counts as unset, as `-n`.
+  - **When both are set, bunvex's win**, as a pair: `PERSISTENCE` decides the driver, and its URL is
+    `PERSISTENCE_URL`, or Convex's name for that driver when `PERSISTENCE_URL` is missing. Convex has no
+    such case (it has one set of names), so this is not a divergence.
+  - When neither is set, the store is memory, as before (Convex's is SQLite; not changed here).
+  - **The URL must name the database** (DV-110). A URL without one (Convex's style) is refused at start:
+    "POSTGRES_URL names no database: bunvex uses the database the URL names and derives none. Add it to the
+    URL's path". bunvex does not fall back to libpq's default (the user's name), which would put a Convex
+    operator's data in a database they did not choose.
+- **TLS, as Convex.** The server reads `DO_NOT_REQUIRE_SSL` as the image does (any non-empty value), and
+  `PG_CA_FILE` / `MYSQL_CA_FILE`. The drivers take `{ requireSsl, caFile }` and require TLS by default, so
+  a program that opens a driver directly is covered too.
+  - **Postgres** (`postgres`, porsager): before the pool is made, each host is asked the SSLRequest once.
+    - Required: a host that answers `N` is refused with "Postgres at host:port does not accept TLS
+      connections, and bunvex requires TLS by default: set DO_NOT_REQUIRE_SSL=1 …". Otherwise TLS with
+      `rejectUnauthorized` and the host name check, against the system roots and the bundled Mozilla roots
+      plus `PG_CA_FILE`. A weaker `sslmode` in the URL does not turn this off (Convex appends).
+    - `DO_NOT_REQUIRE_SSL`: the URL's `sslmode`, `prefer` by default. `prefer` uses verified TLS when the
+      server answered `S`, plain when `N`, as tokio-postgres. `disable` is plain; `require`, `verify-ca`
+      and `verify-full` are required and verified (tokio-postgres rejects the last two; accepting them is
+      harmless).
+    - Every connection asks for `target_session_attrs=read-write`, overriding the URL, as Convex.
+  - **MySQL** (`mysql2`): required means `ssl: { rejectUnauthorized: true, verifyIdentity: true, ca }`.
+    The URL's `require_ssl`, `verify_ca`, `verify_identity` and `built_in_roots` are read with
+    mysql_async's meaning and removed; while TLS is required, `require_ssl` and `verify_ca` in the URL cannot
+    weaken it, `verify_identity=false` can (as Convex's appended parameters). `MYSQL_CA_FILE` alone turns
+    TLS on, unless the URL says `require_ssl=false`. A read-only server is refused at open.
+  - **Errors** say what to do: a server without TLS names `DO_NOT_REQUIRE_SSL`; a certificate that does
+    not verify names the code, `PG_CA_FILE` / `MYSQL_CA_FILE` and `DO_NOT_REQUIRE_SSL`.
+  - **MongoDB** is unchanged: TLS is what its URL says (`tls=true`). Convex has no MongoDB driver to match.
+  - **Where this bites:** a local Postgres has no TLS and a local MySQL has unverifiable certificates. CI's
+    conformance jobs, `scripts/mac-bench.sh` and the README say to set `DO_NOT_REQUIRE_SSL=1`, as Convex's
+    self-hosting guide does for local databases (`postgres_or_mysql.md:62-74`).
+- **Remaining differences, not divergences by intent:**
+  - Roots: Convex's Postgres driver trusts the system store, its MySQL driver its built-in set; bunvex
+    trusts both on both drivers (Bun's `tls.getCACertificates("system")` and `"bundled"`). A certificate
+    that verifies on Convex verifies on bunvex.
+  - The MySQL read-only check runs at open, not on every new connection; a primary that turns read-only
+    later fails its writes instead. Building the per-connection check needs a hook mysql2's pool lacks.
+  - A Postgres server refused by `target_session_attrs` surfaces as the driver's `CONNECTION_DESTROYED`.
+
 ## 4. Divergences
 
 | # | Divergence | Convex | bunvex | Risk / why | Recommendation | Decision |
@@ -174,7 +276,7 @@ Throwaway runs, 30 Sep 2026:
 | L5 | Retries of reads and init | Once, on a fresh connection | None | Spurious query errors after a database restart | Bug (minor). One retry | owner |
 | L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
 | L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | owner |
-| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | owner |
+| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | **Decided (owner, 2026-10-01):** TLS and `target_session_attrs` as Convex (DV-109) and Convex's env names as aliases (DV-88), both **built** (§3.4); the database name is **not** derived from the instance name, the URL decides and must name one (divergence, DV-110) |
 | L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70) |
 | L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** |
 | L11 | Shutdown | SIGINT only; committer aborted; lease not released; SIGTERM kills | Drain, release, close; SIGINT and SIGTERM (`bench/server`) | Deploys hand over at once; no in-flight commit is left in doubt | Keep; wire into the product CLI when it exists | owner |
@@ -191,6 +293,14 @@ Throwaway runs, 30 Sep 2026:
   an ambiguous commit; the process stops.
 - **L6:** open a store written by a future layout version; refuse with a clear error.
 - **L9:** two processes on one SQLite file or one memory log; the second refuses (the same shape as K10).
+- **L8 (built):** `packages/server/test/persistence-config.test.ts` (env names, precedence,
+  `DO_NOT_REQUIRE_SSL`, a URL without a database); `packages/persistence/test/tls.test.ts` (the TLS
+  decision); `packages/persistence/test/tls-db.test.ts` against real servers: a Postgres without TLS
+  (refused by default, `DO_NOT_REQUIRE_SSL` connects, a read-only database refused), a Postgres with TLS
+  and a self-signed CA (connects with `PG_CA_FILE`; refused without it, by address instead of host name,
+  and still encrypted with `sslmode=disable` in the URL), MySQL 8.4 with its own certificates (refused by
+  default), with a test CA (connects; host name checked), and with TLS off (refused by default). CI runs
+  the no-TLS Postgres and the auto-certificate MySQL groups on its service containers.
 
 These become conformance checks where they apply to every driver.
 
@@ -198,5 +308,6 @@ These become conformance checks where they apply to every driver.
 
 - L4: how many retries before fail-stop? Convex retries indefinitely with backoff, and relies on the
   duplicate-key signal.
-- L8: adopt Convex's `POSTGRES_URL` / `MYSQL_URL` / `INSTANCE_NAME` names as the primary configuration, or
-  only as aliases?
+- ~~L8: adopt Convex's `POSTGRES_URL` / `MYSQL_URL` / `INSTANCE_NAME` names as the primary configuration, or
+  only as aliases?~~ Aliases (owner, 2026-10-01; DV-88). `INSTANCE_NAME` does not choose the database
+  (DV-110).

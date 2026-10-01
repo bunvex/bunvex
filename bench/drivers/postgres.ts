@@ -8,7 +8,11 @@ export async function open(fresh: boolean) {
     await sql.unsafe(`drop table if exists documents, indexes, bunvex_lease`);
     await sql.end();
   }
-  return PostgresPersistence.open(process.env.PG_URL!);
+  // TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none).
+  return PostgresPersistence.open(process.env.PG_URL!, undefined, {
+    requireSsl: !process.env.DO_NOT_REQUIRE_SSL,
+    caFile: process.env.PG_CA_FILE || undefined,
+  });
 }
 
 /** K14: a session other than ours holds the lease row's write lock, i.e. a writer is inside a flush. */
