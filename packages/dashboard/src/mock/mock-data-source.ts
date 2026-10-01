@@ -6,6 +6,7 @@
 import {
   type AuditEvent,
   type AuditEventQuery,
+  type AuthProvider,
   type CallOptions,
   type Capabilities,
   type CronJob,
@@ -35,6 +36,9 @@ import {
   type ScheduledFunction,
   type ScheduledFunctionQuery,
   type SchemaInfo,
+  type SnapshotExport,
+  type SnapshotImport,
+  type SnapshotImportRequest,
   type StoredFile,
   type TableInfo,
   type TableMetric,
@@ -50,6 +54,7 @@ import { tableNameProblem } from "../database/table-name.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
 import { MockAudit } from "./audit.ts";
+import { SAMPLE_AUTH_PROVIDERS } from "./auth.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
@@ -58,6 +63,7 @@ import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
+import { MockSnapshots } from "./snapshots.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
   /** Delay before every call resolves. Default 0. */
@@ -80,6 +86,10 @@ export type MockDataSourceOptions = FixtureOptions & {
   sampleFiles?: boolean;
   /** Start with a few past audit events (deploys, index builds, variables). Default true. */
   sampleAudit?: boolean;
+  /** The configured authentication providers (UI-01 §19.1). Default: an OIDC one and a custom JWT one. */
+  authProviders?: AuthProvider[];
+  /** Between two steps of a snapshot export or import (UI-01 §19.2). Default 300 ms. */
+  snapshotStepMs?: number;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -160,6 +170,7 @@ export class MockDataSource implements DashboardDataSource {
   private readonly envVars = new MockEnvironmentVariables();
   /** The audit log (UI-01 §14.5). Not part of the contract: tests read what the writes recorded. */
   readonly audit: MockAudit;
+  private readonly snapshots: MockSnapshots;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -228,6 +239,15 @@ export class MockDataSource implements DashboardDataSource {
       opts.now ?? Date.now(),
       opts.sampleAudit ?? true,
     );
+    this.snapshots = new MockSnapshots({
+      tables: this.tables,
+      files: this.files,
+      rnd: this.rnd,
+      now: () => this.scheduler.now(),
+      record: (action, metadata) => this.record(action, metadata),
+      changed: (table) => this.changed(table),
+      stepMs: opts.snapshotStepMs ?? 300,
+    });
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.stats = {
       at: opts.now ?? Date.now(),
@@ -400,11 +420,14 @@ export class MockDataSource implements DashboardDataSource {
       const inOrder = (a: Key, b: Key) => sign * compareValues(a, b);
       const query = canonicalFilter(q.table, q.filter);
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+      // each document's key once (not per comparison), and only the page is cloned: at 100 000 documents a
+      // page went from ~230 ms to a fraction of it in the browser (UI-01 §19.3)
       const matching = t.documents
         .filter((d) => matchesFilter(d, expr, ix))
-        .sort((a, b) => inOrder(key(a), key(b)))
-        .map((d) => structuredClone(d));
-      return paginate(matching, key, inOrder, after, q.numItems, query);
+        .map((d) => ({ d, k: key(d) }))
+        .sort((a, b) => inOrder(a.k, b.k));
+      const page = paginate(matching, (m) => m.k, inOrder, after, q.numItems, query);
+      return { ...page, page: page.page.map((m) => structuredClone(m.d)) };
     });
   }
 
@@ -831,6 +854,80 @@ export class MockDataSource implements DashboardDataSource {
         const action = c.value === null ? "delete" : had.has(c.name) ? "update" : "create";
         this.record(`${action}_environment_variable`, { variable_name: c.name });
       }
+    });
+  }
+
+  // ---------------------------------------------------------------- authentication (§19.1)
+
+  listAuthProviders(opts?: CallOptions): Promise<AuthProvider[]> {
+    return this.call(opts?.signal, () => {
+      const ops = this.opts.capabilities.operations;
+      if (!ops.includes("viewData") || !ops.includes("viewEnvironmentVariables"))
+        throw new DataSourceError("unauthorized", "this credential cannot view the authentication configuration");
+      return structuredClone(this.opts.authProviders ?? SAMPLE_AUTH_PROVIDERS);
+    });
+  }
+
+  // ---------------------------------------------------------------- snapshots (§19.2)
+
+  private canBackups(op: "viewBackups" | "createBackups" | "downloadBackups" | "importBackups") {
+    const c = this.opts.capabilities;
+    if (!c.operations.includes(op))
+      throw new DataSourceError(
+        "unauthorized",
+        `this credential cannot ${
+          { viewBackups: "view", createBackups: "request", downloadBackups: "download", importBackups: "import" }[op]
+        } snapshots`,
+      );
+    if (op === "importBackups") this.canWrite();
+  }
+
+  getLatestSnapshotExport(opts?: CallOptions): Promise<SnapshotExport | null> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("viewBackups");
+      return this.snapshots.latestExport();
+    });
+  }
+
+  requestSnapshotExport(options: { includeStorage: boolean }, opts?: CallOptions): Promise<SnapshotExport> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("createBackups");
+      return this.snapshots.requestExport(!!options?.includeStorage);
+    });
+  }
+
+  downloadSnapshotExport(id: string, opts?: CallOptions): Promise<Blob> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("downloadBackups");
+      return this.snapshots.download(id);
+    });
+  }
+
+  startSnapshotImport(request: SnapshotImportRequest, opts?: CallOptions): Promise<SnapshotImport> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("importBackups");
+      return this.snapshots.start(request);
+    });
+  }
+
+  confirmSnapshotImport(id: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("importBackups");
+      this.snapshots.confirm(id);
+    });
+  }
+
+  cancelSnapshotImport(id: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("importBackups");
+      this.snapshots.cancel(id);
+    });
+  }
+
+  getSnapshotImport(id: string, opts?: CallOptions): Promise<SnapshotImport> {
+    return this.call(opts?.signal, () => {
+      this.canBackups("viewBackups");
+      return this.snapshots.getImport(id);
     });
   }
 
