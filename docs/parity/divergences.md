@@ -81,6 +81,9 @@ every parity row marked "Divergence?" on `main`, 2026-09-30.
 | DV-136 | Rate limits and origin checks done by bunvex, not better-auth | — | yes | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B8](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 | DV-137 | Dashboard Users / Organizations / Settings / Audit via `_system/auth:*` with the admin key | no user management | yes (dashboard) | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B9](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 | DV-138 | Order: spike, then scheduler / HTTP actions / env / admin keys, then the phases | — | no | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B10](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -157,9 +160,6 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-87 | `"use node"`: may collapse to "accept and ignore" since Bun has Node APIs | a separate Node runtime for those modules | yes | Parity "Divergence?" | [platform §9](platform.md#9-nodejs-actions-use-node) |
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
-| DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | Recommended: yes | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
-| DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | Recommended: yes | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
-| DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | Recommended: yes | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 
 ## Gaps recorded in studies
 
