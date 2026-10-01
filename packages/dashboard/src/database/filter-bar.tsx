@@ -113,7 +113,8 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
   const allFields = [...new Set([...fields, ...draft.clauses.map((c) => c.field).filter(Boolean)])];
 
   return (
-    <section aria-label="Filters" className="flex flex-col gap-2 border bg-card p-3 text-sm">
+    // a bar across the screen under its title bar (UI-01 §22.3): no box; clause rows stack inside it
+    <section aria-label="Filters" className="flex flex-col gap-2 border-b px-4 py-2 text-sm md:px-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span id={indexLabel} className="text-muted-foreground">
           Index
@@ -168,6 +169,15 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
               {rangeOn} range
             </Button>
           ))}
+        <Button variant="outline" size="sm" onClick={() => setDraft((d) => addClause(d))}>
+          <Plus aria-hidden="true" />
+          Add filter
+        </Button>
+        {(draft.clauses.length > 0 || draft.eq.length > 0 || draft.range.lower || draft.range.upper) && (
+          <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, eq: [], range: {}, clauses: [] }))}>
+            Clear filters
+          </Button>
+        )}
         <span className="ml-auto flex items-center gap-2">
           <span id={orderLabel} className="text-muted-foreground">
             Order
@@ -209,22 +219,11 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" onClick={() => setDraft((d) => addClause(d))}>
-          <Plus aria-hidden="true" />
-          Add filter
-        </Button>
-        {(draft.clauses.length > 0 || draft.eq.length > 0 || draft.range.lower || draft.range.upper) && (
-          <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, eq: [], range: {}, clauses: [] }))}>
-            Clear filters
-          </Button>
-        )}
-        {rejected && rejected.code !== "invalid_request" && (
-          <p role="alert" className="text-destructive">
-            {rejected.message}
-          </p>
-        )}
-      </div>
+      {rejected && rejected.code !== "invalid_request" && (
+        <p role="alert" className="text-destructive">
+          {rejected.message}
+        </p>
+      )}
     </section>
   );
 }

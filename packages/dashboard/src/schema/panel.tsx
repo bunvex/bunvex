@@ -65,7 +65,7 @@ export function TablePanel(props: {
     ));
 
   return (
-    <Panel title={<span className="font-mono">{node.table}</span>} onClose={props.onClose}>
+    <Panel kind="schema-table" title={<span className="font-mono">{node.table}</span>} onClose={props.onClose}>
       <div className="flex flex-col gap-5 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <DashLink

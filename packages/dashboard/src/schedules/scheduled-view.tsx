@@ -201,7 +201,7 @@ function RunDetails(props: {
   const { source } = useQueryScope();
   const { run } = props;
   return (
-    <Panel title="Scheduled run" onClose={props.onClose}>
+    <Panel kind="schedules-run" title="Scheduled run" onClose={props.onClose}>
       {run === null ? (
         <p className="text-sm text-muted-foreground">This run is no longer scheduled: it ran, or it was canceled.</p>
       ) : (
