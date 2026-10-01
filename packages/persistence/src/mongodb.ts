@@ -13,6 +13,9 @@
 // (`meta` {_id: "commit"}) and rows written before it; they are read as such, and the rows a crash left
 // above the marker are deleted — under the lease only, never by a mere open.
 //
+// Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `meta` {_id: "layout", version} and
+// `meta` {_id: "read_only"}. Open checks both before writing anything (index builds included) and refuses a
+// foreign, future or read-only store; a new store's version record is written under the lease.
 // Timeouts (STUDY-25 L3). Convex has no MongoDB driver; this one follows its Postgres driver: every call is
 // bounded on the client side (30 s by default), per round trip, and a connection whose call timed out is
 // never reused. The bound is the driver's own (socketTimeoutMS: a connection that waits longer for an answer
@@ -30,13 +33,22 @@
 // inserted twice, silently; the fence catches it instead (it also requires maxTs below the group's top) and the
 // flush fails with `UnsureCommitError` (fail-stop, as Convex's duplicate key).
 import {
+  checkLayoutVersion,
+  checkUnversionedTables,
   DatabaseTimeoutError,
   type DocWrite,
+  groupLog,
   type IndexWrite,
+  LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type LogCommit,
+  type LogRow,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -52,6 +64,13 @@ type DocRow = { t: number; i: string; ts: number; j: string | null };
 type IdxRow = { x: number; k: string; ts: number; d: string | null };
 
 const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
+
+const STORE = "this MongoDB database";
+/** bunvex's fields: how an unversioned store is recognised (a sample of each collection). */
+const FIELDS = {
+  documents: ["_id", "t", "i", "ts", "j"],
+  indexes: ["_id", "x", "k", "ts", "d"],
+};
 
 type LeaseDoc = {
   _id: string;
@@ -102,7 +121,7 @@ export function operational(e: unknown): boolean {
   return false;
 }
 
-export class MongoPersistence implements Persistence, ScanDocs, Lease {
+export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
   /** Our lease's epoch, 0 when we hold none. */
@@ -118,6 +137,10 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     private app: string,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
     private timeoutMs: number,
+    /** `indexes` and `meta` read at majority (PERSIST-01 C11): a log reader never sees a group that a
+     *  failover could still roll back. */
+    private idxMajority: Collection<IdxRow>,
+    private metaMajority: Collection<any>,
   ) {}
 
   /**
@@ -126,7 +149,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
    * fails with `DatabaseTimeoutError`; the driver closes the connection it was waiting on (STUDY-25 L3). 0
    * disables it.
    */
-  static async open(url: string, opts: { fresh?: boolean; pool?: number; timeoutMs?: number } = {}) {
+  static async open(url: string, opts: { fresh?: boolean; pool?: number; timeoutMs?: number } & OpenOptions = {}) {
     const { MongoClient: Client } = await loadPeer<typeof import("mongodb")>("mongodb", "mongodb");
     const app = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
@@ -155,11 +178,13 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
           const docs = db.collection<DocRow>("documents");
           const idx = db.collection<IdxRow>("indexes");
           const meta = db.collection<any>("meta");
+          await MongoPersistence.checkStore(docs, idx, meta, opts, progress);
           // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
           const want: [Collection<any>, Record<string, 1 | -1>][] = [
             [docs, { t: 1, i: 1, ts: -1 }],
             [idx, { x: 1, k: 1, ts: -1 }],
             [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
+            [idx, { ts: 1 }], // the log by ts (PERSIST-01 C11)
           ];
           for (const [c, key] of want) {
             const have = await c
@@ -170,7 +195,17 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
             if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
             progress();
           }
-          return new MongoPersistence(client, docs, idx, meta, app, timeoutMs);
+          const majority = { readConcern: { level: "majority" as const } };
+          return new MongoPersistence(
+            client,
+            docs,
+            idx,
+            meta,
+            app,
+            timeoutMs,
+            db.collection<IdxRow>("indexes", majority),
+            db.collection<any>("meta", majority),
+          );
         });
       return await retryOnce(init, (e) => e instanceof DatabaseTimeoutError);
     } catch (e) {
@@ -182,6 +217,50 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
   /** One database call, bounded per round trip (`progress()` marks the end of one). */
   private call<T>(fn: (progress: () => void) => Promise<T>, ms = this.timeoutMs) {
     return withTimeout("MongoDB", ms, fn);
+  }
+
+  /**
+   * PERSIST-01 C10, before anything is written: the recorded layout version must be this bunvex's; a store
+   * without one must hold bunvex's fields (written before C10: the same layout) or nothing; and a store
+   * marked read-only opens only with `allowReadOnly`. Refusing needs no lease: nothing is written.
+   */
+  private static async checkStore(
+    docs: Collection<DocRow>,
+    idx: Collection<IdxRow>,
+    meta: Collection<any>,
+    opts: OpenOptions,
+    progress: () => void,
+  ) {
+    const flags = await meta.find({ _id: { $in: ["layout", "read_only"] } }).toArray();
+    progress();
+    const layout = flags.find((f) => f._id === "layout");
+    if (layout) checkLayoutVersion(layout.version, STORE);
+    else {
+      const found: Record<string, string[]> = {};
+      for (const [name, c] of [
+        ["documents", docs],
+        ["indexes", idx],
+      ] as const) {
+        const one = await (c as Collection<any>).findOne({});
+        progress();
+        if (one) found[name] = Object.keys(one);
+      }
+      checkUnversionedTables(STORE, found, FIELDS, ["collection", "fields"]);
+    }
+    if (flags.some((f) => f._id === "read_only") && !opts.allowReadOnly) throw new ReadOnlyError(STORE);
+  }
+
+  /** Convex's `set_read_only`: no lease needed; the next open for writing is refused while it is set. */
+  async setReadOnly(readOnly: boolean) {
+    await this.call(async () => {
+      if (readOnly)
+        await this.meta.updateOne(
+          { _id: "read_only" },
+          { $set: { since: new Date() } },
+          { upsert: true, writeConcern: { w: "majority" } },
+        );
+      else await this.meta.deleteOne({ _id: "read_only" }, { writeConcern: { w: "majority" } });
+    });
   }
 
   /** A read: one call, run once more after a timeout (STUDY-25 L5; network errors: the driver's retryReads). */
@@ -264,6 +343,22 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
       if (won) {
         this.epoch = won.epoch;
         this.ttlMs = opts.ttlMs;
+        // PERSIST-01 C10: a new (or pre-C10) store gets its layout version now, under the lease; one stamped in
+        // the meantime by another bunvex is checked again, before any recovery below touches its rows.
+        await this.meta.updateOne(
+          { _id: "layout" },
+          { $setOnInsert: { version: LAYOUT_VERSION } },
+          { upsert: true, writeConcern: { w: "majority" } },
+        );
+        progress();
+        const layout = await this.meta.findOne({ _id: "layout" });
+        progress();
+        try {
+          checkLayoutVersion(layout?.version, STORE);
+        } catch (e) {
+          await this.releaseLease();
+          throw e;
+        }
         // Rows above the durable prefix are the remains of an interrupted flush of an earlier version
         // (commit-marker stores): delete them now that no one else can be writing.
         await this.docs.deleteMany({ ts: { $gt: won.maxTs } });
@@ -466,6 +561,54 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
       if (j) out.push(j);
     }
     return out;
+  }
+
+  /**
+   * PERSIST-01 C11. The bound is the lease document's maxTs (the durable prefix, written in the same
+   * transaction as each group; for a store never leased, the old commit marker). Rows come from the ts
+   * index in order and are cut into commits; the read stops at the first row of commit `limit + 1`.
+   */
+  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+    if (limit <= 0) return [];
+    // A read (STUDY-25 L3/L5): every round trip bounded by the call timeout, the whole read run once more
+    // after a timeout.
+    return this.read(async (progress) => {
+      const lease = await this.metaMajority.findOne({ _id: "lease" });
+      progress();
+      const durable = (lease?.maxTs as number | undefined) ?? (await this.metaMajority.findOne({ _id: "commit" }))?.ts;
+      progress();
+      const hi = Math.min(upToTs, durable ?? upToTs);
+      if (hi <= afterTs) return [];
+      const rows: LogRow[] = [];
+      let commits = 0;
+      let lastTs = -1;
+      const cursor = this.idxMajority
+        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, x: 1, k: 1, ts: 1, d: 1 } })
+        .sort({ ts: 1 })
+        // Batches sized to the request: the driver's default getMore takes up to 16 MB, i.e. the whole rest
+        // of the log, for the one row that tells us commit `limit` is complete.
+        .batchSize(Math.min(Math.max(limit * 4 + 1, 101), 10_000));
+      try {
+        for await (const r of cursor) {
+          progress(); // a row came: its batch's round trip is over
+          if (r.ts !== lastTs) {
+            if (commits === limit) break;
+            commits++;
+            lastTs = r.ts;
+          }
+          rows.push({ ts: r.ts, index: r.x, key: Buffer.from(r.k, "hex"), id: r.d });
+        }
+      } finally {
+        await cursor.close();
+      }
+      if (!rows.length) return [];
+      const [prev] = await this.idxMajority
+        .find({ ts: { $lte: afterTs } }, { projection: { _id: 0, ts: 1 } })
+        .sort({ ts: -1 })
+        .limit(1)
+        .toArray();
+      return groupLog(rows, prev?.ts ?? 0);
+    });
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease document's maxTs, which every fenced flush sets; for a
