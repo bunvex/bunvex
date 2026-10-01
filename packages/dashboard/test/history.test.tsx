@@ -33,6 +33,12 @@ test("events in words", () => {
   expect(e("add_documents", { table: "tasks", count: 3 })).toBe("Added 3 documents to tasks");
   expect(e("add_documents", { table: "tasks", count: 1452 })).toBe("Added 1,452 documents to tasks");
   expect(e("pause_deployment", {})).toBe("Paused the deployment");
+  expect(e("request_export", { format: "zip", include_storage: true })).toBe(
+    "Requested a snapshot export, with the stored files",
+  );
+  expect(e("snapshot_import", { table_names: ["notes"], import_mode: "replace", count: 2 })).toBe(
+    "Imported 2 documents into notes (replacing)",
+  );
   expect(e("unpause_deployment", {})).toBe("Resumed the deployment");
   expect(e("delete_documents", { table: "tasks", count: 1 })).toBe("Deleted 1 document from tasks");
   expect(e("clear_tables", { tables: ["messages"], count: 3 })).toBe("Cleared messages (3 documents)");
