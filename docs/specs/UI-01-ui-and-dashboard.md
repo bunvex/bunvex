@@ -1310,6 +1310,26 @@ Every screen was captured in both themes at 1 440 px and at phone width and revi
 owner approved all 25 findings (UX-1…UX-25; UX-18 went to the Health redesign). They land in five grouped
 pull requests.
 
+### 20.1 Database: polish and bugs
+
+- **UX-1** The document panel shows the document as the JavaScript literal the rest of the dashboard uses
+  (`credits: 10n`, `Bytes("…")`, bare keys), through `database/literal-view.tsx` — no more wire form
+  (`{"$integer": …}`).
+- **UX-2** A filter row just added is silent until something is typed in it; it does not apply meanwhile.
+- **UX-12** The schema panel's code wraps long lines with a hanging indent instead of running past its edge.
+- **UX-20** On a phone the toolbar keeps Add documents and ⋯ on the title row; Schema, Indexes and Columns
+  move into the ⋯ menu (`TableMenu panels`).
+- **UX-21** Every cell value truncates with an ellipsis; numbers (and int64) are right-aligned.
+- **UX-22** The cell menu groups the cell's actions, the document's, and Delete document on its own.
+- **UX-23** A right-click with no click before targets the cell under the pointer (tested). The review's
+  capture likely hit a layout shift while the table settled.
+- **UX-25** Add documents has no reserved line between the editor and its button.
+- **Submenu** (owner's note): "Filter by …" closed before it could be clicked when the pointer moved fast.
+  Base UI focuses the parent menu when the pointer leaves an item — the submenu's own trigger on the way into
+  it — and the submenu closed as "focus-out". `DropdownMenuSub` (`@bunvex/ui`) ignores a focus-out that stays
+  in the menu tree; a sibling item, Escape, a click outside or picking an item still close it. Reproduced and
+  checked in Chrome.
+
 ### 20.2 Logs
 
 - **UX-5** The Time column stays in view when a long message scrolls the list sideways: `DataTable`
