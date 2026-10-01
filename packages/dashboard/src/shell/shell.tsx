@@ -162,7 +162,8 @@ export function Shell() {
           </ul>
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex min-h-12 items-center gap-4 border-b px-4 py-2 md:px-6">
+          {/* exactly 48 px with its border (7 + 32 + 7 + 1): the full-height screens take 100svh − 3rem */}
+          <header className="flex min-h-12 items-center gap-4 border-b px-4 py-[7px] md:px-6">
             <div className="min-w-0 flex-1">
               <DeploymentSummary />
             </div>

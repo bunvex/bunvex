@@ -424,6 +424,45 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Database: the grid fills to the bottom, the bars line up with the panel's header, the panel follows the row", async () => {
+    for (const [table, width] of [
+      ["tasks", 1440],
+      ["imports", 1440],
+      ["tasks", 1024],
+    ] as const) {
+      const { page, errors, close } = await open(`/database/${table}`, { viewport: { width, height: 900 } });
+      await heading(page, table);
+      const grid = page.getByRole("grid", { name: `Documents in ${table}` });
+      await grid.getByRole("row").nth(3).waitFor();
+      await grid.getByRole("link").first().click();
+      const panel = page.getByRole("complementary");
+      await panel.waitFor();
+      const m = await page.evaluate(() => {
+        const region = document.querySelector('[data-slot="data-table"]')!.getBoundingClientRect();
+        const bar1 = document.querySelector("h1")!.parentElement!.getBoundingClientRect();
+        const header = document.querySelector('[data-slot="side-panel"] header')!.getBoundingClientRect();
+        return {
+          gridBottom: region.bottom,
+          bar1Bottom: bar1.bottom,
+          panelHeaderBottom: header.bottom,
+          viewport: innerHeight,
+          pageScrolls: document.documentElement.scrollHeight > innerHeight,
+        };
+      });
+      expect(Math.abs(m.gridBottom - m.viewport)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.bar1Bottom - m.panelHeaderBottom)).toBeLessThanOrEqual(1);
+      expect(m.pageScrolls).toBe(false);
+      // a click on any cell of another row: the panel shows that row's document
+      const third = grid.getByRole("row").nth(3);
+      const id = await third.getByRole("link").textContent();
+      await third.getByRole("gridcell").nth(2).click();
+      await page.getByRole("complementary", { name: id! }).waitFor();
+      expect(new URL(page.url()).searchParams.get("doc")).toBe(id);
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");

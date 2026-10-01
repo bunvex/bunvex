@@ -26,7 +26,14 @@ import { formatTime } from "./values.ts";
 
 export type PanelState =
   /** `editRequest` changes each time the document should open in its editor (Shift+Enter on a cell). */
-  | { kind: "document"; id: string; canEdit: boolean; editRequest?: number }
+  | {
+      kind: "document";
+      id: string;
+      canEdit: boolean;
+      editRequest?: number;
+      /** Told whether the document's editor holds unsaved changes. */
+      onDirtyChange?: (dirty: boolean) => void;
+    }
   | { kind: "schema" }
   | { kind: "indexes" }
   | { kind: "metrics" }
@@ -42,6 +49,7 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
         id={state.id}
         canEdit={state.canEdit}
         editRequest={state.editRequest}
+        onDirtyChange={state.onDirtyChange}
         onClose={onClose}
       />
     );
@@ -72,6 +80,7 @@ function DocumentPanel(props: {
   id: string;
   canEdit: boolean;
   editRequest?: number;
+  onDirtyChange?: (dirty: boolean) => void;
   onClose: () => void;
 }) {
   const { table, id, onClose } = props;
@@ -83,7 +92,13 @@ function DocumentPanel(props: {
   }, [props.canEdit, props.editRequest]);
   const [saved, setSaved] = useState(false);
   return (
-    <Panel kind="database-document" title={<span className="font-mono text-sm">{id}</span>} onClose={onClose}>
+    // the grid keeps the focus: the panel follows its current row (UI-01 §22.3)
+    <Panel
+      kind="database-document"
+      focusOnOpen={false}
+      title={<span className="font-mono text-sm">{id}</span>}
+      onClose={onClose}
+    >
       {isPending ? (
         <p className="text-sm text-muted-foreground">Loading the document…</p>
       ) : error ? (
@@ -94,6 +109,7 @@ function DocumentPanel(props: {
         <DocumentEditor
           table={table}
           doc={doc}
+          onDirtyChange={props.onDirtyChange}
           onDone={(ok) => {
             setEditing(false);
             setSaved(ok);

@@ -694,6 +694,14 @@ Convex's `TableNode.tsx` lists a table's indexes under its fields (name and fiel
 way. bunvex now does both (UI-01 §22.2) — no divergence. Also new, not in Convex: a table icon on each card (the
 owner's request). The side panel became docked and resizable on every screen (UI-01 §22.1, the owner's call).
 
+### 14.6 The document panel and the selected row (added 1 Oct 2026)
+
+Convex's data view docks a resizable **"View Selected"** panel beside the table (`Table.tsx`, `ViewDocument.tsx`)
+that shows the rows ticked in the **selection** — it follows the checkboxes, not the current cell. bunvex's
+document panel **follows the current row** (a click on any cell, ↑/↓), as its Logs details do, and holds while
+its editor has unsaved changes (UI-01 §22.3): a deliberate difference, **the owner's call** (1 Oct 2026). Its
+docked, resizable shape matches Convex's (UI-01 §22.1).
+
 ## 15. Topology (a bunvex addition, added 1 Oct 2026)
 
 **Convex has no such view** — not in self-hosted, not in the cloud dashboard (Convex Cloud's own topology,

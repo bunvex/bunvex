@@ -1587,3 +1587,30 @@ fields, then an **Indexes** section — each index's name and fields; system ind
 references a table (`Id<"users">`) is a button: it **pans to that table, lights it a moment and focuses it**
 (instant under reduced motion), without opening its panel; the panel's references do the same and open it.
 Both canvases fit never past 100 % zoom and share their controls and dot grid.
+
+### 22.3 Database layout (the owner's annotated screenshot, 1 Oct 2026)
+
+- **The grid fills the screen**: edge to edge between the tables list and the docked panel, down to the bottom
+  of the viewport (the screen is `100svh − 3rem` from `lg`; the shell's header is now exactly 48 px, so no
+  canvas or grid screen scrolls by a pixel). No padding or box around it; `DataTable`'s new `fill` mode drops
+  its frame and height cap, and pins its footer ("N of M documents loaded") to its bottom edge — with few rows
+  the rest is the grid's own background. Horizontal scrolling stays inside the grid. Below `lg` the tables
+  list sits above and the table takes a screen's height of its own.
+- **Two full-width bars** with dividers, no boxed filter card: **Bar 1** — the table's name, "· N documents",
+  "· Not in the schema" (and Read-only) on the left, the actions on the right — is 44 px, as tall as the side
+  panel's header, so their bottom lines continue across. It folds by its **own width** (a container query): in
+  a narrow bar (beside a docked panel, on a phone) Schema, Indexes, Metrics and Columns move into ⋯ (which
+  lists them at every width) and Add documents keeps only its icon. **Bar 2** — the filter bar: Index, the
+  range, Add filter (and Clear filters) on one row with Order at its end; clause rows stack inside it. The
+  grid starts right under it. Notices and errors are thin rows between the bars and the grid.
+- **The document panel follows the row**: while it is open, a click on any cell of any row — or ↑/↓ onto
+  another row — switches it to that row's document (`?doc=`, the title), as the Logs details follow their
+  list; the grid keeps the focus (the panel does not take it). A single click selects a cell (and moves the
+  panel); editing a cell still needs a double-click or Enter. **Unless the document's editor holds unsaved
+  changes**: then the panel stays, with "Save or cancel your edit to open another document." (an unchanged
+  editor does not hold it). `DataTable` gains `onCellClick` (any single click, even on the current cell).
+- Tests: the panel follows a click and the arrows, opens nothing when closed, the unsaved-edit guard and its
+  notice (and an unchanged editor not holding it), the bars and the filled grid; e2e at 1440 (tasks, imports)
+  and 1024: the grid ends at the viewport's bottom, Bar 1's bottom line and the panel header's within 1 px, no
+  page scroll, a click on another row switches the panel. Follow-up: the same full-bleed, two-bar layout for
+  Logs, Files, Schedules and History (each has its own header and toolbar today).
