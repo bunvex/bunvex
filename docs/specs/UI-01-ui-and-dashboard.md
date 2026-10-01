@@ -1351,6 +1351,13 @@ pull requests.
 - **UX-16** Files' Open button is as tall as the storage-ID box.
 - **UX-17** No reserved status line between a toolbar and its table (Files, Scheduled functions).
 
+### 20.4 Functions and the runner
+
+- **UX-3** The header's Run functions (and Ctrl+`) opens the runner on the function the Functions screen
+  shows, as Convex's runner follows the selected function; elsewhere it keeps the last one.
+- **UX-12, UX-13** A function's Arguments and Returns validators wrap long lines with a hanging indent, grow
+  to 12 lines, and past that scroll with a note ("N lines: scroll for the rest.").
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens

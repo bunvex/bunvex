@@ -4,7 +4,7 @@
 import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { Outlet, useRouter } from "@tanstack/react-router";
+import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
   CalendarClock,
@@ -209,12 +209,23 @@ function useRunnerState(): { context: Runner; path?: string } {
   const available = typeof scope.source.runFunction === "function" && !!caps?.operations.includes("runFunctions");
   const [shown, setShown] = useState(false);
   const [path, setPath] = useState<string>();
+  // the function open on the Functions screen: the header's Run and Ctrl+` open the runner on it, as
+  // Convex's runner follows the selected function (UX-3); elsewhere the runner keeps the last one
+  const viewing = useRouterState({
+    select: (s) => {
+      const search = s.matches.find((m) => m.routeId === "/functions")?.search as { function?: string } | undefined;
+      return search?.function;
+    },
+  });
+  const viewingRef = useRef(viewing);
+  viewingRef.current = viewing;
   const context = useMemo<Runner>(
     () => ({
       available,
       shown: available && shown,
       open: (p) => {
-        if (p) setPath(p);
+        const target = p ?? viewingRef.current;
+        if (target) setPath(target);
         setShown(true);
       },
       close: () => setShown(false),
@@ -226,7 +237,10 @@ function useRunnerState(): { context: Runner; path?: string } {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "`" && e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        setShown((s) => !s);
+        setShown((s) => {
+          if (!s && viewingRef.current) setPath(viewingRef.current);
+          return !s;
+        });
       }
     };
     window.addEventListener("keydown", onKey);

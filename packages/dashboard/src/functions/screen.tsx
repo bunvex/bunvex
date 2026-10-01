@@ -127,6 +127,34 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   );
 }
 
+/** Up to this many lines show at once; a longer validator scrolls, and says so (UX-13). */
+const VALIDATOR_LINES = 12;
+
+/** A validator's code: long lines wrap with a hanging indent (UX-12); past 12 lines it scrolls, with a note. */
+export function ValidatorCode({ code }: { code: string }) {
+  const lines = code.split("\n").length;
+  const noteId = useId();
+  const long = lines > VALIDATOR_LINES;
+  return (
+    <>
+      <pre
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
+        tabIndex={0}
+        aria-describedby={long ? noteId : undefined}
+        // 12 lines of text-xs (1rem each) plus the padding
+        className="max-h-[13rem] overflow-auto border bg-muted/40 p-2 pl-6 -indent-4 font-mono text-xs break-words whitespace-pre-wrap"
+      >
+        {code}
+      </pre>
+      {long && (
+        <p id={noteId} className="mt-1 text-xs text-muted-foreground">
+          {lines} lines: scroll for the rest.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** The declared arguments and return validators, as the `v.*` code (STUDY-12 V1). */
 function FunctionValidators({ fn }: { fn: FunctionInfo }) {
   const shown = [
@@ -138,14 +166,7 @@ function FunctionValidators({ fn }: { fn: FunctionInfo }) {
       {shown.map(({ title, v, none }) => (
         <section key={title} aria-label={`${title} validator`} className="min-w-0">
           <h2 className="mb-1 text-sm font-medium">{title}</h2>
-          {v ? (
-            // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
-            <pre tabIndex={0} className="max-h-40 overflow-auto border bg-muted/40 p-2 font-mono text-xs">
-              {displayValidator(v)}
-            </pre>
-          ) : (
-            <p className="text-sm text-muted-foreground">{none}</p>
-          )}
+          {v ? <ValidatorCode code={displayValidator(v)} /> : <p className="text-sm text-muted-foreground">{none}</p>}
         </section>
       ))}
     </div>
