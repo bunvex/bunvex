@@ -19,7 +19,18 @@
 // is closed; connectTimeoutMS, serverSelectionTimeoutMS, waitQueueTimeoutMS for the other waits), plus a
 // guard around each call, because the driver retries a timed-out read or transaction on its own (retryReads,
 // withTransaction for up to 120 s), which would let one call wait several timeouts.
+//
+// Retries (STUDY-25 L4/L5; no Convex counterpart, so this follows Convex's SQL drivers). A read runs once more
+// after a timeout (the driver's own retryReads already retries a read once on a network error, on another
+// connection). A flush that fails with a timeout or an operational error (`operational` below: a network
+// error, a server shutting down or stepping down) is transient: the committer retries it, and this driver
+// keeps the group for that retry. Before re-running a group, the driver ends the failed attempt's session and
+// reads the lease record: a group an earlier attempt did commit is acknowledged without writing (DV-124).
+// Unlike the SQL stores, MongoDB has no unique key on the rows, so a group that landed after that read would be
+// inserted twice, silently; the fence catches it instead (it also requires maxTs below the group's top) and the
+// flush fails with `UnsureCommitError` (fail-stop, as Convex's duplicate key).
 import {
+  DatabaseTimeoutError,
   type DocWrite,
   type IndexWrite,
   type Lease,
@@ -27,8 +38,11 @@ import {
   LeaseLostError,
   type Persistence,
   renewTimeoutMs,
+  retriedGroupLanded,
+  retryOnce,
   type ScanDocs,
   scanLatest,
+  UnsureCommitError,
   withTimeout,
 } from "@bunvex/core/persistence";
 import type { Collection, Db, MongoClient } from "mongodb";
@@ -47,6 +61,46 @@ type LeaseDoc = {
   expiresAt: Date;
   maxTs: number;
 };
+
+/** Server codes of a server that is not serving: shutting down, stepping down, or not (or no longer) the
+ *  primary — MongoDB's counterparts of the MySQL errors Convex calls operational. */
+const OPERATIONAL_CODES = new Set([
+  6, // HostUnreachable
+  7, // HostNotFound
+  89, // NetworkTimeout
+  9001, // SocketException
+  91, // ShutdownInProgress
+  189, // PrimarySteppedDown
+  10107, // NotWritablePrimary
+  11600, // InterruptedAtShutdown
+  11602, // InterruptedDueToReplStateChange
+  13435, // NotPrimaryNoSecondaryOk
+  13436, // NotPrimaryOrSecondary
+]);
+/** Driver errors of a lost connection or an unreachable server (subclasses included: MongoNetworkError covers
+ *  MongoNetworkTimeoutError), and of a pool checkout that timed out (Convex lists "connection pool timed out"
+ *  for MySQL). */
+const OPERATIONAL_NAMES = new Set([
+  "MongoNetworkError",
+  "MongoNetworkTimeoutError",
+  "MongoServerSelectionError",
+  "MongoPoolClearedError",
+  "MongoWaitQueueTimeoutError",
+  "MongoServerClosedError",
+  "MongoTopologyClosedError",
+  "MongoStalePrimaryError",
+]);
+
+/** A lost connection or a server that is not serving (STUDY-25 L4): transient. */
+export function operational(e: unknown): boolean {
+  const x = e as { name?: unknown; code?: unknown } | null;
+  if (!x || typeof x !== "object") return false;
+  if (OPERATIONAL_CODES.has(x.code as number)) return true;
+  if (typeof x.name === "string" && OPERATIONAL_NAMES.has(x.name)) return true;
+  for (let p = Object.getPrototypeOf(x); p && p !== Error.prototype; p = Object.getPrototypeOf(p))
+    if (OPERATIONAL_NAMES.has(p.constructor?.name)) return true;
+  return false;
+}
 
 export class MongoPersistence implements Persistence, ScanDocs, Lease {
   private docsBuf: DocRow[] = [];
@@ -84,38 +138,41 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     });
     const call = <T>(fn: (progress: () => void) => Promise<T>) => withTimeout("MongoDB", timeoutMs, fn);
     try {
-      return await call(async (progress) => {
-        await client.connect();
-        progress();
-        const db: Db = client.db();
-        const hello = await db.admin().command({ hello: 1 });
-        progress();
-        if (!hello.setName)
-          throw new Error(
-            "bunvex needs MongoDB as a replica set (a single-node one is enough: start mongod with --replSet and run rs.initiate()); a standalone server cannot run the transactions a flush needs",
-          );
-        if (opts.fresh) await db.dropDatabase();
-        progress();
-        const docs = db.collection<DocRow>("documents");
-        const idx = db.collection<IdxRow>("indexes");
-        const meta = db.collection<any>("meta");
-        // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
-        const want: [Collection<any>, Record<string, 1 | -1>][] = [
-          [docs, { t: 1, i: 1, ts: -1 }],
-          [idx, { x: 1, k: 1, ts: -1 }],
-          [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
-        ];
-        for (const [c, key] of want) {
-          const have = await c
-            .listIndexes()
-            .toArray()
-            .catch(() => []);
+      // Every step is idempotent: the whole open runs once more after a timeout (STUDY-25 L5).
+      const init = () =>
+        call(async (progress) => {
+          await client.connect();
           progress();
-          if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
+          const db: Db = client.db();
+          const hello = await db.admin().command({ hello: 1 });
           progress();
-        }
-        return new MongoPersistence(client, docs, idx, meta, app, timeoutMs);
-      });
+          if (!hello.setName)
+            throw new Error(
+              "bunvex needs MongoDB as a replica set (a single-node one is enough: start mongod with --replSet and run rs.initiate()); a standalone server cannot run the transactions a flush needs",
+            );
+          if (opts.fresh) await db.dropDatabase();
+          progress();
+          const docs = db.collection<DocRow>("documents");
+          const idx = db.collection<IdxRow>("indexes");
+          const meta = db.collection<any>("meta");
+          // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
+          const want: [Collection<any>, Record<string, 1 | -1>][] = [
+            [docs, { t: 1, i: 1, ts: -1 }],
+            [idx, { x: 1, k: 1, ts: -1 }],
+            [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
+          ];
+          for (const [c, key] of want) {
+            const have = await c
+              .listIndexes()
+              .toArray()
+              .catch(() => []);
+            progress();
+            if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
+            progress();
+          }
+          return new MongoPersistence(client, docs, idx, meta, app, timeoutMs);
+        });
+      return await retryOnce(init, (e) => e instanceof DatabaseTimeoutError);
     } catch (e) {
       await client.close().catch(() => {});
       throw e;
@@ -125,6 +182,19 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
   /** One database call, bounded per round trip (`progress()` marks the end of one). */
   private call<T>(fn: (progress: () => void) => Promise<T>, ms = this.timeoutMs) {
     return withTimeout("MongoDB", ms, fn);
+  }
+
+  /** A read: one call, run once more after a timeout (STUDY-25 L5; network errors: the driver's retryReads). */
+  private read<T>(fn: (progress: () => void) => Promise<T>) {
+    return retryOnce(
+      () => this.call(fn),
+      (e) => e instanceof DatabaseTimeoutError,
+    );
+  }
+
+  /** A timeout or an operational error (STUDY-25 L4). */
+  isTransient(e: unknown) {
+    return e instanceof DatabaseTimeoutError || operational(e);
   }
 
   acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
@@ -250,9 +320,45 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     const idx = this.idxBuf;
     this.docsBuf = [];
     this.idxBuf = [];
+    const retry = this.retrying;
+    try {
+      await this.flushGroup(docs, idx, retry);
+      this.retrying = false;
+    } catch (e) {
+      // Keep the group: the committer retries a transient failure with the same rows at the same timestamps.
+      this.docsBuf = docs.concat(this.docsBuf);
+      this.idxBuf = idx.concat(this.idxBuf);
+      this.retrying = true;
+      throw e;
+    }
+  }
+
+  /** Set once a flush failed and kept its group: the next flush is a retry of it. */
+  private retrying = false;
+
+  /** The session of the last failed flush: its transaction may still be open on the server. */
+  private abandoned: unknown = null;
+
+  private async flushGroup(docs: DocRow[], idx: IdxRow[], retry: boolean) {
     const top = Math.max(docs.at(-1)?.ts ?? 0, idx.at(-1)?.ts ?? 0);
+    // A retry: end the failed attempt's transaction first. A transaction belongs to its session, not to a
+    // connection, so the server keeps it (and its write on the lease document) open after the client dropped
+    // the connection, for up to transactionLifetimeLimitSeconds (60 s); every retry would meet it as a write
+    // conflict until then. Killing it is safe: if it committed already, nothing changes, and the lease read
+    // below finds the group; if not, it aborts. (The attempt itself sends nothing more once it timed out:
+    // `withTimeout`'s progress() throws, so `withTransaction` does not run its callback again.)
+    if (this.abandoned) {
+      const lsid = this.abandoned;
+      await this.call(() => this.client.db("admin").command({ killSessions: [lsid] }));
+      this.abandoned = null;
+    }
+    // Then the group may have landed although its attempt failed here (its answer was lost): it is there exactly
+    // once, and acknowledged without writing (DV-124).
+    if (retry) {
+      const lease = await this.call(() => this.meta.findOne({ _id: "lease" }));
+      if (retriedGroupLanded(lease && { epoch: lease.epoch, maxTs: lease.maxTs }, this.epoch, top)) return;
+    }
     const session = this.client.startSession();
-    let ok = false;
     try {
       await this.call((progress) =>
         session.withTransaction(
@@ -260,12 +366,22 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
             progress();
             // The fence first: nothing of the group commits unless the lease still carries our epoch. A
             // concurrent takeover makes this a write conflict (retried by withTransaction, then refused here).
+            // It also refuses a group that is there already (maxTs reached its top under our epoch): an earlier
+            // attempt's COMMIT that landed after the lease read above (STUDY-25 L4; MongoDB has no unique key
+            // on the rows to refuse it).
             const f = await this.meta.updateOne(
-              { _id: "lease", epoch: this.epoch },
+              { _id: "lease", epoch: this.epoch, maxTs: { $lt: top } },
               { $set: { maxTs: top } },
               { session },
             );
-            if (f.matchedCount !== 1) throw new LeaseLostError();
+            if (f.matchedCount !== 1) {
+              const lease = await this.meta.findOne({ _id: "lease" }, { session });
+              if (lease?.epoch === this.epoch && (lease.maxTs as number) >= top)
+                throw new UnsureCommitError(
+                  `a retried flush (ts ≤ ${top}) found the lease's durable prefix at ${lease.maxTs}: an earlier attempt committed it`,
+                );
+              throw new LeaseLostError();
+            }
             progress();
             if (docs.length) await this.docs.insertMany(docs, { session, ordered: false });
             progress();
@@ -275,20 +391,20 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
           { writeConcern: { w: "majority", j: true } },
         ),
       );
-      ok = true;
-    } finally {
-      // After a failure, not awaited: on a store that does not answer, ending the session (which aborts its
-      // transaction) would wait too, and the flush has already failed.
-      const ended = session.endSession();
-      if (ok) await ended;
-      else ended.catch(() => {});
+    } catch (e) {
+      // Not ended: on a store that does not answer, ending the session (which aborts its transaction) would
+      // wait too, and an ended session's id goes back to the driver's pool, to be reused by later calls that
+      // the retry's killSessions would then hit. The retry ends its transaction instead.
+      this.abandoned = session.id ?? null;
+      throw e;
     }
+    await session.endSession();
   }
 
   private latest(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
     return scanLatest(
       async (p) => {
-        const rows = await this.call(() =>
+        const rows = await this.read(() =>
           this.idx
             .find(
               { x: index, k: { $gte: hex(p.lo), $lt: hex(p.hi) }, ts: { $lte: ts } },
@@ -316,7 +432,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
   }
 
   async get(table: number, id: string, ts: number) {
-    const r = await this.call(() =>
+    const r = await this.read(() =>
       this.docs.findOne({ t: table, i: id, ts: { $lte: ts } }, { sort: { ts: -1 }, projection: { j: 1 } }),
     );
     return r ? r.j : null;
@@ -334,7 +450,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     const ids = await this.latest(index, lo, hi, ts, limit, desc);
     if (!ids.length) return [];
     // One round trip for every document: newest version <= ts of each id.
-    const rows = await this.call(() =>
+    const rows = await this.read(() =>
       this.docs
         .aggregate<{ _id: string; j: string | null }>([
           { $match: { t: table, i: { $in: ids }, ts: { $lte: ts } } },
@@ -355,7 +471,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
   /** The durable prefix (PERSIST-01 C5/C7): the lease document's maxTs, which every fenced flush sets; for a
    *  store never leased, the old commit marker. */
   maxTs() {
-    return this.call(async (progress) => {
+    return this.read(async (progress) => {
       const lease = await this.meta.findOne({ _id: "lease" });
       if (lease) return lease.maxTs as number;
       progress();
@@ -364,7 +480,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
   }
 
   async auditLiveDocs(table: number, ts: number) {
-    const [r] = await this.call(() =>
+    const [r] = await this.read(() =>
       this.docs
         .aggregate<{ n: number }>([
           { $match: { t: table, ts: { $lte: ts } } },
@@ -376,6 +492,13 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
         .toArray(),
     );
     return r?.n ?? 0;
+  }
+
+  async auditRowsAt(ts: number) {
+    const [docs, idx] = await this.read(() =>
+      Promise.all([this.docs.countDocuments({ ts }), this.idx.countDocuments({ ts })]),
+    );
+    return { docs, idx };
   }
 
   /** Closes the client; on a database that does not answer, gives up waiting after one timeout. */
