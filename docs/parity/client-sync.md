@@ -130,15 +130,15 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `setAuth(fetchToken, onChange, onRefreshChange?)` with `fetchToken({forceRefreshToken})` → JWT \| null | `browser/sync/client.ts`, `browser/sync/authentication_manager.ts` | missing | No `@bunvex/auth` either. |
-| Pause the socket while fetching the first token, then resume (queries don't run unauthenticated first) | `browser/sync/authentication_manager.ts` (`setConfig`), `browser/sync/local_state.ts` (`pause`/`resume`) | missing | — |
-| Auth state machine: cached token → server confirmation → fresh token refetch → scheduled refetch before `exp` (leeway 10 s, max delay 20 days) | `browser/sync/authentication_manager.ts` | missing | — |
-| Server confirms auth by a Transition whose `identity` version advanced | `browser/sync/authentication_manager.ts` (`onTransition`) | missing | — |
-| On `AuthError`: stop socket, force-refresh token, reconnect; after 2 failed confirmations clear auth and report unauthenticated | `browser/sync/authentication_manager.ts` (`tryToReauthenticate`) | missing | — |
-| Ignore stale AuthErrors for older identity versions, and function-level token-expired errors while confirming | `browser/sync/authentication_manager.ts` | missing | — |
-| Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | missing | — |
-| Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | missing | — |
-| `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | missing | — |
+| `setAuth(fetchToken, onChange, onRefreshChange?)` with `fetchToken({forceRefreshToken})` → JWT \| null | `browser/sync/client.ts`, `browser/sync/authentication_manager.ts` | done (STUDY-27) | `BaseBunvexClient.setAuth`; `BunvexClient.setAuth(fetchToken, onChange?)` and `getAuth()`. Tested differentially: each scenario runs with the official client and with `BunvexClient` (`sync-e2e/test/client-auth.test.ts`). |
+| Pause the socket while fetching the first token, then resume (queries don't run unauthenticated first) | `browser/sync/authentication_manager.ts` (`setConfig`), `browser/sync/local_state.ts` (`pause`/`resume`) | done (STUDY-27) | |
+| Auth state machine: cached token → server confirmation → fresh token refetch → scheduled refetch before `exp` (leeway 10 s, max delay 20 days) | `browser/sync/authentication_manager.ts` | done (STUDY-27) | Including Convex's second `onChange(true)` after each confirmed fresh token (STUDY-27 §1.6). |
+| Server confirms auth by a Transition whose `identity` version advanced | `browser/sync/authentication_manager.ts` (`onTransition`) | done (STUDY-27) | |
+| On `AuthError`: stop socket, force-refresh token, reconnect; after 2 failed confirmations clear auth and report unauthenticated | `browser/sync/authentication_manager.ts` (`tryToReauthenticate`) | done (STUDY-27) | Logs `Failed to authenticate: "<error>", check your server auth config`, as Convex. |
+| Ignore stale AuthErrors for older identity versions, and function-level token-expired errors while confirming | `browser/sync/authentication_manager.ts` | done (STUDY-27) | |
+| Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | done (STUDY-27) | |
+| Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | done (STUDY-27) | |
+| `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | done (STUDY-27) | |
 | Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
 | Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
 | Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | partial (STUDY-27) | User tokens: checked before every transition, mutation and action. Admin revalidation comes with admin keys. |
@@ -188,7 +188,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but `setAuth` (with `@bunvex/auth`) and the paginated client (with `usePaginatedQuery`); `baseClient` injection included. |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but the paginated client (with `usePaginatedQuery`); `setAuth` since STUDY-27; `baseClient` injection included. |
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
@@ -263,6 +263,6 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 |---|---|---|---|
 | Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
 | Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | missing | Choose `BUNVEX_URL`-style names. |
-| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but the auth options (with `@bunvex/auth`) and `reportDebugInfoToConvex` (C4). |
+| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but `reportDebugInfoToConvex` (C4); the auth options since STUDY-27. |
 | `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | partial (STUDY-26) | `disabled` done; `baseClient` comes with the React client. |
 | Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex` re-exports `server` and `values` only; `browser`/`react`/`nextjs` re-exports are planned but empty. |
