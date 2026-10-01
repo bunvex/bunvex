@@ -16,8 +16,13 @@ afterEach(async () => {
 async function setup() {
   const h = await startServer();
   cleanup.push(h.stop);
-  const c = new ConvexClient(h.url, { skipConvexDeploymentUrlCheck: true, logger: false });
+  const logged: string[] = [];
+  const keep = (...a: unknown[]) => logged.push(a.map(String).join(" "));
+  const logger = { log: keep, warn: keep, error: keep, logVerbose: () => {} };
+  const c = new ConvexClient(h.url, { skipConvexDeploymentUrlCheck: true, logger });
   cleanup.push(() => c.close());
+  // The client warns about slow or huge transitions from serverTs and clientClockSkew: there must be none.
+  cleanup.push(() => expect(logged.filter((l) => l.includes("received query results"))).toEqual([]));
   return { h, c };
 }
 

@@ -1,38 +1,19 @@
-// The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape), the sync protocol
-// v1 at `/api/{version}/sync` (sync.ts, STUDY-23) and, until it is deleted, the v0 WebSocket at `/ws`. One
-// process: the committer is single by design.
-
+// The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
+// protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
-import {
-  type Caller,
-  type Engine,
-  type FormatError,
-  OccError,
-  parseValue,
-  type SubResult,
-  Subscriptions,
-  stringifyValue,
-} from "@bunvex/core";
-import { type ClientMessage, subscriptionKey, v1 } from "@bunvex/protocol";
-import type { Server, ServerWebSocket } from "bun";
+import { type Caller, type Engine, OccError, parseValue, stringifyValue } from "@bunvex/core";
+import { v1 } from "@bunvex/protocol";
+import type { Server } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
-import { collectLogs, type WithLogLines, withoutLogs } from "./logs.ts";
+import { collectLogs, type WithLogLines } from "./logs.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { fromWireTs, MAX_PENDING_MUTATIONS, SyncHub, SyncSession, wireTs } from "./sync.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
-/**
- * One connection's state. `mutations` is the tail of its mutation queue: as in Convex's sync worker
- * (`mutation_futures … buffered(1)`, crates/sync/src/worker.rs), a connection's mutations run one at a
- * time, in the order they arrived (STUDY-22).
- */
-type V0Data = { keys: Set<string>; mutations: Promise<void>; pendingMutations: number; closed: boolean };
-/** A socket's state: a v1 sync session, or a v0 connection. */
-type WsData = { session: SyncSession } | ({ session?: undefined } & V0Data);
-/** Close code for "try again later" (RFC 6455 1013), which Convex uses for rate-limit errors. */
-const CLOSE_TRY_AGAIN_LATER = 1013;
+/** A socket's state: its sync session. */
+type WsData = { session: SyncSession };
 
 export type ServerOptions = {
   engine: Engine;
@@ -106,18 +87,11 @@ export function createServer(opts: ServerOptions) {
     }
   };
   /** A failed function run, for a client: the message (without its request id) and the app's data. */
-  const formatError: FormatError = (e) => {
+  const formatError = (e: unknown): { error: string; data?: string } => {
     if (isSystemError(e)) return { error: INTERNAL_SERVER_ERROR_MESSAGE };
     const c = clientError(e, redact);
     return c.data === undefined ? { error: c.message } : { error: c.message, data: JSON.stringify(c.data) };
   };
-  /** `,"e":…` (+ `,"d":…`) of a WebSocket frame carrying an error. */
-  const errorFields = (r: { error: string; data?: string }) =>
-    `,"e":${JSON.stringify(withRequestId(r.error))}${r.data === undefined ? "" : `,"d":${r.data}`}`;
-  const subFrame = (key: string, r: SubResult) =>
-    "value" in r
-      ? `{"t":"upd","k":${JSON.stringify(key)},"v":${r.value}}`
-      : `{"t":"err","k":${JSON.stringify(key)}${errorFields(r)}}`;
   engine.committer.onFatal(
     opts.onFatal ??
       ((e) => {
@@ -126,8 +100,6 @@ export function createServer(opts: ServerOptions) {
       }),
   );
   let server: Server<WsData> | null = null;
-  // Fan-out rides on Bun's native pub/sub: one topic per subscription key.
-  const subs = new Subscriptions(engine, (key, msg) => server?.publish(key, subFrame(key, msg)), formatError);
 
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -156,25 +128,18 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
-  const sync = new SyncHub({ engine, functions, redact, formatError, fromWire });
+  const sync = new SyncHub({
+    engine,
+    functions,
+    redact,
+    formatError,
+    fromWire,
+    verifyToken: (token) => verifier.verify(token),
+  });
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
   );
-
-  /** Run one WebSocket mutation and send its `res` frame. Never throws. */
-  const runWsMutation = async (ws: ServerWebSocket<V0Data>, id: number, path: string, args: unknown) => {
-    const r = await collectLogs(async () => stringifyValue(await functions.runMutation(path, fromWire(args))));
-    if (ws.data.closed) return;
-    const lines = linesField("l", r.logLines, redact);
-    if (r.ok) ws.send(`{"t":"res","id":${JSON.stringify(id)},"v":${r.value}${lines}}`);
-    else {
-      // An exhausted OCC budget is not the function's error: Convex ends the connection with it
-      // (STUDY-21 D2); v0 sends its message as the result.
-      const e = r.error instanceof OccError ? { error: r.error.message } : formatError(r.error);
-      ws.send(`{"t":"res","id":${JSON.stringify(id)}${errorFields(e)}${lines}}`);
-    }
-  };
 
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
@@ -183,81 +148,19 @@ export function createServer(opts: ServerOptions) {
       maxPayloadLength: 8 * 1024 * 1024,
       idleTimeout: 960,
       open(ws) {
-        ws.data.session?.open(ws as ServerWebSocket<{ session: SyncSession }>);
+        ws.data.session.open(ws);
       },
-      async message(sock, raw) {
-        if (sock.data.session) return sock.data.session.message(String(raw));
-        const ws = sock as ServerWebSocket<V0Data>;
-        let m: ClientMessage;
-        try {
-          m = JSON.parse(String(raw));
-        } catch {
-          return;
-        }
-        if (m.t === "sub") {
-          const key = subscriptionKey(m.path, m.args);
-          const send = (r: SubResult | null) => {
-            if (r !== null) ws.send(subFrame(key, r));
-          };
-          // Already subscribed on this socket: one reference per socket and key, just resend the result.
-          if (ws.data.keys.has(key)) return send(subs.current(key));
-          ws.subscribe(key); // join the topic BEFORE the first run publishes to it
-          ws.data.keys.add(key);
-          let current: SubResult | null;
-          try {
-            const body = functions.queryBody(m.path, fromWire(m.args));
-            // A subscription's runs belong to no caller: a re-run triggered by a mutation's commit must not
-            // add its console lines to that mutation's logLines.
-            current = await subs.subscribe(key, (db) => withoutLogs(() => body(db)));
-          } catch (e) {
-            send(formatError(e));
-            return;
-          }
-          send(current);
-        } else if (m.t === "unsub") {
-          const key = subscriptionKey(m.path, m.args);
-          if (ws.data.keys.delete(key)) {
-            ws.unsubscribe(key);
-            subs.unsubscribe(key);
-          }
-        } else if (m.t === "mut") {
-          const { id, path, args } = m;
-          const conn = ws.data;
-          // Convex refuses the 1001st pending mutation with a rate-limit error that ends the connection
-          // ("TooManyConcurrentMutations", close code 1013).
-          if (conn.pendingMutations >= MAX_PENDING_MUTATIONS) {
-            ws.close(CLOSE_TRY_AGAIN_LATER, "TooManyConcurrentMutations");
-            return;
-          }
-          conn.pendingMutations++;
-          // Queued synchronously, before any await, so the queue order is the order frames arrived.
-          conn.mutations = conn.mutations.then(async () => {
-            try {
-              // A closed connection's queued mutations never start, as when Convex drops the worker; the
-              // client re-sends what it did not get an answer for.
-              if (!conn.closed) await runWsMutation(ws, id, path, args);
-            } finally {
-              conn.pendingMutations--;
-            }
-          });
-        }
+      message(ws, raw) {
+        ws.data.session.message(String(raw));
       },
-      close(sock) {
-        if (sock.data.session) return sock.data.session.close();
-        const ws = sock as ServerWebSocket<V0Data>;
-        ws.data.closed = true;
-        for (const k of ws.data.keys) subs.unsubscribe(k);
+      close(ws) {
+        ws.data.session.close();
       },
     },
     async fetch(req, srv) {
       const url = new URL(req.url);
       if (/^\/api\/[^/]+\/sync$/.test(url.pathname)) {
         const data: WsData = { session: new SyncSession(sync) };
-        if (srv.upgrade(req, { data })) return undefined as never;
-        return new Response("upgrade failed", { status: 400 });
-      }
-      if (url.pathname === "/ws") {
-        const data: WsData = { keys: new Set(), mutations: Promise.resolve(), pendingMutations: 0, closed: false };
         if (srv.upgrade(req, { data })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
@@ -270,8 +173,6 @@ export function createServer(opts: ServerOptions) {
           ts: c.visibleTs,
           groups: c.groups,
           conflicts: c.conflicts,
-          subs: subs.size,
-          ...subs.stats,
           syncSessions: sync.sessions.size,
           sync: sync.stats,
         });
@@ -320,7 +221,6 @@ export function createServer(opts: ServerOptions) {
   });
   return {
     server,
-    subscriptions: subs,
     sync,
     stop: () => {
       stopCleanup();
