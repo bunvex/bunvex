@@ -44,6 +44,18 @@
   --chart-3: oklch(0.4 0.07 227);
   --chart-4: oklch(0.83 0.19 84);
   --chart-5: oklch(0.77 0.19 70);
+  /* metric charts (UI-01 §18): categorical slots in a fixed order, validated for colour-blind separation on
+     this surface (dataviz validate_palette.js); the percentiles are one blue, light to dark */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-other: #8a8a86;
+  --series-p50: #86b6ef;
+  --series-p90: #5598e7;
+  --series-p95: #256abf;
+  --series-p99: #104281;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -86,6 +98,16 @@
   --chart-3: oklch(0.77 0.19 70);
   --chart-4: oklch(0.63 0.27 304);
   --chart-5: oklch(0.65 0.25 16);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-other: #8a8a86;
+  --series-p50: #184f95;
+  --series-p90: #256abf;
+  --series-p95: #5598e7;
+  --series-p99: #b7d3f6;
   --sidebar: oklch(0.19 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.74 0.12 250);

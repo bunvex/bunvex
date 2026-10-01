@@ -368,7 +368,7 @@ first.
 | P10 | Identity in execution keys | per-query (only those that read `ctx.auth`, needs tracking) / all queries | **all queries** first (correct and simple), refine later |
 | P11 | Client telemetry `Event` messages | accept and ignore / log | **accept and ignore** |
 | P12 | Actions over WS | with v1 / later | **with v1**: the official client sends actions over the socket |
-| P13 | A replayed session mutation's `ts` (step 4, **open**) | (a) the snapshot that saw the record (≥ the commit); (b) the original commit ts, as Convex, which needs `Persistence` to return a version's ts (a PERSIST-01 change) | **(a)** for now: same client behavior, no contract change while PERSIST-01 C7 is in flight; (b) if something ever needs the exact value |
+| P13 | A replayed session mutation's `ts` (step 4) | (a) the snapshot that saw the record (≥ the commit); (b) the original commit ts, as Convex, which needs `Persistence` to return a version's ts (a PERSIST-01 change) | later: (a) now, (b) when `Persistence` returns a version's ts (owner, 2026-09-30; DV-94) |
 
 ## 7. Open questions
 
