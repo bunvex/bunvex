@@ -147,6 +147,16 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-87 | `"use node"`: may collapse to "accept and ignore" since Bun has Node APIs | a separate Node runtime for those modules | yes | Parity "Divergence?" | [platform §9](platform.md#9-nodejs-actions-use-node) |
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
+| DV-102 | Built-in auth (users, sessions, a Users dashboard), opt-in | none (verifies external tokens only) | yes (new API) | Recommended: yes | [STUDY-28 B1](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-103 | better-auth hosted in the engine: each endpoint a bunvex function, adapter over the transaction | — | no | Recommended: yes | [STUDY-28 B2](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-104 | Built-in identity: JWT over the protocol, plus the session row tracked so revocation reaches subscriptions at once | JWT valid until it expires | yes | Recommended: yes | [STUDY-28 B3](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-105 | `users`/orgs in the app schema; auth secrets in system tables; auth-owned fields read-only through `ctx.db` | Convex Auth: all in the app schema | yes | Recommended: yes | [STUDY-28 B4](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-106 | Auth dispatcher executions get the real CSPRNG (app mutations still throw) | — | no | Recommended: yes | [STUDY-28 B5](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-107 | Auth endpoints are function calls over the socket; HTTP only for redirects, email links, SSR, JWKS | component: HTTP on `.convex.site` | yes (wire) | Recommended: yes | [STUDY-28 B6](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-108 | Plugin allowlist with a manifest and conformance test each; better-auth pinned to a minor | — | yes (which plugins) | Recommended: yes | [STUDY-28 B7](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-109 | Rate limits and origin checks done by bunvex, not better-auth | — | yes | Recommended: yes | [STUDY-28 B8](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-110 | Dashboard Users / Organizations / Settings / Audit via `_system/auth:*` with the admin key | no user management | yes (dashboard) | Recommended: yes | [STUDY-28 B9](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-111 | Order: spike, then scheduler / HTTP actions / env / admin keys, then the phases | — | no | Recommended: yes | [STUDY-28 B10](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 
 ## Gaps recorded in studies
 
