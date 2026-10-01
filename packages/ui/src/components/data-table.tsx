@@ -647,7 +647,8 @@ function DataTable<TData extends RowData>({
             <col key={id} style={{ width: widthOf(id) }} />
           ))}
         </colgroup>
-        <thead className="sticky top-0 z-10 bg-muted text-left">
+        {/* the column names are labels, not a band: the rows' background, smaller muted text, a shorter row */}
+        <thead className="sticky top-0 z-10 bg-background text-left">
           {table.getHeaderGroups().map((group) => (
             <tr
               key={group.id}
@@ -677,8 +678,8 @@ function DataTable<TData extends RowData>({
                       : undefined
                   }
                   className={cn(
-                    "relative h-9 truncate border-r border-b px-3 font-medium whitespace-nowrap last:border-r-0",
-                    header.column.id === stickyColumn && "sticky left-0 z-[1] bg-muted",
+                    "relative h-8 truncate border-r border-b px-3 text-xs font-medium whitespace-nowrap text-muted-foreground last:border-r-0",
+                    header.column.id === stickyColumn && "sticky left-0 z-[1] bg-background",
                     onColumnStateChange && header.column.id !== SELECT_COLUMN && "cursor-grab select-none",
                     "data-[dragging]:cursor-grabbing data-[dragging]:opacity-50",
                     // the drop indicator: a bar on the edge the column lands at
