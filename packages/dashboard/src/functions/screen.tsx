@@ -4,6 +4,7 @@
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { Input } from "@bunvex/ui/components/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
@@ -13,6 +14,7 @@ import { functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
 import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
 import { useLogLines } from "../logs/use-logs.ts";
+import { FunctionStats } from "../metrics/function-stats.tsx";
 import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { useRunner } from "../runner/context.tsx";
 import { displayValidator } from "../validators.ts";
@@ -183,50 +185,60 @@ function FunctionValidators({ fn }: { fn: FunctionInfo }) {
 
 function FunctionView({ fn }: { fn: FunctionInfo }) {
   const scope = useQueryScope();
-  // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
-  // the list is only this function's, so there is no function filter
   const search = functionsRoute.useSearch();
   const navigate = functionsRoute.useNavigate();
+  // Statistics first, as Convex; a link with log filters opens the logs
+  const tab = search.tab ?? (search.type || search.q ? "logs" : "statistics");
+  // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
+  // the list is only this function's, so there is no function filter
   const [view, setView] = useLogViewInUrl(
     `bunvex:function-logs:${scope.scope}:${fn.path}`,
     { type: search.type, q: search.q },
     ({ type, q }, replace) =>
-      navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q }), replace }),
+      navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q, tab }), replace }),
   );
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
   const { module, name } = splitPath(fn.path);
   const runner = useRunner();
   return (
-    <LogsView
-      key={fn.path}
-      label={`Log lines of ${fn.path}`}
-      logs={logs}
-      view={view}
-      onView={setView}
-      header={
-        <>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <h1 className="font-mono text-xl font-semibold tracking-tight">{name}</h1>
-            <span className="text-sm text-muted-foreground">
-              {describeFunction(fn)} in <span className="font-mono text-xs">{module}</span>
-            </span>
-            <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
-              <code className="font-mono text-xs break-all">{fn.path}</code>
-              <CopyButton text={fn.path} label="Copy function path" iconOnly />
-              {runner.available && (
-                <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
-                  <Play aria-hidden="true" />
-                  Run
-                </Button>
-              )}
-            </span>
-          </div>
-          <FunctionValidators fn={fn} />
-          <h2 className="text-sm font-medium">Logs</h2>
-        </>
+    <Tabs
+      value={tab}
+      onValueChange={(t) =>
+        navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ ...s, tab: t as "statistics" | "logs" }) })
       }
-    />
+      className="flex min-w-0 flex-1 flex-col gap-0"
+    >
+      <div className="flex flex-col gap-3 px-4 pt-4 md:px-6 md:pt-6">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="font-mono text-xl font-semibold tracking-tight">{name}</h1>
+          <span className="text-sm text-muted-foreground">
+            {describeFunction(fn)} in <span className="font-mono text-xs">{module}</span>
+          </span>
+          <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
+            <code className="font-mono text-xs break-all">{fn.path}</code>
+            <CopyButton text={fn.path} label="Copy function path" iconOnly />
+            {runner.available && (
+              <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
+                <Play aria-hidden="true" />
+                Run
+              </Button>
+            )}
+          </span>
+        </div>
+        <FunctionValidators fn={fn} />
+        <TabsList aria-label={`${fn.path}: statistics or logs`}>
+          <TabsTrigger value="statistics">Statistics</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="statistics" className="p-4 md:p-6">
+        <FunctionStats fn={fn} />
+      </TabsContent>
+      <TabsContent value="logs" className="flex min-h-0 flex-1">
+        <LogsView key={fn.path} label={`Log lines of ${fn.path}`} logs={logs} view={view} onView={setView} />
+      </TabsContent>
+    </Tabs>
   );
 }
 
