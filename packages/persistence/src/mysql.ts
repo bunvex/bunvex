@@ -7,6 +7,9 @@
 // group's top as the durable prefix; the rest of the group runs only if it matched. MySQL has no data-
 // modifying CTE, so the fence costs one statement (a round trip) per flush.
 //
+// Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version') and
+// `read_only`, Convex's table names. Open checks both before writing anything and refuses a foreign, future
+// or read-only store; a new store's version record is written under the lease.
 // Timeouts (STUDY-25 L3), as Convex's MySQL driver: every database call is bounded on the client side (19 s by
 // default, Convex's MYSQL_TIMEOUT_SECONDS), per round trip, including getting a connection from the pool. The
 // MySQL protocol cannot cancel a statement, so a timed-out call's connection is destroyed, never reused.
@@ -20,13 +23,20 @@
 // reads the lease record: a group an earlier attempt did commit is acknowledged without writing (DV-124). One
 // that lands after that read hits the primary key: `UnsureCommitError`.
 import {
+  checkLayoutVersion,
+  checkUnversionedTables,
   DatabaseTimeoutError,
   type DocWrite,
+  decodeLayoutVersion,
   type IndexWrite,
+  LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -52,6 +62,22 @@ const drop = (c: Conn) => {
   c.destroy();
   (c as unknown as { connection?: { stream?: { destroy?(): void } } }).connection?.stream?.destroy?.();
 };
+
+const STORE = "this MySQL database";
+/** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
+const COLUMNS = {
+  documents: ["table_id int", "id varchar", "ts bigint", "json_value mediumtext", "deleted tinyint"],
+  indexes: [
+    "index_id int",
+    "key_prefix varbinary",
+    "key_suffix longblob",
+    "key_suffix_hash varbinary",
+    "ts bigint",
+    "deleted tinyint",
+    "document_id varchar",
+  ],
+};
+const TABLES = ["documents", "indexes", "bunvex_lease", "persistence_globals", "read_only"];
 
 /** mysql2 and socket codes of a connection that is gone (Convex: `DriverError::ConnectionClosed`,
  *  `PoolDisconnected`, `Error::Io`). */
@@ -90,7 +116,7 @@ export function operational(e: unknown): boolean {
   return /connection is in closed state/.test(message);
 }
 
-export class MysqlPersistence implements Persistence, ScanDocs, Lease {
+export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush: the group's top, recorded as max_ts by the fence. */
@@ -116,7 +142,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
    * (a statement, BEGIN, COMMIT, getting a connection) may take before the call fails with
    * `DatabaseTimeoutError` and its connection is destroyed (STUDY-25 L3). 0 disables it.
    */
-  static async open(url: string, pool = 16, opts: TlsOptions & { timeoutMs?: number } = {}) {
+  static async open(url: string, pool = 16, opts: OpenOptions & TlsOptions & { timeoutMs?: number } = {}) {
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
     const { uri, ssl } = mysqlTls(url, opts);
@@ -131,7 +157,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     });
     const store = new MysqlPersistence(p, conn, timeoutMs);
     try {
-      await store.bootstrap();
+      await store.bootstrap(opts);
     } catch (e) {
       await store.close().catch(() => {});
       throw explainTlsError(e, "MySQL", "MYSQL_CA_FILE");
@@ -190,8 +216,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     return e instanceof DatabaseTimeoutError || operational(e);
   }
 
-  /** The tables, created only when one is missing. */
-  private async bootstrap() {
+  /** The server and store checks (C10), then the tables, created only when one is missing. */
+  private async bootstrap(opts: OpenOptions) {
     // A writable server only, as Convex's `require_leader` (crates/mysql/src/connection.rs:670-690), the
     // counterpart of Postgres's target_session_attrs=read-write. Convex repeats it on every new connection;
     // bunvex checks at open (a replica that becomes read-only later fails its writes).
@@ -200,15 +226,19 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     )) as any;
     if (Number(ro[0].ro))
       throw new Error("MySQL is read-only (read_only or innodb_read_only is on): bunvex needs the writable primary");
-    // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
-    // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
-    const [have] = (await this.read((c) =>
+    // What is there decides what may happen: read-only, before any write.
+    const [rows] = (await this.read((c) =>
       c.query(
-        `select count(*) as n from information_schema.tables
-       where table_schema = database() and table_name in ('documents', 'indexes', 'bunvex_lease')`,
+        `select table_name as t from information_schema.tables
+         where table_schema = database() and table_name in (?)`,
+        [TABLES],
       ),
     )) as any;
-    if (Number(have[0].n) >= 3) return;
+    const have = new Set<string>(rows.map((r: any) => r.t as string));
+    await this.checkStore(have, opts);
+    // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
+    // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
+    if (have.size >= TABLES.length) return;
     // Every statement is idempotent: the whole step runs again after an operational error.
     await this.read(async (c, progress) => {
       try {
@@ -224,10 +254,50 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
         await c.query(`create table if not exists bunvex_lease (id int primary key, epoch bigint not null,
           holder varchar(255), holder_conn varchar(64), expires_at datetime(6) not null, max_ts bigint not null)`);
         progress();
+        await c.query(`create table if not exists persistence_globals (\`key\` varchar(255) primary key,
+          json_value text not null)`);
+        progress();
+        await c.query(`create table if not exists read_only (id bigint primary key)`);
+        progress();
       } finally {
         await c.query(`select release_lock('bunvex_bootstrap')`).catch(() => {});
       }
     });
+  }
+
+  /**
+   * PERSIST-01 C10, before anything is written: the recorded layout version must be this bunvex's; a store
+   * without one must have bunvex's columns (written before C10: the same layout) or no tables at all; and a
+   * store marked read-only opens only with `allowReadOnly`. Refusing needs no lease: nothing is written.
+   */
+  private async checkStore(have: Set<string>, opts: OpenOptions) {
+    const [rows] = (await this.read((c) =>
+      c.query(
+        `select ${have.has("persistence_globals") ? "(select json_value from persistence_globals where `key` = 'layout_version')" : "null"} as v,
+         ${have.has("read_only") ? "exists (select 1 from read_only)" : "0"} as ro`,
+      ),
+    )) as any;
+    const version = decodeLayoutVersion(rows[0].v);
+    if (version !== null) checkLayoutVersion(version, STORE);
+    else if (have.has("documents") || have.has("indexes")) {
+      const [cols] = (await this.read((c) =>
+        c.query(
+          `select table_name as t, concat(column_name, ' ', data_type) as c from information_schema.columns
+           where table_schema = database() and table_name in ('documents', 'indexes')`,
+        ),
+      )) as any;
+      const found: Record<string, string[]> = {};
+      for (const c of cols) found[c.t] = [...(found[c.t] ?? []), String(c.c).toLowerCase()];
+      checkUnversionedTables(STORE, found, COLUMNS);
+    }
+    if (Number(rows[0].ro) && !opts.allowReadOnly) throw new ReadOnlyError(STORE);
+  }
+
+  /** Convex's `set_read_only`: no lease needed; the next open for writing is refused while it is set. */
+  async setReadOnly(readOnly: boolean) {
+    await this.call((c) =>
+      c.query(readOnly ? `insert ignore into read_only (id) values (1)` : `delete from read_only`),
+    );
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
@@ -288,6 +358,18 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
       progress();
       if (won.affectedRows === 1) {
         const [e] = (await c.query(`select epoch from bunvex_lease where id = 1`)) as any;
+        progress();
+        // PERSIST-01 C10: a new (or pre-C10) store gets its layout version now, under the lease, in the same
+        // transaction; one stamped in the meantime by another bunvex is checked again (a mismatch rolls the
+        // acquisition back).
+        await c.query(`insert ignore into persistence_globals (\`key\`, json_value) values ('layout_version', ?)`, [
+          JSON.stringify(LAYOUT_VERSION),
+        ]);
+        progress();
+        const [v] = (await c.query(
+          `select json_value from persistence_globals where \`key\` = 'layout_version' for share`,
+        )) as any;
+        checkLayoutVersion(decodeLayoutVersion(v[0]?.json_value), STORE);
         progress();
         await c.commit();
         this.epoch = Number(e[0].epoch);
