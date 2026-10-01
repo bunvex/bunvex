@@ -502,10 +502,12 @@ Two findings along the way:
   - **Match sublinearly:** an interval index over subscribed read-set ranges, per index. This replaces
     today's linear scan (STUDY-08 D9).
     - **Built** (STUDY-08 §3.4): `ReadSetIndex` in `@bunvex/core`, a treap per index as Convex's
-      `IntervalMap`, used by the query cache and the sync hub (and core subscriptions until #94 deleted them). With 10 000
-      live subscriptions and 10 000 cached queries, one writer went from 485 to 14 500 commits/s; matching one
-      commit against 100 000 read-sets costs about 5 µs instead of 13 ms. Splaying the notifications of a
-      very wide invalidation, as Convex does, is not built yet (DV-64).
+      `IntervalMap`, used by the query cache and the sync hub (and core subscriptions until #94 deleted them).
+      With 10 000 live subscriptions and 10 000 cached queries, one writer went from 485 to 14 500
+      commits/s; matching one commit against 100 000 read-sets costs about 5 µs instead of 13 ms. A very
+      wide invalidation is splayed as Convex's (STUDY-08 §3.5): one write that invalidates 10 000 sessions
+      no longer stalls the event loop for 25 ms at once (p99 timer lateness about 1.3 ms), at the cost of
+      spreading the transitions over up to 50 s.
   - **Dedup:** run each distinct `(function, args, identity-if-read)` once per node and fan the result out.
     Queries that do not read the identity keep an identity-free key.
     - The index reports each owner once per group of commits; the sync hub's owners are its shared

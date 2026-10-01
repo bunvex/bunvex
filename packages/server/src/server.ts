@@ -9,7 +9,15 @@ import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
-import { fromWireTs, MAX_PENDING_MUTATIONS, SyncHub, SyncSession, wireTs } from "./sync.ts";
+import {
+  fromWireTs,
+  MAX_PENDING_MUTATIONS,
+  type SplayOptions,
+  SyncHub,
+  SyncSession,
+  splayOptions,
+  wireTs,
+} from "./sync.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -50,6 +58,12 @@ export type ServerOptions = {
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
    */
   scheduler?: SchedulerOptions;
+  /**
+   * Splaying of wide invalidations (STUDY-08 §3.5). Defaults: Convex's knobs from the environment
+   * (`SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`), else
+   * Convex's values (200 subscriptions, 5 ms). Tests inject `random` and `timers`.
+   */
+  subscriptionSplay?: Partial<SplayOptions>;
 };
 
 /**
@@ -141,6 +155,7 @@ export function createServer(opts: ServerOptions) {
     redact,
     formatError,
     fromWire,
+    splay: splayOptions(opts.subscriptionSplay),
     verifyToken: (token) => verifier.verify(token),
   });
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });

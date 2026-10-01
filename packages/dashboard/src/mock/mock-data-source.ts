@@ -45,6 +45,7 @@ import {
   type Timeseries,
   type TopKMeasure,
   type TopKSeries,
+  type Topology,
   toDataSourceError,
   type Unsubscribe,
   type ValidatorJson,
@@ -64,6 +65,7 @@ import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 import { MockSnapshots } from "./snapshots.ts";
+import { MockTopology } from "./topology.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
   /** Delay before every call resolves. Default 0. */
@@ -90,6 +92,10 @@ export type MockDataSourceOptions = FixtureOptions & {
   authProviders?: AuthProvider[];
   /** Between two steps of a snapshot export or import (UI-01 §19.2). Default 300 ms. */
   snapshotStepMs?: number;
+  /** How many nodes the topology shows (UI-01 §22): 1 (default, as bunvex runs today) to 8. */
+  nodes?: number;
+  /** How often watchTopology delivers. Default 1 000 ms. */
+  topologyIntervalMs?: number;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -171,6 +177,7 @@ export class MockDataSource implements DashboardDataSource {
   /** The audit log (UI-01 §14.5). Not part of the contract: tests read what the writes recorded. */
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
+  private readonly topology: MockTopology;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -247,6 +254,12 @@ export class MockDataSource implements DashboardDataSource {
       record: (action, metadata) => this.record(action, metadata),
       changed: (table) => this.changed(table),
       stepMs: opts.snapshotStepMs ?? 300,
+    });
+    this.topology = new MockTopology(this.rnd, {
+      nodes: opts.nodes ?? 1,
+      now: opts.now ?? Date.now(),
+      version: this.deployment.version,
+      persistence: this.deployment.persistence,
     });
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.stats = {
@@ -991,6 +1004,44 @@ export class MockDataSource implements DashboardDataSource {
 
   scheduledJobLag(w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
     return this.metrics(opts?.signal, w, () => metrics.scheduledJobLag(this.logs, w));
+  }
+
+  // ---------------------------------------------------------------- topology (§22), simulated
+
+  private canViewTopology() {
+    if (!this.opts.capabilities.operations.includes("viewMetrics"))
+      throw new DataSourceError("unauthorized", "this credential cannot view the deployment's topology");
+  }
+
+  getTopology(opts?: CallOptions): Promise<Topology> {
+    return this.call(opts?.signal, () => {
+      this.canViewTopology();
+      return this.topology.snapshot();
+    });
+  }
+
+  watchTopology(onTopology: (t: Topology) => void, onError: (e: DataSourceError) => void): Unsubscribe {
+    let live = true;
+    const deliver = () => {
+      if (!live) return;
+      try {
+        this.canViewTopology();
+        onTopology(this.topology.snapshot());
+      } catch (e) {
+        onError(toDataSourceError(e));
+      }
+    };
+    const first = setTimeout(deliver, 0);
+    const every = this.opts.topologyIntervalMs ?? 1000;
+    const timer = setInterval(() => {
+      this.topology.step(every);
+      deliver();
+    }, every);
+    return () => {
+      live = false;
+      clearTimeout(first);
+      clearInterval(timer);
+    };
   }
 }
 
