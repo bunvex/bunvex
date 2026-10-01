@@ -11,15 +11,10 @@ Paths are shortened: `browser/…`, `react/…`, `nextjs/…`, `react-clerk/…`
 Status: **done** = behaviour an app can rely on exists · **partial** = something exists but misses part of the
 semantics · **missing** = nothing yet.
 
-Since STUDY-23 step 2, bunvex also speaks Convex's sync protocol v1 at `/api/{version}/sync`
-(`packages/server/src/sync.ts`): per-connection state versions, transitions at one ts, shared executions,
-mutations with their commit ts, actions, `Ping`, `FatalError`. The rows below say which. The v0 socket is
-deleted once `@bunvex/client` speaks v1. What v0 has, in one paragraph: an unversioned JSON WebSocket at `/ws` with `sub`/`unsub` keyed by
-`path + NUL + JSON(args)`, `mut` with a numeric id, and `upd`/`err`/`res` replies. Subscriptions are shared across
-all connections per key, invalidated by read-set/write-set overlap, and re-published only when the JSON payload
-changes. Each subscription reruns and publishes by itself, at its own snapshot. The HTTP API is `POST /api/{query,mutation,action}`
-returning `{status, value | errorMessage}`. There is no client library, React binding, auth, timestamps, versions,
-idempotency or reconnect logic.
+bunvex speaks Convex's sync protocol v1 at `/api/{version}/sync` (`packages/server/src/sync.ts`, STUDY-23),
+with `@bunvex/client` and `@bunvex/react` on top (STUDY-26); the official `convex` client also works against
+it (`packages/sync-e2e`). The first, unversioned protocol (v0, `/ws`) was deleted (STUDY-23 P2). The HTTP API
+is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 ---
 
@@ -27,7 +22,7 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). v0 `/ws` remains until the client moves. |
+| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). |
 | Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | done (STUDY-26) | `/api/<client version>/sync`. |
 | Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | missing | No client-version negotiation. |
 | JSON text frames, one message per frame, discriminated by `type` | `browser/sync/protocol.ts` | done (STUDY-23) | v1 frames are Convex's (`@bunvex/protocol` `v1`). |
@@ -79,7 +74,7 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | done (STUDY-23) | v1: one transition per connection at `T = visibleTs`. v0 still tears. |
+| All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | done (STUDY-23) | One transition per connection at `T = visibleTs`. |
 | Transitions are gapless: `startVersion` must equal the client's current version, or the client throws | `browser/sync/remote_query_set.ts` | done (STUDY-23, STUDY-26) | The client throws `Invalid start version: …`, as Convex. |
 | Server version never goes backwards (`advance_version` asserts it) | `crates/sync/src/state.rs` | done (STUDY-23) | `T` is `visibleTs`, monotonic. |
 | Query-set versioning: server rejects a `ModifyQuerySet` whose `baseVersion` doesn't match (`BaseVersionMismatch`) | `crates/sync/src/state.rs` (`modify_query_set`) | done (STUDY-23) | `FatalError` "Base version … passed up doesn't match the current version …". |
@@ -97,7 +92,7 @@ idempotency or reconnect logic.
 | Backpressure / single-flight: at most N (=2) unsent Transitions queued per client; later updates coalesce into the next one | `crates/sync/src/worker.rs` (`SingleFlightSender`, `SYNC_MAX_SEND_TRANSITION_COUNT`) | partial (STUDY-23) | One transition computed at a time per connection, later triggers coalesced; no cap on unsent frames yet. |
 | Query reruns in parallel with bounded concurrency (20) and retry with backoff on retriable errors | `crates/sync/src/worker.rs` (`UPDATE_QUERY_CONCURRENCY`, `SYNC_WORKER_QUERY_RETRY_*`) | partial | Reruns run in parallel, unbounded, with no retry. |
 | Temporarily-unavailable features (search index bootstrapping) → skip, then retry later | `crates/sync/src/worker.rs` | missing | Not applicable until search exists. |
-| Shared execution across clients for identical queries | `crates/application` query cache | done (STUDY-23) | v1: one execution per (path, args, journal, identity) and ts, single-flight; frames assembled per connection (P3). Costs ~1.4× v0 per delivery (`packages/server/bench/sync-fanout.ts`), mostly in the per-socket send. |
+| Shared execution across clients for identical queries | `crates/application` query cache | done (STUDY-23) | v1: one execution per (path, args, journal, identity) and ts, single-flight; frames assembled per connection (P3). About 100 deliveries/ms (`packages/server/bench/sync-fanout.ts`), about 1.4× the deleted v0 per delivery, mostly in the per-socket send. |
 
 ### 5. Mutation idempotency, request ids and resend
 
@@ -107,7 +102,7 @@ idempotency or reconnect logic.
 | Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | done (STUDY-26) |  |
 | Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | done (STUDY-23) | A replay answers the recorded result and log lines. Its ts is the snapshot that saw the record, ≥ the original (P13, open). |
 | Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | done (STUDY-23) | Same transaction as the writes; cleanup by `_creationTime`, 64 per transaction, ≤ 256/s, `MAX_SESSION_CLEANUP_DURATION_HOURS`. |
-| Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | v0 closes on mutations only; v1 on both. |
+| Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | Mutations and actions. |
 | 60 s timeout per WS mutation | `crates/sync/src/worker.rs` (`SYNC_WORKER_PROCESS_TIMEOUT`) | missing | — |
 | Server request id derived from session + request id (tracing / logs correlation) | `crates/sync/src/worker.rs` (`RequestId::new_for_ws_session`) | missing | — |
 
