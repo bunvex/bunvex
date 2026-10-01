@@ -49,10 +49,23 @@ The full map, with status and dependency rules, is [ARCHITECTURE.md](ARCHITECTUR
 bun install
 bun run check          # lint, typecheck, dependency rules, tests
 bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL / MONGO_URL when set;
-                       #   MongoDB must be a replica set — a single-node one is enough)
+                       #   MongoDB must be a replica set — a single-node one is enough;
+                       #   DO_NOT_REQUIRE_SSL=1 for a local Postgres/MySQL without verifiable TLS)
 
 PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions on :3210
 ```
+
+### Choosing the database
+
+| Variable | Meaning |
+|---|---|
+| `PERSISTENCE` | `memory` (default), `sqlite`, `postgres`, `mysql` or `mongodb` |
+| `PERSISTENCE_URL` | the URL for `postgres`, `mysql` and `mongodb`; it names the database |
+| `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | Convex's names, accepted too: without `PERSISTENCE`, the first one set selects Postgres, MySQL or (deprecated) Postgres. bunvex's names win when both are set. Unlike Convex, the URL must name the database |
+| `DO_NOT_REQUIRE_SSL` | any non-empty value: connect to Postgres/MySQL without requiring TLS. By default, as Convex, the connection must be encrypted and the server's certificate verified (chain and host name); a Postgres connection must also be read-write (never a standby) |
+| `PG_CA_FILE`, `MYSQL_CA_FILE` | a PEM file with the CA that signed the server's certificate, trusted besides the built-in roots |
+
+MongoDB's TLS is what its URL says (`tls=true`).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

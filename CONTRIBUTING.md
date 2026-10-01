@@ -44,6 +44,11 @@ A new driver implements the `Persistence` interface from `@bunvex/core/persisten
 `@bunvex/persistence-conformance` (see [PERSIST-01](docs/specs/PERSIST-01-contract.md)). Third-party
 drivers are welcome as their own packages (`bunvex-persistence-<name>`).
 
+Postgres and MySQL connections require TLS and a verifiable certificate by default, as Convex (STUDY-25
+L8). A local or CI database usually has neither: run the conformance suite and the bench against one with
+`DO_NOT_REQUIRE_SSL=1` (CI does). The TLS behaviour itself is tested against real servers by
+`packages/persistence/test/tls-db.test.ts` (its header lists the variables that point it at them).
+
 ## Gotchas
 
 - Never start a source file with `// @bun…`: Bun reads it as its "already transpiled" pragma and loads the
