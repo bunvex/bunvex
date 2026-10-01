@@ -7,7 +7,9 @@ import {
   type AuditEventQuery,
   type DashboardDataSource,
   DataSourceError,
+  type FileKind,
   type FileQuery,
+  fileKind,
   type Page,
   type ScheduledFunction,
   type StoredFile,
@@ -151,6 +153,26 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
     });
 
   // ---------------------------------------------------------------- file storage
+  test("file stats (when offered): counts and bytes per kind; listFiles honours kind and size", async () => {
+    const src = await make();
+    if (!src.listFiles || !src.fileStats) return;
+    const all = await allFiles(src);
+    const sum = (fs: StoredFile[]) => fs.reduce((n, f) => n + f.size, 0);
+    const stats = await src.fileStats();
+    expect([stats.count, stats.totalBytes]).toEqual([all.length, sum(all)]);
+    for (const kind of ["image", "document", "other"] as FileKind[]) {
+      const mine = all.filter((f) => fileKind(f.contentType) === kind);
+      expect(stats.byKind[kind]).toEqual({ count: mine.length, bytes: sum(mine) });
+      expect((await allFiles(src, { kind })).map((f) => f.id)).toEqual(mine.map((f) => f.id));
+    }
+    const sizes = all.map((f) => f.size).sort((a, b) => a - b);
+    const mid = sizes[Math.floor(sizes.length / 2)] ?? 0;
+    const small = all.filter((f) => f.size <= mid);
+    expect((await allFiles(src, { maxSize: mid })).map((f) => f.id)).toEqual(small.map((f) => f.id));
+    expect((await src.fileStats({ maxSize: mid })).count).toBe(small.length);
+    expect((await allFiles(src, { minSize: mid + 1 })).length).toBe(all.length - small.length);
+  });
+
   test("files (when offered): newest first by default, oldest on request, bounded by time, counted", async () => {
     const src = await make();
     if (!src.listFiles) return;

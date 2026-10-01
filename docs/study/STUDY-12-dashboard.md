@@ -389,6 +389,44 @@ out as Database and Logs (owner's call, 1 Oct 2026):
 | L16 | A run's, a job's, an event's and a file's details follow the current row while open | owner's call (as Database's, §14.6) |
 | L17 | The Functions screen's validators move into its Statistics tab (bunvex shows validators at all only by the owner's call, V1) | owner's call |
 
+### 7.6 The section column and the grouped sidebar (added 1 Oct 2026, UI-01 §23)
+
+Convex's dashboard has a flat sidebar and, per screen, its own frame (Data's table list, Settings' page
+sidebar in `DeploymentSettingsLayout.tsx`, the Schedules tabs). bunvex gives every screen one section column
+(name and primary action, nav groups, the current page's filters) and labels the sidebar's groups — the
+owner's call (L18), with Supabase-like screens as layout references only.
+
+### 7.7 Files: views, filters, storage used, buckets (added 1 Oct 2026, UI-01 §24)
+
+Convex's Files (`features/files`) lists every file with a date filter and a storage-id lookup; it has no views
+by kind, size filter, usage summary or buckets (Convex storage has one bucket per deployment). bunvex adds,
+as the owner's calls: the views and filters with counts and the usage bar, backed by an optional
+`fileStats` and `listFiles`' `kind` / size filters (L19); and a **Buckets** section showing only "Default" —
+a **placeholder** for named buckets, which neither Convex nor bunvex has (L20, a bunvex addition; it does
+nothing until a bucket concept exists).
+
+### 7.8 Authentication (added 1 Oct 2026, UI-01 §25) — a bunvex addition
+
+**Convex has no such screen.** Its dashboard's Settings → Authentication only lists the token providers from
+`auth.config.ts` (§13.1); the users themselves live in Convex Auth's tables (browsed in Data) or in an external
+service (Clerk, Auth0) with its own dashboard. bunvex adds a screen to administer them (owner's call, L21),
+mock-first, shaped by **better-auth**, the library bunvex's auth builds on (STUDY-28). Read, not copied, in
+better-auth 1.7.6 (`node_modules/better-auth/dist/`):
+
+- the core schema — `user` (`name`, `email`, `emailVerified`, `image`, `createdAt`, `updatedAt`), `account`
+  (`providerId`, `accountId`), `session` (`token`, `expiresAt`, `ipAddress`, `userAgent`), `verification`;
+- `plugins/admin/schema.mjs` — `user.role`, `banned`, `banReason`, `banExpires`; `session.impersonatedBy`;
+  and `plugins/admin/routes.mjs` — `/admin/list-users`, `create-user`, `ban-user`, `unban-user`,
+  `impersonate-user`, `list-user-sessions`, `revoke-user-session(s)`, `remove-user`, `set-role`;
+- `plugins/two-factor` (TOTP, OTP, backup codes; `user.twoFactorEnabled`), `plugins/organization`
+  (organization, member, invitation), `plugins/magic-link`; passkeys are a separate package (WebAuthn,
+  relying party name and ID); better-auth's options for `session.expiresIn` / `updateAge` / `freshAge`,
+  `rateLimit.window` / `max`, `trustedOrigins` (the redirect allow-list) and the email senders.
+
+The contract (`data-source-auth-admin.ts`) uses these names where sensible (`banExpires`, `impersonatedBy`,
+`providerId`s); timestamps are ms like the rest of the dashboard contract. Settings → Authentication moves
+into Authentication → Sign in / Providers (L22, owner's call). No server implements the contract yet.
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it

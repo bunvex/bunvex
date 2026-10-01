@@ -29,7 +29,10 @@ beforeEach(() => localStorage.clear());
 describe("the Schedules screen", () => {
   test("Schedules opens the scheduled functions: nearest first, with their state and function", async () => {
     const { history, source } = mount("/schedules");
-    await screen.findByRole("heading", { level: 1, name: "Schedules" });
+    // the page's name in Bar 1; the screen's pages in its section column (UI-01 §23)
+    await screen.findByRole("heading", { level: 1, name: "Scheduled functions" });
+    const pages = screen.getByRole("navigation", { name: "Schedules" });
+    expect(within(pages).getByRole("link", { name: "Scheduled functions" }).getAttribute("aria-current")).toBe("page");
     await waitFor(() => expect(history.location.pathname).toBe("/schedules/functions"));
     await waitFor(() => expect(rows("Scheduled functions").length).toBeGreaterThan(3));
     const all = (await source.listScheduledFunctions({ numItems: 100, cursor: null })).page;
@@ -144,9 +147,12 @@ describe("the Schedules screen", () => {
 
   test("cron jobs: schedule, function, last and next run; a job's details list its recent runs", async () => {
     const { history } = mount("/schedules/functions");
-    await screen.findByRole("heading", { level: 1, name: "Schedules" });
+    await screen.findByRole("heading", { level: 1, name: "Scheduled functions" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("link", { name: "Cron jobs" }));
+    await screen.findByRole("heading", { level: 1, name: "Cron jobs" });
+    // no filters on Cron jobs: the column holds only the pages
+    expect(screen.queryByRole("navigation", { name: "Schedule filters" })).toBeNull();
     await waitFor(() => expect(history.location.pathname).toBe("/schedules/crons"));
     await waitFor(() => expect(rows("Cron jobs").length).toBe(4));
     const daily = rows("Cron jobs").find((r) => cells(r)[0] === "purge old messages")!;

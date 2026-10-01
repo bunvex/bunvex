@@ -12,6 +12,7 @@ import {
   FileBox,
   FunctionSquare,
   History,
+  KeyRound,
   Menu,
   Network,
   Play,
@@ -19,7 +20,20 @@ import {
   Settings,
   Waypoints,
 } from "lucide-react";
-import { createContext, lazy, type ReactNode, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type ComponentType,
+  createContext,
+  lazy,
+  type ReactNode,
+  Suspense,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
 import { DashLink } from "../router.tsx";
@@ -37,6 +51,44 @@ export const HeaderActionsContext = createContext<ReactNode>(null);
 const NAV_LINK =
   "flex h-8 items-center gap-2 border-b-2 border-transparent px-2 text-sm whitespace-nowrap outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring md:border-b-0 md:border-l-2 aria-[current=page]:border-sidebar-primary aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium aria-[current=page]:text-sidebar-accent-foreground";
 const ICON = "hidden size-4 shrink-0 sm:block";
+
+/** A group of screens in the sidebar, under a small label (none for the first and the last). */
+function NavGroup({ label, children }: { label?: string; children: ReactNode }) {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1">
+      {label ? (
+        <p
+          id={id}
+          className="px-2 pt-3 pb-0.5 text-[11px] font-medium tracking-wide text-sidebar-foreground/60 uppercase"
+        >
+          {label}
+        </p>
+      ) : (
+        <div className="pt-2" />
+      )}
+      <ul aria-labelledby={label ? id : undefined} className="flex flex-col gap-1">
+        {children}
+      </ul>
+    </div>
+  );
+}
+
+function NavItem(props: {
+  link: ComponentProps<typeof DashLink>["link"];
+  icon: ComponentType<{ className?: string; "aria-hidden"?: "true" }>;
+  children: ReactNode;
+}) {
+  const Icon = props.icon;
+  return (
+    <li>
+      <DashLink link={props.link} className={NAV_LINK}>
+        <Icon className={ICON} aria-hidden="true" />
+        {props.children}
+      </DashLink>
+    </li>
+  );
+}
 
 export function Shell() {
   const headerActions = useContext(HeaderActionsContext);
@@ -86,7 +138,8 @@ export function Shell() {
               Menu
             </Button>
           </div>
-          <ul
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: it only listens for a pick (a link's click) and Escape */}
+          <div
             id="dashboard-screens"
             className={cn("flex-col gap-1 px-2 pb-2 md:flex", menuOpen ? "flex" : "hidden")}
             onClick={(e) => {
@@ -99,67 +152,53 @@ export function Shell() {
               }
             }}
           >
-            <li>
-              <DashLink link={{ to: "/", activeOptions: { exact: true } }} className={NAV_LINK}>
-                <Activity className={ICON} aria-hidden="true" />
+            {/* the screens in labelled groups (UI-01 §23.2); Settings last, on its own */}
+            <NavGroup>
+              <NavItem link={{ to: "/", activeOptions: { exact: true } }} icon={Activity}>
                 Health
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/topology" }} className={NAV_LINK}>
-                <Waypoints className={ICON} aria-hidden="true" />
+              </NavItem>
+              <NavItem link={{ to: "/topology" }} icon={Waypoints}>
                 Topology
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/database" }} className={NAV_LINK}>
-                <Database className={ICON} aria-hidden="true" />
+              </NavItem>
+            </NavGroup>
+            <NavGroup label="Data">
+              <NavItem link={{ to: "/database" }} icon={Database}>
                 Database
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/schema" }} className={NAV_LINK}>
-                <Network className={ICON} aria-hidden="true" />
+              </NavItem>
+              <NavItem link={{ to: "/schema" }} icon={Network}>
                 Schema
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/functions" }} className={NAV_LINK}>
-                <FunctionSquare className={ICON} aria-hidden="true" />
-                Functions
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/files" }} className={NAV_LINK}>
-                <FileBox className={ICON} aria-hidden="true" />
+              </NavItem>
+              <NavItem link={{ to: "/files" }} icon={FileBox}>
                 Files
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/schedules" }} className={NAV_LINK}>
-                <CalendarClock className={ICON} aria-hidden="true" />
+              </NavItem>
+            </NavGroup>
+            <NavGroup label="Functions">
+              <NavItem link={{ to: "/functions" }} icon={FunctionSquare}>
+                Functions
+              </NavItem>
+              <NavItem link={{ to: "/schedules" }} icon={CalendarClock}>
                 Schedules
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/logs" }} className={NAV_LINK}>
-                <ScrollText className={ICON} aria-hidden="true" />
+              </NavItem>
+            </NavGroup>
+            <NavGroup label="Manage">
+              <NavItem link={{ to: "/auth" }} icon={KeyRound}>
+                Authentication
+              </NavItem>
+            </NavGroup>
+            <NavGroup label="Observe">
+              <NavItem link={{ to: "/logs" }} icon={ScrollText}>
                 Logs
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/history" }} className={NAV_LINK}>
-                <History className={ICON} aria-hidden="true" />
+              </NavItem>
+              <NavItem link={{ to: "/history" }} icon={History}>
                 History
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/settings" }} className={NAV_LINK}>
-                <Settings className={ICON} aria-hidden="true" />
+              </NavItem>
+            </NavGroup>
+            <NavGroup>
+              <NavItem link={{ to: "/settings" }} icon={Settings}>
                 Settings
-              </DashLink>
-            </li>
-          </ul>
+              </NavItem>
+            </NavGroup>
+          </div>
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           {/* exactly 48 px with its border (7 + 32 + 7 + 1): the full-height screens take 100svh − 3rem */}

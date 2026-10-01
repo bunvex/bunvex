@@ -7,6 +7,7 @@
 // suite may fill and empty — never point it at data you want to keep.
 import { test as bunTest, describe, expect } from "bun:test";
 import { describeAuthContract } from "./contract-auth.ts";
+import { describeAuthAdminContract } from "./contract-auth-admin.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
@@ -562,6 +563,7 @@ export function describeDataSourceContract(
     describeMetricsContract({ make, test });
     describeTopologyContract({ make, test, watchTimeoutMs });
     describeAuthContract({ make, test });
+    describeAuthAdminContract({ make, test });
     describeSnapshotContract({ make, test, opts });
 
     // -------------------------------------------------------------- writes (opt-in)

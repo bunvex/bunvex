@@ -4,16 +4,16 @@
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { useQueryScope } from "../context.tsx";
 import { type CronJob, type CronRun, toDataSourceError } from "../data-source.ts";
 import { formatLiteral } from "../database/literal.ts";
 import { formatTime } from "../database/values.ts";
 import { formatDuration } from "../logs/log-list.tsx";
 import { type CronsSearch, cronsRoute } from "../router.tsx";
-import { BAR1 } from "../shell/bars.ts";
+import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
+import { useSchedulesColumn } from "./column.tsx";
 import { describeSchedule } from "./cron.ts";
 import { formatRelative } from "./format.ts";
 import { cronJobsQuery, cronRunsQuery, useSchedulesLive } from "./queries.ts";
@@ -24,7 +24,8 @@ function RunStatus({ run }: { run: CronRun }) {
   return <StatusBadge status={run.status} />;
 }
 
-export function CronsView({ heading }: { heading: ReactNode }) {
+export function CronsView() {
+  const { column, button, sheet } = useSchedulesColumn();
   const scope = useQueryScope();
   const search = cronsRoute.useSearch();
   const navigate = cronsRoute.useNavigate();
@@ -79,11 +80,13 @@ export function CronsView({ heading }: { heading: ReactNode }) {
   ];
 
   return (
-    // no filter column: a deployment has a handful of jobs, all in view (UI-01 §22.5)
+    // no filters: a deployment has a handful of jobs, all in view (UI-01 §22.5)
     <>
+      {column}
       <div className="@container/schedules flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
-          {heading}
+          <h1 className={BAR_TITLE}>Cron jobs</h1>
+          {button}
           {/* the count next to the title, as on the other list screens (UX-14) */}
           {!jobs.isPending && !jobs.error && (
             <span className="text-sm text-muted-foreground tabular-nums">{`${list.length} cron ${list.length === 1 ? "job" : "jobs"}`}</span>
@@ -114,6 +117,7 @@ export function CronsView({ heading }: { heading: ReactNode }) {
           />
         )}
       </div>
+      {sheet}
       {open !== undefined && <CronDetails job={open} name={search.cron!} onClose={() => setCron(undefined)} />}
     </>
   );

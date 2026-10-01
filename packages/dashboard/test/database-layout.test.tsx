@@ -67,21 +67,26 @@ describe("room for the table", () => {
   test("the table list is resizable from its edge, and keeps its width", async () => {
     const first = mount("/database/tasks");
     await heading("tasks");
-    const nav = screen.getByRole("navigation", { name: "Tables" });
-    const handle = within(nav).getByRole("separator", { name: "Resize the table list" });
+    // the screen's section column (UI-01 §23) holds the tables
+    const nav = screen
+      .getByRole("navigation", { name: "Tables" })
+      .closest('[data-slot="section-column"]') as HTMLElement;
+    const handle = within(nav).getByRole("separator", { name: "Resize the column" });
     expect([handle.getAttribute("aria-valuenow"), nav.style.width]).toEqual(["224", "224px"]);
     handle.focus();
     const user = userEvent.setup();
     await user.keyboard("{Shift>}{ArrowRight}{/Shift}{ArrowRight}");
     expect(nav.style.width).toBe("304px");
     await user.keyboard("{Shift>}{ArrowRight}{ArrowRight}{ArrowRight}{/Shift}"); // clamped
-    expect(nav.style.width).toBe("480px");
+    expect(nav.style.width).toBe("440px");
     await expectAccessible(nav);
     first.unmount();
     mount("/database/tasks");
     await heading("tasks");
-    const again = screen.getByRole("navigation", { name: "Tables" });
-    expect(again.style.width).toBe("480px");
+    const again = screen
+      .getByRole("navigation", { name: "Tables" })
+      .closest('[data-slot="section-column"]') as HTMLElement;
+    expect(again.style.width).toBe("440px");
     within(again).getByRole("separator").focus();
     await user.keyboard("{Enter}"); // back to the default
     expect(again.style.width).toBe("224px");
