@@ -3,7 +3,7 @@
 // (sessionStorage, so a reload keeps them) and taken out of the address before the router starts — the
 // route's parameters stay.
 const KEY = "bunvex:dashboard-dev-knobs";
-const KNOBS = ["latency", "fail", "writes", "tables"] as const;
+const KNOBS = ["latency", "fail", "writes", "tables", "tasks", "executions"] as const;
 
 type Env = {
   location: Pick<Location, "search" | "pathname" | "hash">;

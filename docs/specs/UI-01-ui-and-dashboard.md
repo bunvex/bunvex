@@ -1314,6 +1314,71 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   **Function calls**, **Errors**, **Execution time** (p50, p90, p95, p99 — one blue, light to dark,
   labelled at the lines' ends) and, for a query, **Cache hit rate**. Without metrics it says why.
 
+### 18.3 A table's metrics (STUDY-12 §12)
+
+- **Metrics** beside Schema and Indexes on the Database screen (shown when the source has `tableRate`)
+  opens the side panel (`?panel=metrics`), as Convex's table **Metrics** tool (`TableMetrics.tsx`): the rows
+  the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
+  same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
+
+## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
+
+### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+- **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
+  `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,
+  in the config's order. Needs `viewData` and `viewEnvironmentVariables`. **Contract suite**: when offered and
+  allowed, every provider is well-formed (`isAuthProvider`).
+- **Page** (`settings/auth.tsx`, lazy): a list item per provider named by its kind and domain / issuer, its
+  values as code with copy buttons; none → "This deployment has no authentication providers yet." and where they
+  are declared (Convex links its docs; bunvex has no docs site yet); without both operations the page says why and asks nothing of the source; a source without the method
+  gets the "not offered" screen.
+- **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
+
+### 19.2 Settings → Snapshots (STUDY-12 §13.2, a bunvex addition)
+
+- **Contract** (`data-source-snapshot.ts`, every method optional): `getLatestSnapshotExport`,
+  `requestSnapshotExport({ includeStorage })`, `downloadSnapshotExport(id)` → the zip as a `Blob`;
+  `startSnapshotImport({ file, format, mode, table? })` → `failed` with why, or `waiting_for_confirmation` with
+  `changes` (per table: added, deleted); `confirmSnapshotImport`, `cancelSnapshotImport`, `getSnapshotImport`
+  (progress, checkpoints, rows written). Operations `viewBackups`, `createBackups`, `downloadBackups`,
+  `importBackups` (Convex's names); importing also needs to write. **Contract suite**: the latest export is
+  read when offered; an export (opt-in) is requested, followed to `completed` and downloaded (a zip of its
+  size); an import (opt-in, into a scratch table) refuses a bad file, then is confirmed and written.
+- **Page** (`settings/snapshots.tsx`, lazy): **Export** — include stored files, Export a snapshot, its state
+  while it runs (polled every 500 ms), then when, how large, until when, and Download (a `snapshot-<time>.zip`);
+  **Import** — a file (the format guessed from its extension, the table from its name), the format, the
+  table for a single-table format, and what to do when a table has documents (the four modes; replacing
+  everything only for a zip); Upload and review shows what will change per table; the confirm button says how
+  many documents it deletes; then progress, the steps done, and the documents written. Every half follows its
+  operations; a source without either gets the "not offered" screen.
+- **Mock** (`mock/snapshots.ts`, `mock/zip.ts`): exports and imports advance a step per table every
+  `snapshotStepMs` (300 ms); the zip is Convex's layout, stored uncompressed, and the reader also takes deflated
+  entries; ids and creation times in a file are kept (an `append` that repeats an id fails); CSV numbers and
+  booleans are read as such, empty cells left out; `request_export` and `snapshot_import` go to the audit log
+  (History says them in words).
+
+### 19.3 Volume
+
+Measured in headless Chrome against the production build (`vite preview`), with the dev host's new volume
+knobs `?tasks=100000&executions=4000` (100 000 tasks; ~10 000 log lines): the Database screen opened on
+`tasks`, then scrolled to the end 15 times (16 pages, 1 600 rows); a field filter (`done = true`); the Logs
+screen scrolled until ~8 450 lines were loaded, then 10 characters typed in its filter. "Long tasks" are the
+browser's (> 50 ms on the main thread).
+
+| | before | after |
+|---|---|---|
+| Database: long tasks while loading 15 more pages | 16, max 186 ms, total 2 779 ms | **1, 71 ms** |
+| Database: first rows | 594 ms | 483 ms |
+| Logs: long tasks while scrolling to ~8 450 lines, and while filtering them | none | none |
+
+- The cost was the **mock's** `listDocuments`: every page filtered, sorted with a key built per comparison,
+  and cloned every matching document — 170 ms a page at 100 000 documents (in Bun). It now builds each key
+  once and clones only the page: **13 ms** a page. The dashboard's own work (the grid, virtualized; React)
+  stays under the long-task line; a profile of the scrolling shows the rest is React rendering the new rows.
+- Left as is: opening the page with 100 000 tasks has one ~260 ms task — the mock generating them, in the
+  dev host only. A real server pages from an index.
+
 ## 20. Amendment — UX review (30 Sep 2026)
 
 Every screen was captured in both themes at 1 440 px and at phone width and reviewed for consistency; the
