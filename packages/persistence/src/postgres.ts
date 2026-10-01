@@ -30,11 +30,13 @@ import {
   DatabaseTimeoutError,
   type DocWrite,
   decodeLayoutVersion,
+  groupLog,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type LogCommit,
   MAX_KEY_PREFIX_LEN,
   type OpenOptions,
   type Persistence,
@@ -111,6 +113,8 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   /** Retired pools, still ending (closed with the store). */
   private retired = new Set<Promise<void>>();
   private closed = false;
+  /** The store predates PERSIST-01 C11: its ts index is built once we hold the lease. */
+  private needsLogIndex = false;
   private constructor(
     private newPool: () => postgresDriver.Sql,
     /** This instance's connections' application_name, recorded in the lease row: a successor that finds us
@@ -221,14 +225,16 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     const [have] = await this.read(
       (sql) => sql`select to_regclass('documents') is not null as documents,
         to_regclass('indexes') is not null as indexes, to_regclass('bunvex_lease') is not null as lease,
-        to_regclass('persistence_globals') is not null as globals, to_regclass('read_only') is not null as ro`,
+        to_regclass('persistence_globals') is not null as globals, to_regclass('read_only') is not null as ro,
+        to_regclass('indexes_by_ts') is not null as by_ts`,
     );
     await this.checkStore(have, opts);
     // DDL only when a table is missing: a `create … if not exists` still waits for locks another process
     // holds, so a paused process must not wedge every later open (STUDY-24 S3). Concurrent first opens are
     // serialized by an advisory lock (two concurrent `create table` race on the catalog and one fails).
     // The whole transaction runs again if it fails on a lost or timed-out connection: every statement in it
-    // is idempotent, and a failed run left nothing behind.
+    // is idempotent, and a failed run left nothing behind. The ts index (PERSIST-01 C11) is created with the
+    // `indexes` table; a store whose table predates C11 gets it under the lease (see acquireLease).
     if (!(have.documents && have.indexes && have.lease && have.globals && have.ro))
       await this.read((sql, progress) =>
         sql.begin(async (tx) => {
@@ -244,6 +250,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
             key_suffix_hash bytea not null, ts bigint not null, deleted boolean not null, document_id text);
           -- (key, ts desc): an ascending scan reads each key's newest version first, straight off the index.
           create unique index if not exists indexes_by_key on indexes (index_id, key_prefix, key_suffix_hash, ts desc);
+          ${have.indexes ? "" : "create index if not exists indexes_by_ts on indexes (ts); -- the log by ts (PERSIST-01 C11)"}
           create table if not exists bunvex_lease (id int primary key check (id = 1), epoch bigint not null,
             holder text, holder_conn text, expires_at timestamptz not null, max_ts bigint not null);
           create table if not exists persistence_globals (key text primary key, json_value text not null);
@@ -251,6 +258,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           progress(); // COMMIT
         }),
       );
+    // A store written before C11 (its `indexes` table exists without the ts index): building the index blocks
+    // writes, so it waits for the lease, as an upgrade would.
+    this.needsLogIndex = have.indexes && !have.by_ts;
   }
 
   /**
@@ -287,6 +297,16 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
+    const r = await this.acquireOnce(opts);
+    if ("epoch" in r && this.needsLogIndex) {
+      // One timed call (STUDY-25 L3), not retried: a build that timed out is not run twice.
+      await this.call((sql) => sql`create index if not exists indexes_by_ts on indexes (ts)`);
+      this.needsLogIndex = false;
+    }
+    return r;
+  }
+
+  private async acquireOnce(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.tryAcquire(opts);
@@ -575,6 +595,56 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       if (j !== null) out.push(j);
     }
     return out;
+  }
+
+  /**
+   * PERSIST-01 C11, one statement (one snapshot): the bound is the lease row's max_ts (the durable prefix,
+   * written in the same transaction as each group), `c` walks the ts index to the last of the first
+   * `limit` commits, and the rows up to it come back in ts order with the newest ts at or before `afterTs`
+   * (one more index probe).
+   */
+  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+    if (limit <= 0) return [];
+    // The bounds are inlined, not bound: a prepared statement may switch to a generic plan after five runs,
+    // and without the values Postgres estimates a range on ts as a large part of the table and plans
+    // sequential scans (36 ms against 0.7 ms at 300k rows, measured with plan_cache_mode =
+    // force_generic_plan). Inlined, every call gets the index plan. They are integers, checked here.
+    const [after, upTo, n] = [afterTs, Math.min(upToTs, Number.MAX_SAFE_INTEGER), limit].map((x) => {
+      if (!Number.isSafeInteger(x)) throw new Error(`readLog: ${x} is not an integer timestamp or limit`);
+      return x;
+    });
+    // `c` finds the first `limit` commit timestamps one index probe at a time (a loose index scan): a plain
+    // `select distinct ts … order by ts limit n` is planned from statistics, and on a log that just grew
+    // they say the range is small, so Postgres hashes the whole range and sorts it (54 ms against 3 ms for
+    // 1000 commits at 300k rows, measured); `order by ts limit 1` walks the index whatever they say.
+    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on a fresh pool
+    // if its connection was lost or it timed out.
+    const rows = await this.read((sql) =>
+      sql.unsafe(
+        `with recursive
+         b as (select least(${upTo}, coalesce((select max_ts from bunvex_lease where id = 1), ${upTo})) as hi),
+         c(ts, n) as (
+           (select ts, 1 from indexes, b where ts > ${after} and ts <= b.hi order by ts limit 1)
+           union all
+           select (select i.ts from indexes i, b where i.ts > c.ts and i.ts <= b.hi order by i.ts limit 1), c.n + 1
+           from c where c.n < ${n} and c.ts is not null)
+       select ts, index_id, key_prefix, key_suffix, document_id,
+              (select max(ts) from indexes where ts <= ${after}) as prev
+       from indexes where ts > ${after} and ts <= (select max(ts) from c) order by ts`,
+        [],
+        { prepare: false },
+      ),
+    );
+    if (!rows.length) return [];
+    return groupLog(
+      rows.map((r) => ({
+        ts: Number(r.ts),
+        index: r.index_id as number,
+        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
+        id: r.document_id as string | null,
+      })),
+      Number(rows[0].prev ?? 0),
+    );
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store

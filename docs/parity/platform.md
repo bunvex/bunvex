@@ -295,7 +295,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural. |
+| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural; the by-ts log read exists on `indexes` (PERSIST-01 C11), the documents side does not yet. |
 | `json_schemas`, `get_table_column_names`, `test_streaming_export_connection` | same | missing | |
 | Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | missing | |
 | Fivetran source/destination connectors | `crates/fivetran_source`, `fivetran_destination` | missing | Separate programs; low priority. |
@@ -350,6 +350,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | In-place database migrations between versions (`migrations_model`) | `crates/migrations_model` | missing | **Not for now (owner, 2026-10-01, DV-56):** pre-alpha. The version story comes first, and is built (#114): next row. An older layout is refused until an upgrade exists. |
 | Persistence layout version: chosen by configuration (V5/V6) and checked against the database (MySQL v5 refuses a non-V5 configuration; v6 refuses to initialize over a v5 or unversioned database, and checks its shared tables' columns) | `crates/common/src/types/mod.rs:175-197`; `crates/mysql/src/v5/persistence.rs:151-153`; `crates/mysql/src/v6/persistence.rs:207-271` | done | As Convex (STUDY-25 L6, PERSIST-01 C10, conformance K22; #114, DV-107 resolved). bunvex has one layout, so every store records it instead (`persistence_globals.layout_version`, MongoDB `meta`, the memory log's header) and every open checks it. A newer, unknown or older (no upgrade yet) version is refused with `LayoutError`, and so is a store that is not bunvex's (e.g. Convex's own tables), without being written to. A store written before this check opens as version 1 and gets its record under the lease. |
 | `read_only` flag: a writer's open fails with "persistence is read-only, data migration in progress" unless `allow_read_only` (readers pass it); `set_read_only` needs no lease; Postgres and MySQL only | `crates/postgres/src/lib.rs:220-224, 330-334, 357-389`, `sql.rs:198-215, 681-715`; `crates/mysql/src/v6/persistence.rs:168-180`; `crates/db_connection/src/lib.rs:181-196, 238-262` | done | As Convex (STUDY-25 L7, PERSIST-01 C10, conformance K23; #114, DV-108 resolved): `ReadOnlyError` unless `allowReadOnly`; `setReadOnly(on)` on every driver. No CLI yet; import/export will use it. **Divergence (owner, 2026-10-01, DV-125):** also on SQLite and memory+log, where Convex has none. |
+| Reading the commit log by timestamp (`load_documents` over a `TimestampRange`, bounded by the repeatable ts; Postgres pages `documents` by `(ts, table_id, id)`) | `crates/common/src/persistence/mod.rs:562`, `:774`; `crates/postgres/src/sql.rs:269` | partial | PERSIST-01 C11 (STUDY-24 H11, owner 2026-10-01): `readLog(afterTs, upToTs, limit)` on every driver reads **`indexes`** by ts (each commit's index write set, whole commits, a per-commit `prevTs` for gap detection, never above the durable prefix), with a ts index everywhere. Documents by ts and `prev_ts` (retention, export) are not built (DV-66). |
 | OpenAPI specs (`/api/public_openapi.json`, `/api/dashboard_openapi.json`, `/api/v1/openapi.json`) | `crates/local_backend/router.rs` | missing | |
 
 ### 23. Public HTTP function API (non-sync)
@@ -393,10 +394,10 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Status | Count |
 |---|---|
 | done | 4 |
-| partial | 11 |
+| partial | 12 |
 | missing | 224 |
 
 - The four done rows are system indexes, database selection, the client-side timeouts on database calls and
   the retries of transient database errors.
-- The eleven partial rows are: the persistence lease (PERSIST-01 C7: every driver), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
+- The twelve partial rows are: the persistence lease (PERSIST-01 C7: every driver), the log by timestamp (PERSIST-01 C11: on `indexes`), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.
