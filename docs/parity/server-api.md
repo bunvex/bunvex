@@ -26,12 +26,12 @@ Key bunvex facts behind the statuses:
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
 | `db.query(table)` returns a QueryInitializer | server/query.ts | partial | Exists and defaults to `by_creation_time` ascending. It is one mutable object rather than Convex's chain of single-use stages. |
 | `db.normalizeId(table, idString)` | impl/database_impl.ts (`1.0/db/normalizeId`) | done (#44) | Legacy v4/v5 id formats are not accepted (no legacy data). |
-| `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | missing | There are no user-visible system tables yet (`_storage`, `_scheduled_functions`). |
-| User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | missing | The in-flight schema change rejects `_`-prefixed user table names. There is no `db.system` split. |
+| `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | partial (STUDY-30) | `_scheduled_functions`, in its public shape with `by_id` / `by_creation_time`; `_storage` comes with file storage. |
+| User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | partial (STUDY-30) | `ctx.db` refuses `_`-prefixed tables ("System table … is not accessible here."); `db.system` reads the public ones. Convex's exact message is not checked yet. |
 | `db.table(name)` scoped reader (`.get(id)`, `.query()`), the newer "WithTable" API | server/database.ts (`GenericDatabaseReaderWithTable`) | missing | |
 | Queries see a consistent snapshot (serializable reads) | crates/database | done | MVCC snapshot at `visibleTs`. |
 | A mutation's queries see its own writes (merged in index order) | crates/database/src/transaction_index.rs | done | Pending-entry B-tree merge per index. |
-| Read-set tracking for reactivity/OCC ends at the last key actually read | crates/database/src/reads.rs | partial | bunvex records the whole scanned interval even for `take(n)`/`first()`. That is correct but invalidates more often than Convex. |
+| Read-set tracking for reactivity/OCC ends at the last key actually read | crates/database/src/reads.rs, crates/database/src/query/index_range.rs | done | As Convex since #134 (DV-57): up to the last key read, inclusive (desc: from it), the whole range once a scan runs out ([STUDY-06 §9](../study/STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read)). |
 
 ### 2. Query builder: withIndex, filter, order, terminal operations
 
@@ -126,8 +126,8 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | partial | Only `db`. |
-| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | Only `db`. |
-| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | Only `runQuery` / `runMutation`. |
+| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | `db`, `auth`, `scheduler`. |
+| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`. |
 | `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | missing | |
 | `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | missing | |
 | `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Strings instead of references, and internal functions are allowed. |
@@ -158,7 +158,7 @@ Key bunvex facts behind the statuses:
 | `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | missing | New Convex feature. |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | missing | bunvex runs everything on Bun, which is arguably not needed. |
-| Query result caching keyed by args and identity, invalidated by read-set | crates/application cache | done (STUDY-08 §3.6) | As Convex (DV-63): keyed by name, canonical args and (when read) identity; an LRU bounded by bytes (`UDF_CACHE_MAX_SIZE`, 100 MiB); identical concurrent calls coalesced, HTTP included; validated against the write log when looked up, at any later ts (`query_at_ts` too); clock readers expire after 17 s. Sync subscriptions keep their own shared executions (DV-09). Pending, internal: a hit writes its token back (DV-153). |
+| Query result caching keyed by args and identity, invalidated by read-set | crates/application cache | done (STUDY-08 §3.6) | As Convex (DV-63): keyed by name, canonical args and (when read) identity; an LRU bounded by bytes (`UDF_CACHE_MAX_SIZE`, 100 MiB); identical concurrent calls coalesced, HTTP included; validated against the write log when looked up, at any later ts (`query_at_ts` too); clock readers expire after 17 s. Sync subscriptions keep their own shared executions (DV-09). Decided, internal: a hit writes its token back (DV-153). |
 
 ### 8. Validators (`v`) and value types
 
@@ -271,39 +271,39 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | missing | "M". |
-| `scheduler.runAt(timestamp \| Date, fnRef, args)` | server/scheduler.ts | missing | |
-| `scheduler.cancel(id)` | server/scheduler.ts | missing | |
-| Scheduling from a mutation is transactional (only if the mutation commits); from an action it isn't | docs; crates/model scheduled_jobs | missing | |
-| Scheduled mutations run exactly once, scheduled actions at most once | crates/application scheduled_jobs | missing | |
-| `_scheduled_functions` system table (name, args, scheduledTime, completedTime, state pending/inProgress/success/failed/canceled) | server/schema.ts | missing | |
-| Limits: 1000 scheduled per transaction, 16 MiB total args, 4 MiB per job's args; retention 7 days | knobs.rs | missing | |
-| Only mutations and actions (public or internal) can be scheduled | server/scheduler.ts | missing | |
+| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | done (STUDY-30) | |
+| `scheduler.runAt(timestamp \| Date, fnRef, args)` | server/scheduler.ts | done (STUDY-30) | |
+| `scheduler.cancel(id)` | server/scheduler.ts | done (STUDY-30) | |
+| Scheduling from a mutation is transactional (only if the mutation commits); from an action it isn't | docs; crates/model scheduled_jobs | done (STUDY-30) | |
+| Scheduled mutations run exactly once, scheduled actions at most once | crates/application scheduled_jobs | done (STUDY-30) | |
+| `_scheduled_functions` system table (name, args, scheduledTime, completedTime, state pending/inProgress/success/failed/canceled) | server/schema.ts | done (STUDY-30) | Read through `db.system.get` / `db.system.query`. |
+| Limits: 1000 scheduled per transaction, 16 MiB total args, 4 MiB per job's args; retention 7 days | knobs.rs | done (STUDY-30) | The 4 MiB per job is only a warning in Convex; bunvex does not warn yet. |
+| Only mutations and actions (public or internal) can be scheduled | server/scheduler.ts | done (STUDY-30) | Checked when the job runs, as Convex. |
 
 ### 15. Crons
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | missing | |
-| `crons.interval(id, { seconds \| minutes \| hours }, fn, args)` | server/cron.ts | missing | |
-| `crons.hourly(id, { minuteUTC }?, fn, args)` | server/cron.ts | missing | |
-| `crons.daily(id, { hourUTC, minuteUTC }?, …)` | server/cron.ts | missing | |
-| `crons.weekly(id, { dayOfWeek, hourUTC, minuteUTC }, …)` | server/cron.ts | missing | |
-| `crons.monthly(id, { day, hourUTC, minuteUTC }, …)` | server/cron.ts | missing | |
-| `crons.cron(id, "unix cron string", …)` | server/cron.ts | missing | |
-| Unique cron identifiers; input validation (ranges for minute, hour and day) | server/cron.ts | missing | |
+| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | partial (STUDY-30) | `cronJobs()` as Convex; passed as `createServer({ crons })` until the CLI (S1). |
+| `crons.interval(id, { seconds \| minutes \| hours }, fn, args)` | server/cron.ts | done (STUDY-30) | |
+| `crons.hourly(id, { minuteUTC }?, fn, args)` | server/cron.ts | done (STUDY-30) | |
+| `crons.daily(id, { hourUTC, minuteUTC }?, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.weekly(id, { dayOfWeek, hourUTC, minuteUTC }, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.monthly(id, { day, hourUTC, minuteUTC }, …)` | server/cron.ts | done (STUDY-30) | |
+| `crons.cron(id, "unix cron string", …)` | server/cron.ts | done (STUDY-30) | saffron's grammar and semantics. |
+| Unique cron identifiers; input validation (ranges for minute, hour and day) | server/cron.ts | done (STUDY-30) | |
 
 ### 16. HTTP actions and router
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | missing | "M" (custom routes). |
-| `httpRouter()` + `http.route({ path, method, handler })` in `http.ts` | server/router.ts | missing | |
-| `http.route({ pathPrefix: "/x/", … })` prefix routes, longest prefix wins | server/router.ts | missing | |
-| Methods GET / POST / PUT / DELETE / OPTIONS / PATCH; HEAD maps to GET | server/router.ts (`normalizeMethod`) | missing | |
-| Route validation: leading `/`, prefix ends with `/`, `/.files` reserved, duplicate detection | server/router.ts | missing | |
-| `getRoutes()` / `lookup(path, method)` | server/router.ts | missing | |
-| Served on the separate HTTP-actions origin/port (`/.site`-style), with `defineApp({ httpPrefix })` | components/index.ts; crates/local_backend | missing | |
+| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | done (STUDY-31) | Served on `/http/*` and the site port. |
+| `httpRouter()` + `http.route({ path, method, handler })` in `http.ts` | server/router.ts | done (STUDY-31) | Passed as `createServer({ http })` (H1, DV-143) once served. |
+| `http.route({ pathPrefix: "/x/", … })` prefix routes, longest prefix wins | server/router.ts | done (STUDY-31) | |
+| Methods GET / POST / PUT / DELETE / OPTIONS / PATCH; HEAD maps to GET | server/router.ts (`normalizeMethod`) | done (STUDY-31) | |
+| Route validation: leading `/`, prefix ends with `/`, `/.files` reserved, duplicate detection | server/router.ts | done (STUDY-31) | Convex's messages, in its order; the start checks of `http.js` too. |
+| `getRoutes()` / `lookup(path, method)` | server/router.ts | done (STUDY-31) | |
+| Served on the separate HTTP-actions origin/port (`/.site`-style), with `defineApp({ httpPrefix })` | components/index.ts; crates/local_backend | partial (STUDY-31) | `/http/*` and the site port; `httpPrefix` waits for components. |
 
 ### 17. Components
 

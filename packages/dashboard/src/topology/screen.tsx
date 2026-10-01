@@ -3,6 +3,7 @@
 // leader holds the lease on, drawn as a diagram (diagram.tsx). A one-line summary above says the same in words;
 // the events feed below lights a node when one is picked. A deployment of one node (bunvex today) shows that
 // node and its store. Live from watchTopology.
+
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronUp } from "lucide-react";
@@ -13,6 +14,7 @@ import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
 import { type Topology, toDataSourceError } from "../data-source.ts";
 import { type TopologySearch, topologyRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
+import { BAR_TITLE } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { NodePanel } from "./node-panel.tsx";
@@ -55,8 +57,9 @@ export function TopologyScreen() {
     // events docked at the bottom (collapsed: they never steal the canvas's height), the panel at the edge
     <div className="-m-4 flex h-[calc(100svh-3rem)] min-h-[28rem] md:-m-6">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b px-4 py-3 md:px-6">
-          <h1 className="text-xl font-semibold tracking-tight">Topology</h1>
+        {/* Bar 1 (UI-01 §22.5): 44 px, on the docked panel header's line */}
+        <div className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-1 md:px-6">
+          <h1 className={BAR_TITLE}>Topology</h1>
           {t && (
             <span className="text-sm text-muted-foreground" data-testid="topology-summary">
               {summary(t)}

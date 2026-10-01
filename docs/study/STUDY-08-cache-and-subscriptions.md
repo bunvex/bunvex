@@ -1,6 +1,6 @@
 # STUDY-08 — Query cache and subscriptions
 
-- **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D8 built to match Convex (§1.6, §3.6; DV-63), with one internal question for the owner (§3.6, DV-153); D10 to match Convex, gap tracked in docs/parity (DV-57). Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D10 resolved to match Convex in #134 (DV-57, STUDY-06 §9); D8 built to match Convex (§1.6, §3.6; DV-63), with one decided internal divergence (§3.6, DV-153). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`; §1.4 and §3.4 (D9) at `9c9bd14`; §1.5 and §3.5 (splaying) at
   `3ed8c33`; §1.6 and §3.6 (D8, the query cache) at `8cf412a`
@@ -491,8 +491,8 @@ from scratch.
   after it. Convex's step 4 says a hit "will bump the cache result's token", but its guard only stores a
   fresh run's result, so in Convex every lookup re-checks every commit since the entry was made (up to the
   write log's retention). Not observable: the answer is the same. Measured below: without the write-back,
-  the CPU-bound mixed workload served 17 200–23 100 reads/s instead of about 33 000. **Owner question
-  (DV-153).**
+  the CPU-bound mixed workload served 17 200–23 100 reads/s instead of about 33 000. **Decided (owner,
+  2026-10-01): keep it (DV-153).**
 - **No timeouts** in the loop (Convex: a peer older than 16 s is abandoned, and a call fails after 16 s):
   a bunvex run is an in-process promise that always settles, and bunvex has no query time limit yet
   (docs/parity/server-api.md, "user execution time ≤ 1 s", missing). They come with that limit.
@@ -560,9 +560,9 @@ requests never overlap.
 | D5 | A mutation resolves before the client's subscriptions reflect it (no ts in `res`, no client-side wait) | OBSERVABLE | Breaks Convex's read-your-writes-after-await guarantee. Known "N" item | resolved to match Convex (owner, 2026-09-30) in #50 (DV-44) |
 | D6 | The cache key and subscription key have no identity | BUG (latent) | Harmless today (no auth). The moment `ctx.auth` lands, one user's cached or subscribed result would be served to another unless identity is added, as in Convex's `observed_identity` rule | **fixed for the HTTP query cache in #103**; the sync path is next ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B13) |
 | D7 | The cache/subscription key depends on argument field order (`JSON.stringify(args)`) | INTERNAL | Duplicate entries and executions; no wrong results | resolved to match Convex in #21 (DV-45) |
-| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | **Decided (owner, 2026-10-01): match Convex. Built (§3.6, DV-63):** an LRU bounded by bytes (100 MiB), coalescing, lazy validation against the write log, MAX_CACHE_AGE for clock readers, `query_at_ts` cached. Internal differences: a hit writes its token back (**owner question, DV-153**), no timeouts until queries have one; sync keeps its shared executions (DV-09) |
+| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | **Decided (owner, 2026-10-01): match Convex. Built (§3.6, DV-63):** an LRU bounded by bytes (100 MiB), coalescing, lazy validation against the write log, MAX_CACHE_AGE for clock readers, `query_at_ts` cached. Internal differences: a hit writes its token back (**decided: keep it, DV-153**), no timeouts until queries have one; sync keeps its shared executions (DV-09) |
 | D9 | ~~Invalidation is a linear scan over subscriptions × writes × intervals~~, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | **Decided (owner, 2026-10-01): match Convex.** Built: the matching (§3.4), an interval index per index used by the query cache and the sync hub; and splaying (§3.5), as Convex's knobs and defaults. Resolved (DV-64). Splaying: owner, 2026-10-01: approved as Convex; may revisit (a cap would be a divergence) |
-| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-57) |
+| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | **as Convex, fixed in #134** (owner, 2026-10-01: match Convex; DV-57): the read-set ends at the last key read ([STUDY-06 §9](STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read)); a cached or subscribed `first()` re-runs 0 times per append past its head (was 1) |
 | D11 | `err` has no `errorData` | OBSERVABLE | `ConvexError` data is lost (STUDY-11) | resolved to match Convex in #32 (DV-49) |
 
 ## 5. Tests
@@ -575,6 +575,8 @@ requests never overlap.
 - **Read-your-writes (once implemented):** after `await mutation()`, the client's subscribed query
   already includes the write, with no extra wait.
 - **Splaying** (§3.5): threshold, window, per-query draws, read-your-writes, close during a pending splay.
+- **Narrow read-sets** (D10): appends past a subscribed `first()` re-run nothing; deleting its head re-runs
+  it (`packages/server/test/sync.test.ts`); the same for a cached query (`read-set-prefix.test.ts`).
 - **Cross-check:** the same scenario on Convex with the official client, comparing the sequence of
   observed states.
 
@@ -584,7 +586,7 @@ requests never overlap.
    after the one it ran at, until a commit writes into its reads.
 2. Should subscriptions share the cache, as Convex's do, to collapse identical executions across
    clients and HTTP? Not now: `SyncHub` already shares one execution per key and ts (DV-09); sharing
-   results between HTTP and sync is not observable.
-3. **Owner (DV-153):** a cache hit writes its refreshed token back (§3.6), which Convex's comment intends
-   and its code does not do. Recommendation: keep it (not observable, about 1.6× the reads/s in the
+   results between HTTP and sync is not observable. Confirmed by the owner, 2026-10-01.
+3. **Decided (owner, 2026-10-01; DV-153):** a cache hit writes its refreshed token back (§3.6), which Convex's comment intends
+   and its code does not do. Accepted as recommended: keep it (not observable, about 1.6× the reads/s in the
    CPU-bound mixed benchmark).

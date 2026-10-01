@@ -17,6 +17,7 @@ import { useLogLines } from "../logs/use-logs.ts";
 import { FunctionStats } from "../metrics/function-stats.tsx";
 import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { useRunner } from "../runner/context.tsx";
+import { BAR1 } from "../shell/bars.ts";
 import { displayValidator } from "../validators.ts";
 import { buildFunctionTree, describeFunction, type FunctionNode, matchFunctions, splitPath } from "./tree.ts";
 
@@ -107,19 +108,21 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
       aria-label="Functions"
       className="flex max-h-72 shrink-0 flex-col border-b lg:max-h-none lg:w-64 lg:border-r lg:border-b-0"
     >
-      <div className="p-3">
+      {/* on Bar 1's line (44 px), as the filter columns' headers */}
+      <div className="flex min-h-11 items-center border-b px-3">
         <label htmlFor={searchId} className="sr-only">
           Search functions
         </label>
         <Input
           id={searchId}
           type="search"
+          className="h-7"
           placeholder="Search functions"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <ul ref={list} className="flex-1 overflow-y-auto pb-3">
+      <ul ref={list} className="flex-1 overflow-y-auto py-2">
         {tree.map((n) => (
           <Branch
             key={n.kind === "folder" ? n.path : n.module}
@@ -188,14 +191,17 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
   const search = functionsRoute.useSearch();
   const navigate = functionsRoute.useNavigate();
   // Statistics first, as Convex; a link with log filters opens the logs
-  const tab = search.tab ?? (search.type || search.q ? "logs" : "statistics");
-  // the log filters in the URL (`?function=<the open one>&type=&q=`) and kept in this browser per function;
-  // the list is only this function's, so there is no function filter
+  const tab = search.tab ?? (search.type || search.q || search.range || search.from ? "logs" : "statistics");
+  // the log filters in the URL (`?function=<the open one>&type=&q=&range=` or `&from=&to=`) and kept in this
+  // browser per function; the list is only this function's, so there is no function or kind filter
   const [view, setView] = useLogViewInUrl(
     `bunvex:function-logs:${scope.scope}:${fn.path}`,
-    { type: search.type, q: search.q },
-    ({ type, q }, replace) =>
-      navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q, tab }), replace }),
+    { type: search.type, q: search.q, range: search.range, from: search.from, to: search.to },
+    ({ type, q, range, from, to }, replace) =>
+      navigate({
+        search: (s: FunctionsSearch): FunctionsSearch => ({ function: s.function, type, q, range, from, to, tab }),
+        replace,
+      }),
   );
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
@@ -207,36 +213,48 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
       onValueChange={(t) =>
         navigate({ search: (s: FunctionsSearch): FunctionsSearch => ({ ...s, tab: t as "statistics" | "logs" }) })
       }
-      className="flex min-w-0 flex-1 flex-col gap-0"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
     >
-      <div className="flex flex-col gap-3 px-4 pt-4 md:px-6 md:pt-6">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="font-mono text-xl font-semibold tracking-tight">{name}</h1>
-          <span className="text-sm text-muted-foreground">
-            {describeFunction(fn)} in <span className="font-mono text-xs">{module}</span>
-          </span>
-          <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
-            <code className="font-mono text-xs break-all">{fn.path}</code>
-            <CopyButton text={fn.path} label="Copy function path" iconOnly />
-            {runner.available && (
-              <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
-                <Play aria-hidden="true" />
-                Run
-              </Button>
-            )}
-          </span>
-        </div>
-        <FunctionValidators fn={fn} />
-        <TabsList aria-label={`${fn.path}: statistics or logs`}>
+      {/* Bar 1 (UI-01 §22.5): the function, its two tabs, its path and Run — 44 px, as on the grid screens */}
+      <div className={BAR1}>
+        <h1 className="font-mono text-base font-semibold tracking-tight">{name}</h1>
+        <span className="text-sm text-muted-foreground">
+          {describeFunction(fn)} in <span className="font-mono text-xs">{module}</span>
+        </span>
+        <TabsList aria-label={`${fn.path}: statistics or logs`} className="mx-2">
           <TabsTrigger value="statistics">Statistics</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
+        <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
+          <code className="font-mono text-xs break-all">{fn.path}</code>
+          <CopyButton text={fn.path} label="Copy function path" iconOnly />
+          {runner.available && (
+            <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
+              <Play aria-hidden="true" />
+              Run
+            </Button>
+          )}
+        </span>
       </div>
-      <TabsContent value="statistics" className="p-4 md:p-6">
+      {/* the declared validators with the statistics: the Logs tab keeps the whole height for its list */}
+      <TabsContent
+        value="statistics"
+        className="flex flex-col gap-6 p-4 md:p-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
+      >
+        <FunctionValidators fn={fn} />
         <FunctionStats fn={fn} />
       </TabsContent>
-      <TabsContent value="logs" className="flex min-h-0 flex-1">
-        <LogsView key={fn.path} label={`Log lines of ${fn.path}`} logs={logs} view={view} onView={setView} />
+      {/* the rest of the screen's height (a screen's own on narrower screens): the list scrolls inside (UI-01 §22.4) */}
+      <TabsContent value="logs" className="flex h-[calc(100svh-3rem)] min-h-0 flex-none lg:h-auto lg:flex-1">
+        <LogsView
+          key={fn.path}
+          label={`Log lines of ${fn.path}`}
+          logs={logs}
+          view={view}
+          onView={setView}
+          widthKey="bunvex-dashboard:function-logs-filters-width"
+          exportPrefix={`logs-${fn.path.replace(/[^\w.-]+/g, "_")}`}
+        />
       </TabsContent>
     </Tabs>
   );
@@ -248,7 +266,8 @@ export function FunctionsScreen() {
   const fn = functions.find((f) => f.path === search.function);
   return (
     // full-bleed inside <main>: the sidebar and the details panel run to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:flex-row">
+    // from lg a screen's height: the tree and the function scroll inside, as the Database screen's
+    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:h-[calc(100svh-3rem)] lg:flex-row">
       <FunctionsSidebar functions={functions} current={fn?.path} />
       {fn ? (
         <FunctionView key={fn.path} fn={fn} />

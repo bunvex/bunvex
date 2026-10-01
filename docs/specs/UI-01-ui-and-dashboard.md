@@ -890,6 +890,10 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 
 ### 13.1 The Logs screen
 
+> The layout, the filters' form, the toolbar and the details' header are superseded by §22.4 (the Logs
+> redesign, 1 Oct 2026); the lines, paging, pausing, clearing, the URL and browser view and the details'
+> content below still hold.
+
 - **`/logs`** (`src/logs/`): every function's log lines, newest first, one row per line: time (with ms),
   the request id's first four characters, the execution's outcome and duration on its last line, level,
   the function (its kind's letter and path) and the message; errors and failed executions in the
@@ -1614,3 +1618,96 @@ Both canvases fit never past 100 % zoom and share their controls and dot grid.
   and 1024: the grid ends at the viewport's bottom, Bar 1's bottom line and the panel header's within 1 px, no
   page scroll, a click on another row switches the panel. Follow-up: the same full-bleed, two-bar layout for
   Logs, Files, Schedules and History (each has its own header and toolbar today).
+
+### 22.4 Logs redesign (the owner's call, 1 Oct 2026)
+
+Logs take the Database screen's visual language (§22.3); the reference was a Supabase-like logs screen, for
+the layout only. Supersedes §13.1's layout, its multi-select filters and its toolbar. One component,
+`LogsView` (`src/logs/screen.tsx`), is both the Logs screen and a function's **Logs** tab.
+
+- **Filter column** (`filter-column.tsx`) on the left, as the tables list: fixed, resizable from its right
+  edge (the window-splitter handle), its width kept in this browser (`bunvex-dashboard:logs-filters-width`;
+  the Functions tab keeps its own). Its header ("Filters", Reset) is 44 px, on Bar 1's line. Sections, each a
+  labelled group: **Time range** (radios: All time, Last minute, Last 5 / 15 minutes, Last hour);
+  **Functions**, **Type** (success, failure, debug, info, warn, error) and **Function kind** (query,
+  mutation, action) as checkboxes, each with the number of loaded lines it holds **in text** — counted under
+  the time range and the search, not under the other choices (`facetCounts`). Every box checked is "all"
+  (later functions included). The Functions tab's column has Time range and Type only. Below `md` the
+  column is a **Filters** button in Bar 1 that opens the same sections in a sheet (the shared panel).
+- **The view in the URL and the browser** (STUDY-12 L7, extended): `?function=&type=&kind=&q=&range=15m`;
+  a brushed window is `&from=<ms>&to=<ms>` (both, `from < to`, or neither) and overrides the range. The
+  window lives in the URL only (not kept in the browser: it is a moment, not a preference). A range that
+  reaches past the oldest loaded line loads older pages until it is covered or the buffer is full (10 000
+  lines; STUDY-12 L2, L4). The Functions tab carries `type, q, range, from, to` next to `?function=`.
+- **Bar 1** (`log-bar.tsx`, 44 px, its bottom line continuing the panel header's): the heading (Logs
+  screen), the search box (200 ms), the line count ("208 lines", "57 of 208 lines"; polite live region),
+  then **Live** (a dot that pulses, steady under reduced motion; pressing it pauses, and it becomes "Resume (N
+  new)"), **Export** and **Clear** ("Show N cleared" when some are hidden). Beside a docked panel the bar is
+  narrow: Export and Clear keep their icons (a container query, `@container/logs`).
+- **Export**: the lines the list shows (every filter applied, events left out), oldest first, as **JSON
+  Lines** (`logs-<ISO time>.jsonl`, `application/x-ndjson`), saved the way snapshot exports are (an object
+  URL and a download link); no library.
+- **Bar 2, the histogram** (`histogram.tsx`, `histogram-data.ts`): the loaded lines' volume over time in 60
+  buckets, from the oldest loaded line (or the range's start, when earlier) to now; counted under every
+  filter but time. Stacked by outcome: success in neutral ink (bottom), warnings amber, failures red (a
+  failed execution or an error line); 2 px gaps between buckets and segments, the top segment's corners
+  rounded. The amber and red steps are chart-only and pass the dataviz palette checks on each theme's
+  surface (colour-vision ΔE ≥ 8); the text tokens alone did not. A **legend** with icons, words and totals;
+  colour is never the only signal. Hover — or focus the strip and use ←/→ — shows a bucket's tooltip
+  (its time and counts per outcome). **Drag across the strip** to pick a window (a click picks one bucket);
+  the keyboard does it with Shift+←/→ and Enter; Escape or **Clear selection** drops it. A preset range is
+  drawn as a band and named on the strip. A screen-reader table carries the same numbers.
+- **The grid** (`fill`, edge to edge, down to the bottom): Time, Level, Function (kind letter + path),
+  Outcome / duration, Request, Message (on a phone: Time, Message, …, UX-6). Events interleave as before.
+- **Details** only while a line is selected, docked on the right, following the selection (click, ↑/↓). New
+  at the top: the time as ISO, local and relative ("58 seconds ago"), and the level; at the end, the line as
+  **raw JSON** (read-only). The rest as before: function, request id (copy), outcome, started by, resources
+  used, the message, the request's other lines and its call tree.
+- Tests: counts and filters, presets and the URL, the window (keyboard and drag) filtering and in the URL,
+  older pages for a range past the loaded lines, the export's content, the details' time and raw JSON, the
+  Functions tab's column, the phone sheet; e2e at 1440: the filter header, Bar 1 and the panel header on one
+  line, the grid down to the bottom, no page scroll; dragging across the histogram filters and goes into the
+  URL; the Functions tab with its own column and a screen-high list.
+
+### 22.5 The other grid screens in the same language (the owner's call, 1 Oct 2026)
+
+Follows §22.3 and §22.4: History, Schedules (scheduled functions and cron jobs) and Files take the Database /
+Logs layout, and the Functions, Schema and Topology screens' top bars match it. Supersedes the layouts of
+§14.2, §14.3 and §14.5 (their content, filters and actions still hold).
+
+- **The frame** (`shell/bars.ts`): full-bleed, a screen's height; **Bar 1** — the heading (`text-base`), the
+  count, the actions — 44 px, so its bottom line continues the docked panel header's and the filter column's
+  header; **Bar 2** — search and filters — where a screen has them outside a column; then the grid (`fill`),
+  edge to edge, down to the bottom. Details are the shared docked panel; while open they **follow the
+  current row** (click, ↑/↓; the grid keeps the focus), as on Database and Logs.
+- **The filter column** (`shell/facet-column.tsx`, shared with Logs): resizable, width kept per screen, a
+  44 px "Filters" header with Reset, labelled sections of checkboxes or radios with each choice's count in
+  text; below `md`, a Filters button in Bar 1 opens the same sections in a sheet.
+  - **History**: *Days* (radios: Any day, Today, Last 7 days, Last 30 days — they set `from`), *Day range*
+    (From / Until), *Action* (checkboxes, `?action=a,b`, filtered by the source as before). An action's count
+    is of the loaded events of those days **for every action** (a second query, the same one when no action
+    is picked), so a narrowed list still shows what the other actions would add; a note says the counts are
+    of the loaded events.
+  - **Scheduled functions**: *State* (Pending, Running; filtered here, over the loaded runs: `?state=`) and
+    *Function* (radios, filtered by the source, as before: `?function=`), each with its loaded runs' count.
+    Bar 1: Schedules, the two pages as tabs, the count, Cancel all.
+  - **Cron jobs**: no column — a deployment has a handful of jobs, all in view.
+  - **Files**: no column — its filters are the source's (order, upload days, a storage id), in Bar 2; a
+    content-type facet over one loaded page would mislead. Bar 1: Files, "N files stored", Delete N and
+    Upload (its icon only when the bar is narrow, beside a docked panel).
+- **Functions**: Bar 1 holds the function's name, kind and module, the **Statistics / Logs tabs**, its path
+  (copy) and Run; the tree's search sits on the same 44 px line. The declared validators move into the
+  Statistics tab, so the Logs tab (§22.4) has the whole height below the bar; from `lg` the screen is a
+  screen's height and the tree and the statistics scroll inside.
+- **Schema and Topology**: their top bars become Bar 1 (44 px), on the docked panel header's line.
+- Tests: History's action counts (every action's, while the list is narrowed), the URL, Reset, the day
+  presets, the details following ↓; Scheduled's function and state facets with counts and the URL; e2e at
+  1440: History, Scheduled, Crons and Files — Bar 1, the filter header and the panel header on one line, the
+  grid to the bottom, no page scroll, ↓ moves the open details; Functions' 44 px Bar 1 with its tabs.
+
+### 22.6 Schema: spacing inside a group box (1 Oct 2026)
+
+A group box (a cluster of linked tables, §15) lays its tables out with the root's spacing — 96 px between
+layers, 56 between tables. ELK reads its spacing options per parent, so the boxes had used its defaults: the
+tables sat 20 px apart and the reference lines ran along the cards' borders, between `tasks`, `messages` and
+`users`. Test: inside a box, consecutive layers are at least 90 px apart.

@@ -42,10 +42,12 @@ import {
   type Doc,
   type IndexDef,
   indexKey,
+  indexKeyValues,
   maintainedIndexes,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
+import { SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
 
@@ -220,7 +222,17 @@ export type PaginationResult = {
 };
 
 export class Tx {
-  reads: Interval[] = [];
+  private readList: Interval[] = [];
+  /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
+  readonly unsettled: ScanReads[] = [];
+  /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
+  get reads(): Interval[] {
+    if (this.unsettled.length) {
+      for (const s of this.unsettled) s.settle();
+      this.unsettled.length = 0;
+    }
+    return this.readList;
+  }
   /** The instance secret that signs pagination cursors (STUDY-17). */
   instanceSecret = "";
   /**
@@ -244,7 +256,7 @@ export class Tx {
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
     /** System transactions (the engine's own) may touch `_`-prefixed system tables; app code may not. */
-    private readonly system = false,
+    private readonly systemTx = false,
   ) {
     this.day = Math.floor(nextCreationTime / 86_400_000);
   }
@@ -280,7 +292,7 @@ export class Tx {
     return this.identity;
   }
   private get systemAccess() {
-    return this.system || this.systemDepth > 0;
+    return this.systemTx || this.systemDepth > 0;
   }
 
   /**
@@ -294,6 +306,21 @@ export class Tx {
     } finally {
       this.systemDepth--;
     }
+  }
+
+  /** `asSystem`, for a synchronous call. */
+  asSystemSync<T>(fn: () => T): T {
+    this.systemDepth++;
+    try {
+      return fn();
+    } finally {
+      this.systemDepth--;
+    }
+  }
+
+  /** Convex's `db.system`: read access to the system tables apps may see (`_scheduled_functions`). */
+  get system(): SystemReader {
+    return new SystemReader(this);
   }
 
   /**
@@ -363,9 +390,10 @@ export class Tx {
     this.recordInterval(ix.metaRead);
   }
 
-  private recordInterval(i: Interval) {
-    this.reads.push(i);
-    if (!this.system && this.reads.length > TRANSACTION_MAX_READ_SET_INTERVALS)
+  /** @internal (ScanReads) */
+  recordInterval(i: Interval) {
+    this.readList.push(i);
+    if (!this.systemTx && this.readList.length > TRANSACTION_MAX_READ_SET_INTERVALS)
       throw new Error(
         `Too many reads in a single function execution (limit: ${TRANSACTION_MAX_READ_SET_INTERVALS}). ${OVER_LIMIT_HELP}`,
       );
@@ -375,7 +403,7 @@ export class Tx {
   private recordDoc(json: string) {
     this.docsRead++;
     this.bytesRead += json.length;
-    if (this.system) return;
+    if (this.systemTx) return;
     if (this.docsRead > TRANSACTION_MAX_READ_SIZE_ROWS)
       throw new Error(
         `Too many documents read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_ROWS}). ${OVER_LIMIT_HELP}`,
@@ -487,8 +515,14 @@ export class Tx {
   /** @internal (QueryImpl) */
   async *iterate(st: QState): AsyncGenerator<Doc> {
     if (!st.t || !st.ix) return;
-    this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.hi });
-    for await (const d of this.stream(st)) if (st.filters.every((f) => passes(f, d))) yield d;
+    const reads = new ScanReads(this, st);
+    for await (const d of this.stream(st)) {
+      reads.reached(d);
+      if (!st.filters.every((f) => passes(f, d))) continue;
+      reads.handOut();
+      yield d;
+    }
+    reads.exhausted();
   }
 
   private async snapshotRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
@@ -632,7 +666,7 @@ export class Tx {
       }
     }
     // Read-set: the range this page covers (to the end cursor, or to the last key read).
-    const readHi = st.desc ? hi : exhausted ? hi : succ(last ?? lo);
+    const readHi = st.desc ? hi : exhausted ? hi : readEndAfter(last ?? lo, hi);
     const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
     this.recordInterval({ index: st.ix.id, lo: readLo, hi: readHi });
     if (
@@ -652,22 +686,35 @@ export class Tx {
 
   /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
   collectLimit() {
-    return this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
+    return this.systemTx ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
   }
 
   /** @internal (QueryImpl) */
   async runQuery(st: QState, limit: number): Promise<Doc[]> {
+    // As Convex's `limit` operator: `take(0)` never pulls from the scan, so it reads nothing.
     if (limit <= 0 || !st.t || !st.ix) return [];
-    // Read-set = the whole scanned interval (a take(n) could narrow it to what was read; that only affects
-    // how often the query cache is invalidated, never correctness).
-    this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.hi });
-    if (st.filters.length === 0) return this.page(st, st.range.lo, st.range.hi, limit);
+    const reads = new ScanReads(this, st);
+    if (st.filters.length === 0) {
+      const docs = await this.page(st, st.range.lo, st.range.hi, limit);
+      // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
+      // one ran out of the range.
+      if (docs.length < limit) reads.exhausted();
+      else {
+        reads.reached(docs[docs.length - 1]);
+        reads.handOut();
+      }
+      return docs;
+    }
     // With filters: stream until `limit` documents pass (reads count toward the limits as they happen).
+    // Documents the filter drops were scanned all the same: they extend the read-set.
     const out: Doc[] = [];
     for await (const d of this.stream(st)) {
+      reads.reached(d);
       if (st.filters.every((f) => passes(f, d))) out.push(d);
       if (out.length >= limit) break;
     }
+    if (out.length < limit) reads.exhausted();
+    else reads.handOut();
     return out;
   }
 
@@ -862,6 +909,101 @@ export class Tx {
   get hasWrites() {
     return this.writes.size > 0;
   }
+}
+
+/**
+ * The read-set of one index range as it is consumed, as Convex's `IndexRange` (STUDY-06 §9): each document the
+ * scan reaches — filtered out or not — extends the recorded interval from the range's start (in scan order) to
+ * that document's key, inclusive; a scan that runs out records the whole range. A scan that stops early
+ * (`take(n)`, `first()`, `unique()`, a `for await` that breaks) therefore leaves writes past its last key out
+ * of the read-set.
+ *
+ * The interval is recorded when the scan reaches its first document (nothing for a scan that reads nothing,
+ * e.g. `take(0)`), then kept up to date in place. Encoding a key per document would double the cost of a
+ * long `for await` or a filtered scan, so only the last document reached is kept, and its key is encoded
+ * when the transaction's read-set is next looked at (`Tx.reads`). The app may change a document it was
+ * given, and the key must be the stored one: `handOut` keeps the key's values before it gets it.
+ */
+class ScanReads {
+  private iv: Interval | null = null;
+  /** The last document reached, while the app does not hold it. */
+  private last: Doc | null = null;
+  /** Or: the key values of the last document reached, taken when it was handed to the app. */
+  private vals: KeyValue[] | null = null;
+  constructor(
+    private readonly tx: Tx,
+    private readonly st: QState,
+  ) {}
+
+  /** The scan reached `doc` (in its order). */
+  reached(doc: Doc) {
+    if (!this.iv) this.open();
+    if (this.last === null && this.vals === null) this.tx.unsettled.push(this);
+    this.last = doc;
+    this.vals = null;
+  }
+
+  /**
+   * The app is about to get the last document reached, and may change the object: keep its key values now.
+   * Strings, numbers, booleans and null cannot change; an object, array or bytes value could, so a key
+   * holding one is computed right away.
+   */
+  handOut() {
+    const d = this.last;
+    if (d === null) return;
+    const vals = indexKeyValues(this.st.ix!, d);
+    for (const v of vals)
+      if (v !== null && typeof v === "object") {
+        this.settle();
+        return;
+      }
+    this.vals = vals;
+    this.last = null;
+  }
+
+  /** The scan ran out of its range. */
+  exhausted() {
+    if (!this.iv) this.open();
+    const iv = this.iv!;
+    iv.lo = this.st.range.lo;
+    iv.hi = this.st.range.hi;
+    this.last = null;
+    this.vals = null;
+  }
+
+  /** @internal (Tx.reads) End the interval at the last document reached. */
+  settle() {
+    let key: Uint8Array;
+    if (this.vals !== null) key = encodeKey(this.vals);
+    else if (this.last !== null) key = indexKey(this.st.ix!, this.last);
+    else return;
+    this.last = null;
+    this.vals = null;
+    const iv = this.iv!;
+    if (this.st.desc) {
+      iv.lo = key;
+      iv.hi = this.st.range.hi;
+    } else {
+      iv.lo = this.st.range.lo;
+      iv.hi = readEndAfter(key, this.st.range.hi);
+    }
+  }
+
+  private open() {
+    // The whole range until settled; never seen as such (`Tx.reads` settles first).
+    this.iv = { index: this.st.ix!.id, lo: this.st.range.lo, hi: this.st.range.hi };
+    this.tx.recordInterval(this.iv);
+  }
+}
+
+/**
+ * Where an ascending scan's read-set ends once it reached `key`, as Convex's `Interval::split_after`: just
+ * past every key starting with `key` (Convex's `BinaryKey::increment`; an index key ends with the document id,
+ * so that is just past `key` itself), but never past the range's own end `hi`.
+ */
+export function readEndAfter(key: Uint8Array, hi: Uint8Array): Uint8Array {
+  const end = prefixEnd(key);
+  return compareKeys(end, hi) < 0 ? end : hi;
 }
 
 function countRemovals(pend: [Uint8Array, Doc | null][]) {

@@ -1,6 +1,6 @@
 # STUDY-30 — Scheduled functions and cron jobs
 
-- **Status:** accepted: S1–S3 as recommended (owner, 2026-10-01)
+- **Status:** accepted: S1–S4 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** platform.md §4–§5, server-api.md §14–§15; STUDY-23 (session requests, the pattern for system
   tables written with app writes); STUDY-28 (built-in auth delivers its email through the scheduler)
@@ -214,9 +214,11 @@ It runs in the process that owns the committer (one per deployment, STUDY-24).
 ### 3.4 Crons
 
 - **`cronJobs()`** is in `@bunvex/server`, with Convex's builders, shape and messages.
-- **The cron string parser and next-run computation** are bunvex's own TS code, written to saffron's
-  grammar: `*`, lists, ranges, steps, month and day names, and dom/dow OR semantics. They are tested
-  against cases taken from saffron's behaviour.
+- **The cron string parser and next-run computation** are bunvex's own TS code, written to saffron's (get-convex fork, rev 1d84237)
+  grammar: `*`, lists, ranges, steps, month and day names, `L`/`W`/`#`, and dom/dow OR semantics, with saffron's
+  quirks (a wrapped range also includes `a−1`; wrapped steps over day/month/weekday; its `any()` heuristic;
+  its one-candidate-per-month search). A fixture of 7143 cases answered by that exact saffron build (the
+  study's vectors plus random expressions) pins it.
 - **Splay** as Convex, with `CRON_SPLAY_SECONDS` (0 turns it off).
 - **Tables, run logs** (5 per cron, truncation) and the executor rules: as Convex.
 - **Registration (S1):** bunvex has no push yet (CLI and codegen are Phase 3 item 7), so crons are passed
@@ -225,7 +227,12 @@ It runs in the process that owns the committer (one per deployment, STUDY-24).
 
 ### 3.5 Dashboard
 
-Admin-only system functions for the dashboard session to build the screens on:
+Admin-only system functions for the dashboard session to build the screens on, with Convex's names, arguments
+and private document shapes (`_scheduled_jobs` / `_cron_*`: times in ns, args as bytes, `state.type`), built
+on the way out of bunvex's storage (S2). Until admin keys (Phase 3 item 6) they are called in-process
+(`functions.runSystemQuery`); clients cannot reach any `_system` name. The dashboard contract
+(`DeploymentFeatures`) follows Convex here too: a running job can be canceled, canceling a finished one is a
+no-op, and `minuteUTC` is optional.
 - **Schedules:** list pending and in-progress jobs, optionally by function; cancel one; cancel all.
 - **Crons:** list with last and next run; run history.
 
@@ -243,6 +250,7 @@ Admin-only system functions for the dashboard session to build the screens on:
 | S1 | Crons are registered by passing them to the server (`createServer({ crons })`) and diffed at startup, not discovered in `convex/crons.ts` at push | bunvex has no push or analyze step until the CLI (Phase 3 item 7); then `crons.ts`'s default export is discovered, keeping the same API | **accepted** (owner, 2026-10-01) |
 | S2 | `_scheduled_functions` is a real system table projected to the public shape, not a virtual table over `_scheduled_jobs` | same documents, ids and indexes for apps; no virtual-table layer to build first | **accepted** (owner, 2026-10-01) |
 | S3 | Until log streaming (Phase 4), scheduled and cron runs' log lines go to the server's log output, not a function log; cron run logs are as Convex | bunvex has no function-execution log yet | **accepted** (owner, 2026-10-01) |
+| S4 | A cron string whose day of month is `L-nW` evaluated from certain Mondays: saffron computes `day + n − daysInMonth` unsigned and underflows, which aborts the Convex process; bunvex treats that comparison as false and answers | a crash is not behaviour to copy; every other saffron quirk is kept, so schedules match | **accepted** (owner, 2026-10-01) |
 
 Recorded in the ledger as DV-139–DV-141 (decided). Convex's code is followed where it disagrees with its docs: 16 MiB rather than 8 MB, and cancel of a
 finished job as a no-op. That matches Convex, so it needs no decision.
