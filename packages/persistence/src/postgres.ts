@@ -15,9 +15,19 @@
 // (30 s by default, Convex's POSTGRES_TIMEOUT_SECONDS), per round trip. A timed-out call's connection is never
 // reused: postgres.js does not expose its connections, so the whole pool is retired (in-flight calls on it
 // may finish; its connections are destroyed after one more timeout) and a fresh one takes the next calls.
+//
+// Retries (STUDY-25 L4/L5), as Convex's Postgres driver: a read, or the bootstrap, that fails because its
+// connection was lost or timed out runs once more on a fresh pool. A flush that times out or loses its
+// connection is transient (`isTransient`; a lost connection only since DV-123 — Convex counts only timeouts
+// on Postgres): the committer retries it, and this driver keeps the group for that retry; a flush that loses
+// its connection before its transaction began is also retried once here, on a fresh pool (Convex's
+// `transact`). Before re-running a group, the driver reads the lease record: a group an earlier attempt did
+// commit is acknowledged without writing (DV-124). One that lands after that read hits the primary key:
+// `UnsureCommitError`.
 import {
   checkLayoutVersion,
   checkUnversionedTables,
+  DatabaseTimeoutError,
   type DocWrite,
   decodeLayoutVersion,
   type IndexWrite,
@@ -31,11 +41,14 @@ import {
   ReadOnlyError,
   type ReadOnlyFlag,
   renewTimeoutMs,
+  retriedGroupLanded,
+  retryOnce,
   type ScanDocs,
   type SplitRow,
   scanLatest,
   splitKey,
   splitPages,
+  UnsureCommitError,
   withTimeout,
 } from "@bunvex/core/persistence";
 import type postgresDriver from "postgres";
@@ -59,6 +72,29 @@ const COLUMNS = {
     "deleted boolean",
     "document_id text",
   ],
+};
+
+/** postgres.js and socket codes of a connection that is gone, and the server's codes for "this session is
+ *  over": admin_shutdown, crash_shutdown, cannot_connect_now, and the connection_exception class (08xxx). */
+const LOST = new Set([
+  "CONNECTION_CLOSED",
+  "CONNECTION_DESTROYED",
+  "CONNECTION_ENDED",
+  "CONNECT_TIMEOUT",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "57P01",
+  "57P02",
+  "57P03",
+]);
+/** The connection a call ran on is gone (Convex: `tokio_postgres::Error::is_closed`). */
+export const connectionLost = (e: unknown) => {
+  const code = (e as { code?: unknown })?.code;
+  return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
 export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
@@ -138,6 +174,25 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     );
   }
 
+  /**
+   * A read (or an idempotent bootstrap step): one call, run once more on a fresh pool if its connection was
+   * lost or it timed out (STUDY-25 L5; Convex's `with_retry` retries a poisoned connection once, on a new
+   * connection "in case other pooled connections are also stale").
+   */
+  private read<T>(fn: (sql: postgresDriver.Sql, progress: () => void) => Promise<T>) {
+    const sql = this.sql;
+    return retryOnce(
+      () => this.call(fn),
+      (e) => e instanceof DatabaseTimeoutError || connectionLost(e),
+      () => this.retire(sql),
+    );
+  }
+
+  /** A timeout (as Convex's `is_transient_db_error` on Postgres) or a lost connection (DV-123; STUDY-25 L4). */
+  isTransient(e: unknown) {
+    return e instanceof DatabaseTimeoutError || connectionLost(e);
+  }
+
   private retire(sql: postgresDriver.Sql) {
     if (this.sql !== sql || this.closed) return; // already retired by another call that timed out
     this.sql = this.newPool();
@@ -153,7 +208,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   /** The store's checks (C10), then the tables, created only when one is missing. */
   private async bootstrap(opts: OpenOptions) {
     // What is there decides what may happen: read-only, never waiting on a lock, before any write.
-    const [have] = await this.call(
+    const [have] = await this.read(
       (sql) => sql`select to_regclass('documents') is not null as documents,
         to_regclass('indexes') is not null as indexes, to_regclass('bunvex_lease') is not null as lease,
         to_regclass('persistence_globals') is not null as globals, to_regclass('read_only') is not null as ro`,
@@ -162,8 +217,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     // DDL only when a table is missing: a `create … if not exists` still waits for locks another process
     // holds, so a paused process must not wedge every later open (STUDY-24 S3). Concurrent first opens are
     // serialized by an advisory lock (two concurrent `create table` race on the catalog and one fails).
+    // The whole transaction runs again if it fails on a lost or timed-out connection: every statement in it
+    // is idempotent, and a failed run left nothing behind.
     if (!(have.documents && have.indexes && have.lease && have.globals && have.ro))
-      await this.call((sql, progress) =>
+      await this.read((sql, progress) =>
         sql.begin(async (tx) => {
           progress();
           await tx.unsafe(`set local lock_timeout = '10s'`);
@@ -192,7 +249,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
    * store marked read-only opens only with `allowReadOnly`. Refusing needs no lease: nothing is written.
    */
   private async checkStore(have: Record<string, boolean>, opts: OpenOptions) {
-    const [r] = await this.call((sql) =>
+    const [r] = await this.read((sql) =>
       sql.unsafe(
         `select ${have.globals ? "(select json_value::text from persistence_globals where key = 'layout_version')" : "null"} as v,
          ${have.ro ? "exists (select 1 from read_only)" : "false"} as ro`,
@@ -201,7 +258,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     const version = decodeLayoutVersion(r.v);
     if (version !== null) checkLayoutVersion(version, STORE);
     else if (have.documents || have.indexes) {
-      const cols = await this.call(
+      const cols = await this.read(
         (sql) => sql`select table_name::text as t, column_name || ' ' || data_type as c
           from information_schema.columns where table_schema = current_schema() and table_name in ('documents', 'indexes')`,
       );
@@ -332,6 +389,37 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     const top = this.top;
     this.docs = [];
     this.idx = [];
+    const retry = this.retrying;
+    try {
+      // A retry: the group may have landed although its attempt failed here (its answer was lost). Then it
+      // is there exactly once, and acknowledged without writing (DV-124).
+      if (!(retry && (await this.landed(top)))) await this.flushGroup(docs, idx, top);
+      this.retrying = false;
+    } catch (e) {
+      // Keep the group: the committer retries a transient failure with the same rows at the same timestamps.
+      this.docs = docs.concat(this.docs);
+      this.idx = idx.concat(this.idx);
+      this.retrying = true;
+      // 23505: the group is there already, so an earlier attempt of it did commit although it failed here.
+      if (retry && (e as { code?: string }).code === "23505")
+        throw new UnsureCommitError(
+          `a retried flush (ts ≤ ${top}) found its rows already written by an earlier attempt`,
+          { cause: e },
+        );
+      throw e;
+    }
+  }
+
+  /** Set once a flush failed and kept its group: the next flush is a retry of it. */
+  private retrying = false;
+
+  /** Whether the group up to `top` committed, from the lease record (`retriedGroupLanded`, PERSIST-01 C9). */
+  private async landed(top: number) {
+    const [l] = await this.call((sql) => sql`select epoch, max_ts from bunvex_lease where id = 1`);
+    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: Number(l.max_ts) }, this.epoch, top);
+  }
+
+  private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
     // One jsonb parameter per table, expanded server-side: one statement per table whatever the group
     // size (postgres.js does not bind boolean[]/bytea[] arrays for unnest). Keys travel as hex.
     const docInsert = `insert into documents select (r->>0)::int, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean
@@ -339,26 +427,37 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     const idxInsert = `insert into indexes select (r->>0)::int, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
       decode(r->>3, 'hex'), (r->>4)::bigint, (r->>5)::boolean, r->>6
       from jsonb_array_elements($1::text::jsonb) r`;
-    await this.call((sql, progress) =>
-      sql.begin(async (tx) => {
-        progress();
-        // The fence: the first insert happens only if the lease row still carries our epoch, and that update
-        // also records the group's top as the durable prefix. Data-modifying CTEs always run, and their row
-        // lock is held to COMMIT, so a takeover waits for this transaction and then sees max_ts.
-        const [first, rows, rest] = docs.length
-          ? [docInsert, docs, idx.length ? idxInsert : null]
-          : [idxInsert, idx, null];
-        const [f] = await tx.unsafe(
-          `with l as (update bunvex_lease set max_ts = $2 where id = 1 and epoch = $3 returning 1),
+    // As Convex's `transact`: if the connection is lost before the transaction began, nothing was sent, and
+    // the transaction is opened once more, on a fresh pool. Once it began, a lost connection is not retried.
+    let began = false;
+    const sql0 = this.sql;
+    const attempt = () =>
+      this.call((sql, progress) =>
+        sql.begin(async (tx) => {
+          began = true;
+          progress();
+          // The fence: the first insert happens only if the lease row still carries our epoch, and that update
+          // also records the group's top as the durable prefix. Data-modifying CTEs always run, and their row
+          // lock is held to COMMIT, so a takeover waits for this transaction and then sees max_ts.
+          const [first, rows, rest] = docs.length
+            ? [docInsert, docs, idx.length ? idxInsert : null]
+            : [idxInsert, idx, null];
+          const [f] = await tx.unsafe(
+            `with l as (update bunvex_lease set max_ts = $2 where id = 1 and epoch = $3 returning 1),
               w as (${first} where exists (select 1 from l))
          select count(*)::int as n from l`,
-          [JSON.stringify(rows), top, this.epoch] as any,
-        );
-        if (f.n !== 1) throw new LeaseLostError();
-        progress();
-        if (rest) await tx.unsafe(rest, [JSON.stringify(idx)]);
-        progress(); // COMMIT
-      }),
+            [JSON.stringify(rows), top, this.epoch] as any,
+          );
+          if (f.n !== 1) throw new LeaseLostError();
+          progress();
+          if (rest) await tx.unsafe(rest, [JSON.stringify(idx)]);
+          progress(); // COMMIT
+        }),
+      );
+    await retryOnce(
+      attempt,
+      (e) => !began && connectionLost(e),
+      () => this.retire(sql0),
     );
   }
 
@@ -372,7 +471,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     if (limit <= 0) return [];
     if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
       const dir = desc ? "desc" : "asc";
-      const rows = await this.call((sql) =>
+      const rows = await this.read((sql) =>
         sql.unsafe(
           `select document_id, octet_length(key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long from (
            select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, deleted, document_id
@@ -399,7 +498,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return {
       page: async (b: { lo: Uint8Array; loStrict: boolean; hi: Uint8Array; hiInclusive: boolean; n: number }) =>
         (
-          await this.call((sql) =>
+          await this.read((sql) =>
             sql.unsafe(
               `select key_prefix, key_suffix, ts, deleted, document_id from indexes
              where index_id = $1 and key_prefix ${b.loStrict ? ">" : ">="} $2 and key_prefix ${b.hiInclusive ? "<=" : "<"} $3
@@ -411,7 +510,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
         ).map(toRow),
       group: async (prefix: Uint8Array) =>
         (
-          await this.call((sql) =>
+          await this.read((sql) =>
             sql.unsafe(
               `select key_prefix, key_suffix, ts, deleted, document_id from indexes
              where index_id = $1 and key_prefix = $2 and ts <= $3`,
@@ -423,7 +522,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   async get(table: number, id: string, ts: number) {
-    const [r] = await this.call((sql) =>
+    const [r] = await this.read((sql) =>
       sql.unsafe(
         `select json_value, deleted from documents where table_id = $1 and id = $2 and ts <= $3 order by ts desc limit 1`,
         [table, id, ts] as any,
@@ -444,7 +543,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     if (limit <= 0) return [];
     if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
       const dir = desc ? "desc" : "asc";
-      const rows = await this.call((sql) =>
+      const rows = await this.read((sql) =>
         sql.unsafe(
           `with e as (
            select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, deleted, document_id
@@ -471,7 +570,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store
    *  never leased (written before C7) has no row yet: the newest row of either table. */
   async maxTs() {
-    const [r] = await this.call(
+    const [r] = await this.read(
       (sql) => sql`select coalesce((select max_ts from bunvex_lease where id = 1),
       greatest((select coalesce(max(ts), 0) from documents), (select coalesce(max(ts), 0) from indexes)))::bigint as m`,
     );
@@ -479,7 +578,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   async auditLiveDocs(table: number, ts: number) {
-    const [r] = await this.call((sql) =>
+    const [r] = await this.read((sql) =>
       sql.unsafe(
         `select count(*)::int as n from (select distinct on (id) json_value from documents
        where table_id = $1 and ts <= $2 order by id, ts desc) v where json_value is not null`,
@@ -487,6 +586,14 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       ),
     );
     return Number(r.n);
+  }
+
+  async auditRowsAt(ts: number) {
+    const [r] = await this.read(
+      (sql) => sql`select (select count(*) from documents where ts = ${ts})::int as docs,
+      (select count(*) from indexes where ts = ${ts})::int as idx`,
+    );
+    return { docs: Number(r.docs), idx: Number(r.idx) };
   }
 
   /** Ends the pool; on a database that does not answer, gives up waiting after one timeout. */

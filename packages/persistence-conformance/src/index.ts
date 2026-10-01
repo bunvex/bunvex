@@ -4,8 +4,9 @@
 //   K1 byte order          K2 snapshots          K3 no lost update       K4 cache invalidation
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
 // and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
-// stops answering: calls fail within the timeout); for drivers that record their layout (PERSIST-01 C10),
-// K22 (layout version) and K23 (read-only flag).
+// stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
+// stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
+// (read-only flag).
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -60,7 +61,7 @@ export type DriverModule = {
 };
 
 // K3 also runs K4–K5; K10 runs K10–K19
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K22" | "K23";
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K21" | "K22" | "K23";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -86,6 +87,13 @@ const IDLE_TX_BOUND_MS = 2500;
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 const rnd = (n: number) => Math.floor(Math.random() * n);
+
+type Rows = { docs: number; idx: number };
+/** The rows an engine's store holds at exactly `ts` (audit), or null when the driver cannot tell. */
+const rowsOf = async (e: Engine, ts: number): Promise<Rows | null> =>
+  e.persistence.auditRowsAt ? await e.persistence.auditRowsAt(ts) : null;
+const sameRows = (a: Rows | null, b: Rows | null) =>
+  a === null || b === null ? a === b : a.docs === b.docs && a.idx === b.idx && a.docs > 0;
 
 export async function runConformance(opts: ConformanceOptions): Promise<{ failures: number }> {
   const { name } = opts;
@@ -882,7 +890,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
   // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
   // connections the timed-out calls waited on must be dropped by the client, the store must work again once
-  // it answers, and a flush that times out must stop the committer (fail-stop: the commit is in doubt).
+  // it answers; through the engine, a commit whose flush times out is retried (C9), and the timed-out attempt
+  // sends nothing more once the store answers.
   async function k20() {
     const T = 1500; // the call timeout under test
     const TTL = 2000; // a renewal is bounded by TTL / 4 = 500 ms, under T
@@ -921,9 +930,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
       proxy.freeze();
       const read = await timed(Promise.resolve(st.get(960, "a", 10)));
+      // A driver may run a timed-out read once more (STUDY-25 L5: Convex's Postgres driver does), so up to two
+      // timeouts.
       check(
-        read.failed && read.took <= T + SLACK,
-        `K20 a read on a frozen store fails within the ${T} ms timeout (${read.what})`,
+        read.failed && read.took <= 2 * T + SLACK,
+        `K20 a read on a frozen store fails within the ${T} ms timeout, or two with one retry (${read.what})`,
       );
       put(20, "b");
       const flush = await timed(Promise.resolve(st.flush()));
@@ -959,22 +970,206 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (leased) await st.releaseLease();
       await st.close();
 
-      // Through the engine: a commit whose flush times out stops the committer, as any failed flush.
-      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), { lease: { ttlMs: 60_000 } });
+      // Through the engine: a commit whose flush times out is not acknowledged while the store does not answer;
+      // the committer retries it (STUDY-25 L4, transient), and once the store answers it is acknowledged, its
+      // rows stored once.
+      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
       await e.mutation(insertItem("k20"));
+      const base = await rowsOf(e, e.committer.visibleTs);
       proxy.freeze();
-      const m = await timed(e.mutation(insertItem("k20")));
-      check(
-        m.failed && m.took <= T + SLACK && e.committer.stopped !== null,
-        `K20 a commit whose flush times out fails within the timeout and stops the committer (${m.what}; ${e.committer.stopped ? "stopped" : "still running"})`,
-      );
-      // Thaw only once the client has dropped what it was waiting on: the held bytes of a dropped connection
-      // are discarded, so no half-sent transaction reaches the store to hold its locks after the check.
+      let settled = false;
+      const pending = timed(e.mutation(insertItem("k20"))).finally(() => {
+        settled = true;
+      });
       await sleep(2 * T + SLACK);
+      const held = !settled && e.committer.appliedTs > e.committer.visibleTs;
+      const retrying = e.committer.stopped === null && e.committer.flushFailures >= 1;
       proxy.thaw();
+      const m = await pending;
+      const rows = m.answered ? await rowsOf(e, e.committer.visibleTs) : null;
+      check(
+        held && retrying && m.answered && e.committer.stopped === null && sameRows(rows, base),
+        `K20 a commit whose flush times out is held and retried while the store does not answer, then acknowledged once, its rows stored once (${m.what}${e.committer.stopped ? `: ${e.committer.stopped.message}` : ""}; ${e.committer.flushFailures} failed attempt(s); rows ${JSON.stringify(rows)} vs ${JSON.stringify(base)})`,
+      );
       await e.close().catch(() => {});
+
+      // A failed attempt stays failed (C9): once its flush timed out, an attempt sends nothing more when the
+      // store answers again, while the committer's retry waits. Otherwise it races the retry for the group (it
+      // did on MongoDB: withTransaction ran the timed-out callback again and committed the group under the
+      // retry, which then stopped as "unsure" — a flaky K20). The retries are held until 1 s after the thaw;
+      // in that second, the proxy counts the requests that carry the group's marker or commit.
+      let failedOnce = false;
+      let releaseRetries = () => {};
+      const retriesReleased = new Promise<void>((r) => {
+        releaseRetries = r;
+      });
+      const st3 = await mod.openThrough!(proxy, { timeoutMs: T });
+      const holdRetries = new Proxy(st3, {
+        get(target, key) {
+          if (key === "flush")
+            return async () => {
+              if (failedOnce) await retriesReleased;
+              try {
+                return await target.flush();
+              } catch (err) {
+                failedOnce = true;
+                throw err;
+              }
+            };
+          const v = (target as any)[key];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const e3 = await newEngine(holdRetries, { lease: { ttlMs: 60_000 }, flushRetry: { onRetry: () => {} } });
+      await e3.mutation(insertItem("k20"));
+      const base3 = await rowsOf(e3, e3.committer.visibleTs);
+      proxy.freeze();
+      const abandoned = timed(e3.mutation(insertItem("k20-abandoned")));
+      const deadline = Date.now() + 3 * T;
+      while (!failedOnce && Date.now() < deadline) await sleep(5);
+      proxy.watch(/k20-abandoned/);
+      proxy.thaw();
+      await sleep(1000);
+      const sentAfter = proxy.fired.watched;
+      proxy.watch(null);
+      releaseRetries();
+      const m3 = await abandoned;
+      const rows3 = m3.answered ? await rowsOf(e3, e3.committer.visibleTs) : null;
+      check(
+        failedOnce && sentAfter === 0 && m3.answered && e3.committer.stopped === null && sameRows(rows3, base3),
+        `K20 a flush attempt that timed out sends nothing more once the store answers (${sentAfter} request(s) with the group or a COMMIT in the second after the thaw); its retry is acknowledged once (${m3.what}${e3.committer.stopped ? `: ${e3.committer.stopped.message}` : ""}; rows ${JSON.stringify(rows3)} vs ${JSON.stringify(base3)})`,
+      );
+      await e3.close().catch(() => {});
     } finally {
       await proxy.close();
+    }
+  }
+
+  // K21 — transient errors are retried (STUDY-25 L4/L5, PERSIST-01 C9). The proxy of K20 acts on the requests
+  // that carry a marker: it resets their connection (lost to a restart or the network), freezes before them,
+  // or lets a COMMIT through and drops every answer after it (the commit lands; the client never hears so).
+  //   - L5: a read whose connection is lost runs once more on a fresh one; a read that fails twice surfaces.
+  //   - L4: a connection lost in the middle of a flush is retried (on Postgres too: DV-123), and the commit is
+  //     acknowledged once, its rows stored once.
+  //   - L4: a retry of a group whose first attempt did commit finds it through the lease record and
+  //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
+  //     key on its rows: the lease record is what tells).
+  async function k21() {
+    const T = 1000;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const settle = async <V>(p: Promise<V>) => {
+      const t0 = Date.now();
+      try {
+        const value = await p;
+        return { ok: true as const, value, error: null as unknown, what: `answered after ${Date.now() - t0} ms` };
+      } catch (error) {
+        const name = (error as Error)?.constructor?.name ?? String(error);
+        return { ok: false as const, value: undefined, error, what: `${name} after ${Date.now() - t0} ms` };
+      }
+    };
+    await (await mod.open(true)).close();
+    const proxy = await freezableProxy(mod.target!());
+    try {
+      // L5: reads.
+      const st = await mod.openThrough!(proxy, { timeoutMs: T });
+      const leased = hasLease(st);
+      if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
+      st.apply(
+        10,
+        [{ table: 970, id: "k21read", json: `{"v":1}` }],
+        [{ index: 971, key: encodeKey(["k21read"]), id: "k21read" }],
+      );
+      await st.flush();
+      proxy.resetOn(/k21read/, 1);
+      const once = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      check(
+        proxy.fired.resets === 1 && once.ok && once.value === `{"v":1}`,
+        `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
+      );
+      proxy.resetOn(/k21read/, 2);
+      const twice = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      check(
+        proxy.fired.resets === 3 && !twice.ok,
+        `K21 a read that loses its connection twice fails: one retry only (L5; ${twice.what}, ${proxy.fired.resets - 1} resets)`,
+      );
+      if (leased) await st.releaseLease();
+      await st.close();
+
+      // L4: a connection lost in the middle of a flush.
+      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
+      await e.mutation(insertItem("k21-base"));
+      const base = await rowsOf(e, e.committer.visibleTs);
+      proxy.resetOn(/k21-reset/, 1);
+      const lost = await settle(e.mutation(insertItem("k21-reset")));
+      const lostTs = e.committer.appliedTs;
+      const lostStopped = e.committer.stopped;
+      const lostFailures = e.committer.flushFailures;
+      // A stopped engine keeps its lease (a store in doubt is not handed over); the check hands it over itself.
+      if (lostStopped && hasLease(e.persistence)) await e.persistence.releaseLease().catch(() => {});
+      await e.close().catch(() => {});
+      const lostRows = await rowsOfStore(lostTs);
+      check(
+        proxy.fired.resets === 4 && lost.ok && lostStopped === null && sameRows(lostRows, base),
+        `K21 a connection lost during a flush is retried and acknowledged once, its rows stored once (L4; DV-123 on Postgres; ${lost.what}${lostStopped ? `: ${lostStopped.message}` : ""}; ${lostFailures} failed attempt(s); rows ${JSON.stringify(lostRows)} vs ${JSON.stringify(base)})`,
+      );
+
+      // L4: the first attempt committed, but its answer was lost.
+      const e2 = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
+      proxy.loseAnswersAfterCommit(/k21-unsure/);
+      const restore = (async () => {
+        const deadline = Date.now() + 30 * T;
+        while (!proxy.fired.loseAnswers && Date.now() < deadline) await sleep(5);
+        await sleep(2.5 * T);
+        proxy.keepAnswers();
+      })();
+      const unsure = await settle(e2.mutation(insertItem("k21-unsure")));
+      await restore;
+      const unsureTs = e2.committer.appliedTs;
+      const stopped = e2.committer.stopped;
+      if (stopped && hasLease(e2.persistence)) await e2.persistence.releaseLease().catch(() => {});
+      await e2.close().catch(() => {});
+      const after = await rowsOfStore(unsureTs);
+      const durable = await maxTsOfStore();
+      const unsureFailures = e2.committer.flushFailures;
+      check(
+        proxy.fired.loseAnswers &&
+          unsure.ok &&
+          stopped === null &&
+          unsureFailures >= 1 &&
+          sameRows(after, base) &&
+          durable === unsureTs,
+        `K21 a COMMIT whose answer is lost: the retry finds the group landed and acknowledges it once; after a reopen the store holds it exactly once (L4, DV-124; ${unsure.what}${stopped ? `: ${stopped.message}` : ""}; ${unsureFailures} failed attempt(s); rows ${JSON.stringify(after)} vs ${JSON.stringify(base)}; maxTs ${durable === unsureTs ? "= the group's ts" : `${durable} ≠ ${unsureTs}`})`,
+      );
+    } finally {
+      proxy.keepAnswers();
+      await proxy.close();
+    }
+  }
+
+  /** The rows at `ts`, read through a fresh open of the store (no lease needed to read). */
+  async function rowsOfStore(ts: number): Promise<Rows | null> {
+    const st = await mod.open(false);
+    try {
+      return st.auditRowsAt ? await st.auditRowsAt(ts) : null;
+    } finally {
+      await st.close();
+    }
+  }
+  async function maxTsOfStore() {
+    const st = await mod.open(false);
+    try {
+      return Number(await st.maxTs?.());
+    } finally {
+      await st.close();
     }
   }
 
@@ -1007,6 +1202,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     if (mod.target && mod.openThrough) await k20();
     else if (opts.requireTimeouts)
       check(false, "K20 the driver is a remote store but its module has no target/openThrough");
+  }
+  if (want("K21")) {
+    if (mod.target && mod.openThrough) await k21();
+    else if (opts.requireTimeouts)
+      check(false, "K21 the driver is a remote store but its module has no target/openThrough");
   }
   return { failures };
 }
