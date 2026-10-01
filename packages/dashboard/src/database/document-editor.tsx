@@ -4,7 +4,7 @@
 import { Button } from "@bunvex/ui/components/button";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { dashboardKeys } from "../data/queries.ts";
 import { type Document, toDataSourceError, type Value } from "../data-source.ts";
@@ -27,10 +27,22 @@ export function checkDocument(text: string): Check {
   return { ok: true, fields: v as Record<string, Value> };
 }
 
-export function DocumentEditor(props: { table: string; doc: Document; onDone: (saved: boolean) => void }) {
+export function DocumentEditor(props: {
+  table: string;
+  doc: Document;
+  onDone: (saved: boolean) => void;
+  /** Told when the text starts or stops differing from the document (and false when the editor closes). */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { source, scope } = useQueryScope();
   const queryClient = useQueryClient();
-  const [text, setText] = useState(() => formatLiteral(fieldsOf(props.doc), "  "));
+  const [initial] = useState(() => formatLiteral(fieldsOf(props.doc), "  "));
+  const [text, setText] = useState(initial);
+  const dirty = text !== initial;
+  const onDirty = useRef(props.onDirtyChange);
+  onDirty.current = props.onDirtyChange;
+  useEffect(() => onDirty.current?.(dirty), [dirty]);
+  useEffect(() => () => onDirty.current?.(false), []);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const hintId = useId();

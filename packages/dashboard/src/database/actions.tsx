@@ -107,8 +107,9 @@ export function DeleteDialog(props: {
 }
 
 /**
- * The "More" menu: actions on the whole table. On a phone it also holds the panels (`panels`) whose buttons
- * the toolbar hides below `sm` (UX-20), so the title row keeps Add documents and ⋯ together.
+ * The "More" menu: actions on the whole table, and the panels (`panels`) whose buttons the title bar folds
+ * away when it is narrow (UX-20; the bar's own width since UI-01 §22.3 — e.g. beside a docked panel), so it
+ * keeps Add documents and ⋯ on one line. The menu lists them at every width (it opens outside the bar).
  */
 export function TableMenu(props: {
   table: string;
@@ -130,7 +131,7 @@ export function TableMenu(props: {
               size="icon-sm"
               aria-label={`More actions on ${props.table}`}
               // with nothing to clear, the menu only holds the phone's panels
-              className={props.canClear ? undefined : "sm:hidden"}
+              className={props.canClear ? undefined : "@2xl/table:hidden"}
             />
           }
         >
@@ -138,11 +139,11 @@ export function TableMenu(props: {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {panels.map((p) => (
-            <DropdownMenuItem key={p.label} className="sm:hidden" onClick={p.open}>
+            <DropdownMenuItem key={p.label} onClick={p.open}>
               {p.label}
             </DropdownMenuItem>
           ))}
-          {panels.length > 0 && props.canClear && <DropdownMenuSeparator className="sm:hidden" />}
+          {panels.length > 0 && props.canClear && <DropdownMenuSeparator />}
           {props.canClear && (
             <DropdownMenuItem variant="destructive" onClick={() => setClearing(true)}>
               Clear table…

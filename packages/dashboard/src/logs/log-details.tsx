@@ -71,7 +71,12 @@ export function LogDetails(props: {
   const startedBy = end?.execution?.identity;
   const usageId = useId();
   return (
-    <Panel title={<span className="font-mono text-sm">{formatLogTime(line.time)}</span>} onClose={props.onClose}>
+    <Panel
+      kind="logs-details"
+      focusOnOpen={false}
+      title={<span className="font-mono text-sm">{formatLogTime(line.time)}</span>}
+      onClose={props.onClose}
+    >
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
         {line.function && (
           <>

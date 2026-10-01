@@ -8,14 +8,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { TableMetrics } from "../metrics/table-metrics.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
+import { Panel } from "../shell/panel.tsx";
 import { AddDocuments } from "./add-documents.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
@@ -26,39 +26,19 @@ import { formatTime } from "./values.ts";
 
 export type PanelState =
   /** `editRequest` changes each time the document should open in its editor (Shift+Enter on a cell). */
-  | { kind: "document"; id: string; canEdit: boolean; editRequest?: number }
+  | {
+      kind: "document";
+      id: string;
+      canEdit: boolean;
+      editRequest?: number;
+      /** Told whether the document's editor holds unsaved changes. */
+      onDirtyChange?: (dirty: boolean) => void;
+    }
   | { kind: "schema" }
   | { kind: "indexes" }
   | { kind: "metrics" }
   | { kind: "add"; onAdded: (ids: string[]) => void }
   | { kind: "columns"; fields: string[]; state: ColumnState; onChange: (s: ColumnState) => void };
-
-function Panel({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
-  const titleId = useId();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <aside
-      aria-labelledby={titleId}
-      className="fixed inset-y-0 right-0 z-30 flex w-full flex-col overflow-hidden border-l bg-background shadow-xl sm:w-[28rem] 2xl:static 2xl:z-auto 2xl:w-[26rem] 2xl:shrink-0 2xl:shadow-none"
-    >
-      <header className="flex h-11 items-center gap-2 border-b px-4">
-        <h2 id={titleId} className="min-w-0 flex-1 truncate font-medium">
-          {title}
-        </h2>
-        <Button variant="ghost" size="icon-sm" aria-label="Close the panel" onClick={onClose}>
-          <X aria-hidden="true" />
-        </Button>
-      </header>
-      <div className="flex-1 overflow-y-auto p-4">{children}</div>
-    </aside>
-  );
-}
 
 export function SidePanel({ state, info, onClose }: { state: PanelState; info: TableInfo; onClose: () => void }) {
   if (state.kind === "document")
@@ -69,25 +49,26 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
         id={state.id}
         canEdit={state.canEdit}
         editRequest={state.editRequest}
+        onDirtyChange={state.onDirtyChange}
         onClose={onClose}
       />
     );
   if (state.kind === "schema") return <SchemaPanel info={info} onClose={onClose} />;
   if (state.kind === "columns")
     return (
-      <Panel title={`Columns of ${info.name}`} onClose={onClose}>
+      <Panel kind="database-columns" title={`Columns of ${info.name}`} onClose={onClose}>
         <ColumnSettings fields={state.fields} state={state.state} onChange={state.onChange} />
       </Panel>
     );
   if (state.kind === "add")
     return (
-      <Panel title={`Add documents to ${info.name}`} onClose={onClose}>
+      <Panel kind="database-add" title={`Add documents to ${info.name}`} onClose={onClose}>
         <AddDocuments table={info.name} onAdded={state.onAdded} />
       </Panel>
     );
   if (state.kind === "metrics")
     return (
-      <Panel title={`Metrics of ${info.name}`} onClose={onClose}>
+      <Panel kind="database-metrics" title={`Metrics of ${info.name}`} onClose={onClose}>
         <TableMetrics table={info.name} />
       </Panel>
     );
@@ -99,6 +80,7 @@ function DocumentPanel(props: {
   id: string;
   canEdit: boolean;
   editRequest?: number;
+  onDirtyChange?: (dirty: boolean) => void;
   onClose: () => void;
 }) {
   const { table, id, onClose } = props;
@@ -110,7 +92,13 @@ function DocumentPanel(props: {
   }, [props.canEdit, props.editRequest]);
   const [saved, setSaved] = useState(false);
   return (
-    <Panel title={<span className="font-mono text-sm">{id}</span>} onClose={onClose}>
+    // the grid keeps the focus: the panel follows its current row (UI-01 §22.3)
+    <Panel
+      kind="database-document"
+      focusOnOpen={false}
+      title={<span className="font-mono text-sm">{id}</span>}
+      onClose={onClose}
+    >
       {isPending ? (
         <p className="text-sm text-muted-foreground">Loading the document…</p>
       ) : error ? (
@@ -121,6 +109,7 @@ function DocumentPanel(props: {
         <DocumentEditor
           table={table}
           doc={doc}
+          onDirtyChange={props.onDirtyChange}
           onDone={(ok) => {
             setEditing(false);
             setSaved(ok);
@@ -199,7 +188,7 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
     </>
   );
   return (
-    <Panel title={`Schema of ${info.name}`} onClose={onClose}>
+    <Panel kind="database-schema" title={`Schema of ${info.name}`} onClose={onClose}>
       {canGenerate ? (
         <Tabs value={shown} onValueChange={(v) => setTab(v as "saved" | "generated")}>
           {/* underlined, as every switch between sibling views (Schedules' tabs) is (UX-7) */}
@@ -306,7 +295,7 @@ function SavedSchema({ code, table }: { code: SchemaCode; table?: string }) {
 
 function IndexesPanel({ info, onClose }: { info: TableInfo; onClose: () => void }) {
   return (
-    <Panel title={`Indexes of ${info.name}`} onClose={onClose}>
+    <Panel kind="database-indexes" title={`Indexes of ${info.name}`} onClose={onClose}>
       <ul className="divide-y border">
         {info.indexes.map((ix) => (
           <li key={ix.name} className="flex flex-col gap-1 p-3 text-sm">

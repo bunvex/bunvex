@@ -80,6 +80,10 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 /** Files (UI-01 §14.3): the order, a day range (`YYYY-MM-DD`, the viewer's zone), the open file. */
 /** The table open in the Schema screen's side panel (STUDY-12 §14). */
 export type SchemaSearch = { table?: string };
+
+/** The Topology screen's open node (UI-01 §22). */
+export type TopologySearch = { node?: string };
+export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
 export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
@@ -115,6 +119,7 @@ const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Ove
 const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
 const EmptyDatabase = lazyRouteComponent(() => import("./database/empty.tsx"), "EmptyDatabase");
 const SchemaScreen = lazyRouteComponent(() => import("./schema/screen.tsx"), "SchemaScreen");
+const TopologyScreen = lazyRouteComponent(() => import("./topology/screen.tsx"), "TopologyScreen");
 const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
@@ -172,6 +177,13 @@ export const tableRoute = createRoute({
     await queryClient.ensureInfiniteQueryData(documentsQuery(scope, params.table, filter)).catch(() => {});
   },
   component: DatabaseScreen,
+});
+
+export const topologyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "topology",
+  validateSearch: validateTopologySearch,
+  component: TopologyScreen,
 });
 
 export const schemaRoute = createRoute({
@@ -270,6 +282,7 @@ export const cronsRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   healthRoute,
+  topologyRoute,
   databaseRoute,
   tableRoute,
   schemaRoute,

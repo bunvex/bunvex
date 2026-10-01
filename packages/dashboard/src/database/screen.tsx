@@ -7,7 +7,7 @@ import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/co
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys, documentsQuery, referenceQuery, tablesQuery } from "../data/queries.ts";
 import { type Document, type FilterExpression, type TableInfo, toDataSourceError } from "../data-source.ts";
@@ -45,7 +45,8 @@ export function DatabaseScreen(): ReactNode {
   const canCreate = useCanCreateTable() === true;
   return (
     // full-bleed inside <main>: the sidebar and the panel run to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:flex-row">
+    // the grid runs to the bottom of the viewport from lg (the sidebar beside it); stacked below that
+    <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:h-[calc(100svh-3rem)] lg:flex-row">
       <TablesSidebar tables={tables} current={table} canCreate={canCreate} />
       {info ? (
         <TableView key={info.name} info={info} />
@@ -218,8 +219,27 @@ function TableView({ info }: { info: TableInfo }) {
         }
       : undefined,
   });
+  /** Whether the open document's editor holds unsaved changes (then the panel does not follow the row). */
+  const documentDirty = useRef(false);
+  /** The open document follows the current row: a click on any of its cells, or ↑/↓ onto it. */
+  const follow = (d: Document) => {
+    if (!search.doc || d._id === search.doc) return;
+    if (documentDirty.current) {
+      setNotice({ ok: false, message: "Save or cancel your edit to open another document." });
+      return;
+    }
+    setSearch({ doc: d._id, panel: undefined });
+  };
   const panel: PanelState | null = search.doc
-    ? { kind: "document", id: search.doc, canEdit: can.replace, editRequest }
+    ? {
+        kind: "document",
+        id: search.doc,
+        canEdit: can.replace,
+        editRequest,
+        onDirtyChange: (dirty) => {
+          documentDirty.current = dirty;
+        },
+      }
     : search.panel === "add"
       ? can.insert
         ? {
@@ -248,16 +268,32 @@ function TableView({ info }: { info: TableInfo }) {
       : `${formatCount(loaded)}${info.documentCount === undefined ? "" : ` of ${formatCount(info.documentCount)}`} documents loaded`;
 
   return (
-    <div className="flex min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col gap-3 p-4 md:p-6">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="text-xl font-semibold tracking-tight">{table}</h1>
+    // full-bleed (UI-01 §22.3): two bars across the top — the table and its actions, the filters — and the
+    // grid filling the rest, edge to edge between the tables list and the docked panel, down to the bottom
+    // below lg the table list sits above: the table takes a screen's height of its own (its grid scrolls inside)
+    <div className="flex h-[calc(100svh-3rem)] min-w-0 shrink-0 lg:h-auto lg:min-h-0 lg:flex-1">
+      <div className="@container/table flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* Bar 1: as tall as the side panel's header (44 px), so their bottom lines continue across */}
+        <div className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-1 md:px-6">
+          <h1 className="font-mono text-base font-semibold tracking-tight">{table}</h1>
           {info.documentCount !== undefined && (
-            <span className="text-sm text-muted-foreground tabular-nums">
-              {formatCount(info.documentCount)} document{info.documentCount === 1 ? "" : "s"}
-            </span>
+            <>
+              <span aria-hidden="true" className="text-muted-foreground">
+                ·
+              </span>
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {formatCount(info.documentCount)} document{info.documentCount === 1 ? "" : "s"}
+              </span>
+            </>
           )}
-          {!info.declared && <span className="text-sm text-muted-foreground">Not in the schema</span>}
+          {!info.declared && (
+            <>
+              <span aria-hidden="true" className="text-muted-foreground">
+                ·
+              </span>
+              <span className="text-sm text-muted-foreground">Not in the schema</span>
+            </>
+          )}
           {caps && !writable && (
             <span className="text-sm text-muted-foreground" title="This credential cannot change data">
               Read-only
@@ -283,13 +319,14 @@ function TableView({ info }: { info: TableInfo }) {
                 onClick={() => setSearch({ doc: undefined, panel: search.panel === "add" ? undefined : "add" })}
               >
                 <Plus aria-hidden="true" />
-                Add documents
+                {/* a narrow bar (beside a docked panel) keeps the icon; the name stays for assistive tech */}
+                <span className="sr-only @lg/table:not-sr-only">Add documents</span>
               </Button>
             )}
             <Button
               variant="ghost"
               size="sm"
-              className="hidden sm:inline-flex"
+              className="hidden @2xl/table:inline-flex"
               aria-pressed={search.panel === "schema" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "schema" ? undefined : "schema" })}
             >
@@ -298,7 +335,7 @@ function TableView({ info }: { info: TableInfo }) {
             <Button
               variant="ghost"
               size="sm"
-              className="hidden sm:inline-flex"
+              className="hidden @2xl/table:inline-flex"
               aria-pressed={search.panel === "indexes" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "indexes" ? undefined : "indexes" })}
             >
@@ -308,6 +345,7 @@ function TableView({ info }: { info: TableInfo }) {
               <Button
                 variant="ghost"
                 size="sm"
+                className="hidden @2xl/table:inline-flex"
                 aria-pressed={search.panel === "metrics" && !search.doc}
                 onClick={() => setSearch({ doc: undefined, panel: search.panel === "metrics" ? undefined : "metrics" })}
               >
@@ -317,7 +355,7 @@ function TableView({ info }: { info: TableInfo }) {
             <Button
               variant="ghost"
               size="sm"
-              className="hidden sm:inline-flex"
+              className="hidden @2xl/table:inline-flex"
               aria-pressed={search.panel === "columns" && !search.doc}
               onClick={() => setSearch({ doc: undefined, panel: search.panel === "columns" ? undefined : "columns" })}
             >
@@ -328,21 +366,20 @@ function TableView({ info }: { info: TableInfo }) {
               count={info.documentCount}
               canClear={can.clear}
               onDone={afterWrite}
-              panels={(["schema", "indexes", "columns"] as const).map((panel) => ({
+              panels={(
+                [
+                  "schema",
+                  "indexes",
+                  ...(typeof scope.source.tableRate === "function" ? (["metrics"] as const) : []),
+                  "columns",
+                ] as const
+              ).map((panel) => ({
                 label: panel[0]!.toUpperCase() + panel.slice(1),
                 open: () => setSearch({ doc: undefined, panel }),
               }))}
             />
           </span>
         </div>
-        {notice && (
-          <p
-            role={notice.ok ? "status" : "alert"}
-            className={cn("text-sm", notice.ok ? "text-muted-foreground" : "text-destructive")}
-          >
-            {notice.message}
-          </p>
-        )}
         <FilterBar
           info={info}
           fields={fields}
@@ -351,18 +388,36 @@ function TableView({ info }: { info: TableInfo }) {
           rejected={rejected}
           onApply={(_, param) => setSearch({ filter: param })}
         />
+        {notice && (
+          <p
+            role={notice.ok ? "status" : "alert"}
+            className={cn(
+              "border-b px-4 py-1.5 text-sm md:px-6",
+              notice.ok ? "text-muted-foreground" : "text-destructive",
+            )}
+          >
+            {notice.message}
+          </p>
+        )}
         {search.filter && !applied && (
-          <p className="text-sm text-muted-foreground">
+          <p className="border-b px-4 py-1.5 text-sm text-muted-foreground md:px-6">
             The filter in this link could not be read; showing every document.
           </p>
         )}
-        {liveError && <ErrorState error={liveError} />}
+        {liveError && (
+          <div className="border-b px-4 py-2 md:px-6">
+            <ErrorState error={liveError} />
+          </div>
+        )}
         {rejected && rejected.code !== "invalid_request" && docs.length === 0 ? (
-          <ErrorState error={rejected} onRetry={() => void query.refetch()} />
+          <div className="p-4 md:px-6">
+            <ErrorState error={rejected} onRetry={() => void query.refetch()} />
+          </div>
         ) : (
           <DataTable
             label={`Documents in ${table}`}
-            className={cn("max-h-[calc(100svh-15rem)]", query.isPlaceholderData && "opacity-60")}
+            fill
+            className={cn(query.isPlaceholderData && "opacity-60")}
             columns={columns}
             data={docs}
             getRowId={(d) => d._id}
@@ -383,6 +438,10 @@ function TableView({ info }: { info: TableInfo }) {
               // system fields are the engine's; every other field is edited in place
               canEdit: (_, field) => writable && !field.startsWith("_"),
               onCellActivate: (d) => setSearch({ doc: d._id, panel: undefined }),
+              // the open document follows the current row — a click on any cell, or ↑/↓ — unless its editor
+              // holds unsaved changes (UI-01 §22.3)
+              onCellFocus: follow,
+              onCellClick: follow,
               renderEditor: ({ row, columnId, done }) => (
                 <CellEditor table={table} doc={row} field={columnId} done={done} />
               ),

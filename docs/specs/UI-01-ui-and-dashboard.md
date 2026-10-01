@@ -774,7 +774,7 @@ which Convex's does not.
   the address (`apps/dashboard/src/knobs.ts`). Since the move to plain paths (30 Sep 2026) the knobs share
   the query with the route's own search, so only their three keys are taken out.
 
-### 12.5.6 Columns and room for the table
+### 12.5.6 Columns and room for the table (its side-panel rule superseded by §22.1)
 
 - **Columns, per table, kept in this browser** (`localStorage`, per deployment `scope` and table): the
   order and hidden columns from a **Columns** side panel (a checkbox and move up / move down per column,
@@ -1501,3 +1501,116 @@ a table), lazy like the other screens.
   from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
   grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
 
+## 22. Amendment — Topology (1 Oct 2026)
+
+A **bunvex addition** (STUDY-12 §15): who is running and how it connects, after STUDY-24's roles. Reworked twice
+the same day at the owner's request: a canvas like PlanetScale's primary/replicas and Railway's service flow,
+then diagram only, laid out like the Schema screen, with each node's query cache.
+
+- **Contract** (`data-source-topology.ts`): optional `getTopology()` and `watchTopology(onTopology, onError)`,
+  needing `viewMetrics`. A `Topology` is the leader first then followers by id (role, state `ok` / `lagging` /
+  `down`, version, uptime, CPU, memory, connections, subscriptions, a follower's lag in commits and ms, the
+  leader's commits per second, who runs the scheduler, actions running, a minute of samples), the **store**
+  (driver, single-node or not, lease holder, expiry and TTL, latency, size, connections) and recent
+  **events** newest first. Each node may carry its own **query cache** (`NodeCache`: entries and the LRU's
+  capacity, bytes and their limit, hit rate, invalidations per second, evictions, the most-cached
+  functions); samples carry its hit rate and invalidations. The contract suite checks the shape
+  (`contract-topology.ts`): entries within capacity, rates in range, most-cached in order.
+- **Mock** (`mock/topology.ts`): `nodes` (default 1, as today; the dev host's `?nodes=4`, up to 8) — with several,
+  the store is Postgres, clients connect to followers, one follower drifts behind and catches up, emitting
+  events. Each node's LRU fills from its queries, is invalidated in step with the leader's commits, and evicts
+  past its 5k capacity. Its own clock, so a fixed `now` stays consistent.
+- **Screen** (`/topology`, lazy), laid out like the Schema screen: full-bleed inside `<main>`; a slim bar with
+  the title and the one-line summary ("Leader node-a · 3 followers · 881 clients · max lag 740 ms · Postgres
+  OK"); the canvas taking the rest; the **events docked under it**, one line (the newest) until opened, then a
+  short scrolling list — the right edge stays free for the node panel, and the canvas keeps its height.
+- **Diagram** (`diagram.tsx`, React Flow — already a dependency for Schema — loaded with the diagram only;
+  zoom/fit controls and the dot grid shared with Schema, `shell/flow-controls.tsx`):
+  - **Layout** (`layout.ts`, no ELK): fixed layers top to bottom — one **client group** per serving node, the
+    **followers** side by side (120 px apart), the **leader**, the **store** — centred; one node: clients →
+    node → store. Positions depend only on which nodes exist: live updates never move anything; the view
+    re-frames when a node joins or leaves, and Fit re-frames on demand, never past 100 % zoom. On a **phone**
+    (a canvas under 640 px when it opens) the layout is one column — each follower under its clients, then
+    the leader, then the store — framed to the width at a readable zoom and panned vertically; the commit
+    streams climb along the left margin, one lane per follower, so they never cross a card (their labels
+    are left to the cards, which say the lag).
+  - **Cards** (220 px, 11–13 px text): a server's id, a crown and "Leader", its state as an icon and a word;
+    its lag in words with a bar (or commits/s and "scheduler" on the leader); CPU and memory with thin bars;
+    and a **cache strip**: hit rate, the LRU's occupancy "3.1k/5k" with a bar, invalidations per second.
+    Clients: a device icon and the count. Store: a generic database mark per driver (no brand logos), the
+    lease holder and TTL, latency and size.
+  - **Edges**: clients → follower "385 ws" (dashed); the commit stream leader → follower "3 commits · 50 ms"
+    (", lagging" / ", down"), width by commits/s, colour by the follower's state, labelled near the follower;
+    leader → store "110 commits/s" with a lock. **Particles** move along the stream and the store edge, their
+    number and speed from commits/s; none under `prefers-reduced-motion`.
+  - Hovering a node, or picking one of the events, lights its edges and dims the rest; a click or Enter on a
+    focused node opens the panel (`?node=`). Nodes are focusable with descriptive labels ("node-d, follower,
+    lagging, 73 commits · 740 ms behind, 88 clients, cache 89% hits, 3,900 of 5,000 entries, press Enter
+    for details").
+- **Node panel**: **Overview** (role, state, version, lag, vitals, CPU and lag or connections sparklines) and
+  **Cache** (hit rate and invalidations-per-second sparklines, entries and bytes against the limits with the
+  occupancy bar, evictions, the most-cached queries with their counts).
+- The List view and its `?view=` are gone (the owner's call): the summary line and the nodes' labels carry
+  the picture in words.
+- Tests: the words; the wide and narrow layouts (positions stable across updates, spacing); the stream's
+  look; the edges' words and node labels (pure — happy-dom cannot measure, so draws no edge); the mock's LRU
+  (capacity, evictions, invalidations following commits); the screen: one node, the cache strips, Enter and
+  the Cache tab, the docked events lighting a node, permission, not offered; axe; the contract for 1 and 4
+  nodes. e2e (real Chromium): nodes, edges, labels, particles and cache strips in both themes, hover dimming,
+  the Cache tab, none under reduced motion, the phone layout; Topology in the axe sweep with contrast.
+
+### 22.1 Side panels are docked and resizable (the owner's call, 1 Oct 2026)
+
+Supersedes §12.5.6's rule ("a drawer over the table below 2xl, beside it above"). Every side panel — Database
+(document, schema, indexes, columns, metrics, add documents), Logs details, Files, Schedules (a run, a cron),
+History, Schema's table, Topology's node — is the one `Panel` (`shell/panel.tsx`):
+
+- **Docked**: part of the layout beside the screen's content, which shrinks to make room; never floating over
+  it. At most 45 % of its row, so the content keeps the rest. Below `md` (a phone) there is no room side by
+  side: a full-screen sheet.
+- **Resizable** by dragging its left edge — `ResizeHandle` (the window-splitter pattern, now with a left-edge
+  mode: Left widens, Right narrows, Shift for 64 px, Enter or a double-click puts the default back), 288–760
+  px, default 416 — its width kept in this browser **per kind of panel** (`bunvex-dashboard:panel-width:<kind>`).
+- A complementary landmark named by its title; Escape or the close button closes it; on open it takes the focus
+  (its heading) and on close gives it back to what had it, unless the screen keeps the focus (Logs: the list,
+  whose current line the details follow).
+- Tests: the shared panel (landmark, focus in and back, a screen that keeps it, resize by keyboard within
+  bounds, the width kept per kind); Database's layout classes; e2e: docked beside the content on Database and
+  Topology at 1440 (content ends where the panel starts; dragging the edge widens it and narrows the content),
+  a full-screen sheet at 390.
+
+### 22.2 Schema: indexes on the cards, going to a relation (1 Oct 2026)
+
+As Convex's `TableNode.tsx`: each card shows a table icon (`Table2`, as the tables list) left of its name, its
+fields, then an **Indexes** section — each index's name and fields; system indexes (`by_id`,
+`by_creation_time`) left out; at most 5, then "+N more indexes" — sized into the layout. A field whose type
+references a table (`Id<"users">`) is a button: it **pans to that table, lights it a moment and focuses it**
+(instant under reduced motion), without opening its panel; the panel's references do the same and open it.
+Both canvases fit never past 100 % zoom and share their controls and dot grid.
+
+### 22.3 Database layout (the owner's annotated screenshot, 1 Oct 2026)
+
+- **The grid fills the screen**: edge to edge between the tables list and the docked panel, down to the bottom
+  of the viewport (the screen is `100svh − 3rem` from `lg`; the shell's header is now exactly 48 px, so no
+  canvas or grid screen scrolls by a pixel). No padding or box around it; `DataTable`'s new `fill` mode drops
+  its frame and height cap, and pins its footer ("N of M documents loaded") to its bottom edge — with few rows
+  the rest is the grid's own background. Horizontal scrolling stays inside the grid. Below `lg` the tables
+  list sits above and the table takes a screen's height of its own.
+- **Two full-width bars** with dividers, no boxed filter card: **Bar 1** — the table's name, "· N documents",
+  "· Not in the schema" (and Read-only) on the left, the actions on the right — is 44 px, as tall as the side
+  panel's header, so their bottom lines continue across. It folds by its **own width** (a container query): in
+  a narrow bar (beside a docked panel, on a phone) Schema, Indexes, Metrics and Columns move into ⋯ (which
+  lists them at every width) and Add documents keeps only its icon. **Bar 2** — the filter bar: Index, the
+  range, Add filter (and Clear filters) on one row with Order at its end; clause rows stack inside it. The
+  grid starts right under it. Notices and errors are thin rows between the bars and the grid.
+- **The document panel follows the row**: while it is open, a click on any cell of any row — or ↑/↓ onto
+  another row — switches it to that row's document (`?doc=`, the title), as the Logs details follow their
+  list; the grid keeps the focus (the panel does not take it). A single click selects a cell (and moves the
+  panel); editing a cell still needs a double-click or Enter. **Unless the document's editor holds unsaved
+  changes**: then the panel stays, with "Save or cancel your edit to open another document." (an unchanged
+  editor does not hold it). `DataTable` gains `onCellClick` (any single click, even on the current cell).
+- Tests: the panel follows a click and the arrows, opens nothing when closed, the unsaved-edit guard and its
+  notice (and an unchanged editor not holding it), the bars and the filled grid; e2e at 1440 (tasks, imports)
+  and 1024: the grid ends at the viewport's bottom, Bar 1's bottom line and the panel header's within 1 px, no
+  page scroll, a click on another row switches the panel. Follow-up: the same full-bleed, two-bar layout for
+  Logs, Files, Schedules and History (each has its own header and toolbar today).
