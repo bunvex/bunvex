@@ -35,6 +35,7 @@ describe("catalog (_tables / _index)", () => {
           _index: 514,
           _instance: 515,
           _session_requests: 516,
+          _scheduled_functions: 517,
           users: 10001,
           posts: 10002,
         });

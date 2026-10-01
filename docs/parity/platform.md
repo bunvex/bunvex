@@ -11,7 +11,7 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
     `GET /version` and `GET /stats` (JSON);
   - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
-- `ctx.auth` exists (STUDY-27); there is no ctx.storage and no ctx.scheduler.
+- `ctx.auth` (STUDY-27) and `ctx.scheduler` (STUDY-30) exist; there is no ctx.storage yet.
 
 Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes marks where bunvex may deliberately differ; the owner has to decide those.
 
@@ -81,17 +81,17 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | missing | Mutations and actions only; function handles are allowed. |
-| Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | missing | The central guarantee. From actions, scheduling commits immediately. |
-| Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | missing | The function type is checked only when the job runs. |
-| Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | missing | Docs quote "1,000,000 outstanding" for cloud. |
-| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | missing | State kinds: `pending`, `inProgress`, `success`, `failed{error}`, `canceled`. Physical tables are `_scheduled_jobs` and `_scheduled_job_args`. |
-| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | missing | Pending or in-progress jobs become canceled. A running action keeps running, but what it schedules is inserted as canceled. Finished jobs are a no-op, although the TS doc says it throws. A mutation canceling itself raises an error. |
-| Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | missing | Success is written in the same transaction as the user mutation. OCC is retried with backoff (100 ms to 60 s). A user error gives `failed`. |
-| Scheduled actions run at most once | same | missing | Marked inProgress, then run. After a crash, a leftover inProgress job becomes failed ("Transient error"). Never retried. |
-| System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | missing | |
-| Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | missing | |
-| GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | missing | |
+| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference or a name. Function handles come with components. |
+| Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | done (STUDY-30) | From actions, each call commits at once. |
+| Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
+| Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
+| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | done (STUDY-30) | A real system table, projected to the public shape through `db.system` (S2, DV-140); only `by_id` / `by_creation_time` are public. |
+| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | done (STUDY-30) | As Convex: no-op on finished jobs; self-cancel refused; what a canceled running action schedules is born canceled. |
+| Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | done (STUDY-30) | The job is finished in the mutation's transaction; OCC retried with backoff (100 ms to 60 s); a user error gives `failed`. |
+| Scheduled actions run at most once | same | done (STUDY-30) | A job found in progress that no one runs fails with "Transient error while executing action". |
+| System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | done (STUDY-30) | |
+| Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | partial (STUDY-30) | Parallelism 8 (env as Convex); pausing waits for the deployment state. Woken by commits, no polling. |
+| GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | done (STUDY-30) | `SCHEDULED_JOB_RETENTION` (seconds), as Convex. |
 | Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | missing | |
 | Per-component scheduling | `crates/model/scheduled_jobs` (per namespace) | missing | Depends on components. |
 

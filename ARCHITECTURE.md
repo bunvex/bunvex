@@ -67,7 +67,7 @@ bunvex/
 │   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
 │   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
-│   │   ├── scheduler                runAfter/runAt · crons                                    M
+│   │   ├── scheduler                runAfter/runAt/cancel, db.system (STUDY-30) ✅ · crons     M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
 │   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·
 │   │   │                            admin keys M

@@ -13,6 +13,8 @@ export const INDEX_TABLE = "_index";
 export const INSTANCE_TABLE = "_instance";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
+/** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
+export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;

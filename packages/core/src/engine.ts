@@ -13,6 +13,7 @@ import {
   INSTANCE_TABLE,
   type IndexMeta,
   planCatalog,
+  SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
   TABLES_TABLE,
   type TableMeta,
@@ -34,6 +35,7 @@ import {
   LeaseLostError,
   type Persistence,
 } from "./persistence/index.ts";
+import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import { type DeclaredTable, type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
 import {
   deleteSessionRequestsBefore,
@@ -254,6 +256,7 @@ export class Engine {
           indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
           document: v.any(),
         },
+        { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       ];
       const changes = planCatalog([...systemTables, ...this.schema.tables.values()], current.tables, current.indexes);
       if (!hasChanges(changes)) return current;
