@@ -30,6 +30,7 @@ export {
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DatabaseTimeoutError,
   type DocWrite,
   hasLease,
   type IndexWrite,
@@ -59,5 +60,4 @@ export {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
-export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

@@ -85,7 +85,8 @@ export function AddDocuments({ table, onAdded }: { table: string; onAdded: (ids:
         onSubmit={() => void submit()}
       />
       {/* what is wrong with the draft, as you type; what the source refused, as an alert */}
-      <p id={`${inputId}-check`} aria-live="polite" className="min-h-5 text-sm text-destructive">
+      {/* empty when the draft is fine: no reserved line between the editor and the button (UX-25) */}
+      <p id={`${inputId}-check`} aria-live="polite" className="text-sm text-destructive empty:-mt-3">
         {!parsed.ok && parsed.error}
       </p>
       {error && (

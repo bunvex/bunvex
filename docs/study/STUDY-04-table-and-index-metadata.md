@@ -95,11 +95,11 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | The tablet id is a small integer allocated from a counter, not a random 16-byte id; `_tables` and `_index` have fixed ids instead of persistence globals | PERSIST-01 stores integer ids. Fixed bootstrap ids replace the globals. Not observable. | owner |
+| D1 | The tablet id is a small integer allocated from a counter, not a random 16-byte id; `_tables` and `_index` have fixed ids instead of persistence globals | PERSIST-01 stores integer ids. Fixed bootstrap ids replace the globals. Not observable. | Decided (owner, 2026-10-01): keep bunvex's (DV-53) |
 | D2 | ~~Tables exist only if the schema declares them~~ Fixed in #33: a first insert creates the table in the same transaction | — | done |
-| D3 | ~~Backfill runs synchronously at startup, before the server accepts requests, instead of in the background~~ | Decided (owner, 2026-10-01): match Convex. Done in [STUDY-29](STUDY-29-index-backfill.md): background worker, checkpoints, resume. What differs is STUDY-29 B1 and B2 (DV-126, DV-127, pending). | done (DV-54) |
-| D4 | ~~No `Backfilled`/staged state~~ and no namespaces (components) | Decided (owner, 2026-10-01): match Convex. `backfilled` and staged indexes done in STUDY-29; namespaces (components) remain a gap. | partly done (DV-55) |
-| D5 | Stores created before this change are not readable (no migration) | Pre-alpha; bench data is reseeded | owner |
+| D3 | ~~Backfill runs synchronously at startup, before the server accepts requests, instead of in the background~~ | Decided (owner, 2026-10-01): match Convex. Done in [STUDY-29](STUDY-29-index-backfill.md) (#115): background worker, checkpoints, resume. What differs is STUDY-29 B1 and B2, decided as divergences (owner, 2026-10-01: DV-126, revisit with `bunvex deploy`; DV-127, until `prev_ts` (DV-66) exists). | done (DV-54) |
+| D4 | ~~No `Backfilled`/staged state~~ and no namespaces (components) | Decided (owner, 2026-10-01): match Convex. `backfilled` and staged indexes done in STUDY-29 (#115); namespaces (components) remain a gap. | partly done (DV-55) |
+| D5 | Stores created before this change are not readable (no migration) | Pre-alpha; bench data is reseeded | Decided (owner, 2026-10-01): keep bunvex's for now: pre-alpha; a stored layout version (STUDY-25 L6) first, migrations later (DV-56) |
 
 ## 6. Tests
 

@@ -111,7 +111,7 @@ describe("the Logs screen", () => {
     expect([...times].sort().reverse()).toEqual(times);
     // one request per mock execution; an action's calls are executions of their own, inside it
     const ends = history.filter((e) => e.execution && !e.parentExecutionId);
-    expect(rows().some((r) => /^(success|failure) \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
+    expect(rows().some((r) => /^(Success|Failure) \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
     expect(ends.length).toBe(12);
     await expectAccessible();
   });
@@ -182,7 +182,7 @@ describe("the Logs screen", () => {
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "success" }));
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(rows().every((r) => cells(r)[COL.outcome]!.startsWith("success"))).toBe(true));
+    await waitFor(() => expect(rows().every((r) => cells(r)[COL.outcome]!.startsWith("Success"))).toBe(true));
     expect(screen.getByRole("button", { name: "Types: success" })).toBeDefined();
     const fn = cells(rows()[0]!)[COL.function]!.slice(1); // after the kind's letter
     await user.type(screen.getByRole("searchbox", { name: "Filter logs" }), fn);
@@ -294,11 +294,15 @@ describe("the Logs screen", () => {
     await opened();
     const user = userEvent.setup();
     // a line that ends an execution: it carries the usage and the identity
-    const end = rows().find((r) => /^(success|failure)/.test(cells(r)[COL.outcome]!))!;
+    const end = rows().find((r) => /^(Success|Failure)/.test(cells(r)[COL.outcome]!))!;
     await user.click(within(end).getAllByRole("gridcell")[COL.message]!);
     const panel = await screen.findByRole("complementary");
     expect(within(panel).getByText("Started by")).toBeDefined();
-    expect(within(panel).getByText(/^(User|System)$/)).toBeDefined();
+    const who = within(panel).getByText(/^(User|System)$/);
+    // said once, the explanation as a tooltip; the kind as the list's badge (UX-24)
+    expect(who.getAttribute("title")).toMatch(/^Started by /);
+    expect(within(panel).queryByText(/^Started by (a|the) /)).toBeNull();
+    expect(within(panel).getByTitle(/^(query|mutation|action)$/).textContent).toMatch(/^[QMA]$/);
     const used = within(panel).getByRole("region", { name: "Resources used" });
     expect(within(used).getByText(/^\d+ MB for \d+\.\d\d s$/)).toBeDefined();
     expect(within(used).getByText(/ read, .* written$/)).toBeDefined();
@@ -329,5 +333,32 @@ describe("usage and identity", () => {
     await source.runFunction("tasks:list", {}, { identity: { subject: "u", issuer: "i" } });
     expect((await newestEnd()).identity).toBe("acting_as_user");
     expect((await newestEnd()).usage?.memoryMb).toBe(16);
+  });
+
+  test("the time stays in view when the list scrolls sideways (UX-5); on a phone the message comes second (UX-6)", async () => {
+    mount();
+    await opened();
+    const header = (name: string) => within(grid()).getByRole("columnheader", { name });
+    expect(header("Time").className).toContain("sticky");
+    expect(within(rows()[0]!).getAllByRole("gridcell")[COL.time]!.className).toContain("sticky");
+    cleanup();
+    const real = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: q.includes("max-width: 639px"),
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      mount();
+      await opened();
+      expect(
+        within(grid())
+          .getAllByRole("columnheader")
+          .map((h) => h.textContent),
+      ).toEqual(["Time", "Message", "Level", "Function", "Outcome", "Request"]);
+    } finally {
+      window.matchMedia = real;
+    }
   });
 });

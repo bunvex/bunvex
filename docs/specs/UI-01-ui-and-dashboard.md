@@ -1390,6 +1390,80 @@ providers, copyable) and **Snapshots** (export, download a real zip, import a fi
 (colour contrast included, both themes) now also covers a function's page, Logs, General, Authentication and
 Snapshots. 22 tests, about a minute.
 
+## 20. Amendment — UX review (30 Sep 2026)
+
+Every screen was captured in both themes at 1 440 px and at phone width and reviewed for consistency; the
+owner approved all 25 findings (UX-1…UX-25; UX-18 went to the Health redesign). They land in five grouped
+pull requests.
+
+### 20.1 Database: polish and bugs
+
+- **UX-1** The document panel shows the document as the JavaScript literal the rest of the dashboard uses
+  (`credits: 10n`, `Bytes("…")`, bare keys), through `database/literal-view.tsx` — no more wire form
+  (`{"$integer": …}`).
+- **UX-2** A filter row just added is silent until something is typed in it; it does not apply meanwhile.
+- **UX-12** The schema panel's code wraps long lines with a hanging indent instead of running past its edge.
+- **UX-20** On a phone the toolbar keeps Add documents and ⋯ on the title row; Schema, Indexes and Columns
+  move into the ⋯ menu (`TableMenu panels`).
+- **UX-21** Every cell value truncates with an ellipsis; numbers (and int64) are right-aligned.
+- **UX-22** The cell menu groups the cell's actions, the document's, and Delete document on its own.
+- **UX-23** A right-click with no click before targets the cell under the pointer (tested). The review's
+  capture likely hit a layout shift while the table settled.
+- **UX-25** Add documents has no reserved line between the editor and its button.
+- **Submenu** (owner's note): "Filter by …" closed before it could be clicked when the pointer moved fast.
+  Base UI focuses the parent menu when the pointer leaves an item — the submenu's own trigger on the way into
+  it — and the submenu closed as "focus-out". `DropdownMenuSub` (`@bunvex/ui`) ignores a focus-out that stays
+  in the menu tree; a sibling item, Escape, a click outside or picking an item still close it. Reproduced and
+  checked in Chrome.
+
+### 20.2 Logs
+
+- **UX-5** The Time column stays in view when a long message scrolls the list sideways: `DataTable`
+  gains `stickyColumn`.
+- **UX-6** On a phone the message comes right after the time (Time, Message, Level, Function, Outcome,
+  Request).
+- **UX-24** A line's details say who started the request once (the explanation is its tooltip), show the
+  function's kind as the list's Q/M/A badge, and keep the copy button in the body font.
+
+### 20.3 Shell layout and lists
+
+- **UX-4** On a phone the header shows the deployment as one muted line (`local · memory · 0.0.0-mock`,
+  labelled for assistive tech) and Run functions as an icon (its name kept for assistive tech); the
+  labelled list returns from `md` up.
+- **UX-9** An environment variable's actions sit at the row's right edge, on the name's line; each Copy
+  button says "Copy" (named for its variable), so they line up.
+- **UX-14** One place for counts: next to the title (Database, Files, History) or above the list (each
+  Schedules tab); a footer only says "N loaded" while more are still to load. History's counts (its title's
+  and an event's, "Added 1,452 documents") use the shared count format, with thousands separators.
+- **UX-16** Files' Open button is as tall as the storage-ID box.
+- **UX-17** No reserved status line between a toolbar and its table (Files, Scheduled functions).
+
+
+
+### 20.4 Functions and the runner
+
+- **UX-3** The header's Run functions (and Ctrl+`) opens the runner on the function the Functions screen
+  shows, as Convex's runner follows the selected function; elsewhere it keeps the last one.
+- **UX-12, UX-13** A function's Arguments and Returns validators wrap long lines with a hanging indent, grow
+  to 12 lines, and past that scroll with a note ("N lines: scroll for the rest.").
+
+### 20.5 Shared components
+
+- **UX-7** The schema panel's Saved / Generated are underlined tabs (`TabsList variant="line"`), as every
+  switch between sibling views is; Settings' vertical nav already had the sidebar's active treatment.
+- **UX-8** A copy next to a value is an icon (`CopyButton iconOnly`) named by its label ("Copy client URL"),
+  with the label, then "Copied", as its tooltip; page-level copies keep their text.
+- **UX-10** Destructive actions read the same: a row's delete is `destructive-ghost` (quiet, red); a
+  reversible but disruptive action (Pause deployment) is `destructive-outline`; confirmations keep the strong
+  one.
+- **UX-11** One `StatusBadge` (`@bunvex/ui`): an icon and a sentence-case word in the status colours, with
+  optional detail (a duration), for a log line's outcome, a scheduled run's state and a cron's last run.
+- **UX-15** `DayInput` (`@bunvex/ui`): the design system's input, typed as `YYYY-MM-DD` (it applies once
+  complete and valid; a wrong day says so) or picked from a month's calendar in a popover — not the
+  browser's date field.
+- **UX-19** The "bright bar" on a phone was the open function's row, cut by the short tree; the tree now
+  scrolls the open function into view.
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens
