@@ -13,6 +13,8 @@ export const INDEX_TABLE = "_index";
 export const INSTANCE_TABLE = "_instance";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
+/** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
+export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";

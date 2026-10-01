@@ -7,6 +7,7 @@ import type { Server } from "bun";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import {
   fromWireTs,
@@ -52,6 +53,11 @@ export type ServerOptions = {
   auth?: AuthConfig;
   /** `fetch` for OIDC discovery and JWKS (tests point it at an in-process issuer). */
   authFetch?: typeof fetch;
+  /**
+   * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
+   * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
+   */
+  scheduler?: SchedulerOptions;
   /**
    * Splaying of wide invalidations (STUDY-08 §3.5). Defaults: Convex's knobs from the environment
    * (`SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`), else
@@ -152,6 +158,8 @@ export function createServer(opts: ServerOptions) {
     splay: splayOptions(opts.subscriptionSplay),
     verifyToken: (token) => verifier.verify(token),
   });
+  const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
+  scheduler.start();
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
@@ -238,7 +246,9 @@ export function createServer(opts: ServerOptions) {
   return {
     server,
     sync,
+    scheduler,
     stop: () => {
+      void scheduler.stop();
       stopCleanup();
       sync.stop();
       server?.stop(true);
@@ -246,6 +256,7 @@ export function createServer(opts: ServerOptions) {
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      await scheduler.stop();
       sync.stop();
       server?.stop(true);
       await engine.close();

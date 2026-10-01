@@ -25,4 +25,5 @@ export {
 } from "./functions.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
+export { type SchedulableFunction, ScheduledJobExecutor, type Scheduler, type SchedulerOptions } from "./scheduler.ts";
 export { createServer, type ServerOptions } from "./server.ts";
