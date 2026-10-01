@@ -357,6 +357,25 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
 | L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10: live query results, run history, acting as a user, deployment events, usage and identity all built |
 
+### 7.4 The Logs redesign (added 1 Oct 2026, UI-01 §22.4)
+
+Convex's Logs (`logs/components/Logs.tsx`, `LogToolbar`-style filters above `LogList.tsx`) put the function
+and type filters in **a toolbar of multi-selects** above the list, have **no time range and no histogram**,
+no function-kind filter and no export, and show the drilldown as a panel over the list. What differs in
+bunvex, all **the owner's calls / bunvex additions** (1 Oct 2026):
+
+| # | Divergence | Decision |
+|---|---|---|
+| L10 | The filters are a resizable column on the left (as the Database tables list), with each choice's count among the loaded lines; on a phone, a Filters sheet | owner's call |
+| L11 | A time range (presets) and a brushed window, in the URL (`range`, `from`/`to`); a function-kind filter (`kind`) | owner's call (an addition) |
+| L12 | A log-volume histogram above the list, stacked by outcome, brushable; counted on the client over the loaded lines (L2) | owner's call (an addition) |
+| L13 | Export of the shown lines as JSON Lines | owner's call (an addition) |
+| L14 | The details show the time as ISO, local and relative, and the line's raw JSON | owner's call |
+
+The function kinds are query, mutation and action: the contract's `FunctionKind` has no HTTP action yet
+(Convex's list shows H for them); the Kind section gains it with the contract. Nothing here reaches the
+server or the contract: every number is computed from the lines already loaded.
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
@@ -686,3 +705,55 @@ search, minimap, controls and side panel. The open table is in the URL (`?table=
 | SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
 | SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
 
+### 14.5 Indexes on the cards and going to a relation (added 1 Oct 2026)
+
+Convex's `TableNode.tsx` lists a table's indexes under its fields (name and fields, at most
+`MAX_VISIBLE_INDEXES` = 5, then "+N more"), and a reference type (`Id<table>`) links to the referenced table:
+`SchemaFlow.tsx` centres it (`setCenter`) and highlights it; `SchemaSidePanel.tsx` links its references the same
+way. bunvex now does both (UI-01 §22.2) — no divergence. Also new, not in Convex: a table icon on each card (the
+owner's request). The side panel became docked and resizable on every screen (UI-01 §22.1, the owner's call).
+
+### 14.6 The document panel and the selected row (added 1 Oct 2026)
+
+Convex's data view docks a resizable **"View Selected"** panel beside the table (`Table.tsx`, `ViewDocument.tsx`)
+that shows the rows ticked in the **selection** — it follows the checkboxes, not the current cell. bunvex's
+document panel **follows the current row** (a click on any cell, ↑/↓), as its Logs details do, and holds while
+its editor has unsaved changes (UI-01 §22.3): a deliberate difference, **the owner's call** (1 Oct 2026). Its
+docked, resizable shape matches Convex's (UI-01 §22.1).
+
+## 15. Topology (a bunvex addition, added 1 Oct 2026)
+
+**Convex has no such view** — not in self-hosted, not in the cloud dashboard (Convex Cloud's own topology,
+Usher and funrun, is internal). The owner asked for one as a bunvex addition (1 Oct 2026), inspired by their
+minivex work but designed from scratch on STUDY-24's roles; it is recorded here as an owner-decided addition,
+not a divergence.
+
+### 15.1 What it shows
+
+STUDY-24 settles how bunvex scales out: one **leader** commits, holds the **lease** on the store (TTL on the
+store's clock, graceful release, H5), runs the **scheduler** (H6) and pushes the **commit stream**;
+**followers** hold the clients' WebSockets and serve queries and subscriptions, catching up by commit
+timestamp, and a follower too far behind waits and then refuses new connections (H9); actions run on any node
+after an owner-tagged claim (H6); memory and SQLite keep one node behind a file lock (H7). The screen draws
+exactly that. First built as lanes by role (the owner's first pick); reworked the same day, at the owner's
+request, into a canvas like PlanetScale's primary/replicas and Railway's service flow, with the lanes kept as
+the List view.
+
+### 15.2 Decisions (owner, 1 Oct 2026)
+
+| # | What | Decided |
+|---|---|---|
+| T1 | Its own nav entry, **Topology**, next to Health | yes |
+| T2 | ~~Lanes by role only~~ → a **React Flow canvas in fixed layers** (Clients, Followers, Leader, Store; no ELK), positions stable across updates, Fit to re-frame; a **Diagram \| List** toggle with the lanes as List | yes (revised 1 Oct 2026) |
+| T7 | Edges: "385 ws"; the commit stream "3 commits · 50 ms", width by commits/s, colour by lag (with the word); "110 commits/s" + a lock to the store; **particles** along the stream, none under reduced motion | yes |
+| T8 | Hover (or an event picked in the feed) lights a node's edges and dims the rest; click opens the side panel | yes |
+| T9 | ~~A phone opens on the List~~ → **diagram only** (no List, no `?view=`); a phone gets a one-column layout framed to the width, panned vertically | yes (revised 1 Oct 2026) |
+| T10 | **Each node's own query cache** (an in-process LRU, invalidated by the commit stream; **no cache shared between nodes**, as each Convex process keeps its own `CacheManager`): a cache strip on every server card, a Cache tab in the node panel | yes |
+| T11 | Laid out like the Schema screen: full-bleed, a slim title bar with the summary, events docked under the canvas (collapsed to one line), shared canvas controls | yes |
+| T3 | v1: nodes, roles, state and lag; store and lease; per-node vitals; an events feed | yes |
+| T4 | One node (bunvex today) shows the node and its store, and says where followers will appear | yes |
+| T5 | The contract's optional `getTopology` / `watchTopology`, needing `viewMetrics` (no new operation) | my call, owner can veto |
+| T6 | Topology events are their own list in the picture (joined, left, leader changed, lease taken or expired, fell behind, caught up), not the audit log: the audit log records what people did, these are what the system did | my call, owner can veto |
+
+Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
+own clock for the lease; per-node logs.
