@@ -370,19 +370,22 @@ import type { AuthFeatures } from "./data-source-auth.ts";
 import type { MetricsFeatures } from "./data-source-metrics.ts";
 import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
+import type { TopologyFeatures } from "./data-source-topology.ts";
 
 export * from "./data-source-auth.ts";
 export * from "./data-source-deployment.ts";
 export * from "./data-source-metrics.ts";
 export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
+export * from "./data-source-topology.ts";
 
 export interface DashboardDataSource
   extends DeploymentFeatures,
     DeploymentStateFeatures,
     MetricsFeatures,
     AuthFeatures,
-    SnapshotFeatures {
+    SnapshotFeatures,
+    TopologyFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;
