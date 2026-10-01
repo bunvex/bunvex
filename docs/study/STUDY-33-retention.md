@@ -1,6 +1,6 @@
 # STUDY-33 — Retention: garbage collection of old versions
 
-- **Status:** accepted: R1–R4 as recommended (owner, 2026-10-01)
+- **Status:** implemented (PERSIST-01 C12–C14 and the engine's `Retention`); R1–R4 accepted (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. The public repository dropped its
   tests in `ba16e0638`; the retention tests below are read from `ba16e0638^`.
 - **Related:**

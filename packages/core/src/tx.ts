@@ -230,6 +230,11 @@ export class Tx {
   prevEndCursor: string | null = null;
   nextEndCursor: string | null = null;
   private paginated = false;
+  /**
+   * The store's retention window (STUDY-33): every read from the store is checked against it before and
+   * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
+   */
+  retention: { check(ts: number): void } | null = null;
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
@@ -453,7 +458,9 @@ export class Tx {
     if (w) return w.next && structuredClone(w.next);
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
+    this.retention?.check(this.snapshot);
     const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+    this.retention?.check(this.snapshot);
     if (json) this.recordDoc(json);
     return json ? decodeDoc(json) : null;
   }
@@ -495,9 +502,11 @@ export class Tx {
     const t = st.t!;
     const ix = st.ix!;
     const p = this.persistence as Persistence & Partial<ScanDocs>;
+    this.retention?.check(this.snapshot);
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
       const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
+      this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
       return rows.map(decodeDoc);
     }
@@ -510,6 +519,7 @@ export class Tx {
         out.push(decodeDoc(json));
       }
     }
+    this.retention?.check(this.snapshot);
     return out;
   }
 

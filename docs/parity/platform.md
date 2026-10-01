@@ -244,11 +244,11 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| Index retention: delete expired index entries older than `INDEX_RETENTION_DELAY` (4 min) | `crates/database/retention.rs` `go_delete_indexes` | missing | ARCHITECTURE marks it M. bunvex keeps every version and index entry forever. |
-| Document retention: delete old document revisions after `DOCUMENT_RETENTION_DELAY` (14 d; docker-compose sets 2 d) | `retention.rs` `expired_documents` | missing | |
-| Reads below the minimum snapshot timestamp fail (snapshot invalid) | `retention.rs` `validate_snapshot` | missing | bunvex snapshots are always valid today; that changes once GC exists. |
-| Purging deleted tables | `retention.rs` `delete_documents_in_tablets` | missing | |
-| Checkpointing and rate limits (`RETENTION_*` knobs) | `knobs.rs:667-822` | missing | |
+| Index retention: delete expired index entries older than `INDEX_RETENTION_DELAY` (4 min) | `crates/database/retention.rs` `go_delete_indexes` | done (STUDY-33) | `Retention` in `@bunvex/core`, in the lease holder. It reads the index log (C11) rather than revision pairs (DV-154); chunks of 512, 10 000 a pass. Measured: a hot range rewritten 100 times scans 10–15× faster once pruned. |
+| Document retention: delete old document revisions after `DOCUMENT_RETENTION_DELAY` (14 d; docker-compose sets 2 d) | `retention.rs` `expired_documents` | done (STUDY-33) | Over the document log (PERSIST-01 C12, DV-155); 14 days by default (DV-157), `DOCUMENT_RETENTION_DELAY` in seconds. |
+| Reads below the minimum snapshot timestamp fail (snapshot invalid) | `retention.rs` `validate_snapshot` | done (STUDY-33) | Checked before and after every store read: `OutOfRetentionError`, "Index snapshot timestamp out of leader retention window: {ts} < {min}" (HTTP 503, close 1013). |
+| Purging deleted tables | `retention.rs` `delete_documents_in_tablets` | missing | bunvex cannot delete a table yet; this comes with it. |
+| Checkpointing and rate limits (`RETENTION_*` knobs) | `knobs.rs:667-822` | done (STUDY-33) | Convex's defaults: windows advanced every 30 s and recorded first (`min_snapshot_ts`, `document_min_snapshot_ts`), cursors checkpointed every 300 s, 256 documents/s, backoff 50 ms to 60 s. |
 | System table cleanup: scheduled jobs (7 d), sessions (2 w), expired exports (30 d), import age (7 d) | `crates/application/system_table_cleanup` | missing | |
 
 ### 17. System tables (complete list)

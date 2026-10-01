@@ -65,6 +65,7 @@ export {
   UnsureCommitError,
 } from "./persistence/index.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
+export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
   type DeclaredTable,
   type Doc,
