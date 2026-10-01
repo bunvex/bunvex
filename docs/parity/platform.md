@@ -63,20 +63,20 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.storage.generateUploadUrl()` (mutations and actions) | `npm/convex/server/storage.ts`; `crates/file_storage/core.rs` | missing | Returns `{origin}/api/storage/upload?token=…`. The token is valid for 1 h, tied to its component, and must be issued within 15 s of the UDF timestamp. |
-| `POST /api/storage/upload?token=` | `crates/local_backend/storage.rs` | missing | Streams the body and hashes it. Optional `Digest: sha-256=` must match. Returns `{storageId}`. No body cap; docs say 2 min timeout. |
-| The `_storage` metadata row is written in its own transaction after the upload | `crates/file_storage` `store_entry` | missing | Avoids OCC conflicts. |
-| `ctx.storage.getUrl(id)` | syscall `1.0/storageGetUrl` | missing | Returns `{origin}/api/storage/{uuid}[?component=]`, or null. |
-| `GET /api/storage/{uuid}`: serving | `crates/local_backend/storage.rs`; `crates/file_storage/lib.rs` | missing | Headers: `Content-Type`, `Content-Length`, `Digest`, `Cache-Control: private, max-age=2592000`, `Accept-Ranges`. A single Range gives 206; multiple ranges give 416. |
-| `ctx.storage.delete(id)` | `crates/model/file_storage` `delete_file` | missing | Transactional delete of the metadata row. Blobs are **never** garbage-collected in OSS, and old URLs return 404. |
-| `ctx.storage.store(blob)` / `get(id)` (actions only) | `npm-packages/udf-runtime/src/storage.ts` | missing | `store` in queries and mutations is rejected with `StorageStoreNotImplemented`. |
-| `ctx.storage.getMetadata` (deprecated) | syscall `1.0/storageGetMetadata` | missing | Replaced by `ctx.db.system.get("_storage", id)`. |
-| `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | missing | Physical table `_file_storage` holds `storageId` (uuid), `storageKey`, `sha256`, `size` and `contentType`, with index `by_storage_id`. |
-| `ctx.db.system.get/query` for virtual system tables | `npm/convex/server/database.ts` (system reader) | missing | Also needed for `_scheduled_functions`. |
-| Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | missing | A doc id from another table is rejected. Decided (owner, 2026-10-01): accept both, as Convex (DV-84). |
-| Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | missing | |
+| `ctx.storage.generateUploadUrl()` (mutations and actions) | `npm/convex/server/storage.ts`; `crates/file_storage/core.rs` | done (STUDY-32) | `{cloud origin}/api/storage/upload?token=`; the origin is `cloudOrigin` / `BUNVEX_CLOUD_ORIGIN` (F2). |
+| `POST /api/storage/upload?token=` | `crates/local_backend/storage.rs` | done (STUDY-32) | Streamed and hashed; `Digest` checked; `{storageId}`; no size limit (F4). Token errors with Convex's codes. |
+| The `_storage` metadata row is written in its own transaction after the upload | `crates/file_storage` `store_entry` | done (STUDY-32) | |
+| `ctx.storage.getUrl(id)` | syscall `1.0/storageGetUrl` | done (STUDY-32) | Reactive (the row is read in the transaction). |
+| `GET /api/storage/{uuid}`: serving | `crates/local_backend/storage.rs`; `crates/file_storage/lib.rs` | done (STUDY-32) | Convex's headers; one range 206, several 416; HEAD; `/api` CORS. |
+| `ctx.storage.delete(id)` | `crates/model/file_storage` `delete_file` | done (STUDY-32) | Transactional. The blob is removed after commit, and orphans are swept hourly (F3, DV-150); Convex never removes them. |
+| `ctx.storage.store(blob)` / `get(id)` (actions only) | `npm-packages/udf-runtime/src/storage.ts` | done (STUDY-32) | |
+| `ctx.storage.getMetadata` (deprecated) | syscall `1.0/storageGetMetadata` | done (STUDY-32) | |
+| `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | done (STUDY-32) | A real system table, projected (F1). |
+| `ctx.db.system.get/query` for virtual system tables | `npm/convex/server/database.ts` (system reader) | done (STUDY-32) | `_scheduled_functions`, `_storage`. |
+| Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | done (STUDY-32) | Convex's messages. |
+| Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | done (STUDY-32) | Not enforced in Convex either. |
 | Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | partial (STUDY-32) | `@bunvex/file-storage`: local (`<dir>/files/<key>.blob`, synced; `STORAGE_DIR`, else `<DATA>/storage`), S3 through Bun's S3Client with Convex's variable names (files bucket), memory for tests; a conformance suite (S3 in CI on RustFS). Other use cases' buckets come with their features. |
-| Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | missing | Switching local↔S3 after init is an error. |
+| Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | partial (STUDY-32) | The S3 key prefix is kept in `_instance` (`bunvex-<uuid>/`); switching local↔S3 is not checked yet. |
 | Total file-storage size gauge | `FileStorageSizeTracker` | missing | Used for usage reporting. |
 
 ### 4. Scheduler

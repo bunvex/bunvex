@@ -27,6 +27,7 @@ import { ActionPermits } from "./action-permits.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import type { FileStorage } from "./storage.ts";
 import { SYSTEM_QUERIES } from "./system-functions.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
@@ -39,10 +40,25 @@ const registryKey = (name: string) => {
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
 };
 
+/** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
+export type StorageReader = ReturnType<FileStorage["reader"]>;
+export type StorageWriter = ReturnType<FileStorage["writer"]>;
+export type StorageActionWriter = ReturnType<FileStorage["actionWriter"]>;
+
+/** `ctx.storage` without a configured file storage: every call says so. */
+const noStorage = new Proxy(
+  {},
+  {
+    get: () => async () => {
+      throw new Error("File storage is not configured on this server.");
+    },
+  },
+) as never;
+
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
 export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
-export type QueryCtx = { db: Tx; auth: Auth };
-export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler };
+export type QueryCtx = { db: Tx; auth: Auth; storage: StorageReader };
+export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler; storage: StorageWriter };
 /** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
 export type FunctionRef = AnyFunctionReference | string;
 export type ActionCtx = {
@@ -51,6 +67,7 @@ export type ActionCtx = {
   runMutation: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
   runAction: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
   scheduler: Scheduler;
+  storage: StorageActionWriter;
 };
 
 /** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
@@ -136,6 +153,9 @@ export const internalAction = builder<ActionCtx>("action", "internal");
 export class Functions {
   private fns = new Map<string, FunctionDef>();
 
+  /** Where files go (STUDY-32); set by `createServer`. */
+  fileStorage: FileStorage | null = null;
+
   /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
   readonly actionPermits: ActionPermits;
 
@@ -195,7 +215,14 @@ export class Functions {
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true) {
     const f = this.fn(name, "query", fromClient);
-    return async (db: Tx) => this.checkReturns(f, await f.handler({ db, auth: txAuth(db) }, this.checkArgs(f, args)));
+    return async (db: Tx) =>
+      this.checkReturns(
+        f,
+        await f.handler(
+          { db, auth: txAuth(db), storage: this.fileStorage?.reader(db) ?? noStorage },
+          this.checkArgs(f, args),
+        ),
+      );
   }
 
   /**
@@ -206,7 +233,15 @@ export class Functions {
     return perAttempt(async (db: Tx) =>
       this.checkReturns(
         f,
-        await f.handler({ db, auth: txAuth(db), scheduler: makeScheduler(this, { db, job }) }, this.checkArgs(f, args)),
+        await f.handler(
+          {
+            db,
+            auth: txAuth(db),
+            scheduler: makeScheduler(this, { db, job }),
+            storage: this.fileStorage?.writer(db) ?? noStorage,
+          },
+          this.checkArgs(f, args),
+        ),
       ),
     );
   }
@@ -368,6 +403,7 @@ export class Functions {
       runMutation: (n, a) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
       runAction: (n, a) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
+      storage: this.fileStorage?.actionWriter() ?? noStorage,
     };
   }
 

@@ -4,7 +4,10 @@ import { LocalBlobStore } from "./local.ts";
 import { S3BlobStore, s3OptionsFromEnv } from "./s3.ts";
 import type { BlobStore } from "./store.ts";
 
-export function blobStoreFromEnv(env = process.env, opts: { s3Prefix?: string } = {}): BlobStore {
+export function blobStoreFromEnv(
+  env = process.env,
+  opts: { s3Prefix?: string | (() => Promise<string>) } = {},
+): BlobStore {
   const s3 = s3OptionsFromEnv(env);
   if (s3) return new S3BlobStore({ ...s3, prefix: opts.s3Prefix });
   return new LocalBlobStore(env.STORAGE_DIR ?? `${env.DATA ?? "./.data"}/storage`);
