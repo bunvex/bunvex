@@ -27,8 +27,19 @@ export interface Persistence {
   get(table: number, id: string, ts: number): string | null | Promise<string | null>;
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): number | Promise<number>;
+  /**
+   * Whether an error of `flush()` is transient (STUDY-25 L4, as Convex's `is_transient_db_error`): a timeout
+   * or an "operational" error (a lost connection, a server shutting down). The committer retries a transient
+   * flush failure with backoff, so a driver that classifies anything as transient MUST keep the group a failed
+   * `flush()` did not make durable: the next `flush()` writes the same rows at the same timestamps behind the
+   * same fence, and fails (not transient) if an earlier attempt did commit (PERSIST-01 C8). Absent: nothing is
+   * transient, any flush failure is fail-stop (the embedded drivers).
+   */
+  isTransient?(e: unknown): boolean;
   /** AUDIT ONLY (conformance K6, never used by the engine): live documents of a table at ts. */
   auditLiveDocs?(table: number, ts: number): number | Promise<number>;
+  /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
+  auditRowsAt?(ts: number): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
   close(): void | Promise<void>;
 }
 
@@ -91,6 +102,7 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
 export { DatabaseTimeoutError, renewTimeoutMs, withTimeout } from "./timeout.ts";

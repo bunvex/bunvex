@@ -5,7 +5,7 @@
 // log), assigns the next ts, applies the writes to persistence, and makes the whole GROUP durable with one
 // flush. Commits queued while a group is being flushed form the next group.
 
-import { wallClockUs } from "./determinism.ts";
+import { outsideExecution, wallClockUs } from "./determinism.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
 
@@ -48,15 +48,34 @@ export class ConflictError extends Error {
  * is expected to restart and recover from what persistence durably holds (PERSIST-01 C5).
  */
 export class CommitterStoppedError extends Error {
-  constructor(cause: unknown) {
+  constructor(
+    cause: unknown,
+    /** What failed, when known: a flush is "write failed, unsure if the group committed to disk" (Convex). */
+    context?: string,
+  ) {
     super(
-      `the committer stopped after a persistence failure: ${cause instanceof Error ? cause.message : String(cause)}`,
-      {
-        cause,
-      },
+      `the committer stopped after a persistence failure: ${context ? `${context}: ` : ""}${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
     );
   }
 }
+
+/**
+ * Convex's backoff for retrying a failed persistence write (`crates/common/src/knobs.rs`,
+ * INITIAL_PERSISTENCE_WRITES_BACKOFF_MS = 100 and MAX_PERSISTENCE_WRITES_BACKOFF_MS = 10 000), full jitter.
+ */
+export const WRITE_RETRY_INITIAL_BACKOFF_MS = 100;
+export const WRITE_RETRY_MAX_BACKOFF_MS = 10_000;
+
+/** How a failed flush is retried (STUDY-25 L4). */
+export type FlushRetryOptions = {
+  /** First backoff, in ms (default: Convex's 100). */
+  initialBackoffMs?: number;
+  /** Backoff cap, in ms (default: Convex's 10 000). */
+  maxBackoffMs?: number;
+  /** Called before each retry (Convex logs "Failed to write to persistence"). Default: console.error. */
+  onRetry?: (error: unknown, failures: number, delayMs: number) => void;
+};
 
 type PendingCommit = {
   snapshot: number;
@@ -68,6 +87,11 @@ type PendingCommit = {
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
+
+const defaultOnRetry = (e: unknown, failures: number, delayMs: number) =>
+  console.error(
+    `bunvex: a flush failed with a transient error (attempt ${failures}); retrying in ${Math.round(delayMs)} ms: ${e instanceof Error ? e.message : String(e)}`,
+  );
 
 export class Committer {
   /** Highest ts applied to persistence (possibly not yet durable). */
@@ -97,6 +121,7 @@ export class Committer {
     private logWindow = 20_000,
     /** The clock commit timestamps follow, in microseconds (tests pass their own). */
     private clockUs: () => number = wallClockUs,
+    private retry: FlushRetryOptions = {},
   ) {}
 
   /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
@@ -215,11 +240,20 @@ export class Committer {
         if (this.log.length > this.logWindow)
           this.purgedTs = this.log.splice(0, this.log.length - this.logWindow).at(-1)!.ts;
         if (!accepted.length) continue;
-        await this.persistence.flush();
+      } catch (e) {
+        // A throwing apply (or the log trim): nothing of this group becomes visible, and the group, and
+        // everything queued behind it, is refused.
+        this.stop(e);
+        for (const [p] of accepted) p.reject(this.stopped);
+        return;
+      }
+      try {
+        await this.flushWithRetries();
       } catch (e) {
         // Nothing of this group becomes visible: visibleTs stays where it was, and readers ignore versions
-        // above it. The group, and everything queued behind it, is refused.
-        this.stop(e);
+        // above it. The group, and everything queued behind it, is refused. Whether the group reached the store
+        // is unknown (its last attempt may have committed before the error), as Convex says it.
+        this.stop(e, "write failed, unsure if the group committed to disk");
         for (const [p] of accepted) p.reject(this.stopped);
         return;
       }
@@ -229,6 +263,50 @@ export class Committer {
       for (const l of this.listeners) l(entries);
       for (const [p, e] of accepted) p.resolve(e.ts);
       this.wakeVisible();
+    }
+  }
+
+  /** Wakes the backoff sleep of a flush retry when the committer stops. */
+  private wakeRetry: (() => void) | null = null;
+  /** Failed flush attempts so far, in total (retried or not). */
+  flushFailures = 0;
+
+  /**
+   * Flush the group, retrying transient failures as Convex's write batcher does (STUDY-25 L4,
+   * `crates/database/src/write_batcher.rs`): a failure the driver classifies as transient (`isTransient`: a
+   * timeout, a lost connection, a server shutting down) is retried with full-jitter exponential backoff from
+   * 100 ms up to 10 s, with no limit on the number of attempts; any other failure ends it. The driver keeps
+   * the group it failed to flush, so the retry writes the same rows at the same timestamps, behind the same
+   * fence (PERSIST-01 C7, C9). A retry whose earlier attempt did commit fails as "unsure" (a duplicate key, or
+   * the driver finding its group already there), which is not transient: fail-stop, as Convex. The lease
+   * bounds the retries in practice: renewals fail too while the store is unreachable, and the engine stops
+   * the committer once the TTL runs out without one.
+   */
+  private async flushWithRetries() {
+    const initial = this.retry.initialBackoffMs ?? WRITE_RETRY_INITIAL_BACKOFF_MS;
+    const max = this.retry.maxBackoffMs ?? WRITE_RETRY_MAX_BACKOFF_MS;
+    for (let failures = 0; ; ) {
+      try {
+        await this.persistence.flush();
+        return;
+      } catch (e) {
+        this.flushFailures++;
+        if (this.stopped || !this.persistence.isTransient?.(e)) throw e;
+        // The real Math.random: the drain may run in the async context of the mutation that started it.
+        const delay = Math.min(initial * 2 ** failures, max) * outsideExecution(Math.random);
+        failures++;
+        (this.retry.onRetry ?? defaultOnRetry)(e, failures, delay);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(done, delay);
+          function done() {
+            clearTimeout(timer);
+            resolve();
+          }
+          this.wakeRetry = done;
+        });
+        this.wakeRetry = null;
+        if (this.stopped) throw e;
+      }
     }
   }
 
@@ -242,9 +320,10 @@ export class Committer {
     this.stop(cause);
   }
 
-  private stop(cause: unknown) {
+  private stop(cause: unknown, context?: string) {
     if (this.stopped) return;
-    this.stopped = new CommitterStoppedError(cause);
+    this.stopped = new CommitterStoppedError(cause, context);
+    this.wakeRetry?.();
     const queued = this.queue;
     this.queue = [];
     for (const p of queued) p.reject(this.stopped);

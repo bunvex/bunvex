@@ -17,7 +17,14 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, type Conflict, ConflictError, type Interval, overlaps } from "./committer.ts";
+import {
+  Committer,
+  type Conflict,
+  ConflictError,
+  type FlushRetryOptions,
+  type Interval,
+  overlaps,
+} from "./committer.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -137,6 +144,11 @@ export class Engine {
        * another process holds before failing with `LeaseHeldError`.
        */
       lease?: { ttlMs?: number; waitMs?: number };
+      /**
+       * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
+       * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
+       */
+      flushRetry?: FlushRetryOptions;
     } = {},
   ) {
     installDeterminism();
@@ -146,7 +158,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence);
+    this.committer = new Committer(persistence, undefined, undefined, opts.flushRetry);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
       if (this.cache.size === 0) return;

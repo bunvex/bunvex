@@ -4,10 +4,13 @@ export {
   CommitterStoppedError,
   type Conflict,
   ConflictError,
+  type FlushRetryOptions,
   firstOverlap,
   type Interval,
   type LogEntry,
   overlaps,
+  WRITE_RETRY_INITIAL_BACKOFF_MS,
+  WRITE_RETRY_MAX_BACKOFF_MS,
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {
@@ -37,6 +40,7 @@ export {
   LeaseLostError,
   type Persistence,
   type ScanDocs,
+  UnsureCommitError,
 } from "./persistence/index.ts";
 export {
   type DeclaredTable,
