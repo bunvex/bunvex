@@ -12,6 +12,7 @@ import {
   FileBox,
   FunctionSquare,
   History,
+  KeyRound,
   Menu,
   Network,
   Play,
@@ -177,6 +178,11 @@ export function Shell() {
               </NavItem>
               <NavItem link={{ to: "/schedules" }} icon={CalendarClock}>
                 Schedules
+              </NavItem>
+            </NavGroup>
+            <NavGroup label="Manage">
+              <NavItem link={{ to: "/auth" }} icon={KeyRound}>
+                Authentication
               </NavItem>
             </NavGroup>
             <NavGroup label="Observe">

@@ -6,7 +6,14 @@
 import {
   type AuditEvent,
   type AuditEventQuery,
+  type AuthConfig,
+  type AuthEmailAction,
+  type AuthEvent,
+  type AuthOrganization,
   type AuthProvider,
+  type AuthSession,
+  type AuthUser,
+  type AuthUserQuery,
   type CallOptions,
   type Capabilities,
   type CronJob,
@@ -58,6 +65,7 @@ import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilt
 import { validateValue } from "../validators.ts";
 import { MockAudit } from "./audit.ts";
 import { SAMPLE_AUTH_PROVIDERS } from "./auth.ts";
+import { MockAuthAdmin } from "./auth-admin.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
@@ -180,6 +188,8 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
+  /** The app's users and their auth (UI-01 §25). Not part of the contract: tests read it. */
+  readonly authAdmin: MockAuthAdmin;
 
   constructor(opts: MockDataSourceOptions = {}) {
     const fixture = createFixture(opts);
@@ -257,6 +267,7 @@ export class MockDataSource implements DashboardDataSource {
       changed: (table) => this.changed(table),
       stepMs: opts.snapshotStepMs ?? 300,
     });
+    this.authAdmin = new MockAuthAdmin(opts.seed ?? 1, () => this.scheduler.now());
     this.topology = new MockTopology(this.rnd, {
       nodes: opts.nodes ?? 1,
       now: opts.now ?? Date.now(),
@@ -877,6 +888,76 @@ export class MockDataSource implements DashboardDataSource {
   }
 
   // ---------------------------------------------------------------- authentication (§19.1)
+
+  // ---------------------------------------------------------------- the app's users (UI-01 §25)
+  private canViewAuth() {
+    if (!this.opts.capabilities.operations.includes("viewData"))
+      throw new DataSourceError("unauthorized", "this credential cannot view the app's users");
+  }
+  private viewAuth<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+    return this.call(signal, () => {
+      this.canViewAuth();
+      return body();
+    });
+  }
+  private writeAuth<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+    return this.call(signal, () => {
+      this.canWrite();
+      return body();
+    });
+  }
+
+  listAuthUsers(q: AuthUserQuery, opts?: CallOptions): Promise<Page<AuthUser>> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.list(q));
+  }
+  getAuthUser(id: string, opts?: CallOptions): Promise<AuthUser | null> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.get(id));
+  }
+  createAuthUser(input: { name: string; email: string; password?: string }, opts?: CallOptions): Promise<string> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.create(input));
+  }
+  inviteAuthUser(email: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.invite(email));
+  }
+  sendAuthEmail(userId: string, kind: AuthEmailAction, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.sendEmail(userId, kind));
+  }
+  listAuthSessions(q: { userId?: string }, opts?: CallOptions): Promise<AuthSession[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listSessions(q.userId));
+  }
+  revokeAuthSession(id: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.revokeSession(id));
+  }
+  revokeAuthUserSessions(userId: string, opts?: CallOptions): Promise<number> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.revokeUserSessions(userId));
+  }
+  removeAuthUserFactors(userId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.removeFactors(userId));
+  }
+  banAuthUser(userId: string, ban: { reason?: string; expiresInSeconds?: number }, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.ban(userId, ban));
+  }
+  unbanAuthUser(userId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.unban(userId));
+  }
+  impersonateAuthUser(userId: string, opts?: CallOptions): Promise<string> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.impersonate(userId));
+  }
+  removeAuthUser(userId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.remove(userId));
+  }
+  listAuthOrganizations(opts?: CallOptions): Promise<AuthOrganization[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.organizations());
+  }
+  getAuthConfig(opts?: CallOptions): Promise<AuthConfig> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.getConfig());
+  }
+  updateAuthConfig(patch: Partial<AuthConfig>, opts?: CallOptions): Promise<AuthConfig> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.updateConfig(patch));
+  }
+  listAuthEvents(q: { userId?: string; limit?: number }, opts?: CallOptions): Promise<AuthEvent[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listEvents(q));
+  }
 
   listAuthProviders(opts?: CallOptions): Promise<AuthProvider[]> {
     return this.call(opts?.signal, () => {

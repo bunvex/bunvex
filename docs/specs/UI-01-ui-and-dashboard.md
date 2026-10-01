@@ -1766,3 +1766,54 @@ what happened. **Manage** (Authentication) joins with §25.
 - Tests: usage, views with counts and the URL, the current view marked, size counts under the view, Reset, the
   bucket; contract: stats and filters (sabotaged: a source ignoring `kind` fails it). e2e: the column header
   on Bar 1's line.
+
+## 25. Authentication (the owner's call, 1 Oct 2026; a bunvex addition)
+
+A screen to administer the app's own users, mock-first: there is no core implementation yet — the point is
+to see everything the screen can offer. Concepts and names follow **better-auth** (users, accounts per
+provider, sessions, verification, two-factor, passkeys, organizations / members / invitations, the admin
+plugin's ban, impersonation and session revocation); STUDY-12 §7.8 cites what was read. In the sidebar under
+**Manage**; `/auth` opens Users; every page is `/auth/<page>`.
+
+### 25.1 The column and Users
+
+- **Column**: "Authentication"; **Manage** — Users, Sessions, Organizations; **Configuration** — Sign in /
+  Providers, Multi-factor, Passkeys, Sessions (lifetime), Rate limits, URL configuration, Emails, Audit. On
+  Users, the filters below the nav: *Provider* and *Status* (verified, unverified, banned) as radios with the
+  loaded users' counts (`?provider=`, `?status=`; the source filters).
+- **Users**: Bar 1 — the page, its count and **Add user**, a split button (Add user creates; its menu: Create
+  user, Invite by email), each a form in the docked panel; a created user opens. Bar 2 — search by name or
+  email (`?q=`, 200 ms). The grid, full-bleed: avatar (initials) and name, email, providers, created, last
+  sign-in, status.
+- **The user's panel** (`?user=`, following the current row; `?tab=logs|json`): **Overview** — who they are
+  (id with copy, email verified, role, created, last sign-in, two-factor, passkeys, the ban), their providers,
+  *Send an email* (password reset, magic link, verify email when unverified), their sessions each with Revoke,
+  and a **Danger zone**: Revoke all sessions, Remove MFA factors, Ban (1 hour, 1 day, 7 days, 30 days, for
+  good; a reason) or Unban, Impersonate (a one-hour session, audited), Delete user — each asking first.
+  **Logs** — the user's auth events. **Raw JSON** — the user record.
+
+### 25.2 Sessions and Organizations
+
+Full-bleed tables: every session (user, signed in, expires, device in words, IP, impersonated by, Revoke after
+a confirmation); every organization (name, slug, members, pending invitations, created).
+
+### 25.3 Configuration
+
+A form per page over its part of the configuration, saved alone (`updateAuthConfig({ <part> })`), with
+Discard; read-only credentials see it disabled. **Sign in / Providers**: the sign-in methods (email and
+password, magic link, Google, GitHub, Apple, Microsoft, passkey) with their client IDs, and **the token
+providers** that were Settings → Authentication (§19.1; that page is gone, its address redirects here, and
+Settings' column loses the item). **Multi-factor**: TOTP, email codes, backup codes, who must use one.
+**Passkeys**: on/off, relying party name and ID. **Sessions**: lifetime, refresh age, fresh age. **Rate
+limits**: on/off, max per window. **URL configuration**: site URL, redirect allow-list. **Emails**: subject and
+body per template. **Audit**: the auth events, newest first.
+
+### 25.4 Contract
+
+`data-source-auth-admin.ts`: every method optional, detected with `typeof`; `listAuthUsers` offers the screen.
+Users (paged, searched, filtered by provider and status), one user, create, invite, send an email, sessions
+(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations, the
+configuration (read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
+random stream; reads need `viewData`, writes `writeData` and not read-only. The contract suite
+(`contract-auth-admin.ts`) checks the listing and its filters, create / ban (signing out) / unban / remove, and
+the configuration's merge.

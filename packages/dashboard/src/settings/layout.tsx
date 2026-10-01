@@ -25,11 +25,6 @@ function SettingsNav() {
                   Environment variables
                 </DashLink>
               </li>
-              <li>
-                <DashLink link={{ to: "/settings/authentication" }} className={SECTION_ITEM}>
-                  Authentication
-                </DashLink>
-              </li>
             </>
           ),
         },

@@ -149,10 +149,7 @@ const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "File
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
 const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
-const AuthenticationSettingsScreen = lazyRouteComponent(
-  () => import("./settings/auth.tsx"),
-  "AuthenticationSettingsScreen",
-);
+const AuthScreen = lazyRouteComponent(() => import("./auth/screen.tsx"), "AuthScreen");
 const EnvironmentVariablesScreen = lazyRouteComponent(
   () => import("./settings/screen.tsx"),
   "EnvironmentVariablesScreen",
@@ -266,10 +263,65 @@ export const envVarsRoute = createRoute({
   component: EnvironmentVariablesScreen,
 });
 
+/** Settings → Authentication moved to the Authentication screen's "Sign in / Providers" (UI-01 §25). */
 export const authSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings/authentication",
-  component: AuthenticationSettingsScreen,
+  beforeLoad: () => {
+    throw redirect({ to: "/auth/$section", params: { section: "providers" }, replace: true });
+  },
+});
+
+/** The Authentication screen's pages (UI-01 §25). */
+export const AUTH_SECTIONS = [
+  "users",
+  "sessions",
+  "organizations",
+  "providers",
+  "multi-factor",
+  "passkeys",
+  "session-lifetime",
+  "rate-limits",
+  "urls",
+  "emails",
+  "audit",
+] as const;
+export type AuthSection = (typeof AUTH_SECTIONS)[number];
+
+/** Users: a search, a provider, a status, the open user and its tab. */
+export type AuthSearch = {
+  q?: string;
+  provider?: string;
+  status?: "verified" | "unverified" | "banned";
+  user?: string;
+  tab?: "overview" | "logs" | "json";
+};
+export const validateAuthSearch = (input: Record<string, unknown>): AuthSearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  q: str(input.q),
+  provider: typeof input.provider === "string" && /^[a-z-]+$/.test(input.provider) ? input.provider : undefined,
+  status:
+    input.status === "verified" || input.status === "unverified" || input.status === "banned"
+      ? input.status
+      : undefined,
+  user: str(input.user),
+  tab: input.tab === "logs" || input.tab === "json" || input.tab === "overview" ? input.tab : undefined,
+});
+
+/** `/auth` opens Users. */
+export const authIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "auth",
+  beforeLoad: () => {
+    throw redirect({ to: "/auth/$section", params: { section: "users" }, replace: true });
+  },
+});
+
+export const authRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "auth/$section",
+  validateSearch: validateAuthSearch,
+  component: AuthScreen,
 });
 
 export const snapshotsSettingsRoute = createRoute({
@@ -319,6 +371,8 @@ export const routeTree = rootRoute.addChildren([
   envVarsRoute,
   authSettingsRoute,
   snapshotsSettingsRoute,
+  authIndexRoute,
+  authRoute,
 ]);
 
 // ------------------------------------------------------------------ the router

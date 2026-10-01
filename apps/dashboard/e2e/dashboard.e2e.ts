@@ -644,6 +644,8 @@ describe("the dashboard in a browser", () => {
       ["/logs", "Logs", "Logs"],
       ["/history", "History", "History"],
       ["/files?view=images", "Files", "Files"],
+      ["/auth/users", "Authentication", "Users"],
+      ["/auth/rate-limits", "Authentication", "Rate limits"],
     ] as const) {
       const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
       await heading(page, h1);
@@ -663,6 +665,29 @@ describe("the dashboard in a browser", () => {
     await page.getByRole("button", { name: "Pages" }).click();
     await page.getByRole("complementary", { name: "Pages" }).getByRole("link", { name: "Snapshots" }).click();
     await heading(page, "Snapshots");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Authentication: the users grid to the bottom, a user's panel on Bar 1's line, the Danger zone", async () => {
+    const { page, errors, close } = await open("/auth/users", { viewport: { width: 1440, height: 900 } });
+    await heading(page, "Users");
+    const grid = page.getByRole("grid", { name: "Users" });
+    await grid.getByRole("row").nth(3).waitFor();
+    await grid.getByRole("row").nth(1).getByRole("gridcell").nth(1).click();
+    const panel = page.getByRole("complementary");
+    await panel.getByRole("region", { name: "Danger zone" }).waitFor();
+    const m = await page.evaluate(() => ({
+      bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().bottom,
+      panelHeader: document.querySelector('[data-slot="side-panel"] header')!.getBoundingClientRect().bottom,
+      gridBottom: document.querySelector('[data-slot="data-table"]')!.getBoundingClientRect().bottom,
+      pageScrolls: document.documentElement.scrollHeight > innerHeight,
+    }));
+    expect(Math.round(Math.abs(m.bar1 - m.panelHeader))).toBe(0);
+    expect(Math.abs(m.gridBottom - 900)).toBeLessThanOrEqual(1);
+    expect(m.pageScrolls).toBe(false);
+    await panel.getByRole("tab", { name: "Raw JSON" }).click();
+    await panel.getByRole("figure", { name: "This user as JSON" }).waitFor();
     expect(errors).toEqual([]);
     await close();
   });
@@ -803,8 +828,10 @@ describe("the dashboard in a browser", () => {
         ["/functions?function=tasks:list", "list"],
         ["/logs", "Logs"],
         ["/settings/general", "General"],
-        ["/settings/authentication", "Authentication"],
+        ["/settings/authentication", "Sign in / Providers"], // moved to Authentication (UI-01 §25)
         ["/settings/snapshots", "Snapshots"],
+        ["/auth/users", "Users"],
+        ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {
