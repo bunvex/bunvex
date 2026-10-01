@@ -25,6 +25,7 @@ import {
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import { SYSTEM_QUERIES } from "./system-functions.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -212,6 +213,21 @@ export class Functions {
         `Attempted to schedule function, but no exported function ${fn} found in the file: ${module}.js. Did you forget to export it?`,
       );
     return `${module}.js:${fn}`;
+  }
+
+  /**
+   * A dashboard system query (`_system/frontend/*`, system-functions.ts), as an admin: Convex's names,
+   * argument checks and result shapes. Not reachable from clients (no `_system` name is public).
+   */
+  async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
+    const q = SYSTEM_QUERIES[name.replace(/:default$/, "")];
+    if (!q) throw new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+    const a = args ?? {};
+    if (!isSimpleObject(a))
+      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    const msg = checkValue(v.object(q.args), a as Value, this.tableOf);
+    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    return this.engine.query((db) => q.handler(db, a as never));
   }
 
   /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
