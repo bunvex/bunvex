@@ -24,7 +24,7 @@ export interface BlobStore {
 export function streamOf(body: ReadableStream<Uint8Array> | Blob | Uint8Array): ReadableStream<Uint8Array> {
   if (body instanceof ReadableStream) return body;
   if (body instanceof Blob) return body.stream();
-  return new Blob([body]).stream();
+  return new Blob([body as Uint8Array<ArrayBuffer>]).stream();
 }
 
 /** Feed each chunk to `write`, hashing and counting as it goes. */

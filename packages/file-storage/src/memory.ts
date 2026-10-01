@@ -17,7 +17,7 @@ export class MemoryBlobStore implements BlobStore {
   async get(key: string, range?: ByteRange): Promise<ReadableStream<Uint8Array> | null> {
     const b = this.blobs.get(key);
     if (!b) return null;
-    return new Blob([range ? b.subarray(range.start, range.end + 1) : b]).stream();
+    return new Blob([(range ? b.subarray(range.start, range.end + 1) : b) as Uint8Array<ArrayBuffer>]).stream();
   }
 
   async delete(key: string): Promise<void> {
