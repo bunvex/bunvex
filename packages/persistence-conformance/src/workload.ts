@@ -76,3 +76,17 @@ export const allOfTenant = (tenantId: string) => (db: Tx) =>
     .query("items")
     .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenantId))
     .collect() as Promise<Doc[]>;
+
+/** `n` documents of ~`pad` bytes each in ONE mutation (K26: a commit above a write batch's caps when large). */
+export const insertPadded =
+  (tenantId: string, n: number, pad: number, seq = 0) =>
+  async (db: Tx) => {
+    for (let i = 0; i < n; i++)
+      await db.insert("items", {
+        tenantId,
+        title: "x".repeat(pad),
+        status: "open",
+        amount: seq,
+        createdAt: Date.now(),
+      });
+  };

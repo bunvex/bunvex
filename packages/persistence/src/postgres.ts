@@ -1,7 +1,8 @@
 // Postgres: the same two generic tables Convex uses (documents + indexes, every row stamped with its
 // commit ts). Index keys are split into key_prefix / key_suffix / key_suffix_hash as Convex does, so a key
-// of any length fits the btree (split.ts). A group of commits is flushed in ONE transaction; a range read and its document fetches are
-// fused into ONE statement (scanDocs). The native driver `postgres` is an optional peer dependency.
+// of any length fits the btree (split.ts). A flush (a write batch of whole commits, bounded by the committer:
+// DV-62) is ONE transaction, its rows sent in statements of at most 1 024 rows each, as Convex's
+// `INSERTS_PER_STATEMENT`; a range read and its document fetches are fused into ONE statement (scanDocs). The native driver `postgres` is an optional peer dependency.
 //
 // Single writer (PERSIST-01 C7): one row in `bunvex_lease` (epoch, holder, expires_at on the server's clock,
 // max_ts). Every flush's first statement is a data-modifying CTE that updates the lease row only if our epoch
@@ -27,6 +28,7 @@
 import {
   checkLayoutVersion,
   checkUnversionedTables,
+  chunkRows,
   DatabaseTimeoutError,
   type DocWrite,
   decodeLayoutVersion,
@@ -40,6 +42,7 @@ import {
   MAX_KEY_PREFIX_LEN,
   type OpenOptions,
   type Persistence,
+  POSTGRES_ROWS_PER_STATEMENT,
   ReadOnlyError,
   type ReadOnlyFlag,
   renewTimeoutMs,
@@ -450,8 +453,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
-    // One jsonb parameter per table, expanded server-side: one statement per table whatever the group
-    // size (postgres.js does not bind boolean[]/bytea[] arrays for unnest). Keys travel as hex.
+    // One jsonb parameter per statement, expanded server-side (postgres.js does not bind boolean[]/bytea[]
+    // arrays for unnest). Keys travel as hex. At most 1 024 rows per statement, as Convex's
+    // `INSERTS_PER_STATEMENT` (DV-62): a large commit is several statements of one transaction.
     const docInsert = `insert into documents select (r->>0)::int, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean
       from jsonb_array_elements($1::text::jsonb) r`;
     const idxInsert = `insert into indexes select (r->>0)::int, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
@@ -469,9 +473,11 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           // The fence: the first insert happens only if the lease row still carries our epoch, and that update
           // also records the group's top as the durable prefix. Data-modifying CTEs always run, and their row
           // lock is held to COMMIT, so a takeover waits for this transaction and then sees max_ts.
-          const [first, rows, rest] = docs.length
-            ? [docInsert, docs, idx.length ? idxInsert : null]
-            : [idxInsert, idx, null];
+          const statements: [string, unknown[][]][] = [
+            ...chunkRows(docs, POSTGRES_ROWS_PER_STATEMENT).map((c): [string, unknown[][]] => [docInsert, c]),
+            ...chunkRows(idx, POSTGRES_ROWS_PER_STATEMENT).map((c): [string, unknown[][]] => [idxInsert, c]),
+          ];
+          const [[first, rows], ...rest] = statements;
           const [f] = await tx.unsafe(
             `with l as (update bunvex_lease set max_ts = $2 where id = 1 and epoch = $3 returning 1),
               w as (${first} where exists (select 1 from l))
@@ -480,8 +486,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           );
           if (f.n !== 1) throw new LeaseLostError();
           progress();
-          if (rest) await tx.unsafe(rest, [JSON.stringify(idx)]);
-          progress(); // COMMIT
+          for (const [statement, chunk] of rest) {
+            await tx.unsafe(statement, [JSON.stringify(chunk)]);
+            progress(); // the next statement, or COMMIT
+          }
         }),
       );
     await retryOnce(
