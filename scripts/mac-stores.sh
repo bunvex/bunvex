@@ -15,6 +15,7 @@ urls() {
   echo "PG_URL=postgres://$USER@127.0.0.1:5434/bunvex"
   echo "MYSQL_URL=mysql://root@127.0.0.1:3307/bunvex"
   echo "MONGO_URL=mongodb://127.0.0.1:27018/bunvex"
+  echo "DO_NOT_REQUIRE_SSL=1   # these stores have no verifiable TLS; bunvex requires it by default"
 }
 
 start() {

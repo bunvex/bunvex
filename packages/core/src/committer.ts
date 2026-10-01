@@ -164,6 +164,14 @@ type PendingCommit = {
   idx: IndexWrite[];
   /** The write source recorded in the log, for other transactions' conflict errors. */
   source?: string;
+  /**
+   * False for an index backfill's commit (STUDY-29): its writes go only to an index no transaction may read
+   * yet, so no read-set can overlap them and they are left out of the write log (validation, the query
+   * cache's invalidation and subscriptions would otherwise scan them all for nothing).
+   */
+  logWrites?: boolean;
+  /** Called with the ts once the commit is visible, before the commit listeners (a catalog change). */
+  onVisible?: (ts: number) => void;
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
@@ -376,7 +384,7 @@ export class Committer {
           // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
           const ts = Math.max(this.appliedTs + 1, this.clockUs());
           this.appliedTs = ts;
-          const writes = p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
+          const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
           const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };
           accepted.push([p, entry]);
           this.persistence.apply(ts, p.docs, p.idx);
@@ -403,6 +411,7 @@ export class Committer {
       }
       this.groups++;
       this.visibleTs = accepted[accepted.length - 1][1].ts;
+      for (const [p, e] of accepted) p.onVisible?.(e.ts);
       const entries = accepted.map(([, e]) => e);
       for (const l of this.listeners) l(entries);
       for (const [p, e] of accepted) p.resolve(e.ts);

@@ -6,7 +6,9 @@
 > **v2.2, 1 Oct 2026:** C9 (transient errors and retries; ambiguous commits per driver) and K21, from STUDY-25
 > L4/L5; K20's last check now expects a timed-out flush to be retried. **v2.3, 1 Oct 2026:** owner decisions on
 > C9: a lost connection is transient on Postgres too (DV-123); a retried group that already landed is
-> acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed.
+> **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7. Every
+> persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -196,6 +198,34 @@ network closed, a server shutting down or not serving — are retried instead of
   also retries after a timeout (so a read waits up to two timeouts); MySQL does not. Never a statement inside
   a transaction or a flush, and never a lease call.
 
+## C10 — layout version and read-only flag
+
+A store says which layout wrote it, and whether it may be opened for writing (STUDY-25 L6/L7, as Convex:
+its configured layout, refused over a different one, and its `read_only` table). The helpers and errors
+are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_VERSION` (1).
+
+- **The record.** Every store holds its layout version: a `layout_version` row of `persistence_globals`
+  (SQL stores), `meta` `{_id: "layout"}` (MongoDB), or the log's first record `{"layout":N}` (memory+log).
+  Each driver's file header says where.
+- **Open checks, writing nothing.** Before any write (DDL included) and without the lease, since refusing
+  is safe:
+  - A recorded version other than `LAYOUT_VERSION` fails the open with `LayoutError`, naming it: newer,
+    unknown, or older with no upgrade. An upgrade, when one exists, runs under the lease only, as recovery
+    does (C7). None exists yet.
+  - A store with no record is bunvex's only if its tables (collections) have bunvex's columns (fields), or
+    do not exist. It is then a store written before C10, the same layout. Anything else is refused with
+    `LayoutError` and left untouched.
+  - A store marked read-only fails the open with `ReadOnlyError` ("… read-only, data migration in
+    progress"), unless the caller passes `allowReadOnly` (readers, migration tools).
+- **Stamping under the lease.** A store with no record gets one when the lease is acquired, in the same
+  atomic step where the store allows it. A record found there is checked again; on a mismatch the
+  acquisition fails and the lease is not kept.
+- **The flag.** A driver implements `ReadOnlyFlag.setReadOnly(on)`: no lease is needed (as Convex's
+  `set_read_only`). It is read at open only; a running writer keeps writing.
+- A third-party driver claims C10 by passing K22 and K23. Its conformance module then exports the
+  `layoutVersion`, `setLayoutVersion`, `makeForeign` and `foreignIntact` hooks, and an `open` that takes
+  `allowReadOnly`.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -220,6 +250,8 @@ network closed, a server shutting down or not serving — are retried instead of
 | K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
 | K20 | a store that stops answering (C8, remote stores) | a TCP proxy between the driver and the store stops forwarding both ways without closing anything: a read fails within the timeout (1.5 s in the suite; two with a retry, C9) and a flush within one, a renewal within TTL/4; the client closes every connection those calls waited on; once the proxy forwards again the same store answers without a reopen; through the engine, a commit whose flush times out is held and retried while the store does not answer, then acknowledged once, its rows stored once (C9); and, with the retries held for 1 s after the thaw, the timed-out attempt sends nothing more (no request with the group's rows, no COMMIT: "a failed attempt stays failed", C9). The driver module exports `target()` and `openThrough(via, { timeoutMs })` |
 | K21 | transient errors are retried (C9, remote stores) | the proxy of K20 resets the connection of a request carrying a marker, or lets a COMMIT through and drops every answer after it: a read whose connection is lost answers through one retry, and fails when the retry loses its connection too; a connection lost in the middle of a flush is retried: the commit is acknowledged once and stored once (all three stores; DV-123); a COMMIT that lands while its answer is lost is retried, found landed through the lease record and acknowledged exactly once, the committer still running, and after a reopen the store holds the group exactly once (`auditRowsAt`), with `maxTs` at its ts (DV-124) |
+| K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
+| K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
