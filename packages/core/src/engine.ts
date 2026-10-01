@@ -8,16 +8,28 @@ import {
   bootstrapCatalog,
   buildCatalog,
   type Catalog,
+  finishCatalog,
   hasChanges,
+  hasFinishChanges,
+  INDEX_BACKFILLS_INDEX,
+  INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
   INSTANCE_TABLE,
+  type IndexBackfillMeta,
   type IndexMeta,
   planCatalog,
   SESSION_REQUESTS_TABLE,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, type Conflict, ConflictError, type FlushRetryOptions, type Interval } from "./committer.ts";
+import {
+  Committer,
+  type Conflict,
+  ConflictError,
+  type FlushRetryOptions,
+  type Interval,
+  type WriteLogRetention,
+} from "./committer.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -25,17 +37,10 @@ import {
   preciseClock,
   runDeterministic,
 } from "./determinism.ts";
-import { encodeKey, prefixEnd } from "./keyenc.ts";
-import {
-  hasLease,
-  type IndexWrite,
-  type Lease,
-  LeaseHeldError,
-  LeaseLostError,
-  type Persistence,
-} from "./persistence/index.ts";
+import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
+import { hasLease, type Lease, LeaseHeldError, LeaseLostError, type Persistence } from "./persistence/index.ts";
 import { ReadSetIndex } from "./read-set-index.ts";
-import { type DeclaredTable, type Doc, documentValidator, indexKey, type SchemaDefinition } from "./schema.ts";
+import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -45,7 +50,9 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
-import { decodeDoc, Tx } from "./tx.ts";
+import { Tx } from "./tx.ts";
+
+export { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions };
 
 /** A function result as Convex JSON text (`undefined` → null), and back. */
 export const stringifyValue = (v: unknown): string => JSON.stringify(toJsonValue((v ?? null) as Value));
@@ -143,6 +150,10 @@ export class Engine {
        * another process holds before failing with `LeaseHeldError`.
        */
       lease?: { ttlMs?: number; waitMs?: number };
+      /** The committer's write-log retention (default: Convex's 30 s / 300 s / 50 MiB; STUDY-06 D10). */
+      writeLogRetention?: Partial<WriteLogRetention>;
+      /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
+      indexBackfill?: IndexBackfillOptions;
       /**
        * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
@@ -157,7 +168,12 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence, undefined, undefined, opts.flushRetry);
+    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry);
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.readyState = { resolve, reject, settled: false };
+    });
+    this.ready.catch(() => {}); // a rejection nobody awaits is not an error
+    this.committer.onFatal((e) => this.settleReady(e));
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps, found through
     // the index of the cached read-sets rather than by testing every entry.
     this.committer.onCommit((entries) => {
@@ -169,15 +185,42 @@ export class Engine {
   /**
    * Open the engine on its store: resume after the store's durable maxTs (PERSIST-01 C5), then load the
    * catalog and reconcile it with the declared schema (STUDY-04). Must finish before serving requests.
+   * New indexes are NOT waited for: they are backfilled in the background (STUDY-29), and a query on one
+   * fails with `IndexBackfillingError` until it is enabled; `indexesReady()` resolves then.
    */
   async init() {
     // The lease first (PERSIST-01 C7): maxTs is only meaningful once no other process can write.
     if (hasLease(this.persistence)) await this.acquireLease(this.persistence);
     const m = (await this.persistence.maxTs?.()) ?? 0;
     this.committer.resume(m);
-    await this.reconcileCatalog();
+    const backfilling = await this.reconcileCatalog();
     await this.loadInstanceSecret();
+    // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
+    if (backfilling) {
+      this.indexWorker = new IndexWorker(this.workerHost(), this.opts.indexBackfill);
+      this.indexWorker.start();
+    }
     return this;
+  }
+
+  /** The background index backfill, while there is one (its `stats` are for tests and measurements). */
+  indexWorker: IndexWorker | null = null;
+  private readonly ready: Promise<void>;
+  private readyState!: { resolve: () => void; reject: (e: unknown) => void; settled: boolean };
+
+  /**
+   * Resolves once every index the declared schema asks for is enabled (staged ones excepted), as Convex's
+   * `wait_for_schema` lets a push complete; rejects if the engine closes or stops first.
+   */
+  indexesReady(): Promise<void> {
+    return this.ready;
+  }
+
+  private settleReady(error?: unknown) {
+    if (this.readyState.settled) return;
+    this.readyState.settled = true;
+    if (error === undefined) this.readyState.resolve();
+    else this.readyState.reject(error);
   }
 
   private lease: { store: Lease; timer: ReturnType<typeof setInterval> } | null = null;
@@ -225,6 +268,8 @@ export class Engine {
 
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
   async close() {
+    await this.indexWorker?.stop();
+    this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
     if (this.lease) {
       clearInterval(this.lease.timer);
@@ -254,55 +299,99 @@ export class Engine {
     }, true);
   }
 
-  /** Create missing tables and indexes, drop undeclared indexes, and backfill new indexes. */
-  private async reconcileCatalog() {
-    const read = async (db: Tx) => ({
-      tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
-      indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
-    });
-    const { tables, indexes } = await this.runMutation(async (db) => {
-      const current = await read(db);
-      const systemTables: DeclaredTable[] = [
-        { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
-        {
-          name: SESSION_REQUESTS_TABLE,
-          indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
-          document: v.any(),
-        },
-      ];
-      const changes = planCatalog([...systemTables, ...this.schema.tables.values()], current.tables, current.indexes);
-      if (!hasChanges(changes)) return current;
-      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
-      for (const id of changes.deleteIndexes) await db.delete(INDEX_TABLE, id);
-      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
-      return read(db); // read-your-own-writes: the catalog as this commit leaves it
-    }, true);
-    this.catalog = buildCatalog(tables, indexes);
-    for (const ix of indexes) if (ix.state === "backfilling") await this.backfill(ix);
+  /** Every table the engine declares: its own system tables, then the schema's. */
+  private declaredTables(): DeclaredTable[] {
+    const systemTables: DeclaredTable[] = [
+      { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+      {
+        name: SESSION_REQUESTS_TABLE,
+        indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
+        document: v.any(),
+      },
+      { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+    ];
+    return [...systemTables, ...this.schema.tables.values()];
   }
 
   /**
-   * Fill a new index from its table's live documents, in batches of commits, then enable it. Idempotent:
-   * after a crash midway the index is still `backfilling` and the next start rewrites the same keys.
+   * Start the schema change (Convex's `start_push` / `prepare_new_and_mutated_indexes`): create missing
+   * tables, add new indexes as `backfilling`, drop pending indexes no longer declared. If nothing is left to
+   * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
-  private async backfill(meta: IndexMeta, batch = 1000) {
-    const t = [...this.catalog.tables.values()].find((x) => x.id === meta.tablet)!;
-    const ix = t.indexes.get(meta.name)!;
-    let lo: Uint8Array = new Uint8Array(0);
-    const hi = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
-    for (;;) {
-      const snapshot = this.committer.visibleTs;
-      const ids = await this.persistence.scan(t.byId.id, lo, hi, snapshot, batch, false);
-      if (ids.length === 0) break;
-      const idx: IndexWrite[] = [];
-      for (const id of ids) {
-        const json = await this.persistence.get(t.id, id, snapshot);
-        if (json) idx.push({ index: ix.id, key: indexKey(ix, decodeDoc(json)), id });
+  private async reconcileCatalog(): Promise<boolean> {
+    const { tables, indexes } = await this.runMutation(async (db) => {
+      const current = await readCatalog(db);
+      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes);
+      if (!hasChanges(changes)) return current;
+      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+      for (const id of changes.deleteIndexes) {
+        await db.delete(INDEX_TABLE, id);
+        await deleteBackfillProgress(db, id);
       }
-      if (idx.length) await this.committer.commit({ snapshot, reads: [], docs: [], idx });
-      lo = prefixEnd(encodeKey([ids[ids.length - 1]]));
-    }
-    await this.runMutation((db) => db.patch(INDEX_TABLE, meta._id, { state: "enabled" }), true);
+      for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, { staged: r.staged });
+      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
+    }, true);
+    this.catalog = buildCatalog(tables, indexes);
+    if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
+    return indexes.some((i) => i.state === "backfilling");
+  }
+
+  /**
+   * Finish the schema change (Convex's `finish_push` / `commit_indexes_for_schema`), once no index it waits
+   * for is still backfilling: enable what is backfilled, disable what became staged, drop what was replaced
+   * or removed, in ONE commit; the catalog changes with it. True once finished.
+   */
+  private async finishSchema(): Promise<boolean> {
+    if (this.readyState.settled) return true;
+    const finished = await this.runMutation(
+      async (db) => {
+        const { tables, indexes } = await readCatalog(db);
+        const f = finishCatalog(this.declaredTables(), tables, indexes);
+        if (!f) return false;
+        if (!hasFinishChanges(f)) return true;
+        for (const i of f.drop) {
+          await db.delete(INDEX_TABLE, i._id);
+          await deleteBackfillProgress(db, i._id);
+        }
+        for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
+        for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
+        const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
+        db.onCommitVisible = (ts) =>
+          this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
+        return true;
+      },
+      true,
+      "index_finish_schema",
+    );
+    if (finished) this.settleReady();
+    return finished;
+  }
+
+  /**
+   * Install a committed `_index` change: a new catalog object (transactions already running keep theirs,
+   * as Convex's index registry belongs to a snapshot), and an empty query cache — a cached result may have
+   * read an index that is gone and will never be invalidated by a write again.
+   */
+  private installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: number) {
+    this.catalog = this.catalog.withIndexChanges(changes, ts);
+    this.cache.clear();
+  }
+
+  private workerHost() {
+    // biome-ignore lint/complexity/noUselessThisAlias: the host reads the engine's CURRENT catalog
+    const engine = this;
+    return {
+      committer: this.committer,
+      persistence: this.persistence,
+      get catalog() {
+        return engine.catalog;
+      },
+      system: <T>(body: (db: Tx) => Promise<T>, source: string) => this.runMutation(body, true, source),
+      installIndexChanges: (c: { enable: number[]; disable: number[]; drop: number[] }, ts: number) =>
+        this.installIndexChanges(c, ts),
+      finishSchema: () => this.finishSchema(),
+    };
   }
 
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
@@ -509,7 +598,14 @@ export class Engine {
       if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
       const { docs, idx } = tx.toWrites();
       try {
-        const ts = await this.committer.commit({ snapshot: tx.snapshot, reads: tx.reads, docs, idx, source });
+        const ts = await this.committer.commit({
+          snapshot: tx.snapshot,
+          reads: tx.reads,
+          docs,
+          idx,
+          source,
+          onVisible: tx.onCommitVisible ?? undefined,
+        });
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)
@@ -522,6 +618,8 @@ export class Engine {
             );
         return withTs ? { value, ts } : value;
       } catch (e) {
+        // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
+        // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
         if (failures >= maxRetries) throw this.occError(e.conflict, source);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
@@ -554,4 +652,20 @@ export class Engine {
       { table, documentId, writeSource, writeTs: conflict.writeTs },
     );
   }
+}
+
+async function readCatalog(db: Tx) {
+  return {
+    tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
+    indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
+  };
+}
+
+/** Drop the backfill checkpoint of a dropped index, if it has one. */
+async function deleteBackfillProgress(db: Tx, indexMetaId: string) {
+  const p = (await db
+    .query(INDEX_BACKFILLS_TABLE)
+    .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexMetaId))
+    .first()) as unknown as IndexBackfillMeta | null;
+  if (p) await db.delete(INDEX_BACKFILLS_TABLE, p._id);
 }

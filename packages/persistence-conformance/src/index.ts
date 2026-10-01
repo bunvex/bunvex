@@ -5,7 +5,9 @@
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
 // and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
-// stop the committer).
+// stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
+// (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
+// driver; for drivers with the log by timestamp (C11, `readLog`), K25.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -18,21 +20,50 @@
 import { spawn } from "node:child_process";
 import {
   compareKeys,
-  type Engine,
+  type Doc,
+  Engine,
   encodeKey,
   hasLease,
+  indexKey,
   type KeyValue,
+  LAYOUT_VERSION,
+  LayoutError,
   LeaseHeldError,
   LeaseLostError,
   OccError,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   type ScanDocs,
 } from "@bunvex/core";
+import { fromJsonValue } from "@bunvex/values";
+import { logChecks } from "./log.ts";
 import { freezableProxy } from "./proxy.ts";
-import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
+import {
+  allOfTenant,
+  counter,
+  increment,
+  insertItem,
+  listTenant,
+  newEngine,
+  pair,
+  schemaWithAmount,
+  seedCounters,
+} from "./workload.ts";
 
 export type DriverModule = {
-  open(fresh: boolean): Promise<Persistence>;
+  /** `opts.allowReadOnly` (K23): open a store marked read-only, as Convex's readers and tools do. */
+  open(fresh: boolean, opts?: OpenOptions): Promise<Persistence>;
+  /** K22 (PERSIST-01 C10): the layout version recorded in the store, read raw, or null if none. */
+  layoutVersion?(): Promise<unknown>;
+  /** K22: record `v` raw (a future or unknown version), or remove the record (null: a store written
+   *  before C10). The store's data stays. */
+  setLayoutVersion?(v: unknown): Promise<void>;
+  /** K22: replace the store with one bunvex did not write (e.g. Convex's own tables, with a row). */
+  makeForeign?(): Promise<void>;
+  /** K22: whether that foreign store is exactly as `makeForeign` left it (a refused open wrote nothing). */
+  foreignIntact?(): Promise<boolean>;
   tearTail?(nextTs: number): void | Promise<void>;
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
@@ -42,9 +73,30 @@ export type DriverModule = {
   /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
    *  address, with the given client-side call timeout (STUDY-25 L3). */
   openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
+  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
+  dropLogIndex?(): Promise<void>;
+  /** Whether the store has its ts index (K25: it is built once the lease is held). */
+  hasLogIndex?(): Promise<boolean>;
+  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
+  strayLogRow?(ts: number): Promise<void>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K21"; // K3 also runs K4–K5; K10 runs K10–K19
+// K3 also runs K4–K5; K10 runs K10–K19
+export type Check =
+  | "K1"
+  | "K2"
+  | "K3"
+  | "K6"
+  | "K7"
+  | "K8"
+  | "K9"
+  | "K10"
+  | "K20"
+  | "K21"
+  | "K22"
+  | "K23"
+  | "K24"
+  | "K25";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -56,8 +108,12 @@ export type ConformanceOptions = {
   log?: (line: string) => void;
   /** The driver claims PERSIST-01 C7 (single writer): its absence is a failure, not a skip. */
   requireLease?: boolean;
+  /** The driver claims PERSIST-01 C10 (layout version, read-only flag): K22/K23's hooks must exist. */
+  requireLayout?: boolean;
   /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
   requireTimeouts?: boolean;
+  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
+  requireReadLog?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -362,6 +418,79 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       `K5 no reader saw half a mutation (${odd} odd reads, ${final.length}/1920)`,
     );
     await e.close();
+  }
+
+  // K24 — a background index backfill (STUDY-29) under concurrent writers: an index added to a table that has
+  // documents is filled in chunks at the same time as 8 writers insert, move the indexed value and delete;
+  // once it is enabled, every live document has exactly one entry, in key order, at several snapshots.
+  async function k24() {
+    let e = await newEngine(await mod.open(true));
+    for (let i = 0; i < 3000; i += 500)
+      await e.mutation(async (db) => {
+        for (let j = 0; j < 500; j++) await insertItem(`t${(i + j) % 10}`)(db);
+      });
+    const ids = (await e.query((db) => db.query("items").collect())).map((d) => d._id);
+    await e.close();
+    // Slow on purpose (2 000 entries/s): the writers overlap the whole backfill. The backfill's range reads
+    // are delayed too (the writers do none), so writes land between a chunk's snapshot and its commit.
+    const st = await mod.open(false);
+    let delayScans = true;
+    for (const m of ["scan", "scanDocs"] as const) {
+      const f = (st as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[m]?.bind(st);
+      if (f)
+        (st as unknown as Record<string, unknown>)[m] = async (...a: unknown[]) => {
+          if (delayScans) await new Promise((r) => setTimeout(r, 3));
+          return f(...a);
+        };
+    }
+    e = await new Engine(schemaWithAmount, st, {
+      indexBackfill: { chunkSize: 200, chunkRate: 10, readSize: 100 },
+    }).init();
+    let stop = false;
+    let writes = 0;
+    const writers = Array.from({ length: 8 }, async (_, w) => {
+      for (let i = 0; !stop; i++) {
+        const id = ids[(w * 7919 + i * 104729) % ids.length];
+        const wrote = await e.mutation(async (db) => {
+          if (i % 4 === 0) ids.push(await insertItem(`t${w}`)(db));
+          else if (!(await db.get("items", id))) return false;
+          else if (i % 4 === 3) await db.delete("items", id);
+          else await db.patch("items", id, { amount: rnd(10_000) });
+          return true;
+        });
+        if (wrote) writes++;
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    await e.indexesReady();
+    delayScans = false;
+    const snapshots = [e.committer.visibleTs];
+    stop = true;
+    await Promise.all(writers);
+    snapshots.push(e.committer.visibleTs);
+    const t = e.catalog.table("items");
+    const ix = t.indexes.get("by_amount")!;
+    let bad = 0;
+    for (const ts of snapshots) {
+      const live = await e.persistence.scan(t.byId.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      const want: [Uint8Array, string][] = [];
+      for (const id of live) {
+        const doc = fromJsonValue(JSON.parse((await e.persistence.get(t.id, id, ts))!)) as unknown as Doc;
+        want.push([indexKey(ix, doc), id]);
+      }
+      want.sort((a, b) => compareKeys(a[0], b[0]));
+      const got = await e.persistence.scan(ix.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      if (got.length !== want.length || got.some((id, i) => id !== want[i][1])) {
+        bad++;
+        log(`  K24 at ts ${ts}: ${got.length} entries for ${want.length} live documents`);
+      }
+    }
+    const stats = e.indexWorker?.stats;
+    await e.close();
+    check(
+      bad === 0 && writes > 100,
+      `K24 a background backfill under ${writes} concurrent writes: one entry per live document at ${snapshots.length} snapshots (${stats?.chunks} chunks, ${stats?.conflicts} refused and redone)`,
+    );
   }
 
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
@@ -745,6 +874,128 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }
   }
 
+  /** What `f` threw (or null), opening the store and an engine on it as a writer would. */
+  const refusal = async (f: () => Promise<Persistence>) => {
+    let st: Persistence | null = null;
+    try {
+      st = await f();
+      const e = await newEngine(st);
+      await e.close();
+      return null;
+    } catch (err) {
+      await Promise.resolve(st?.close()).catch(() => {});
+      return err as Error;
+    }
+  };
+
+  // K22 — PERSIST-01 C10, the layout version: a new store records it; a store written before C10 (no record,
+  // bunvex's tables) opens and gets it; a future or unknown version, or a store bunvex did not write, is
+  // refused with LayoutError, and the refused store is left as it was.
+  async function k22() {
+    const items = async (e: Engine) => (await e.query(allOfTenant("k22"))).length;
+    const e1 = await newEngine(await mod.open(true));
+    for (let i = 0; i < 5; i++) await e1.mutation(insertItem("k22"));
+    await e1.close();
+    const fresh = await mod.layoutVersion!();
+    const e2 = await newEngine(await mod.open(false));
+    const reopened = await items(e2);
+    await e2.close();
+    check(
+      fresh === LAYOUT_VERSION && reopened === 5,
+      `K22 a new store records layout version ${LAYOUT_VERSION} (found ${JSON.stringify(fresh)}) and reopens (${reopened}/5 items)`,
+    );
+
+    await mod.setLayoutVersion!(null);
+    const e3 = await mod
+      .open(false)
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    const legacyItems = e3 instanceof Error ? -1 : await items(e3);
+    if (!(e3 instanceof Error)) await e3.close();
+    const stamped = await mod.layoutVersion!();
+    check(
+      legacyItems === 5 && stamped === LAYOUT_VERSION,
+      `K22 a store without a version record (written before C10) opens with its data (${e3 instanceof Error ? e3.message : `${legacyItems}/5 items`}) and gets version ${JSON.stringify(stamped)}`,
+    );
+
+    let bad = 0;
+    for (const v of [LAYOUT_VERSION + 1, 999, "v1-beta"]) {
+      await mod.setLayoutVersion!(v);
+      const err = await refusal(() => mod.open(false));
+      const after = await mod.layoutVersion!();
+      if (
+        !(err instanceof LayoutError) ||
+        !err.message.includes(JSON.stringify(v).replace(/^"|"$/g, "")) ||
+        after !== v
+      ) {
+        bad++;
+        log(
+          `  K22 version ${JSON.stringify(v)}: ${err ? `${err.name}: ${err.message}` : "opened"}; record now ${JSON.stringify(after)}`,
+        );
+      }
+    }
+    await mod.setLayoutVersion!(LAYOUT_VERSION);
+    const e4 = await newEngine(await mod.open(false));
+    const back = await items(e4);
+    await e4.close();
+    check(
+      bad === 0 && back === 5,
+      `K22 a future or unknown layout version is refused with LayoutError naming it, and left as it was (${bad} violations; ${back}/5 items once restored)`,
+    );
+
+    await mod.makeForeign!();
+    const foreign = await refusal(() => mod.open(false));
+    const intact = await mod.foreignIntact!();
+    check(
+      foreign instanceof LayoutError && intact,
+      `K22 a store bunvex did not write is refused with LayoutError and not written to (${foreign ? `${foreign.name}: ${foreign.message}` : "opened"}; intact: ${intact})`,
+    );
+    await mod.open(true).then((st) => st.close());
+  }
+
+  // K23 — PERSIST-01 C10, the read-only flag (Convex's `read_only`): a store marked read-only does not open
+  // for writing (ReadOnlyError); `allowReadOnly` opens it (readers, migration tools); clearing it lets a
+  // writer open again.
+  async function k23() {
+    const e1 = await newEngine(await mod.open(true));
+    for (let i = 0; i < 3; i++) await e1.mutation(insertItem("k23"));
+    await e1.close();
+    const flag = (await mod.open(false, { allowReadOnly: true })) as Persistence & Partial<ReadOnlyFlag>;
+    if (typeof flag.setReadOnly !== "function") {
+      await flag.close();
+      check(false, "K23 the driver claims PERSIST-01 C10 but has no setReadOnly");
+      return;
+    }
+    await flag.setReadOnly(true);
+    await flag.close();
+    const refused = await refusal(() => mod.open(false));
+    const reader = await mod
+      .open(false, { allowReadOnly: true })
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    let read = -1;
+    if (!(reader instanceof Error)) {
+      read = (await reader.query(allOfTenant("k23"))).length;
+      await (reader.persistence as Persistence & ReadOnlyFlag).setReadOnly(false);
+      await reader.close();
+    }
+    const writer = await mod
+      .open(false)
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    let wrote = false;
+    if (!(writer instanceof Error)) {
+      await writer.mutation(insertItem("k23"));
+      wrote = (await writer.query(allOfTenant("k23"))).length === 4;
+      await writer.close();
+    }
+    check(
+      refused instanceof ReadOnlyError && read === 3 && wrote,
+      `K23 a read-only store refuses to open for writing (${refused ? refused.name : "opened"}), opens with allowReadOnly (${read}/3 items read), and opens for writing once cleared (${writer instanceof Error ? writer.message : wrote ? "wrote" : "write lost"})`,
+    );
+    await mod.open(true).then((st) => st.close());
+  }
+
   // K20 — a store that stops answering (STUDY-25 L3). A TCP proxy between the driver and the store stops
   // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
   // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
@@ -1043,6 +1294,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (leased) await st.releaseLease();
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
+  if (want("K24")) await k24();
+  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();
@@ -1050,6 +1303,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     if (leased) await leaseChecks();
     else if (opts.requireLease) check(false, "K10–K18 the driver claims PERSIST-01 C7 but has no lease");
   }
+  const layoutHooks = !!(mod.layoutVersion && mod.setLayoutVersion && mod.makeForeign && mod.foreignIntact);
+  if (want("K22")) {
+    if (layoutHooks) await k22().catch((e) => check(false, `K22 threw: ${e}`));
+    else if (opts.requireLayout)
+      check(false, "K22 the driver claims PERSIST-01 C10 but its module has no layout hooks");
+  }
+  if (want("K23") && (layoutHooks || opts.requireLayout)) await k23().catch((e) => check(false, `K23 threw: ${e}`));
   if (want("K20")) {
     if (mod.target && mod.openThrough) await k20();
     else if (opts.requireTimeouts)

@@ -1,7 +1,8 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
 - **Status:** accepted. L1–L12 (§4) decided by the owner: L9 and L10 on 2026-09-30, the rest on 2026-10-01
-  ("approve all recommendations"). L1, L3 (#107, §3.4), L4 and L5 (#112, §3.5; DV-123, DV-124) are done; L6–L8 are to be built.
+  ("approve all recommendations"). L1, L3 (#107, §3.4), L4 and L5 (#112, §3.5; DV-123, DV-124), L6 and L7
+  (#114, §3.6) and L8 (#116, §3.7) are done.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -24,7 +25,7 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
   - The database name is derived from the instance name, `-` → `_` (e.g. `convex_self_hosted`), and the URL
     must not name a database (`crates/clusters/src/lib.rs:53-66`).
   - `sslmode=require` and `target_session_attrs=read-write` are added (`:39-50`); `DO_NOT_REQUIRE_SSL`
-    turns SSL off.
+    turns SSL off. Detail in [§1.6](#16-database-selection-and-tls-l8).
   - The operator creates the database (`self-hosted/advanced/postgres_or_mysql.md:53-64`).
 - **MySQL** selects the database per connection. With `require_leader`, every new connection checks
   `@@global.innodb_read_only OR @@global.read_only` (`crates/mysql/src/connection.rs:670-690`).
@@ -57,10 +58,35 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
 
 **Versioning.** No version row is stored.
 
-- The layout version (V5/V6) comes from configuration (`common/src/types/mod.rs:175-197`).
+- The layout version (V5/V6) comes from configuration (`common/src/types/mod.rs:175-197`; the driver tags
+  in `clusters/src/db_driver_tag.rs:17-47`).
+- **A mismatch is refused, by the shape of the database:**
+  - MySQL v5 refuses a non-V5 configuration outright: "V5 persistence cannot open a non-V5 database"
+    (`mysql/src/v5/persistence.rs:151-153`).
+  - MySQL v6 checks a sentinel table, `indexes_latest`, created before any table whose name v5 also uses.
+    `documents` without the sentinel is "a V5 or unversioned persistence database", and v6 refuses to
+    initialize over it (`v6/persistence.rs:207-225`). It then checks that every shared table has v6's
+    columns (`deployment_id`), and refuses otherwise (`:243-271`).
+  - Postgres (V5 only) and SQLite run their guarded DDL over whatever is there and check nothing.
 - The layout evolves in place through guarded, idempotent DDL, e.g. adding a primary key if
   `documents_pkey` is missing (`sql.rs:87-99, 153-164`).
-- `persistence_globals` holds `max_repeatable_ts`, bootstrap ids and table summaries.
+- `persistence_globals` (`key`, `json_value`) holds `max_repeatable_ts`, bootstrap ids and table summaries
+  (`common/src/persistence/mod.rs:210-243`); SQLite has it too (`sqlite/src/lib.rs:641-647`).
+
+**The `read_only` flag** (Postgres and MySQL; SQLite has none):
+
+- A one-row table, `read_only (id BIGINT PRIMARY KEY)`, created by the guarded DDL (`postgres/src/sql.rs:198-215`).
+  A row means read-only (`sql.rs:681-715`: check, set, unset).
+- A writer's open checks it after the DDL and **before the lease**, and fails with
+  `ConnectError::ReadOnly`, "persistence is read-only, data migration in progress"
+  (`postgres/src/lib.rs:220-224, 330-334`; `mysql/src/v5/persistence.rs:186-191`;
+  `v6/persistence.rs:168-180`), unless `allow_read_only` is set.
+- `allow_read_only`: the self-hosted backend passes `false` (`local_backend/src/main.rs:149-155`); readers
+  pass `true` and open regardless (`db_connection/src/lib.rs:181-196`).
+- `set_read_only(true|false)` inserts or deletes the row, with no lease (`postgres/src/lib.rs:357-389`;
+  `db_connection/src/lib.rs:238-262`). For SQLite it fails: "unsupported persistence type" (`:261`). No
+  caller exists in the open-source tree; it is a hook for Convex's migration tooling.
+- The flag is read only at start: setting it does not stop a running backend.
 
 **Startup order** (`postgres/src/lib.rs:299-345`, `database/src/database.rs:1043-1090`):
 
@@ -163,6 +189,57 @@ Throwaway runs, 30 Sep 2026:
 | **Old process paused (SIGSTOP) holding `FOR SHARE` on the lease row** | The new process's lease `UPDATE` blocks. It gives up after the 30 s client timeout and exits, but **its UPDATE stays queued in Postgres**. When the old process resumes, its commit completes, then the orphaned UPDATE applies and the old process dies with `Lease Lost`. **No live backend remains**, and the outage lasts until a manual restart. |
 | **Startup DDL while the old process is paused (STUDY-24 S3)** | **No wedge.** The guarded DDL runs nothing on an existing schema; the only wait was the lease `UPDATE`. |
 
+### 1.6 Database selection and TLS (L8)
+
+**Which database (`self-hosted/docker-build/run_backend.sh:17-32`).**
+
+- The Docker image picks the driver from the environment, first match wins:
+  1. `POSTGRES_URL` → `--db postgres-v5`;
+  2. `MYSQL_URL` → `--db mysql-v5`;
+  3. `DATABASE_URL` → Postgres, with a printed warning that it is deprecated (`:24-27`; renamed when MySQL
+     arrived, `self-hosted/CHANGELOG.md:103-104`);
+  4. otherwise SQLite at `$SQLITE_DB` (`$DATA_DIR/db.sqlite3`, `:6`, `:28-31`).
+- "Set" means non-empty (`[ -n "$X" ]`). The binary itself takes the URL as a positional argument; the env
+  names exist only in the image (`self-hosted/docker/docker-compose.yml:29-38` passes them through).
+- The URL carries **no database name and no query string**: "the connection string without the db name and
+  query params" (`self-hosted/advanced/postgres_or_mysql.md:28-34`, `:59-60`, `:80`).
+  - Postgres refuses a URL with a path, "cluster url already contains db name"
+    (`crates/clusters/src/lib.rs:53-61`), and sets the path to the instance name with `-` → `_` (`:62`).
+  - MySQL selects that database per connection (`:69-82`).
+  - The default instance name is `convex-self-hosted`, so the database is `convex_self_hosted`
+    (`postgres_or_mysql.md:87-92`). The operator creates it.
+
+**TLS: required and verified unless turned off.**
+
+- The flag: `--do-not-require-ssl` (`crates/local_backend/src/config.rs:114-118`), passed by the image
+  when `DO_NOT_REQUIRE_SSL` is non-empty (`run_backend.sh:68`, `${DO_NOT_REQUIRE_SSL:+…}`), so `0` and
+  `false` turn TLS off too. `main.rs:152` passes `require_ssl: !do_not_require_ssl`. Its doc: "It would still
+  prefer SSL if available. This should only be set in tests."
+- **Postgres:**
+  - With the requirement, `sslmode=require` is appended to the URL (`crates/clusters/src/lib.rs:39-45`).
+    tokio-postgres reads query parameters in order, so it overrides a `sslmode` the URL set. It knows only
+    `disable`, `prefer` (its default) and `require` (tokio-postgres 0.7.13 `config.rs:582-587`).
+  - `prefer` uses TLS when the server answers the SSLRequest with `S`, plain when `N`; `require` fails
+    with "server does not support TLS" on `N` (tokio-postgres `connect_tls.rs`).
+  - Whenever TLS is used, rustls **verifies the chain and the host name** against the system roots
+    (rustls-native-certs) plus the PEM file in `PG_CA_FILE` (`crates/postgres/src/lib.rs:423-454`).
+    So `require` is libpq's `verify-full`, and even `prefer` fails on a certificate it cannot verify.
+  - `target_session_attrs=read-write` is appended (`clusters/src/lib.rs:46-50`) and set again on the
+    config, always (`crates/db_connection/src/lib.rs:161`; `require_leader` is `true`, `:77`).
+- **MySQL** (mysql_async 0.37 with rustls):
+  - With the requirement, `require_ssl=true&verify_ca=true` is appended (`clusters/src/lib.rs:69-77`).
+    `verify_identity` defaults to true (mysql_async `opts/mod.rs:1000-1007`), so the host name is verified
+    too unless the URL says `verify_identity=false`.
+  - Without it: plain, unless the URL says `require_ssl=true`.
+  - `MYSQL_CA_FILE` adds a root and **turns TLS on by itself**, unless the URL says `require_ssl=false`
+    (`crates/mysql/src/connection.rs:691-710`).
+  - The "leader" check: every new connection runs `SELECT @@global.innodb_read_only OR @@global.read_only`
+    and fails on a read-only server (`connection.rs:670-690`).
+  - The changelog says why local MySQL needs the flag: once certificates were verified, "you must set
+    `DO_NOT_REQUIRE_SSL` for running locally" (`CHANGELOG.md:97-99`). MySQL's auto-generated certificates
+    are self-signed: they never verify.
+- **MongoDB:** Convex has no MongoDB driver.
+
 ## 2. What an app can observe
 
 - **Nothing on the happy path.** How a store is opened, versioned, timed out or shut down is invisible to
@@ -192,9 +269,10 @@ Throwaway runs, 30 Sep 2026:
 - **SQLite** uses WAL, `synchronous=FULL|OFF`, no `busy_timeout` and no exclusive lock.
 - **memory+log** opens its log file with no lock.
 - **All drivers:**
-  - The URL is used as given; there is no database-name derivation and no SSL default.
+  - The URL is used as given; there is no database-name derivation. (Postgres and MySQL get Convex's TLS
+    defaults and env names: [§3.7](#37-database-selection-and-tls-l8-built).)
   - Pools are 16.
-  - No layout version is stored and none is checked.
+  - No layout version was stored or checked before L6 was built (§3.6).
 
 ### 3.2 Timeouts, retries, shutdown
 
@@ -350,6 +428,106 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
 64 writers, median 26 336 vs 26 208 (runs 25 664–26 480 vs 24 857–26 464); 1 writer, median 2 524 vs 2 511
 (runs 2 138–2 543 vs 2 316–2 549). No measurable change.
 
+### 3.6 Layout version and read-only flag (L6, L7; built as Convex, #114)
+
+**What every store records** (`packages/core/src/persistence/layout.ts`, PERSIST-01 C10):
+
+| Driver | Layout version | Read-only flag |
+|---|---|---|
+| Postgres, MySQL | row `layout_version` of `persistence_globals (key, json_value)`, JSON text | a row in `read_only (id)` |
+| SQLite | the same tables, in the file | the same |
+| MongoDB | `meta` `{_id: "layout", version}` | `meta` `{_id: "read_only"}` |
+| memory+log | the log's first record, `{"layout":1}` | a file next to the log, `<log>.read-only` |
+
+The names are Convex's (`persistence_globals`, `read_only`). bunvex has one layout, version 1.
+
+**What an open does**, in order:
+
+1. **Read, never write.** No lock and no lease is needed, because refusing is safe:
+   - The recorded version must be bunvex's. A newer one, or an unknown one, is refused with `LayoutError`,
+     naming what was found. An older one would be upgraded in place if bunvex had an upgrade for it. It has
+     none yet (DV-56: no migrations for now), so it is refused too.
+   - With no record, `documents` and `indexes` must have bunvex's columns (MongoDB: fields of a sample
+     document), or not exist. Anything else, Convex's own tables included, is refused with `LayoutError`,
+     and nothing is written. SQLite checks before even the WAL pragma, which would rewrite the file's
+     header. A memory log whose first line is neither a header nor a commit record is refused; before L6 it
+     was "torn" and **truncated to nothing**.
+   - A store marked read-only is refused with `ReadOnlyError` ("… is read-only, data migration in
+     progress"), unless the open passes `allowReadOnly` (Convex's `allow_read_only`).
+2. **The guarded DDL** (unchanged): only missing tables, so a store written before L6 gets the two new
+   tables here.
+3. **The lease** (`Engine.init`). The version record is written **under it, in the acquiring
+   transaction** (Postgres, MySQL), or right after winning it (MongoDB, SQLite under its lock, the memory
+   log under its lock while it replays). The record is written only if there is none; a record found there
+   is checked again, so a store changed between the open and the lease is still refused. On a mismatch the
+   lease is given back (Postgres and MySQL roll the acquisition back). PERSIST-01 C7 holds: a mere open
+   writes nothing but missing tables.
+4. `maxTs`, the catalog: unchanged.
+
+**Stores written before L6** have bunvex's tables and no record. They are the same layout, so they open as
+version 1 and get the record at their first lease. This was checked on real stores: written by `main`
+(05d8e49) on all five drivers, then reopened twice by this branch (data intact, one record, the memory log
+with one header appended). The reverse does not work: an older bunvex cannot read a memory log that starts
+with a header, and fails on it.
+
+**Setting the flag**: `setReadOnly(true|false)` on every driver (`ReadOnlyFlag`), with no lease, as
+Convex's `set_read_only`. To clear it, open with `allowReadOnly`. It is read only at open: a running
+writer is not stopped. There is no CLI yet; import/export will use it.
+
+**Measured** (open + `Engine.init` + close on a 100k-document store, see the PR): the checks add one round
+trip to the open of a remote store (two on a store without a record), and one statement to the lease.
+
+### 3.7 Database selection and TLS (L8, built)
+
+Decided by the owner on 2026-10-01: Convex's TLS defaults (DV-109) and env names as aliases (DV-88); the
+URL decides the database (DV-110). Built in `packages/server/src/persistence.ts` (the environment) and
+`packages/persistence/src/tls.ts` (the drivers).
+
+- **Which database.** `PERSISTENCE` and `PERSISTENCE_URL` stay bunvex's names.
+  - When `PERSISTENCE` is not set, Convex's names select the driver with Convex's precedence:
+    `POSTGRES_URL`, then `MYSQL_URL`, then `DATABASE_URL` (Postgres, with a deprecation warning). Empty
+    counts as unset, as `-n`.
+  - **When both are set, bunvex's win**, as a pair: `PERSISTENCE` decides the driver, and its URL is
+    `PERSISTENCE_URL`, or Convex's name for that driver when `PERSISTENCE_URL` is missing. Convex has no
+    such case (it has one set of names), so this is not a divergence.
+  - When neither is set, the store is memory, as before (Convex's is SQLite; not changed here).
+  - **The URL must name the database** (DV-110; confirmed by the owner, 2026-10-01). A URL without one
+    (Convex's style) is refused at start, before any connection is tried:
+    "POSTGRES_URL names no database: bunvex uses the database the URL names and derives none. Add it to the
+    URL's path". bunvex does not fall back to libpq's default (the user's name), which would put a Convex
+    operator's data in a database they did not choose.
+- **TLS, as Convex.** The server reads `DO_NOT_REQUIRE_SSL` as the image does (any non-empty value), and
+  `PG_CA_FILE` / `MYSQL_CA_FILE`. The drivers take `{ requireSsl, caFile }` and require TLS by default, so
+  a program that opens a driver directly is covered too.
+  - **Postgres** (`postgres`, porsager): before the pool is made, each host is asked the SSLRequest once.
+    - Required: a host that answers `N` is refused with "Postgres at host:port does not accept TLS
+      connections, and bunvex requires TLS by default: set DO_NOT_REQUIRE_SSL=1 …". Otherwise TLS with
+      `rejectUnauthorized` and the host name check, against the system roots and the bundled Mozilla roots
+      plus `PG_CA_FILE`. A weaker `sslmode` in the URL does not turn this off (Convex appends).
+    - `DO_NOT_REQUIRE_SSL`: the URL's `sslmode`, `prefer` by default. `prefer` uses verified TLS when the
+      server answered `S`, plain when `N`, as tokio-postgres. `disable` is plain; `require`, `verify-ca`
+      and `verify-full` are required and verified (tokio-postgres rejects the last two; accepting them is
+      harmless).
+    - Every connection asks for `target_session_attrs=read-write`, overriding the URL, as Convex.
+  - **MySQL** (`mysql2`): required means `ssl: { rejectUnauthorized: true, verifyIdentity: true, ca }`.
+    The URL's `require_ssl`, `verify_ca`, `verify_identity` and `built_in_roots` are read with
+    mysql_async's meaning and removed; while TLS is required, `require_ssl` and `verify_ca` in the URL cannot
+    weaken it, `verify_identity=false` can (as Convex's appended parameters). `MYSQL_CA_FILE` alone turns
+    TLS on, unless the URL says `require_ssl=false`. A read-only server is refused at open.
+  - **Errors** say what to do: a server without TLS names `DO_NOT_REQUIRE_SSL`; a certificate that does
+    not verify names the code, `PG_CA_FILE` / `MYSQL_CA_FILE` and `DO_NOT_REQUIRE_SSL`.
+  - **MongoDB** is unchanged: TLS is what its URL says (`tls=true`). Convex has no MongoDB driver to match.
+  - **Where this bites:** a local Postgres has no TLS and a local MySQL has unverifiable certificates. CI's
+    conformance jobs, `scripts/mac-bench.sh` and the README say to set `DO_NOT_REQUIRE_SSL=1`, as Convex's
+    self-hosting guide does for local databases (`postgres_or_mysql.md:62-74`).
+- **Remaining differences, not divergences by intent:**
+  - Roots: Convex's Postgres driver trusts the system store, its MySQL driver its built-in set; bunvex
+    trusts both on both drivers (Bun's `tls.getCACertificates("system")` and `"bundled"`). A certificate
+    that verifies on Convex verifies on bunvex.
+  - The MySQL read-only check runs at open, not on every new connection; a primary that turns read-only
+    later fails its writes instead. Building the per-connection check needs a hook mysql2's pool lacks.
+  - A Postgres server refused by `target_session_attrs` surfaces as the driver's `CONNECTION_DESTROYED`.
+
 ## 4. Divergences
 
 | # | Divergence | Convex | bunvex | Risk / why | Recommendation | Decision |
@@ -359,9 +537,9 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
 | L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-122), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex, fixed in #107.** Owner, 2026-10-01: Postgres retires its pool on a timeout (DV-122); MongoDB uses 30 s (`MONGODB_TIMEOUT_SECONDS`); Convex's `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` are read as is; lease renewals are bounded by TTL/4 (DV-14) (DV-104) |
 | L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff, no limit; an ambiguous commit is fatal ("Unsure if transaction committed to disk") | Was fail-stop on any error; now as Convex (§3.5): retried in the committer with Convex's backoff, same group behind the same fence; ambiguous commits fail-stop (`UnsureCommitError`; MongoDB detects them through the lease's `maxTs`) | A network blip or database restart killed the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | **As Convex, fixed in #112, with two decided divergences (owner, 2026-10-01):** a lost connection is transient on Postgres too (DV-123); a retried group found already landed through the lease record is acknowledged, not fail-stop (DV-124). MongoDB's classification: owner-approved. Pool retirement before a retry: DV-122. Backoff knobs: `Engine` options until Convex's env names (DV-88) |
 | L5 | Retries of reads and init | Once, on a fresh connection (Postgres: after a lost connection or a timeout; MySQL: after an operational error, not a timeout) | Was none; now as Convex, per driver (§3.5) | Spurious query errors after a database restart | Bug (minor). One retry | **As Convex, fixed in #112** (DV-106) |
-| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | **Decided (owner, 2026-10-01): match Convex** (bug; to be built): a stored layout version; unknown or foreign layouts refused (DV-107) |
-| L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | **Decided (owner, 2026-10-01): match Convex**, built with L6 (DV-108) |
-| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | **Decided (owner, 2026-10-01):** TLS required by default (`sslmode=require`, can be turned off) and `target_session_attrs=read-write`, as Convex (to be built, DV-109); the database name is **not** derived from the instance name, the URL decides (divergence, DV-110). Convex's env names are accepted as aliases (DV-88) |
+| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | Recorded in every store, checked on open; a future, unknown, older (no upgrade yet) or foreign store is refused with `LayoutError` (§3.6) | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | **As Convex, fixed in #114** (owner, 2026-10-01: match Convex; DV-107, resolved). Mechanism: a stored record instead of configuration (bunvex has one layout); same refusals |
+| L7 | `read_only` flag | Checked at start: "data migration in progress" | Checked at open on every driver: `ReadOnlyError` unless `allowReadOnly`; `setReadOnly` with no lease (§3.6) | No safe hook for migrations or import/export | Add with L6 | **As Convex, fixed in #114** (owner, 2026-10-01: match Convex; DV-108, resolved). Also on SQLite and memory+log, where Convex has none: **divergence decided** (owner, 2026-10-01: "yes, it must be on every driver"; DV-125) |
+| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | TLS and `target_session_attrs` as Convex; Convex's env names as aliases; the URL names the database (§3.7) | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | **Decided (owner, 2026-10-01):** TLS required by default (`sslmode=require`, can be turned off) and `target_session_attrs=read-write`, as Convex (DV-109), and Convex's env names as aliases (DV-88), both **built** (#116, §3.7); the database name is **not** derived from the instance name, the URL decides and must name one: a URL without a database name is refused at start (divergence, DV-110; refusal confirmed by the owner, 2026-10-01) |
 | L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70; DV-99) |
 | L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** (#62; DV-14) |
 | L11 | Shutdown | SIGINT only; committer aborted; lease not released; SIGTERM kills | Drain, release, close; SIGINT and SIGTERM (`bench/server`) | Deploys hand over at once; no in-flight commit is left in doubt | Keep; wire into the product CLI when it exists | **Decided (owner, 2026-10-01): keep bunvex's** (DV-111) |
@@ -400,8 +578,20 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
     (DV-124): the committer stops as "unsure" on all three (see §3.5 for the numbers).
   - Unit tests: `packages/core/test/flush-retry.test.ts` (backoff, fail-stop cases, a stop during the
     backoff), `packages/persistence/test/transient.test.ts` (each driver's classification).
-- **L6:** open a store written by a future layout version; refuse with a clear error.
+- **L6:** open a store written by a future layout version; refuse with a clear error. Conformance K22: a
+  new store records its version and reopens; a store without a record opens and gets one; a future or
+  unknown version, and a store bunvex did not write, are refused and left as they were.
+- **L7:** conformance K23: a read-only store refuses to open for writing, opens with `allowReadOnly`, and
+  opens for writing once cleared.
 - **L9:** two processes on one SQLite file or one memory log; the second refuses (the same shape as K10).
+- **L8 (built):** `packages/server/test/persistence-config.test.ts` (env names, precedence,
+  `DO_NOT_REQUIRE_SSL`, a URL without a database); `packages/persistence/test/tls.test.ts` (the TLS
+  decision); `packages/persistence/test/tls-db.test.ts` against real servers: a Postgres without TLS
+  (refused by default, `DO_NOT_REQUIRE_SSL` connects, a read-only database refused), a Postgres with TLS
+  and a self-signed CA (connects with `PG_CA_FILE`; refused without it, by address instead of host name,
+  and still encrypted with `sslmode=disable` in the URL), MySQL 8.4 with its own certificates (refused by
+  default), with a test CA (connects; host name checked), and with TLS off (refused by default). CI runs
+  the no-TLS Postgres and the auto-certificate MySQL groups on its service containers.
 
 These become conformance checks where they apply to every driver.
 

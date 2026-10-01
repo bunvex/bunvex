@@ -95,7 +95,7 @@ describe("committer fail-stop on persistence failure (Convex: the committer shut
 
 test("a commit queued right after another resolves, in the same microtask chain, is not lost", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
-  const c = new Committer(p, 20_000, () => 0); // a stopped clock: timestamps 1, 2, 3… (as the asserts expect)
+  const c = new Committer(p, {}, () => 0); // a stopped clock: timestamps 1, 2, 3… (as the asserts expect)
   const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
   const second = c
     .commit({ snapshot: 0, reads: [], docs: [], idx: idx(1) })
@@ -106,7 +106,8 @@ test("a commit queued right after another resolves, in the same microtask chain,
 
 test("changedBetween: whether a commit in (from, to] wrote into the reads, and true beyond the log", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
-  const c = new Committer(p, 3, () => 0); // a stopped clock: timestamps 1, 2, 3…
+  let now = 0; // a stopped clock: timestamps 1, 2, 3…
+  const c = new Committer(p, { maxRetentionUs: 10 }, () => now);
   const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
   const reads = (lo: number, hi: number) => [{ index: 9, lo: new Uint8Array([lo]), hi: new Uint8Array([hi]) }];
   for (let n = 1; n <= 3; n++) await c.commit({ snapshot: n - 1, reads: [], docs: [], idx: idx(n) });
@@ -117,8 +118,10 @@ test("changedBetween: whether a commit in (from, to] wrote into the reads, and t
   expect(c.changedBetween(reads(5, 9), 0, 3)).toBe(false);
   expect(c.changedBetween(reads(1, 9), 3, 3)).toBe(false); // empty range
   expect(() => c.changedBetween(reads(1, 9), 0, 4)).toThrow("past the visible ts");
-  // The log keeps 3 entries: after ts 4, (0, 4] is no longer covered, and nothing can be proven.
-  await c.commit({ snapshot: 3, reads: [], docs: [], idx: idx(4) });
-  expect(c.changedBetween(reads(5, 9), 0, 4)).toBe(true);
-  expect(c.changedBetween(reads(5, 9), 1, 4)).toBe(false);
+  // The log keeps 10 µs of commits: after one at ts 12, ts 1 is dropped (12 - 1 > 10), so (0, 12] is no
+  // longer covered and nothing can be proven.
+  now = 12;
+  expect(await c.commit({ snapshot: 3, reads: [], docs: [], idx: idx(4) })).toBe(12);
+  expect(c.changedBetween(reads(5, 9), 0, 12)).toBe(true);
+  expect(c.changedBetween(reads(5, 9), 1, 12)).toBe(false);
 });

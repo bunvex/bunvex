@@ -12,7 +12,7 @@
   (marked **[blog]**).
 - **bunvex read at:** `main` @ `080c7f0` (and `feat/sync-session` @ `0c40e25` where noted).
 - **Related:** ENGINE-00 R1/R5, PERSIST-01, STUDY-06 (OCC; D9 wall-clock ts, decided and built in #64; D10 log window), STUDY-08 (cache and
-  subscriptions), STUDY-09 D6 (no by-ts log read), STUDY-21 (OCC retries), STUDY-22 (mutation order),
+  subscriptions), STUDY-09 D6 (by-ts log read: built on `indexes` as PERSIST-01 C11), STUDY-21 (OCC retries), STUDY-22 (mutation order),
   STUDY-23 (sync protocol v1).
 
 **Why this study exists.** One of bunvex's goals is to be faster than Convex **and** to scale
@@ -199,8 +199,9 @@ yet (ARCH-01 §6.3).
 **Status (30 Sep 2026):** S1 fixed on every driver by PERSIST-01 C7 (Postgres #62; MySQL #67; SQLite
 and memory #70, an OS lock; MongoDB #84, a transaction per flush on a replica set). S2 fixed with it (the
 durable prefix is recorded by each fenced flush). S3 fixed on Postgres (#62), MySQL (#67) and MongoDB
-(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 open: decided as Convex,
-background backfill (owner, 2026-10-01; DV-54).
+(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 fixed: decided as Convex
+(owner, 2026-10-01; DV-54), backfill now runs in the background ([STUDY-29](STUDY-29-index-backfill.md), #115);
+`init()` and a failover no longer wait for it.
 
 S1 in detail:
 
@@ -266,6 +267,10 @@ S1 in detail:
     within budget at every lag.
   - A2 needs a **time-based OCC window**: at lag 500 ms under load, 60 % of attempts conflicted with the
     count-based one. It also needs S4 fixed.
+  - *Done (STUDY-06 D10, as Convex):* the write log is now kept by time and size (30 s floor, 300 s, 50 MiB
+    soft), and a snapshot past it is `OutOfRetention`, not a conflict. With the real committer at full load
+    (~120k commits/s), lagged commits at 500 ms went from 100 % failed to 0 %; at 2 000 commits/s and a 15 s
+    lag, also from 100 % to 0 % (`bench/write-log.ts lag`). S4 was fixed in #64.
 
 **Recommendation.**
 
@@ -293,7 +298,7 @@ log, so followers need the write set **only** for cache and subscription invalid
   (STUDY-09 D6).
 - The by-ts index is **mandatory**. Without it a poll is a sequential scan that grows with the store (26 ms
   at 350k commits); with it, 0.24 ms, and catch-up runs at 563k commits/s. It costs 0–14 % of write
-  throughput and a small index.
+  throughput and a small index. **Built** on every driver: §4.3.1 (PERSIST-01 C11).
 
 **Delivery options,** measured with the real committer and Postgres driver. Latency is from the durable
 flush to the follower knowing the ts and write set:
@@ -334,9 +339,81 @@ flush to the follower knowing the ts and write set:
   - Past the cap, disconnect it. It catches up by the by-ts read: subscribe first, buffer, then fill.
 - **Follower `visibleTs` is the highest ts up to which the `prevTs` chain is unbroken.** Under pipelined commit, ts 3 can become
   durable before ts 2, and a naive poller then skipped ts 2 forever. Reproduced.
-- **MongoDB** (owner's choice, 2026-09-30: **a transaction per flush on a replica set**): log reads are bounded by the commit marker.
+- **MongoDB** (owner's choice, 2026-09-30: **a transaction per flush on a replica set**): log reads are bounded by the lease's `maxTs` (the durable prefix, written in each flush's transaction), read at majority.
 - **Fan-out cost at the leader** is O(followers), never O(clients).
 - **For the spike,** polling every 20 ms is enough.
+
+### 4.3.1 Built: the by-ts log read (PERSIST-01 C11)
+
+Built on 2026-10-01 after H11 was decided. Every driver has `readLog(afterTs, upToTs, limit)`: the
+commits with `afterTs < ts ≤ min(upToTs, maxTs)`, whole, in ts order, each `{ts, prevTs, writes}` where
+`writes` is the commit's index write set (the committer's `LogEntry.writes`) and `prevTs` the ts of the
+commit before it, so a reader detects a gap by `prevTs !== last`. Conformance K25 checks it on all five
+drivers, and through the engine against the committer's own commits.
+
+**How Convex compares** (STUDY-09 §1.5). Convex reads `documents` by ts (`load_documents`,
+`crates/common/src/persistence/mod.rs:562`), bounded by a repeatable ts (`mod.rs:774`), with
+keyset paging on `(ts, table_id, id)` in Postgres (`crates/postgres/src/sql.rs:269`). Its `prev_ts` is the
+previous version of the same document, for revision pairs and retention; it does not detect a missed
+commit, which is what bunvex's per-commit `prevTs` is for. Streaming export never splits a commit across
+pages (`document_deltas`, `crates/database/src/database.rs:2190`); `readLog` does the same with `limit`.
+
+**Per driver:**
+
+| Driver | Index | Bound (never an unflushed group) | Read |
+|---|---|---|---|
+| memory | the commits in an array, appended in ts order | the last flushed ts | binary search, then a walk |
+| sqlite | `indexes_by_ts (ts)` | the last committed ts while a group sits in this connection's open transaction | one statement + one probe for `prevTs` |
+| postgres | `indexes_by_ts (ts)` | the lease row's `max_ts`, in the same statement | one statement: a loose index scan finds the `limit` commits |
+| mysql | `indexes_by_ts (ts)` | the lease row's `max_ts`, in the same statement | one statement |
+| mongodb | `{ts: 1}` | the lease's `maxTs`, read at majority | a cursor on the ts index, batches sized to `limit` |
+
+The index is created with the tables. A store written before C11 gets it when the lease is acquired
+(Postgres, MySQL, SQLite: a plain build blocks writers, so only the holder runs it, as an upgrade would);
+MongoDB at open, like its other indexes.
+
+**Measured** (8-core Apple Silicon Mac; Postgres 17, MySQL 8.4, MongoDB 8.3 single-node replica set; all
+on one machine). `bun bench/readlog.ts write|catchup`.
+
+Write throughput through the engine (one insert per mutation: one document, three index entries), with and
+without the ts index, three interleaved 10 s runs per cell, alternating which goes first:
+
+| Driver | Writers | With the ts index (commits/s) | Without | Cost (medians) |
+|---|---|---|---|---|
+| Postgres | 64 | 23 648 / 24 077 / 23 994 | 24 256 / 24 525 / 24 896 | 2.2 % |
+| Postgres | 1 | 2 521 / 2 525 / 2 507 | 2 528 / 2 556 / 2 547 | 1.0 % |
+| SQLite (durable) | 64 | 9 421 / 9 472 / 9 446 | 10 163 / 10 163 / 10 138 | 7.1 % |
+| SQLite (durable) | 1 | 4 876 / 4 968 / 4 950 | 5 668 / 5 585 / 5 682 | 12.7 % |
+
+Postgres is within the 0–14 % measured in review; SQLite pays more, since its commits are local and the
+extra B-tree insert per index entry is a larger share of each one.
+
+Catch-up: 100 000 commits (three index entries each) read back from 0 in pages, and a poll at the tail
+(nothing new), with the ts index:
+
+| Driver | Pages of 1 000 (commits/s) | Pages of 100 | Tail poll p50 |
+|---|---|---|---|
+| memory | 13–16 M | 11 M | < 0.01 ms |
+| sqlite | 540–561 k | 486 k | 0.011 ms |
+| postgres | 195–201 k | 143 k | 0.22 ms |
+| mysql | 169 k | 124 k | 0.17 ms |
+| mongodb | 145–156 k | 82 k | 0.16 ms |
+
+Without the index, catch-up is a scan per page: SQLite 24 k / 2.5 k commits/s (pages of 1 000 / 100),
+MySQL 4.7 k / 0.5 k, MongoDB 5.4 k / 0.5 k, Postgres (with a `select distinct` form of the query) 19 k /
+2.4 k with a 13–28 ms tail poll. With the final Postgres query (a loose index scan, one probe per commit),
+a store without the index is far slower still: such a store only exists until its first lease.
+
+Two findings along the way:
+
+- **Postgres plans `select distinct ts … order by ts limit n` from statistics.** On a log that has just
+  grown they describe a small range, and Postgres hashed the whole range (270k rows) and sorted it: 54 ms
+  for 1 000 commits instead of 3 ms. The query now walks the index one commit at a time
+  (`order by ts limit 1`, which no estimate turns into a scan), and inlines its integer bounds so a generic
+  plan cannot replace it.
+- **MongoDB's default `getMore` takes up to 16 MB**: the first page beyond the 101-document first batch
+  pulled the rest of the log. Batches sized to `limit` took catch-up from 1.2 k to 82 k commits/s
+  (pages of 100).
 
 ### 4.4 Leadership and fencing
 
@@ -481,7 +558,7 @@ mutations, half actions.
 | Scheduler and cron loops | Leader; action execution anywhere after a fenced, owner-tagged claim |
 | Mutation job / cron mutation | Wherever mutations run (the leader under A1) |
 | Retention | Leader only: it deletes beneath MVCC, and is fenced |
-| Index backfill | Leader, in the background (S5) |
+| Index backfill | Leader, in the background (S5): the `IndexWorker` is started by `init()`, so only by the process holding the lease (STUDY-29) |
 | `_session_requests` / `_scheduled_jobs` cleanup | Leader (idempotent, could be claimed) |
 | Catalog reconcile, instance secret | Leader |
 | Query cache, subscriptions, per-connection mutation queue | Per node |
@@ -559,7 +636,7 @@ mutations, half actions.
    | K17 | A concurrent first boot yields one catalog and one secret |
    | K18 | Release, then an immediate acquire |
 
-2. **The by-ts log read** (STUDY-09 D6) on `indexes`, with its index on every driver.
+2. **The by-ts log read** (STUDY-09 D6) on `indexes`, with its index on every driver. **Built** (2026-10-01): PERSIST-01 C11, `readLog(afterTs, upToTs, limit)`, conformance K25; measured in §4.3.1.
 3. **The catalog reloadable** on catalog writes, and the instance secret race-free (K17).
 4. **Fix S4 and S5:** a `logStartTs` in the committer; backfill in the background.
 5. **Engine hygiene that single-node needs anyway, and scaling needs more:**
@@ -604,7 +681,7 @@ mutations, half actions.
 | H8 | Fix S1–S3 now, before any scaling work | Silent corruption today on every driver | **Decided (owner, 2026-09-30): yes, Postgres first** (#62); MySQL, MongoDB, SQLite and memory follow |
 | H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | **Decided (owner, 2026-10-01): yes** — wait ≤ 1 s, then refuse `Connect` (DV-118) |
 | H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | **Decided (owner, 2026-10-01): yes** — read index for follower HTTP reads, actions, scheduled functions and `query_at_ts` (DV-119) |
-| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | **Decided (owner, 2026-10-01): yes** (DV-120) |
+| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | **Decided (owner, 2026-10-01): yes** (DV-120). Built: PERSIST-01 C11 (§4.3.1) |
 | H12 | `_creationTime` and `Date.now()` derive from the leader (begin ts / leader clock), not each node's clock | Skew would reorder `by_creation_time` and break `_creationTime ≥ Date.now()` | **Decided (owner, 2026-10-01): yes** (DV-121) |
 
 ## 7. Tests

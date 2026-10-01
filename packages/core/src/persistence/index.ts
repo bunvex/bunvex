@@ -7,6 +7,12 @@
 export type DocWrite = { table: number; id: string; json: string | null };
 /** One index entry version. `id === null` means the entry was removed. `key` is opaque (keyenc bytes). */
 export type IndexWrite = { index: number; key: Uint8Array; id: string | null };
+/**
+ * One commit of the store's log (PERSIST-01 C11): its ts, its index write set (as `apply` received it; the
+ * order inside a commit is unspecified), and `prevTs`, the ts of the commit just before it in the log (0 if
+ * none). Timestamps are sparse, so `prevTs` is how a reader tells a gap from the next commit.
+ */
+export type LogCommit = { ts: number; prevTs: number; writes: IndexWrite[] };
 
 export interface Persistence {
   /** Apply one commit's writes at `ts`. Called by the committer, possibly several times per group. */
@@ -37,6 +43,13 @@ export interface Persistence {
    * fail-stop (the embedded drivers).
    */
   isTransient?(e: unknown): boolean;
+  /**
+   * PERSIST-01 C11, the log by timestamp: the durable commits with `afterTs < ts <= upToTs`, in ts order, at
+   * most `limit` of them and never part of one. Never a commit above the durable prefix (`maxTs`), so
+   * never one of an unflushed group. Read from `indexes` by ts (every commit writes index entries).
+   * Optional for third-party drivers; every first-party driver has it.
+   */
+  readLog?(afterTs: number, upToTs: number, limit: number): LogCommit[] | Promise<LogCommit[]>;
   /** AUDIT ONLY (conformance K6, never used by the engine): live documents of a table at ts. */
   auditLiveDocs?(table: number, ts: number): number | Promise<number>;
   /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
@@ -120,6 +133,17 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export {
+  checkLayoutVersion,
+  checkUnversionedTables,
+  decodeLayoutVersion,
+  LAYOUT_VERSION,
+  LayoutError,
+  type OpenOptions,
+  ReadOnlyError,
+  type ReadOnlyFlag,
+} from "./layout.ts";
+export { groupLog, type LogRow } from "./log.ts";
 export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
