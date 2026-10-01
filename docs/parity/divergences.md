@@ -113,6 +113,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-142 | Cron `L-nW` (day of month) from certain Mondays: answered, the comparison taken as false | saffron underflows and the process aborts | yes (Convex crashes) | A crash is not behaviour to copy; every other saffron quirk is kept | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S4](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-145 | Request bodies capped by Bun's `maxRequestBodySize` (128 MiB, configurable) | no limit in code (docs: 20 MB) | yes (very large bodies) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H3](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-146 | No hard stop of an HTTP action at 1800 s (the 408 at 300 s stays) | the isolate is terminated | yes (runaway actions) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H4](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-147 | Site port `/version` answers `bunvex` | `unknown` | yes (meta route) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H5](../study/STUDY-31-http-actions.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -200,7 +205,8 @@ None as of 2026-10-01: the owner decided every pending row ("approve all recomme
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
-[Decided divergences](#decided-divergences).
+[Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day.
+
 
 ## Gaps recorded in studies
 
