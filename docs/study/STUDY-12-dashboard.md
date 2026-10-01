@@ -598,6 +598,7 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 | # | bunvex | why | status |
 |---|---|---|---|
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
+| M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
 | M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
