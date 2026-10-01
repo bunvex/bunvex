@@ -5,6 +5,7 @@
 import type { v1 } from "@bunvex/protocol";
 import { toJsonValue, type Value } from "@bunvex/values";
 import { parseArgs } from "./args.ts";
+import { AuthenticationManager, type AuthTokenFetcher, decodeJwtPayload } from "./authentication-manager.ts";
 import { browserWindow } from "./browser.ts";
 import type { FunctionResult } from "./function-result.ts";
 import { LocalSyncState } from "./local-state.ts";
@@ -37,6 +38,19 @@ export type BaseBunvexClientOptions = {
   skipDeploymentUrlCheck?: boolean;
   /** Reconnect timings (tests shorten them). */
   webSocket?: WebSocketManagerOptions;
+  /** With auth: refresh a token this many seconds before it expires. Default: 10. */
+  authRefreshTokenLeewaySeconds?: number;
+  /**
+   * Experimental. Hold back queries, mutations and actions until the first auth token can be sent: for pages
+   * only signed-in users see. Default: false.
+   */
+  expectAuth?: boolean;
+  /**
+   * Experimental. Keep using the first (possibly cached) token once the server accepts it, instead of fetching
+   * a fresh one at once, which would make the server run every authenticated query again. A refresh is still
+   * scheduled before it expires (by the server's clock skew). Default: false.
+   */
+  initialAuthTokenReuse?: boolean;
 };
 
 export type ConnectionState = {
@@ -88,6 +102,7 @@ export class BaseBunvexClient {
   private readonly state = new LocalSyncState();
   private readonly requestManager: RequestManager;
   private readonly webSocketManager: WebSocketManager;
+  private readonly authenticationManager: AuthenticationManager;
   private remoteQuerySet: RemoteQuerySet;
   private readonly optimisticQueryResults = new OptimisticQueryResults();
   private transitionHandlerCounter = 0;
@@ -152,6 +167,31 @@ export class BaseBunvexClient {
       });
     }
 
+    const pauseSocket = () => {
+      this.webSocketManager.pause();
+      this.state.pause();
+    };
+    this.authenticationManager = new AuthenticationManager(
+      this.state,
+      {
+        authenticate: (token) => {
+          const message = this.state.setAuth(token);
+          this.webSocketManager.sendMessage(message);
+          return message.baseVersion;
+        },
+        stopSocket: () => this.webSocketManager.stop(),
+        tryRestartSocket: () => this.webSocketManager.tryRestart(),
+        pauseSocket,
+        resumeSocket: () => this.webSocketManager.resume(),
+        clearAuth: () => this.clearAuth(),
+      },
+      {
+        logger: this.logger,
+        refreshTokenLeewaySeconds: options.authRefreshTokenLeewaySeconds ?? 10,
+        initialAuthTokenReuse: options.initialAuthTokenReuse ?? false,
+      },
+    );
+
     this.webSocketManager = new WebSocketManager(
       wsUri,
       {
@@ -170,6 +210,8 @@ export class BaseBunvexClient {
       this.markConnectionStateDirty,
       options.webSocket,
     );
+    // Start paused, waiting for the first auth token.
+    if (options.expectAuth) pauseSocket();
   }
 
   /** A new socket: Connect, then the whole query set, auth, and every request not yet reflected. */
@@ -193,6 +235,7 @@ export class BaseBunvexClient {
     switch (m.type) {
       case "Transition": {
         this.observedTimestamp(m.endVersion.ts);
+        this.authenticationManager.onTransition(m);
         this.remoteQuerySet.transition(m);
         this.state.transition(m);
         const completed = this.requestManager.removeCompleted(this.remoteQuerySet.timestamp());
@@ -209,8 +252,7 @@ export class BaseBunvexClient {
         this.requestManager.onResponse(m);
         break;
       case "AuthError":
-        // Token verification comes with @bunvex/auth (STUDY-26 C6); until then there is no token to retry.
-        this.logger.error(`Authentication error: ${m.error}`);
+        this.authenticationManager.onAuthError(m);
         break;
       case "FatalError": {
         const error = logFatalError(this.logger, m.error);
@@ -274,6 +316,27 @@ export class BaseBunvexClient {
     const id = this.transitionHandlerCounter++;
     this.onTransitionFns.set(id, fn);
     return () => this.onTransitionFns.delete(id);
+  }
+
+  /** The current user token and its claims, decoded locally (not verified); undefined without one. */
+  getCurrentAuthClaims(): { token: string; decoded: Record<string, unknown> } | undefined {
+    const auth = this.state.getAuth();
+    if (auth?.tokenType !== "User") return undefined;
+    return { token: auth.value, decoded: decodeJwtPayload(auth.value) ?? {} };
+  }
+
+  /**
+   * Authenticate with the tokens `fetchToken` returns; it is called again before a token expires and when the
+   * server refuses one. Return null when no token can be had (e.g. the user's access was revoked).
+   * `onChange` hears whether the server accepted the auth; `onRefreshChange` is true while the socket is
+   * paused to fetch a replacement for a token the server refused.
+   */
+  setAuth(
+    fetchToken: AuthTokenFetcher,
+    onChange: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
+  ) {
+    void this.authenticationManager.setConfig(fetchToken, onChange, onRefreshChange);
   }
 
   hasAuth(): boolean {
@@ -455,6 +518,7 @@ export class BaseBunvexClient {
 
   /** Close the socket and stop every subscription. Resolves once the socket closed. */
   close(): Promise<void> {
+    this.authenticationManager.stop();
     return this.webSocketManager.terminate();
   }
 

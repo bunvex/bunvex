@@ -34,7 +34,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
 | WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | done (STUDY-27) | `User` tokens; `Admin` waits for admin keys. |
 | HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is refused until admin keys exist. |
-| Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | missing | Belongs to the client, listed here because it drives the auth protocol. |
+| Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | done (STUDY-27) | `@bunvex/client`; see client-sync.md. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |
 | Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | missing | Needs the `ActAsUser` operation. Used by `npx convex run --identity` and the dashboard runner. |
 | Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | missing | ARCHITECTURE lists clerk and auth0 as D. They are only OIDC configurations plus client glue. |
