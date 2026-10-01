@@ -67,6 +67,10 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 }
 
 /** Files (UI-01 §14.3): the order, a day range (`YYYY-MM-DD`, the viewer's zone), the open file. */
+/** The table open in the Schema screen's side panel (STUDY-12 §14). */
+export type SchemaSearch = { table?: string };
+export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
+
 export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
 const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
 export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch => ({
@@ -99,6 +103,7 @@ export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch
 const Overview = lazyRouteComponent(() => import("./screens/overview.tsx"), "Overview");
 const DatabaseScreen = lazyRouteComponent(() => import("./database/screen.tsx"), "DatabaseScreen");
 const EmptyDatabase = lazyRouteComponent(() => import("./database/empty.tsx"), "EmptyDatabase");
+const SchemaScreen = lazyRouteComponent(() => import("./schema/screen.tsx"), "SchemaScreen");
 const FunctionsScreen = lazyRouteComponent(() => import("./functions/screen.tsx"), "FunctionsScreen");
 const LogsScreen = lazyRouteComponent(() => import("./logs/screen.tsx"), "LogsScreen");
 const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "ScheduledFunctionsScreen");
@@ -156,6 +161,13 @@ export const tableRoute = createRoute({
     await queryClient.ensureInfiniteQueryData(documentsQuery(scope, params.table, filter)).catch(() => {});
   },
   component: DatabaseScreen,
+});
+
+export const schemaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "schema",
+  validateSearch: validateSchemaSearch,
+  component: SchemaScreen,
 });
 
 export const functionsRoute = createRoute({
@@ -249,6 +261,7 @@ export const routeTree = rootRoute.addChildren([
   healthRoute,
   databaseRoute,
   tableRoute,
+  schemaRoute,
   functionsRoute,
   logsRoute,
   filesRoute,
