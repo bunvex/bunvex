@@ -1,7 +1,6 @@
 // The Logs screen (STUDY-12 §7, UI-01 §22.4): every function's log lines, live, newest first, filtered on
 // the client by time, function, type, kind and text (in the URL, and kept in this browser per deployment),
 // with their volume over time above them and a line's details beside them.
-import { Button } from "@bunvex/ui/components/button";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
@@ -10,7 +9,7 @@ import { type AuditEvent, type LogEntry, toDataSourceError } from "../data-sourc
 import { logsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { Panel } from "../shell/panel.tsx";
+import { useFiltersSheet } from "../shell/facet-column.tsx";
 import { interleave, useLogEvents } from "./events.ts";
 import { exportName, saveText, toJsonLines } from "./export.ts";
 import { FilterColumn, FilterSections } from "./filter-column.tsx";
@@ -127,7 +126,6 @@ export function LogsView(props: {
   }, [needOlder, loadingOlder, loadOlder]);
 
   const [open, setOpen] = useState<LogEntry | null>(null);
-  const [filters, setFilters] = useState(false);
   const filtered = isFiltered(view);
   const n = logs.lines.length;
   const count = filtered
@@ -141,6 +139,11 @@ export function LogsView(props: {
     kinds: props.functions !== undefined,
   };
   const reset = filtered ? () => onView({ ...ALL_LOGS }) : undefined;
+  const filtersSheet = useFiltersSheet({
+    kind: "logs-filters",
+    onReset: reset,
+    children: <FilterSections {...sections} />,
+  });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -154,8 +157,7 @@ export function LogsView(props: {
           count={count}
           canExport={shown.length > 0}
           onExport={() => saveText(exportName(props.exportPrefix, Date.now()), toJsonLines(shown))}
-          onFilters={() => setFilters(!filters)}
-          filtersOn={filters}
+          filtersButton={filtersSheet.button}
         />
         <LogHistogram
           lines={charted}
@@ -187,18 +189,7 @@ export function LogsView(props: {
           />
         )}
       </div>
-      {filters && (
-        <Panel kind="logs-filters" title="Filters" onClose={() => setFilters(false)}>
-          <div className="-mx-4 -mt-4">
-            <FilterSections {...sections} />
-          </div>
-          {reset && (
-            <Button variant="outline" size="sm" className="mt-4" onClick={reset}>
-              Reset filters
-            </Button>
-          )}
-        </Panel>
-      )}
+      {filtersSheet.sheet}
       {open && (
         <LogDetails
           line={open}

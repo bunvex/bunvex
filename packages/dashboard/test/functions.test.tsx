@@ -113,7 +113,7 @@ describe("the Functions screen", () => {
   });
 
   test("a function shows its declared validators as code, or says it declares none", async () => {
-    mount("/functions?function=tasks:byOwner&tab=logs");
+    mount("/functions?function=tasks:byOwner");
     await screen.findByRole("heading", { level: 1, name: "byOwner" });
     const args = screen.getByRole("region", { name: "Arguments validator" });
     expect(args.querySelector("pre")?.textContent).toBe('v.object({ owner: v.id("users") })');
@@ -121,7 +121,7 @@ describe("the Functions screen", () => {
     expect(returns).toStartWith("v.array(v.object({\n");
     await expectAccessible();
     cleanup();
-    mount("/functions?function=tasks:summarize&tab=logs");
+    mount("/functions?function=tasks:summarize");
     await screen.findByRole("heading", { level: 1, name: "summarize" });
     expect(screen.getByText("None declared: any arguments are accepted.")).toBeDefined();
   });

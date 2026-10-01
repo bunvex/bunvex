@@ -6,7 +6,7 @@
 import { Button } from "@bunvex/ui/components/button";
 import { Input } from "@bunvex/ui/components/input";
 import { cn } from "@bunvex/ui/lib/utils";
-import { Download, Eraser, ListFilter, Pause, Play } from "lucide-react";
+import { Download, Eraser, Pause, Play } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import type { LogView } from "./log-filter.ts";
 import type { LogLines } from "./use-logs.ts";
@@ -20,9 +20,8 @@ export function LogBar(props: {
   count: string;
   onExport: () => void;
   canExport: boolean;
-  /** Opens the filters sheet (phones); the button shows how many filters apply. */
-  onFilters: () => void;
-  filtersOn: boolean;
+  /** The Filters button (phones), from `useFiltersSheet`. */
+  filtersButton?: ReactNode;
 }) {
   const { view, onView, logs } = props;
   // the text applies 200 ms after the last keystroke, as in Convex's dashboard
@@ -38,16 +37,7 @@ export function LogBar(props: {
   return (
     <div className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-1 md:px-6">
       {props.heading}
-      <Button
-        variant="outline"
-        size="sm"
-        className="md:hidden"
-        aria-pressed={props.filtersOn}
-        onClick={props.onFilters}
-      >
-        <ListFilter aria-hidden="true" />
-        Filters
-      </Button>
+      {props.filtersButton}
       <Input
         type="search"
         aria-label="Search logs"

@@ -595,6 +595,65 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("History, Schedules, Files: full-bleed grids, Bar 1 on the panel header's line, details follow the row", async () => {
+    // 1280: the bars beside the filters and a docked panel are narrow, and must still fold onto one line
+    for (const [path, grid, column, width] of [
+      ["/history", "Audit log", "History filters", 1440],
+      ["/schedules/functions", "Scheduled functions", "Schedule filters", 1440],
+      ["/schedules/crons", "Cron jobs", undefined, 1440],
+      ["/files", "Files", undefined, 1440],
+      ["/history", "Audit log", "History filters", 1280],
+      ["/schedules/functions", "Scheduled functions", "Schedule filters", 1280],
+      ["/files", "Files", undefined, 1280],
+    ] as const) {
+      const { page, errors, close } = await open(path, { viewport: { width, height: 900 } });
+      const g = page.getByRole("grid", { name: grid });
+      await g.getByRole("row").nth(2).waitFor();
+      // a cell that is not a link or a checkbox
+      await g.getByRole("row").nth(1).getByRole("gridcell").last().click();
+      const panel = page.getByRole("complementary");
+      await panel.waitFor();
+      const m = await page.evaluate((column) => {
+        const bottom = (e: Element | null | undefined) => e?.getBoundingClientRect().bottom;
+        return {
+          bar1: bottom(document.querySelector("h1")!.closest("div")),
+          panelHeader: bottom(document.querySelector('[data-slot="side-panel"] header')),
+          filters: column ? bottom(document.querySelector(`nav[aria-label="${column}"] h2`)?.parentElement) : undefined,
+          gridBottom: bottom(document.querySelector('[data-slot="data-table"]')),
+          viewport: innerHeight,
+          pageScrolls: document.documentElement.scrollHeight > innerHeight,
+        };
+      }, column);
+      expect([path, width, Math.round(Math.abs(m.bar1! - m.panelHeader!))]).toEqual([path, width, 0]);
+      if (column) expect(Math.abs(m.filters! - m.panelHeader!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.gridBottom! - m.viewport)).toBeLessThanOrEqual(1);
+      expect(m.pageScrolls).toBe(false);
+      // ↓ moves the details to the next row
+      const before = new URL(page.url()).search;
+      await page.keyboard.press("ArrowDown");
+      await expect_(async () => expect(new URL(page.url()).search).not.toBe(before));
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
+  test("Functions: Bar 1 holds the function and its tabs; the screen does not scroll", async () => {
+    const { page, errors, close } = await open("/functions?function=tasks:list", {
+      viewport: { width: 1440, height: 900 },
+    });
+    await heading(page, "list");
+    const m = await page.evaluate(() => ({
+      bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().height,
+      tabs: !!document.querySelector("h1")!.parentElement!.querySelector('[role="tablist"]'),
+      pageScrolls: document.documentElement.scrollHeight > innerHeight,
+    }));
+    expect(Math.round(m.bar1)).toBe(44); // as tall as the panel header, its bottom line included
+    expect(m.tabs).toBe(true);
+    expect(m.pageScrolls).toBe(false);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Logs: the histogram draws stacked buckets; dragging across it filters the list and goes into the URL", async () => {
     const { page, errors, close } = await open("/logs", { viewport: { width: 1440, height: 900 } });
     await heading(page, "Logs");

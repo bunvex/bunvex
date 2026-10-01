@@ -75,10 +75,15 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
 }
 
 /** Scheduled functions (UI-01 §14.2): the function they are narrowed to, and the run whose details are open. */
-export type ScheduledSearch = { function?: string; run?: string };
+/** Scheduled functions (UI-01 §22.5): one function, states (a comma list; `none`: no state), the open run. */
+export type ScheduledSearch = { function?: string; state?: string; run?: string };
 export function validateScheduledSearch(input: Record<string, unknown>): ScheduledSearch {
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  return { function: str(input.function), run: str(input.run) };
+  const state =
+    typeof input.state === "string" && /^(none|(pending|inProgress)(,(pending|inProgress))*)$/.test(input.state)
+      ? input.state
+      : undefined;
+  return { function: str(input.function), state, run: str(input.run) };
 }
 
 /** Files (UI-01 §14.3): the order, a day range (`YYYY-MM-DD`, the viewer's zone), the open file. */
@@ -100,11 +105,12 @@ export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch
   file: str(input.file),
 });
 
-/** History (UI-01 §14.5): one action, a day range (`YYYY-MM-DD`, the viewer's zone), the open event. */
+/** History (UI-01 §14.5, §22.5): actions (a comma list), a day range (`YYYY-MM-DD`, the viewer's zone), the open event. */
 export type HistorySearch = { action?: string; from?: string; to?: string; event?: string };
 export const validateHistorySearch = (input: Record<string, unknown>): HistorySearch => ({
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  action: typeof input.action === "string" && /^[a-z_]+$/.test(input.action) ? input.action : undefined,
+  // a comma list (`none`: no action at all)
+  action: typeof input.action === "string" && /^[a-z_]+(,[a-z_]+)*$/.test(input.action) ? input.action : undefined,
   from: day(input.from),
   to: day(input.to),
   event: str(input.event),

@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { toDataSourceError, type ValidatorJson } from "../data-source.ts";
+import { BAR_TITLE } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { SchemaDiagram } from "./diagram.tsx";
 import { buildSchemaGraph } from "./graph.ts";
@@ -96,5 +97,5 @@ export function SchemaScreen() {
         </Empty>
       </>
     );
-  return <SchemaDiagram graph={graph} heading={<Heading />} />;
+  return <SchemaDiagram graph={graph} heading={<h1 className={BAR_TITLE}>Schema</h1>} />;
 }

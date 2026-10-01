@@ -62,18 +62,55 @@ describe("the History screen", () => {
     await expectAccessible();
   });
 
-  test("one action, in the URL; a day range with nothing in it says so", async () => {
+  test("actions in a filter column with their counts, in the URL; a day range with nothing in it says so", async () => {
     const { history } = mount();
     await loaded();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Action" }));
-    await user.click(await screen.findByRole("option", { name: "Deployed functions" }));
+    const column = screen.getByRole("navigation", { name: "History filters" });
+    const actions = within(column).getByRole("region", { name: "Action" });
+    const box = (name: string) => within(actions).getByRole("checkbox", { name });
+    // the count of each action among the loaded events, in text
+    expect(box("Deployed functions").closest("li")!.lastElementChild!.textContent).toBe("3");
+    // keep only deploys: uncheck every other action
+    for (const other of within(actions).getAllByRole("checkbox"))
+      if (other !== box("Deployed functions")) await user.click(other);
     await waitFor(() => expect(params(history)).toEqual({ action: "push_config" }));
     await waitFor(() => expect(rows().every((r) => what(r) === "Deployed functions")).toBe(true));
     expect(rows().length).toBe(3);
-    fireEvent.change(screen.getByLabelText("Until"), { target: { value: "2020-01-01" } });
-    fireEvent.blur(screen.getByLabelText("Until")); // a typed day applies once complete (UX-15)
+    // the counts stay those of every action, so the others can be added back
+    expect(box("Deployed functions").closest("li")!.lastElementChild!.textContent).toBe("3");
+    expect(box("Added documents").closest("li")!.lastElementChild!.textContent).toBe("1");
+    await user.click(box("Added documents"));
+    await waitFor(() => expect(params(history)).toEqual({ action: "push_config,add_documents" }));
+    fireEvent.change(within(column).getByLabelText("Until"), { target: { value: "2020-01-01" } });
+    fireEvent.blur(within(column).getByLabelText("Until")); // a typed day applies once complete (UX-15)
     await screen.findByText("Nothing matches these filters.");
+    await user.click(within(column).getByRole("button", { name: "Reset" }));
+    await waitFor(() => expect(params(history)).toEqual({}));
+  });
+
+  test("a day preset sets the range from today; the open event follows the current row", async () => {
+    const { history } = mount();
+    await loaded();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("radio", { name: "Last 7 days" }));
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    const week = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 6);
+    await waitFor(() =>
+      expect(params(history)).toEqual({
+        from: `${week.getFullYear()}-${pad(week.getMonth() + 1)}-${pad(week.getDate())}`,
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: "Any day" }));
+    await waitFor(() => expect(params(history)).toEqual({}));
+    await waitFor(() => expect(rows().length).toBeGreaterThan(2));
+    await user.click(within(rows()[0]!).getAllByRole("gridcell")[1]!);
+    await screen.findByRole("complementary");
+    const first = params(history).event;
+    expect(first).toBeDefined();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(params(history).event).not.toBe(first));
   });
 
   test("what the dashboard does is recorded and shows up live", async () => {
