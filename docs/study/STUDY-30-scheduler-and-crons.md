@@ -1,6 +1,6 @@
 # STUDY-30 — Scheduled functions and cron jobs
 
-- **Status:** accepted: S1–S3 as recommended (owner, 2026-10-01)
+- **Status:** accepted: S1–S4 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** platform.md §4–§5, server-api.md §14–§15; STUDY-23 (session requests, the pattern for system
   tables written with app writes); STUDY-28 (built-in auth delivers its email through the scheduler)
@@ -245,7 +245,7 @@ Admin-only system functions for the dashboard session to build the screens on:
 | S1 | Crons are registered by passing them to the server (`createServer({ crons })`) and diffed at startup, not discovered in `convex/crons.ts` at push | bunvex has no push or analyze step until the CLI (Phase 3 item 7); then `crons.ts`'s default export is discovered, keeping the same API | **accepted** (owner, 2026-10-01) |
 | S2 | `_scheduled_functions` is a real system table projected to the public shape, not a virtual table over `_scheduled_jobs` | same documents, ids and indexes for apps; no virtual-table layer to build first | **accepted** (owner, 2026-10-01) |
 | S3 | Until log streaming (Phase 4), scheduled and cron runs' log lines go to the server's log output, not a function log; cron run logs are as Convex | bunvex has no function-execution log yet | **accepted** (owner, 2026-10-01) |
-| S4 | A cron string whose day of month is `L-nW` evaluated from certain Mondays: saffron computes `day + n − daysInMonth` unsigned and underflows, which aborts the Convex process; bunvex treats that comparison as false and answers | a crash is not behaviour to copy; every other saffron quirk is kept, so schedules match | owner (recommended) |
+| S4 | A cron string whose day of month is `L-nW` evaluated from certain Mondays: saffron computes `day + n − daysInMonth` unsigned and underflows, which aborts the Convex process; bunvex treats that comparison as false and answers | a crash is not behaviour to copy; every other saffron quirk is kept, so schedules match | **accepted** (owner, 2026-10-01) |
 
 Recorded in the ledger as DV-139–DV-141 (decided). Convex's code is followed where it disagrees with its docs: 16 MiB rather than 8 MB, and cancel of a
 finished job as a no-op. That matches Convex, so it needs no decision.
