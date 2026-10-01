@@ -349,7 +349,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **decided** (29 Sep 2026): build without metrics |
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed on the mock** (30 Sep 2026): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2) |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
@@ -598,6 +598,91 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 | # | bunvex | why | status |
 |---|---|---|---|
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
+| M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
 | M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
+
+## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
+
+### 13.1 Authentication (A1)
+
+Convex: **Settings → Authentication** (`dashboard-common/src/features/settings/components/AuthenticationView.tsx`,
+`AuthConfig.tsx`) lists the providers from `_system/frontend/listAuthProviders.ts` (the `_auth` system table,
+which `auth.config.ts` fills on push; types in `npm-packages/convex/src/server/authentication.ts`): an OIDC
+provider shows its domain and application ID, a custom JWT provider its issuer, JWKS URL, algorithm and optional
+application ID, each value copyable, with a link to the docs of that kind; with none, "This deployment has no
+authentication providers yet." and a docs link. The page needs both `ViewData` and `ViewEnvironmentVariables`.
+
+bunvex: an optional `listAuthProviders` in the contract (`data-source-auth.ts`) with Convex's two shapes; the
+page under Settings, after Environment variables; the same permission rule; the mock declares one provider of
+each kind (`authProviders` overrides). One difference, from the repository's rule against Convex's names in
+shipped code: with no providers the page says they are declared in `auth.config.ts` instead of linking Convex's
+docs (bunvex has no docs site yet). **Status: built** (UI-01 §19.1).
+
+### 13.2 Snapshots: export and import (B1, a bunvex addition)
+
+Convex: the **self-hosted** dashboard has neither. Its cloud has **Snapshot Export** (`/api/export/request/zip`,
+`latestExport`; states `requested` → `in_progress` → `completed` with an expiration, or `failed`; downloaded by
+id) and, besides cloud backups, imports run from the CLI: `npx convex import` (`npm-packages/convex/src/cli/lib/
+convexImport.ts`) — formats `zip` (a snapshot), `jsonLines`, `jsonArray`, `csv` (one table, `--table` required);
+modes `requireEmpty` (default), `append`, `replace`, `replaceAll`; the server parses the upload, waits for
+confirmation with a summary of what changes (`waiting_for_confirmation`), then runs with progress and
+checkpoint messages, ending `completed` (rows written) or `failed`. The audit log records `request_export` and
+`snapshot_import`. Operations: `ViewBackups`, `CreateBackups`, `DownloadBackups`, `ImportBackups`
+(`crates/keybroker/src/operations.rs`). The zip's layout: `README.md`, `_tables/documents.jsonl`,
+`<table>/documents.jsonl`, `_storage/documents.jsonl` with the blobs.
+
+bunvex: **Settings → Snapshots**, both halves in the dashboard — the owner's decision (30 Sep 2026): bunvex
+offers more than Convex where it helps, and a self-hosted deployment needs a way to back up and restore without
+the CLI. Optional contract methods (`data-source-snapshot.ts`) in Convex's states, modes and formats; the same
+operation names; the same audit actions. **A deliberate addition, not a divergence to decide.**
+**Status: built** on the mock (UI-01 §19.2); the server has neither yet (parity §18).
+
+## 14. The Schema screen (added 30 Sep 2026)
+
+Missed in the first lists and caught by the owner: Convex's sidebar has **Schema** between Data and Functions
+(`dashboard-common/src/layouts/DeploymentDashboardLayout.tsx`, `href: …/schema`; the self-hosted page is
+`dashboard-self-hosted/src/pages/schema.tsx` → `SchemaView`).
+
+### 14.1 How Convex does it
+
+`features/schema` (~5 000 lines, on `@xyflow/react` and `elkjs`):
+
+- **Data** (`SchemaView.tsx`): the saved schema (`getSchemas`, `active`) wins; tables that hold documents without
+  a schema entry join it, typed from their inferred shapes and flagged ("not defined in your schema",
+  `TableNode.tsx`); with no saved schema, the graph is built from the shapes alone. No tables: "This deployment
+  doesn't have any tables" and "Create a table and add a convex/schema.ts …"; no `ViewData`: a permission notice.
+- **Graph** (`lib/buildSchemaGraph.ts`): a node per table with its top-level fields — a compact TypeScript-style
+  label (`Id<users>`, `{ … }`) and the full type when the label hides detail — and an edge for every `v.id(…)`,
+  direct or nested in arrays, records, objects and unions. A union document type keeps its members, with a
+  discriminator detected from literal fields.
+- **Groups** (`lib/clustering.ts`, `SchemaClusters.tsx`): connected components; a large one split by Louvain
+  modularity; named after the most connected table; on by default, the choice kept per deployment; groups can be
+  renamed and dragged.
+- **Layout** (`lib/elkLayout.ts`): ELK `layered`, top to bottom, groups as compound nodes; ELK loaded on demand.
+- **Around it**: search over groups, tables, fields and indexes (`SchemaSearch.tsx`); a minimap
+  (`SchemaMinimap.tsx`); zoom in / out, fit, reset layout, the grouping toggle (`SchemaControls.tsx`); a side panel
+  with each field (a long type expands), a union's members and the discriminator, and the table's indexes
+  (`SchemaSidePanel.tsx`, reusing the data page's index view).
+
+### 14.2 What an app can observe
+
+Nothing: it is a view of the schema the app already declares.
+
+### 14.3 How bunvex does it
+
+`packages/dashboard/src/schema/` (UI-01 §21), with **@xyflow/react 12.12.0 and elkjs 0.12.0** (the owner's call,
+as Convex), both in the Schema route's chunk. Fed by the contract's `getSchema` (Convex's JSON validators, V2),
+`listTables` (indexes, counts, undeclared tables) and, where the source has it, `inferDocumentType` for tables
+without a declared type. The same model (fields, compact and full labels, references, union members with their
+discriminator), groups (connected components, Louvain's local moving for groups of 8 or more), ELK layout,
+search, minimap, controls and side panel. The open table is in the URL (`?table=`).
+
+### 14.4 Divergences
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| SC1 | Groups cannot be renamed or dragged as a whole; tables can be dragged, and Reset layout lays everything out again | a first version; nothing an app observes | follow-up |
+| SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
+| SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
 

@@ -263,6 +263,37 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schema: the tables drawn with their references; a table opens with Enter; xyflow stays in its chunk", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, external, close } = await open("/schema", { colorScheme });
+      await heading(page, "Schema");
+      await page.locator(".react-flow__node-table").nth(3).waitFor();
+      expect(await page.locator(".react-flow__edge").count()).toBe(2);
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run(document, { resultTypes: ["violations"] });
+        return r.violations.map(
+          (v: { id: string; nodes: { html: string }[] }) =>
+            `${v.id}: ${v.nodes.map((n) => n.html.slice(0, 90)).join(" | ")}`,
+        );
+      });
+      expect([colorScheme, violations]).toEqual([colorScheme, []]);
+      await page.locator('.react-flow__node-table[data-id="tasks"]').focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("complementary", { name: "tasks" }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.waitForURL(`${ORIGIN}/schema`);
+      expect([errors, external]).toEqual([[], []]);
+      await close();
+    }
+    // the diagram's libraries load with the Schema screen only, never with the shell
+    const entry = readdirSync(`${import.meta.dir}/../dist/assets`).find((f) => /^index-.*\.js$/.test(f))!;
+    const code = readFileSync(`${import.meta.dir}/../dist/assets/${entry}`, "utf8");
+    expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");
@@ -325,6 +356,105 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Health: the deployment's counters, with nothing fetched elsewhere", async () => {
+    const { page, external, errors, close } = await open("/");
+    await heading(page, "Health");
+    await page
+      .getByText(/commit/i)
+      .first()
+      .waitFor();
+    expect(external).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Functions: a function's page, then its query subscribed in the runner", async () => {
+    const { page, errors, close } = await open("/functions?function=tasks:list");
+    await page.getByRole("heading", { level: 1, name: "list" }).waitFor();
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    const runner = page.getByRole("region", { name: "Run a function" });
+    // a query is not run but subscribed, as in Convex: its result arrives and updates by itself
+    await runner.getByText(/^Subscribed: the result updates/).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Logs: a line's details open beside the list and follow the arrows", async () => {
+    const { page, errors, close } = await open("/logs");
+    await heading(page, "Logs");
+    const grid = page.getByRole("grid", { name: "Log lines" });
+    await grid.getByRole("gridcell").nth(5).click();
+    const details = page.getByRole("complementary");
+    await details.waitFor();
+    const before = await details.innerText();
+    await page.keyboard.press("ArrowDown");
+    for (let i = 0; i < 50 && (await details.innerText()) === before; i++) await page.waitForTimeout(50);
+    expect(await details.innerText()).not.toBe(before);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Settings: pause the deployment, see it said on every screen, resume", async () => {
+    const { page, errors, close } = await open("/settings/general");
+    await heading(page, "Settings");
+    const pause = page.getByRole("region", { name: "Pause deployment" });
+    await pause.getByRole("button", { name: "Pause deployment" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Pause deployment" }).click();
+    await page
+      .getByText(/This deployment is paused/)
+      .first()
+      .waitFor();
+    await page.getByRole("link", { name: "Logs" }).first().click();
+    await page
+      .getByText(/This deployment is paused/)
+      .first()
+      .waitFor();
+    await page.getByRole("link", { name: "Settings" }).first().click();
+    await pause.getByRole("button", { name: "Resume deployment" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Resume deployment" }).click();
+    await pause.getByText("running").waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Settings: the authentication providers, each value copyable", async () => {
+    const { page, errors, close } = await open("/settings/authentication");
+    await page.getByRole("listitem", { name: /^Custom JWT provider/ }).waitFor();
+    expect(await page.getByRole("button", { name: /^Copy the / }).count()).toBeGreaterThan(4);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Settings: export a snapshot, download the zip, import a file and confirm", async () => {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    await page.goto(url("/settings/snapshots"));
+    const exp = page.getByRole("region", { name: "Export" });
+    await exp.getByRole("button", { name: "Export a snapshot" }).click();
+    await exp.getByText(/^Snapshot of tables/).waitFor({ timeout: 15_000 });
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      exp.getByRole("button", { name: "Download" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/^snapshot-.*\.zip$/);
+    const zip = readFileSync((await download.path())!);
+    expect(zip.subarray(0, 2).toString()).toBe("PK");
+    const imp = page.getByRole("region", { name: "Import" });
+    await imp.getByLabel("File", { exact: true }).setInputFiles({
+      name: "notes.jsonl",
+      mimeType: "application/jsonl",
+      buffer: Buffer.from('{"t":"a"}\n{"t":"b"}\n'),
+    });
+    await imp.getByRole("button", { name: "Upload and review" }).click();
+    await imp.getByRole("table").waitFor();
+    await imp.getByRole("button", { name: "Import", exact: true }).click();
+    await imp.getByText("Imported 2 documents.").waitFor({ timeout: 15_000 });
+    expect(errors).toEqual([]);
+    await context.close();
+  });
+
   for (const colorScheme of ["light", "dark"] as const)
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
@@ -338,6 +468,11 @@ describe("the dashboard in a browser", () => {
         ["/files", "Files"],
         ["/settings/environment-variables", "Settings"],
         ["/history", "History"],
+        ["/functions?function=tasks:list", "list"],
+        ["/logs", "Logs"],
+        ["/settings/general", "Settings"],
+        ["/settings/authentication", "Settings"],
+        ["/settings/snapshots", "Settings"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

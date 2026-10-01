@@ -1304,3 +1304,126 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
   seconds (UX-18).
 
+### 18.2 A function's Statistics tab (STUDY-12 §12, L1)
+
+- The open function's header (name, kind, path, Run, validators) is followed by **Statistics** and **Logs**
+  tabs; Statistics comes first, as Convex's `FunctionsView.tsx`. The tab is in the URL (`?tab=statistics` /
+  `logs`); without it, a link with log filters (`type`, `q`) opens the logs, any other the statistics.
+  Changing the filters keeps the tab, so restoring a function's kept filters never switches it.
+- **Statistics** (`metrics/function-stats.tsx`), the last hour per minute, as Convex's `PerformanceGraphs.tsx`:
+  **Function calls**, **Errors**, **Execution time** (p50, p90, p95, p99 — one blue, light to dark,
+  labelled at the lines' ends) and, for a query, **Cache hit rate**. Without metrics it says why.
+
+### 18.3 A table's metrics (STUDY-12 §12)
+
+- **Metrics** beside Schema and Indexes on the Database screen (shown when the source has `tableRate`)
+  opens the side panel (`?panel=metrics`), as Convex's table **Metrics** tool (`TableMetrics.tsx`): the rows
+  the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
+  same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
+
+## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
+
+### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+- **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
+  `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,
+  in the config's order. Needs `viewData` and `viewEnvironmentVariables`. **Contract suite**: when offered and
+  allowed, every provider is well-formed (`isAuthProvider`).
+- **Page** (`settings/auth.tsx`, lazy): a list item per provider named by its kind and domain / issuer, its
+  values as code with copy buttons; none → "This deployment has no authentication providers yet." and where they
+  are declared (Convex links its docs; bunvex has no docs site yet); without both operations the page says why and asks nothing of the source; a source without the method
+  gets the "not offered" screen.
+- **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
+
+### 19.2 Settings → Snapshots (STUDY-12 §13.2, a bunvex addition)
+
+- **Contract** (`data-source-snapshot.ts`, every method optional): `getLatestSnapshotExport`,
+  `requestSnapshotExport({ includeStorage })`, `downloadSnapshotExport(id)` → the zip as a `Blob`;
+  `startSnapshotImport({ file, format, mode, table? })` → `failed` with why, or `waiting_for_confirmation` with
+  `changes` (per table: added, deleted); `confirmSnapshotImport`, `cancelSnapshotImport`, `getSnapshotImport`
+  (progress, checkpoints, rows written). Operations `viewBackups`, `createBackups`, `downloadBackups`,
+  `importBackups` (Convex's names); importing also needs to write. **Contract suite**: the latest export is
+  read when offered; an export (opt-in) is requested, followed to `completed` and downloaded (a zip of its
+  size); an import (opt-in, into a scratch table) refuses a bad file, then is confirmed and written.
+- **Page** (`settings/snapshots.tsx`, lazy): **Export** — include stored files, Export a snapshot, its state
+  while it runs (polled every 500 ms), then when, how large, until when, and Download (a `snapshot-<time>.zip`);
+  **Import** — a file (the format guessed from its extension, the table from its name), the format, the
+  table for a single-table format, and what to do when a table has documents (the four modes; replacing
+  everything only for a zip); Upload and review shows what will change per table; the confirm button says how
+  many documents it deletes; then progress, the steps done, and the documents written. Every half follows its
+  operations; a source without either gets the "not offered" screen.
+- **Mock** (`mock/snapshots.ts`, `mock/zip.ts`): exports and imports advance a step per table every
+  `snapshotStepMs` (300 ms); the zip is Convex's layout, stored uncompressed, and the reader also takes deflated
+  entries; ids and creation times in a file are kept (an `append` that repeats an id fails); CSV numbers and
+  booleans are read as such, empty cells left out; `request_export` and `snapshot_import` go to the audit log
+  (History says them in words).
+
+### 19.3 Volume
+
+Measured in headless Chrome against the production build (`vite preview`), with the dev host's new volume
+knobs `?tasks=100000&executions=4000` (100 000 tasks; ~10 000 log lines): the Database screen opened on
+`tasks`, then scrolled to the end 15 times (16 pages, 1 600 rows); a field filter (`done = true`); the Logs
+screen scrolled until ~8 450 lines were loaded, then 10 characters typed in its filter. "Long tasks" are the
+browser's (> 50 ms on the main thread).
+
+| | before | after |
+|---|---|---|
+| Database: long tasks while loading 15 more pages | 16, max 186 ms, total 2 779 ms | **1, 71 ms** |
+| Database: first rows | 594 ms | 483 ms |
+| Logs: long tasks while scrolling to ~8 450 lines, and while filtering them | none | none |
+
+- The cost was the **mock's** `listDocuments`: every page filtered, sorted with a key built per comparison,
+  and cloned every matching document — 170 ms a page at 100 000 documents (in Bun). It now builds each key
+  once and clones only the page: **13 ms** a page. The dashboard's own work (the grid, virtualized; React)
+  stays under the long-task line; a profile of the scrolling shows the rest is React rendering the new rows.
+- Left as is: opening the page with 100 000 tasks has one ~260 ms task — the mock generating them, in the
+  dev host only. A real server pages from an index.
+
+### 19.4 Every screen in the browser
+
+The e2e suite (`apps/dashboard/e2e`, against the production build in Chromium) now opens every screen: to the
+Database, Monaco, Schedules, Files, Settings → Environment variables, History, the design system's page and
+the phone-width pass already there, it adds **Health** (its counters, nothing fetched elsewhere),
+**Functions** (a function's page; its query subscribed in the runner), **Logs** (a line's details follow the
+arrows), **Settings → General** (pause, the banner on another screen, resume), **Authentication** (the
+providers, copyable) and **Snapshots** (export, download a real zip, import a file and confirm). The axe pass
+(colour contrast included, both themes) now also covers a function's page, Logs, General, Authentication and
+Snapshots. 22 tests, about a minute.
+
+## 21. Amendment — the Schema screen (30 Sep 2026)
+
+STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens
+a table), lazy like the other screens.
+
+- **Model** (`schema/graph.ts`): `buildSchemaGraph(schema, tables, inferred)` — a node per table (declared ones,
+  plus tables with documents but no declaration, flagged `notInSchema` and typed from `inferDocumentType` when the
+  source has it; with no declared table, every table is inferred), fields with a compact TypeScript-style label
+  and the full one when it hides detail, `references` from every `v.id` (nested too), a union document type's
+  members and discriminator, and an edge per reference to a table that exists. `null`: nothing to draw.
+- **Groups** (`schema/clusters.ts`): linked tables form a group, named after the most linked one; a group of 8 or
+  more is split by modularity (Louvain's local moving); lone tables form none. On by default; the choice is kept
+  per deployment (`bunvex:schema-groups:<scope>`).
+- **Layout** (`schema/layout.ts`): ELK `layered`, top to bottom, groups as compound nodes; loaded on first use.
+  At 150 tables and ~280 references: the model and groups in under 6 ms, ELK about 1 s — "Laying out…" is said
+  meanwhile.
+- **Diagram** (`schema/diagram.tsx`, @xyflow/react 12.12.0): table nodes (at most 12 fields, then "N more"),
+  group boxes, smooth-step arrows (dashed when the field is optional; the open table's highlighted and labelled
+  with the field), a dotted background, a minimap (from `md`), zoom in / out, fit, Reset layout, Group related
+  tables. Search over groups, tables, fields and indexes: arrows move through the hits, Enter opens one, and the
+  diagram dims what does not match. Themed from the tokens (xyflow's CSS variables), following the page's theme;
+  reduced motion makes every zoom instant. Many tables: only the visible ones are rendered past 60.
+- **Keyboard**: every table node is focusable and named ("Table tasks: 5 fields, references users"); Enter or
+  Space opens it. The URL, not xyflow's selection, says which table is open (xyflow's selection re-opened a closed
+  panel), so nodes are not selectable.
+- **Side panel** (`schema/panel.tsx`, the shared `Panel`): Open in Database, the document count, a note for an
+  undeclared table, every field (a long type expands), a union's members one at a time with the discriminator
+  marked, the references in and out (each opens that table), and the indexes.
+- **States**: no tables — "This deployment doesn't have any tables", with how to declare a schema
+  (`bunvex/schema.ts`, `defineSchema`); no `viewData` — "You cannot view the schema"; errors with Retry; a
+  skeleton while loading.
+- **Size**: the screen's chunk is 203 kB (65 kB gzip) with xyflow; ELK is its own 1.43 MB (436 kB gzip) chunk,
+  fetched when the first layout runs. Neither reaches the shell (an e2e test checks the entry chunk).
+- Tested: the model, groups and layout (unit); the screen in happy-dom with axe (navigation, counts, the panel
+  from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
+  grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
+
