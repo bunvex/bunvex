@@ -24,10 +24,12 @@ import {
   type FileQuery,
   type FilterExpression,
   type FunctionInfo,
+  type FunctionMetric,
   type FunctionRun,
   type LogEntry,
   type LogFilter,
   type LogQuery,
+  type MetricsWindow,
   OPERATIONS,
   type Page,
   type RunOptions,
@@ -39,6 +41,10 @@ import {
   type SnapshotImportRequest,
   type StoredFile,
   type TableInfo,
+  type TableMetric,
+  type Timeseries,
+  type TopKMeasure,
+  type TopKSeries,
   toDataSourceError,
   type Unsubscribe,
   type ValidatorJson,
@@ -54,6 +60,7 @@ import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { inferDocumentType } from "./infer.ts";
+import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 import { MockSnapshots } from "./snapshots.ts";
@@ -941,6 +948,49 @@ export class MockDataSource implements DashboardDataSource {
 
   watchAuditEvents(onChange: () => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
     return this.audit.watch(onChange);
+  }
+
+  // ---------------------------------------------------------------- metrics (§18), from the log history
+
+  private metrics<T>(signal: AbortSignal | undefined, w: MetricsWindow, body: () => T): Promise<T> {
+    return this.call(signal, () => {
+      if (!this.opts.capabilities.operations.includes("viewMetrics"))
+        throw new DataSourceError("unauthorized", "this credential cannot view metrics");
+      if (!(w.end > w.start) || !Number.isInteger(w.numBuckets) || w.numBuckets < 1 || w.numBuckets > 1000)
+        throw new DataSourceError("invalid_request", "a metrics window needs start < end and 1–1000 buckets");
+      return body();
+    });
+  }
+
+  functionRate(fn: string, metric: FunctionMetric, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
+    return this.metrics(opts?.signal, w, () => metrics.functionRate(this.logs, fn, metric, w));
+  }
+
+  cacheHitPercentage(fn: string, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
+    return this.metrics(opts?.signal, w, () => metrics.cacheHitPercentage(this.logs, fn, w));
+  }
+
+  latencyPercentiles(fn: string, percentiles: number[], w: MetricsWindow, opts?: CallOptions) {
+    return this.metrics(opts?.signal, w, () => {
+      if (percentiles.some((p) => !(p > 0 && p <= 100)))
+        throw new DataSourceError("invalid_request", "percentiles are between 0 (excluded) and 100");
+      return metrics.latencyPercentiles(this.logs, fn, percentiles, w);
+    });
+  }
+
+  topFunctions(measure: TopKMeasure, w: MetricsWindow, k: number, opts?: CallOptions): Promise<TopKSeries> {
+    return this.metrics(opts?.signal, w, () => metrics.topFunctions(this.logs, measure, w, Math.max(1, k)));
+  }
+
+  tableRate(table: string, metric: TableMetric, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
+    return this.metrics(opts?.signal, w, () => {
+      if (!this.tables.has(table)) throw new DataSourceError("not_found", `there is no table ${table}`);
+      return metrics.tableRate(this.logs, table, metric, w);
+    });
+  }
+
+  scheduledJobLag(w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
+    return this.metrics(opts?.signal, w, () => metrics.scheduledJobLag(this.logs, w));
   }
 }
 
