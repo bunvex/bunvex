@@ -50,6 +50,11 @@ export const WRITE_LOG_MIN_RETENTION_US = 30_000_000;
 export const WRITE_LOG_MAX_RETENTION_US = 300_000_000;
 export const WRITE_LOG_SOFT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 /**
+ * NOT in Convex: the default hard byte cap on the write log (DV-128, decided by the owner on 2026-10-01, may
+ * be revisited). See `WriteLogRetention.hardMaxBytes`.
+ */
+export const WRITE_LOG_HARD_MAX_BYTES = 256 * 1024 * 1024;
+/**
  * Convex's `MAX_TRANSACTION_WINDOW` (10 s): how far behind the latest snapshot a transaction may BEGIN
  * (crates/database/src/snapshot_manager.rs `push` / `snapshot`).
  */
@@ -63,19 +68,19 @@ export type WriteLogRetention = {
   /** Above this approximate size, commits older than `minRetentionUs` are dropped too. */
   softMaxBytes: number;
   /**
-   * NOT in Convex (default Infinity, i.e. off): above this approximate size, the oldest commits are dropped
-   * whatever their age. Convex's minimum retention has no upper bound in bytes; at bunvex's commit rates
-   * (~100k commits/s on the memory driver) 30 s of commits is gigabytes. Whether to turn it on by default is
-   * an open owner question (DV-128, STUDY-06 §7).
+   * NOT in Convex (DV-128; default `WRITE_LOG_HARD_MAX_BYTES`, 256 MiB): above this approximate size, the
+   * oldest commits are dropped whatever their age. Convex's minimum retention has no upper bound in bytes;
+   * at bunvex's commit rates (~100k commits/s on the memory driver) 30 s of commits is gigabytes.
+   * `null`, `0` or `Infinity` turns the cap off, which is Convex's exact behaviour (STUDY-06 §7).
    */
-  hardMaxBytes: number;
+  hardMaxBytes: number | null;
 };
 
 const DEFAULT_RETENTION: WriteLogRetention = {
   minRetentionUs: WRITE_LOG_MIN_RETENTION_US,
   maxRetentionUs: WRITE_LOG_MAX_RETENTION_US,
   softMaxBytes: WRITE_LOG_SOFT_MAX_SIZE_BYTES,
-  hardMaxBytes: Number.POSITIVE_INFINITY,
+  hardMaxBytes: WRITE_LOG_HARD_MAX_BYTES,
 };
 
 /**
@@ -181,7 +186,16 @@ export class Committer {
     /** The clock commit timestamps follow, in microseconds (tests pass their own). */
     private clockUs: () => number = wallClockUs,
   ) {
-    this.retention = { ...DEFAULT_RETENTION, ...retention };
+    const r = { ...DEFAULT_RETENTION };
+    for (const [k, v] of Object.entries(retention)) if (v !== undefined) (r as Record<string, unknown>)[k] = v;
+    // The hard cap is off for `null`/`0` (and `Infinity`); the comparison below wants a number.
+    if (!r.hardMaxBytes) r.hardMaxBytes = Number.POSITIVE_INFINITY;
+    this.retention = r;
+  }
+
+  /** The retention policy in effect (defaults filled in; a disabled hard cap reads as `Infinity`). */
+  get retentionPolicy(): Readonly<WriteLogRetention> {
+    return this.retention;
   }
 
   /** How many commits the write log holds. */
@@ -374,7 +388,11 @@ export class Committer {
     const softLimit = currentTs - maxRetentionUs;
     while (this.logHead < this.log.length) {
       const e = this.log[this.logHead];
-      if (this.logBytes <= hardMaxBytes && e.ts >= (this.logBytes >= softMaxBytes ? hardLimit : softLimit)) break;
+      if (
+        this.logBytes <= (hardMaxBytes ?? Number.POSITIVE_INFINITY) &&
+        e.ts >= (this.logBytes >= softMaxBytes ? hardLimit : softLimit)
+      )
+        break;
       this.purgedTs = e.ts;
       this.logBytes -= logEntryBytes(e);
       this.log[this.logHead++] = undefined as unknown as LogEntry; // release it now

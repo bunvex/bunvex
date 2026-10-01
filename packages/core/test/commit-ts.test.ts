@@ -4,9 +4,16 @@
 // the sync protocol multiplies by 1000 on the wire (packages/server/src/sync.ts).
 import { describe, expect, test } from "bun:test";
 import { v } from "@bunvex/values";
-import { Committer, ConflictError, logEntryBytes, OutOfRetentionError } from "../src/committer.ts";
+import {
+  Committer,
+  ConflictError,
+  logEntryBytes,
+  OutOfRetentionError,
+  WRITE_LOG_HARD_MAX_BYTES,
+} from "../src/committer.ts";
 import { wallClockUs } from "../src/determinism.ts";
 import { Engine } from "../src/engine.ts";
+import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 
@@ -191,14 +198,18 @@ describe("the write log's retention, as Convex", () => {
     expect(tiny.logStartTs).toBe(3980);
   });
 
-  test("the optional hard cap (not in Convex, off by default) drops commits younger than the min retention", async () => {
+  test("the hard cap (not in Convex, DV-128) drops commits younger than the min retention; off, Convex's rule", async () => {
     let now = 0;
     const capped = new Committer(
       await MemoryPersistence.open(null, { durable: false }),
       { hardMaxBytes: 2_000 },
       () => now,
     );
-    const uncapped = new Committer(await MemoryPersistence.open(null, { durable: false }), {}, () => now);
+    const uncapped = new Committer(
+      await MemoryPersistence.open(null, { durable: false }),
+      { hardMaxBytes: null },
+      () => now,
+    );
     for (let n = 0; n < 100; n++) {
       now = n; // 100 commits within 100 µs: all inside the 30 s min retention
       await capped.commit({ snapshot: capped.visibleTs, reads: [], docs: [], idx: write(n) });
@@ -208,6 +219,34 @@ describe("the write log's retention, as Convex", () => {
     expect(capped.logBytes).toBeLessThanOrEqual(2_000);
     expect(capped.logLength).toBeLessThan(100);
     expect(capped.logLength).toBeGreaterThan(2_000 / logEntryBytes({ ts: 0, writes: write(99) }) - 1); // a full budget
+  });
+
+  test("the hard cap is on by default at 256 MiB (DV-128); null, 0 or Infinity turn it off", async () => {
+    // A driver that keeps nothing, and one 1 MiB key shared by every write: the log's estimate grows by
+    // ~1 MiB a commit while the heap does not.
+    const none = { apply() {}, async flush() {} } as unknown as Persistence;
+    const key = new Uint8Array(2 ** 20);
+    const fill = async (c: Committer) => {
+      for (let n = 0; n < 300; n++)
+        await c.commit({ snapshot: c.visibleTs, reads: [], docs: [], idx: [{ index: 9, key, id: `d${n}` }] });
+    };
+    expect(WRITE_LOG_HARD_MAX_BYTES).toBe(256 * 2 ** 20);
+    let now = 0;
+    const byDefault = new Committer(none, {}, () => ++now); // 300 commits within 300 µs: all inside the 30 s floor
+    expect(byDefault.retentionPolicy.hardMaxBytes).toBe(WRITE_LOG_HARD_MAX_BYTES);
+    await fill(byDefault);
+    expect(byDefault.logBytes).toBeLessThanOrEqual(WRITE_LOG_HARD_MAX_BYTES);
+    expect(byDefault.logBytes).toBeGreaterThan(WRITE_LOG_HARD_MAX_BYTES - 2 ** 21); // a full budget
+    expect(byDefault.logLength).toBeLessThan(300);
+    expect(byDefault.logStartTs).toBeGreaterThan(0);
+    // Turned off, the log keeps all 300 (~300 MiB estimated): Convex's 30 s floor has no byte bound.
+    for (const off of [null, 0, Number.POSITIVE_INFINITY]) {
+      const c = new Committer(none, { hardMaxBytes: off }, () => ++now);
+      expect(c.retentionPolicy.hardMaxBytes).toBe(Number.POSITIVE_INFINITY);
+      await fill(c);
+      expect(c.logLength).toBe(300);
+      expect(c.logBytes).toBeGreaterThan(WRITE_LOG_HARD_MAX_BYTES);
+    }
   });
 
   test("lagged snapshots (500 ms) under 2 000 commits/s, and >20 000 commits later, validate normally (STUDY-24 A2)", async () => {

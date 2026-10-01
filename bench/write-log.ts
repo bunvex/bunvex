@@ -7,7 +7,7 @@
 // Env: W (default 64), SECS (default 10), LAG_MS (default 500), RATE (lag: noise commits/s, default as fast
 // as possible), COMMITTER (module exporting `Committer`,
 // default @bunvex/core: point it at another build to compare), PERSIST (`memory`, default, or `null`: a
-// driver that keeps nothing, so the RSS is the committer's own), HARD_MAX_MB (the optional hard cap).
+// driver that keeps nothing, so the RSS is the committer's own), HARD_MAX_MB (the hard cap, default 256; 0 turns it off).
 import { encodeKey, type IndexWrite, type LogEntry, logEntryBytes, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 
@@ -16,7 +16,8 @@ const SECS = Number(process.env.SECS ?? 10);
 const LAG_MS = Number(process.env.LAG_MS ?? 500);
 const RATE = Number(process.env.RATE ?? 0); // lag: cap the noise at about this many commits/s (0: no cap)
 const { Committer } = (await import(process.env.COMMITTER ?? "@bunvex/core")) as typeof import("@bunvex/core");
-const retention = process.env.HARD_MAX_MB ? { hardMaxBytes: Number(process.env.HARD_MAX_MB) * 2 ** 20 } : {};
+const retention =
+  process.env.HARD_MAX_MB !== undefined ? { hardMaxBytes: Number(process.env.HARD_MAX_MB) * 2 ** 20 } : {};
 const mb = (n: number) => Math.round(n / 2 ** 20);
 const open = async (): Promise<Persistence> =>
   process.env.PERSIST === "null"
