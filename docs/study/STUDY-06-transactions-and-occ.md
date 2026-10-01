@@ -1,9 +1,9 @@
 # STUDY-06 — Transactions, OCC and the committer
 
-- **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D11 resolved to match Convex in #120 (DV-61); D3, D8, D12 to match Convex, gaps tracked in docs/parity (DV-57, DV-59, DV-62). Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D11 resolved to match Convex in #120 (DV-61); D3 resolved to match Convex in #PR (DV-57, §9); D8, D12 to match Convex, gaps tracked in docs/parity (DV-59, DV-62). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`; for D10 (§1.6, §7), `main` at `9c9bd14` (2026-10-01); for D11
-  (§1.7, §8), `feat/occ-time-window` at `da84195` (#118)
+  (§1.7, §8), `feat/occ-time-window` at `da84195` (#118); for D3 (§1.1, §9), `main` at `6fcb525` (2026-10-01)
 - **Related:**
   - [STUDY-02](STUDY-02-read-own-writes.md) and [STUDY-03](STUDY-03-deterministic-execution.md): not
     repeated here.
@@ -19,12 +19,36 @@
 - The read-set is a set of **intervals per index**, together with the index's fields.
 - `db.get` records the point interval of the id on `by_id`.
 - An index range records only **the part actually scanned**. In
-  `crates/database/src/query/index_range.rs` (`IndexRange::start_next`), each returned row records
-  `initial_unfetched_interval.split(cursor)`, from the start of the range to the last key returned.
-  The whole range is recorded only when the stream is exhausted.
-  - So `first()` on a queue reads `[start, first key]`, and an insert later in the range does not
+  `crates/database/src/query/index_range.rs` (`IndexRange::start_next`, l. 163):
+  - `initial_unfetched_interval` is the queried interval cut to the start and end cursors (l. 111–131).
+  - Each row the range **returns** (l. 192–227) moves the cursor to `After(key)` and records
+    `initial_unfetched_interval.split(cursor, order).0` with `record_indexed_directly`
+    (`crates/database/src/reads.rs` l. 447): the part from the start of the range, in scan order, up to that
+    key. Rows fetched ahead in a prefetched page but not yet returned are not recorded.
+  - When the range runs out (`unfetched_interval` empty, or the cursor at `End`; l. 246–261), it records the
+    whole `initial_unfetched_interval`.
+  - `Interval::split_after` (`crates/common/src/interval/mod.rs` l. 128–157) is where the edges are:
+    ascending, the read part is `[start, increment(key))`, where `BinaryKey::increment`
+    (`crates/common/src/interval/key.rs` l. 68–80) is the smallest key above every key that starts with
+    `key`, so the last key is included; if there is no such key, or it is not below the interval's end, the
+    whole interval. Descending, the read part is `[key, end)`: it starts at the last key, inclusive.
+  - Successive records for one index are unioned into its `IntervalSet` (`_record_indexed`, `reads.rs`
+    l. 280), so a scan that returns k rows leaves one interval, not k.
+- A scan stops early only because the operator above it stops pulling: `Limit::next`
+  (`crates/database/src/query/limit.rs` l. 53–70) returns `None` once `limit` rows went out, without asking
+  the range again. `take(n)` is `limit(n).collect()`, `first()` is `take(1)`, `unique()` is `take(2)`
+  (`npm-packages/convex/src/server/impl/query_impl.ts` l. 323–344). A `for await` that breaks just stops
+  calling `1.0/queryStreamNext`. So:
+  - `first()` on a queue reads `[start, first key]`, and an insert later in the range does not
     conflict with it.
-- Documents a `filter` rejected still count: they were scanned, so their interval is recorded.
+  - `take(n)` that gets exactly n rows reads up to the n-th, even if nothing follows; with fewer than n rows
+    it asked once more, found the range empty and recorded all of it.
+  - `first()` on an empty range records the whole range. `take(0)` never pulls: it records nothing.
+- Documents a `filter` rejected still count: `Filter::next` (`crates/database/src/query/filter.rs`
+  l. 53–72) pulls rows from the range until one passes, and the range records each one it returns. The
+  recorded prefix therefore runs through the rejected rows up to the row that passed.
+- Pagination is the same stream: a full page stops at its last row (`[start cursor, last key]`), a page that
+  runs out of the range or reaches its end cursor records all of it (STUDY-17).
 
 ### 1.2 Limits per transaction
 
@@ -236,9 +260,9 @@ it moves most of the work off the single committer thread.
 `packages/core/src/tx.ts`:
 
 - `get` records the `by_id` point interval, as Convex does.
-- `query(...).run` records **the whole `[lo, hi)` range** before scanning, whatever `take(n)` read.
+- ~~`query(...).run` records **the whole `[lo, hi)` range** before scanning, whatever `take(n)` read.
   The comment calls it "only affects how often the query cache is invalidated". It also widens the OCC
-  footprint of mutations.
+  footprint of mutations.~~ Since D3 was built (§9): the read-set ends at the last key read, as Convex's.
 
 `packages/core/src/committer.ts`:
 
@@ -278,7 +302,7 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
 |---|---|---|---|---|
 | D1 | A failed `flush()` rejects the commit but leaves its writes applied, its ts consumed and its log entry in place; a later group makes them visible (`committer.ts` `drain`) | BUG | The client is told the mutation failed, yet its writes appear, and can become durable (SQLite commits them with the next group). Convex crashes and recovers from what persistence actually holds | **fixed in #9** |
 | D2 | An exception from `persistence.apply` in `drain()` is uncaught, and `running` stays true forever (`committer.ts`) | BUG | A driver whose `apply` does I/O can throw there. SQLite inserts inside `apply`, so `SQLITE_FULL` or `SQLITE_IOERR` would do it. Every commit after that hangs. The remote drivers only buffer in `apply` and fail in `flush` (D1) instead, e.g. with an index key over MySQL's `varbinary(512)` (STUDY-09) | **fixed in #9** |
-| D3 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix (`tx.ts` `run`) | OBSERVABLE | More OCC conflicts than Convex. A mutation that pops the head of a queue conflicts with every insert into the queue, so it can exhaust retries where Convex succeeds | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-57) |
+| D3 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix (`tx.ts` `run`) | OBSERVABLE | More OCC conflicts than Convex. A mutation that pops the head of a queue conflicts with every insert into the queue, so it can exhaust retries where Convex succeeds | **as Convex, fixed in #PR** (owner, 2026-10-01: match Convex; DV-57): see §9 |
 | D4 | Retries: 30 with ≤20 ms jittered backoff vs Convex's 4 retries (5 runs) at 100 ms–2 s (`engine.ts`) | OBSERVABLE | Different failure rate and latency under contention. Tests that expect an OCC error after hot-key contention behave differently | **as Convex** (owner): [STUDY-21](STUDY-21-occ-error-and-retries.md); resolved to match Convex in #38 (DV-38) |
 | D5 | OCC error: `Error("write conflict")` vs `OptimisticConcurrencyControlFailure` with "Documents read from or written to the "T" table changed…" (`committer.ts` `ConflictError`) | OBSERVABLE | Apps and tooling that match on the message or code differ | **as Convex**: [STUDY-21](STUDY-21-occ-error-and-retries.md); resolved to match Convex in #38 (DV-38) |
 | D6 | No transaction limits: reads (32k docs / 16 MiB), intervals (4 096), writes (16k docs / 16 MiB) | OBSERVABLE | Code that works on bunvex can fail on Convex, and unbounded transactions can exhaust memory or stall the single committer | resolved to match Convex: read limits in #12, write limits in #35 (DV-39) |
@@ -295,7 +319,7 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
   must never become visible, and the next commits must work. Also a double whose `apply()` throws:
   the committer must not wedge.
 - **Conflict footprint:** mutation A reads `first()` from `by_creation_time` while B inserts a later
-  document. A must commit without a retry. Assert `stats.retries === 0`.
+  document. A must commit without a retry. Assert `stats.retries === 0`. Built with D3: §9.
 - **Retry budget:** a hot-key contention test counts executions (5 max) and checks the final error
   code and message against Convex's.
 - **Limits:** reading 32 001 documents, writing 16 001 documents and making 4 097 range reads each
@@ -480,3 +504,81 @@ index on append and trim. Memory driver 124–128k commits/s after vs 129k befor
 364–372k (−1 to −5 %, within run-to-run noise for the memory driver). Heap per retained entry 660 vs
 590 bytes (+12 %).
 
+## 9. D3 as built: the read-set ends at the last key read
+
+`packages/core/src/tx.ts` (`ScanReads`, `readEndAfter`, `Tx.reads`):
+
+- **One `ScanReads` per scan** (`runQuery` for `take`/`first`/`unique`/`collect`, `iterate` for `for await`).
+  Each document the scan reaches, before the filters, is handed to it; when the scan runs out of its range
+  it records the whole range. Nothing is recorded until the first document, so `take(0)` (which, as
+  Convex's `Limit`, never scans) records nothing. The edges are Convex's `split_after`:
+  - ascending: `[lo, readEndAfter(key, hi))`, where `readEndAfter` is `prefixEnd(key)` (Convex's
+    `increment`) capped at the range's end. Index keys end with the self-delimiting document id, so no index
+    key lies strictly between `key` and `prefixEnd(key)`: the interval is exactly "up to and including the
+    last key";
+  - descending: `[key, hi)`.
+- **Where the scan stops.** Without filters, `take(n)` fetches one page of n rows (plus this transaction's
+  removals, STUDY-02): fewer than n means the range ran out (whole range), exactly n ends the read-set at
+  the n-th row, as Convex's `Limit` stops without asking for more. With filters, the stream stops at the row
+  that met the limit; rows the filter dropped are before it, so inside the prefix. Rows this transaction
+  wrote are part of the scan (the merge of STUDY-02), so they extend it too.
+- **Keys are encoded once per scan, not per row.** Encoding an index key for every row would double the cost
+  of a long `for await` (measured: 10 000 rows, 8.6 → 17.0 ms). A `ScanReads` keeps the last document it
+  reached and its interval object (recorded at the first document, so the 4 096-interval limit applies when
+  it did); the key is encoded when the read-set is next read: `Tx.reads` settles every scan that moved.
+  Every consumer goes through `Tx.reads`: the committer's validation, the query cache, and the sync hub's
+  read-set index (`engine.ts` `queryTracked`). An iterator abandoned without `return()` keeps the prefix it
+  reached.
+  - The app may change a document it was given (`d.n = …`), and the key must be the stored one. So before a
+    document is handed out (each `yield`, and the result of `take`/`first`/`unique`), `handOut` takes the
+    key's values. Strings, numbers, booleans and null cannot change; a key holding an object, array or bytes
+    value is encoded at once instead.
+- **Pagination** already recorded `[start, last key]` (STUDY-17); its end now uses the same
+  `readEndAfter`.
+- **Not changed:** a scan's prefetch (pages of 64, growing to 1 024) still counts every fetched document
+  toward the 32 000-document read limit, where Convex counts the rows returned (`record_read_document` in
+  `start_next`). It only matters near the limit, with a filter or a `for await` that stops early; noted
+  here for a follow-up, not decided.
+
+Tests (`packages/core/test/read-set-prefix.test.ts`, `read-set-serializable.test.ts`,
+`packages/server/test/sync.test.ts`):
+
+- Each shape (asc/desc `take`, `first`, `unique`, filters, `for await` with `break`, an abandoned iterator,
+  a returned document the app changed, pages asc/desc, an empty range, `take(0)`, `collect`) is checked
+  against writes before, at and after the last key read, through `changedBetween`, the check both
+  validation and invalidation use.
+- OCC: a queue pop that raced with an append commits without a retry; one that raced with a write to its
+  head retries once; a mutation's own insert inside the scanned prefix extends it.
+- Query cache and sync: appends past a subscribed `first()` re-run nothing; deleting its head re-runs it.
+- **Serializability:** 60 seeds × 6 workers × 14 random mutations (early-stopping scans asc and desc,
+  filters, `unique`, `for await` + `break`, pages, inserts, moves), interleaved at random points between
+  reads and writes. Each committed result equals its result in a serial replay in commit-ts order, and the
+  final states match.
+- **Sabotage** (each run over the four test files above):
+  - ending the ascending interval at the last key, exclusive (one key too short): 10 tests fail, the
+    serializability test and the sync test among them;
+  - starting the descending interval just after the last key: the descending edge test and the
+    serializability test fail;
+  - reading one key too far: the four "no conflict past the last key" tests fail;
+  - never settling (the whole range, as before this change): 13 fail;
+  - not taking the key's values before handing a document out: the "changed a returned document" test fails.
+
+Measured on the memory driver unless named (Apple M-series, `bun bench/queue-head.ts`, 5 s, Convex's retry
+budget, 4 appenders):
+
+| | before | after |
+|---|---|---|
+| 1 popper: pops/s, pop executions lost to a conflict | 0 (35 executions in 5 s), 97.1 % | 3 655, 0 % |
+| 4 poppers: pops/s, executions lost, OCC errors surfaced | 1, 97.4 %, 27 | 3 531, 0.6 %, 19 (pop against pop, same head) |
+| 4 poppers, SQLite: pops/s, executions lost | 1, 97.1 % | 448, 4.9 % |
+| Re-runs of a cached `first()` per append at its tail | 1 | 0 |
+
+Before, the pops starve: each loses to any append and sleeps in Convex's backoff, so the appenders run
+alone (73 k inserts/s; 74 k with no popper at all). After, both run: 18 k commits/s, 3.7 k pops and 14.6 k
+inserts. A pop is the expensive commit here: each `first()` skips the tombstones of the pops before it (no
+retention yet, DV-65; 33 → 69 µs per pop over 8 000 pops, the same before and after this change).
+
+Per query, encoding the last key costs about a microsecond: through `queryTracked`, `first()` 1.7 → 2.7 µs
+and `take(10)` 6.4 → 7.9 µs. Scans of 10 000 rows (`for await`, a filtered `collect`, a filtered `first()`
+that matches late, `collect`): 9.0 → 9.7 ms for `for await` (one `handOut` per row), the others within
+noise (8.1–9.9 ms both sides).

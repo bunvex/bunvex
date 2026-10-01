@@ -155,7 +155,12 @@ export function fieldValue(doc: Doc, path: string): KeyValue {
  * `null`), then the `_id` as a string value — unique, and the final tiebreaker.
  */
 export function indexKey(ix: IndexDef, doc: Doc): Uint8Array {
+  return encodeKey(indexKeyValues(ix, doc));
+}
+
+/** The values `indexKey` encodes, in order. */
+export function indexKeyValues(ix: IndexDef, doc: Doc): KeyValue[] {
   const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
   vals.push(doc._id);
-  return encodeKey(vals);
+  return vals;
 }
