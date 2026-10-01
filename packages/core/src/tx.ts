@@ -252,6 +252,16 @@ export class Tx {
     { def: TableDef; meta: Omit<TableMeta, "_id">; indexes: Omit<IndexMeta, "_id">[] }
   >();
   private systemDepth = 0;
+
+  /** Who runs this transaction: the server's identity object (opaque here), or null without a token. */
+  identity: unknown = null;
+  /** Whether the body read the identity (Convex's `observe_identity`): its result then depends on the caller. */
+  identityObserved = false;
+  /** The caller's identity, recording that the result depends on it (`ctx.auth.getUserIdentity()`). */
+  readIdentity(): unknown {
+    this.identityObserved = true;
+    return this.identity;
+  }
   private get systemAccess() {
     return this.system || this.systemDepth > 0;
   }
