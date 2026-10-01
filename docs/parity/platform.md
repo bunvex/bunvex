@@ -7,7 +7,8 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
 - `@bunvex/auth`, `@bunvex/file-storage`, `@bunvex/cli` and `@bunvex/testing` are empty stubs.
 - `@bunvex/server` has:
   - query, mutation and action definitions, and internal functions;
-  - `POST /api/{query,mutation,action}`, WebSocket `/ws`, `GET /version` and `GET /stats` (JSON);
+  - `POST /api/{query,mutation,action,query_ts,query_at_ts}`, the sync WebSocket at `/api/{version}/sync`,
+    `GET /version` and `GET /stats` (JSON);
   - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
 - There are no system (`_`) tables, no ctx.auth, no ctx.storage and no ctx.scheduler.
@@ -32,7 +33,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | missing | `tokenIdentifier = "iss\|sub"`, `subject`, `issuer`, standard OIDC claims (name, email, pictureUrl, …) and custom claims. Nested custom claims are flattened to dotted keys. `jti`, `nbf` and `fva` are dropped so caching still works. |
 | Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | missing | |
 | Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
-| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | missing | Protocol v0 has no auth message. Identity versioning (`baseVersion`) is part of the protocol. |
+| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | partial (STUDY-23) | The messages and identity versions exist; only `None` is accepted until `@bunvex/auth` verifies tokens (DV-11). |
 | HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | missing | |
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | missing | Belongs to the client, listed here because it drives the auth protocol. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | missing | The bunvex cache key is `path + args` only, so adding auth needs identity in the key. |

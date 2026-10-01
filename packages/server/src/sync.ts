@@ -415,7 +415,9 @@ export class SyncSession {
     this.send(
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
         `"modifications":[${[...modifications.values()].join(",")}],` +
-        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":null}`,
+        // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
+        // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
+        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`,
     );
     this.version = end;
     this.versionText = endText;
