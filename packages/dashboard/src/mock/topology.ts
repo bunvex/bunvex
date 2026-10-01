@@ -17,6 +17,11 @@ const LEASE_TTL_MS = 10_000;
 /** Past this, a follower counts as lagging (STUDY-24 H9's "waits briefly"). */
 const LAGGING_MS = 500;
 const GiB = 1024 ** 3;
+/** The fixture's queries, as the cache's most-cached functions (shares drift a little per node). */
+const QUERIES = ["tasks:list", "messages:list", "tasks:byOwner", "users:get", "tasks:count"];
+const MAX_ENTRIES = 5000;
+const ENTRY_BYTES = 6 * 1024;
+
 const NAMES = ["node-a", "node-b", "node-c", "node-d", "node-e", "node-f", "node-g", "node-h"];
 
 export type MockTopologyOptions = {
@@ -71,7 +76,16 @@ export class MockTopology {
       memoryLimitBytes: 4 * GiB,
       connections: 0,
       subscriptions: 0,
-      cacheHitRate: 0.86,
+      cache: {
+        entries: leader ? 900 : 2600 + i * 300,
+        maxEntries: MAX_ENTRIES,
+        bytes: 0,
+        maxBytes: MAX_ENTRIES * ENTRY_BYTES * 2,
+        hitRate: leader ? 0.82 : 0.9,
+        invalidationsPerSecond: 0,
+        evictions: leader ? 120 : 800 + i * 150,
+        topQueries: [],
+      },
       ...(leader ? { commitsPerSecond: 120 } : { lag: { commits: 1, ms: 20 } }),
       scheduler: leader,
       actionsRunning: 0,
@@ -99,7 +113,22 @@ export class MockTopology {
     for (const [i, n] of this.nodes.entries()) {
       n.cpu = clamp((n.cpu ?? 0.3) + (r.next() - 0.5) * 0.06, 0.05, 0.95);
       n.memoryBytes = clamp((n.memoryBytes ?? GiB) + (r.next() - 0.5) * 0.02 * GiB, 0.4 * GiB, 3.6 * GiB);
-      n.cacheHitRate = clamp((n.cacheHitRate ?? 0.85) + (r.next() - 0.5) * 0.02, 0.5, 0.99);
+      // each node's own LRU: the commits it applies invalidate entries; queries refill it; past the cap it evicts
+      const cps = this.nodes[0]!.commitsPerSecond ?? 100;
+      const c = n.cache!;
+      c.hitRate = clamp((c.hitRate ?? 0.85) + (r.next() - 0.5) * 0.02, 0.55, 0.99);
+      c.invalidationsPerSecond = Math.max(0, Math.round(cps * (0.3 + r.next() * 0.15)));
+      const refill = Math.round((n.role === "leader" ? 6 : n.connections / 30) + r.int(0, 12));
+      const next = c.entries + refill - Math.round(c.invalidationsPerSecond * 0.05);
+      if (next > MAX_ENTRIES) c.evictions += next - MAX_ENTRIES;
+      c.entries = clamp(next, 50, MAX_ENTRIES);
+      c.bytes = c.entries * ENTRY_BYTES + r.int(0, 64 * 1024);
+      const weights = QUERIES.map((_, k) => (QUERIES.length - k) * (1 + (i % 3) * 0.1 * k));
+      const sum = weights.reduce((a, b) => a + b, 0);
+      c.topQueries = QUERIES.map((f, k) => ({
+        function: f,
+        entries: Math.round((c.entries * weights[k]!) / sum),
+      })).sort((a, b) => b.entries - a.entries);
       n.actionsRunning = r.int(0, n.role === "leader" ? 3 : 2);
       // clients connect to followers; a leader alone holds them itself
       if (n.role === "follower" || single) {
@@ -130,6 +159,8 @@ export class MockTopology {
         cpu: n.cpu,
         lagMs: n.lag ? n.lag.ms : null,
         connections: n.connections,
+        cacheHitRate: c.hitRate,
+        invalidationsPerSecond: c.invalidationsPerSecond,
       };
       n.history.push(sample);
       if (n.history.length > HISTORY) n.history.shift();
@@ -150,6 +181,7 @@ export class MockTopology {
       nodes: [leader, ...followers].map((n) => ({
         ...n,
         ...(n.lag && { lag: { ...n.lag } }),
+        ...(n.cache && { cache: { ...n.cache, topQueries: n.cache.topQueries?.map((q) => ({ ...q })) } }),
         history: n.history.map((h) => ({ ...h })),
       })),
       store: {

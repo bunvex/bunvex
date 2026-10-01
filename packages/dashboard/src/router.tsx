@@ -81,12 +81,9 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 /** The table open in the Schema screen's side panel (STUDY-12 §14). */
 export type SchemaSearch = { table?: string };
 
-/** The Topology screen's open node, and Diagram or List (UI-01 §22). */
-export type TopologySearch = { node?: string; view?: "diagram" | "list" };
-export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({
-  node: str(input.node),
-  view: input.view === "diagram" || input.view === "list" ? input.view : undefined,
-});
+/** The Topology screen's open node (UI-01 §22). */
+export type TopologySearch = { node?: string };
+export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
 export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };

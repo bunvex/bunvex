@@ -7,7 +7,6 @@ import "@xyflow/react/dist/style.css";
 import { Button } from "@bunvex/ui/components/button";
 import { Input } from "@bunvex/ui/components/input";
 import {
-  Background,
   type Edge,
   Handle,
   MarkerType,
@@ -20,11 +19,12 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { Expand, Link2, Minus, Plus, RotateCcw } from "lucide-react";
+import { Link2, RotateCcw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { type SchemaSearch, schemaRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
+import { FlowBackground, FlowControls } from "../shell/flow-controls.tsx";
 import { type Cluster, computeClusters } from "./clusters.ts";
 import type { SchemaGraph, SchemaNode } from "./graph.ts";
 import { CLUSTER_TOP, computeLayout, type Layout, MAX_ROWS } from "./layout.ts";
@@ -370,7 +370,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
             proOptions={{ hideAttribution: true }}
             className="[--xy-background-color:var(--color-background)] [--xy-edge-label-background-color:var(--color-background)] [--xy-edge-label-color:var(--color-foreground)] [--xy-minimap-background-color:var(--color-card)] [--xy-node-border-radius:0]"
           >
-            <Background gap={24} size={1} color="var(--color-border)" />
+            <FlowBackground />
             <MiniMap
               pannable
               zoomable
@@ -386,31 +386,11 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
               maskColor="color-mix(in oklab, var(--color-background) 70%, transparent)"
               className="!hidden border md:!block"
             />
-            <div className="absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-1 border bg-background p-1 shadow-sm">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Zoom in"
-                onClick={() => void flow.zoomIn({ duration })}
-              >
-                <Plus aria-hidden="true" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Zoom out"
-                onClick={() => void flow.zoomOut({ duration })}
-              >
-                <Minus aria-hidden="true" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Fit to view"
-                onClick={() => void flow.fitView({ padding: 0.15, duration })}
-              >
-                <Expand aria-hidden="true" />
-              </Button>
+            <FlowControls
+              onZoomIn={() => void flow.zoomIn({ duration })}
+              onZoomOut={() => void flow.zoomOut({ duration })}
+              onFit={() => void flow.fitView({ padding: 0.15, duration })}
+            >
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -434,7 +414,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
                 />
                 Group related tables
               </label>
-            </div>
+            </FlowControls>
           </ReactFlow>
         </section>
       </div>

@@ -13,6 +13,10 @@ export const DRIVER: Record<StoreDriver, string> = {
 
 export const STATE: Record<NodeState, string> = { ok: "OK", lagging: "Lagging", down: "Down" };
 
+const compactFormat = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+/** "3.1K" → "3.1k", "5K" → "5k", "640" → "640": counts in a tight strip. */
+export const compact = (n: number) => compactFormat.format(n).replace("K", "k");
+
 const plural = (n: number, one: string, many = `${one}s`) => `${formatCount(n)} ${n === 1 ? one : many}`;
 
 /** "3 commits · 840 ms behind". */

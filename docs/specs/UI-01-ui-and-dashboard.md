@@ -1503,47 +1503,58 @@ a table), lazy like the other screens.
 
 ## 22. Amendment — Topology (1 Oct 2026)
 
-A **bunvex addition** (STUDY-12 §15): who is running and how it connects, after STUDY-24's roles. Reworked the
-same day at the owner's request into a canvas like PlanetScale's primary/replicas and Railway's service flow.
+A **bunvex addition** (STUDY-12 §15): who is running and how it connects, after STUDY-24's roles. Reworked twice
+the same day at the owner's request: a canvas like PlanetScale's primary/replicas and Railway's service flow,
+then diagram only, laid out like the Schema screen, with each node's query cache.
 
 - **Contract** (`data-source-topology.ts`): optional `getTopology()` and `watchTopology(onTopology, onError)`,
   needing `viewMetrics`. A `Topology` is the leader first then followers by id (role, state `ok` / `lagging` /
-  `down`, version, uptime, CPU, memory, connections, subscriptions, cache hit rate, a follower's lag in
-  commits and ms, the leader's commits per second, who runs the scheduler, actions running, a minute of
-  samples), the **store** (driver, single-node or not, lease holder, expiry and TTL, latency, size,
-  connections) and recent **events** newest first. The contract suite checks the shape (`contract-topology.ts`).
-- **Mock** (`mock/topology.ts`): `nodes` (default 1, as today; the dev host's `?nodes=4`) — with several, the
-  store is Postgres, clients connect to followers, and one follower drifts behind and catches up, emitting
-  events. Its own clock, so a fixed `now` stays consistent.
-- **Screen** (`/topology`, lazy, next to Health): the one-line summary on top ("Leader node-a · 3 followers ·
-  879 clients · max lag 740 ms · Postgres OK"), a **Diagram | List** toggle (`?view=`), the events feed below.
-  A phone opens on the List (the canvas needs pinching at that width); either view can be chosen.
-- **Diagram** (`diagram.tsx`, React Flow — already a dependency for Schema — loaded only with the diagram):
-  fixed layers top to bottom (`layout.ts`, no ELK): one **client group** per serving node (device icon, the
-  connection count), the **followers** (server icon), the **leader** (server icon, a crown badge, commits/s,
-  "runs the scheduler"), the **store** (a generic database mark per driver, no brand logos; lease holder and
-  TTL, latency, size, connections). One node: clients → node → store, centred. Positions depend only on which
-  nodes exist, so live updates never move anything; the view re-frames when a node joins or leaves, and Fit
-  re-frames on demand.
-  - Node cards: state as a dot icon and a word, lag in words and a bar, CPU and memory meters.
-  - **Edges**: clients → follower "385 ws" (dashed); leader → follower, the **commit stream**, "3 commits · 50
-    ms" (", lagging" / ", down" when so), its width by the leader's commits/s, its colour by the follower's
-    state (info / warning / destructive tokens), labelled near the follower so labels never pile up; leader →
-    store "110 commits/s" with a lock when it holds the lease. **Particles** move along the stream and the
-    store edge, their number and speed from commits/s; under `prefers-reduced-motion` there are none (width
-    and colour only).
-  - Canvas: dotted background, zoom and pan, controls (zoom in, zoom out, fit, show labels). Hovering a node
-    lights its edges and clients and dims the rest; an event picked in the feed does the same for its node
-    (and rings its card in the List). A click, or Enter on a focused node, opens the side panel (`?node=`).
-    Nodes are focusable with descriptive labels ("node-d, follower, lagging, 73 commits · 740 ms behind, 88
-    clients, press Enter for details").
-- **List**: the lanes of cards (Clients → Followers ← Leader → Store), every link said in words; on a phone the
-  lanes stack.
-- Tests: the words; one and four nodes, lagging, events, the panel, permission, not offered (List); the fixed
-  layout (positions stable across updates), the stream's look, the edges' words and node labels (pure, as
-  happy-dom cannot measure, so draws no edge), the diagram's nodes, Enter, the toggle, event highlighting;
-  axe; the contract for 1 and 4 nodes. e2e (real Chromium): nodes, edges, labels and particles in both themes,
-  hover dimming, click → panel, no particles under reduced motion; Topology (diagram, list, panel) in the axe
-  sweep with contrast in both themes.
-- Size: the Topology screen's chunk is small; React Flow comes in its own chunk, shared with Schema, fetched
-  with the diagram only (measured in the PR).
+  `down`, version, uptime, CPU, memory, connections, subscriptions, a follower's lag in commits and ms, the
+  leader's commits per second, who runs the scheduler, actions running, a minute of samples), the **store**
+  (driver, single-node or not, lease holder, expiry and TTL, latency, size, connections) and recent
+  **events** newest first. Each node may carry its own **query cache** (`NodeCache`: entries and the LRU's
+  capacity, bytes and their limit, hit rate, invalidations per second, evictions, the most-cached
+  functions); samples carry its hit rate and invalidations. The contract suite checks the shape
+  (`contract-topology.ts`): entries within capacity, rates in range, most-cached in order.
+- **Mock** (`mock/topology.ts`): `nodes` (default 1, as today; the dev host's `?nodes=4`, up to 8) — with several,
+  the store is Postgres, clients connect to followers, one follower drifts behind and catches up, emitting
+  events. Each node's LRU fills from its queries, is invalidated in step with the leader's commits, and evicts
+  past its 5k capacity. Its own clock, so a fixed `now` stays consistent.
+- **Screen** (`/topology`, lazy), laid out like the Schema screen: full-bleed inside `<main>`; a slim bar with
+  the title and the one-line summary ("Leader node-a · 3 followers · 881 clients · max lag 740 ms · Postgres
+  OK"); the canvas taking the rest; the **events docked under it**, one line (the newest) until opened, then a
+  short scrolling list — the right edge stays free for the node panel, and the canvas keeps its height.
+- **Diagram** (`diagram.tsx`, React Flow — already a dependency for Schema — loaded with the diagram only;
+  zoom/fit controls and the dot grid shared with Schema, `shell/flow-controls.tsx`):
+  - **Layout** (`layout.ts`, no ELK): fixed layers top to bottom — one **client group** per serving node, the
+    **followers** side by side (120 px apart), the **leader**, the **store** — centred; one node: clients →
+    node → store. Positions depend only on which nodes exist: live updates never move anything; the view
+    re-frames when a node joins or leaves, and Fit re-frames on demand, never past 100 % zoom. On a **phone**
+    (a canvas under 640 px when it opens) the layout is one column — each follower under its clients, then
+    the leader, then the store — framed to the width at a readable zoom and panned vertically; the commit
+    streams climb along the left margin, one lane per follower, so they never cross a card (their labels
+    are left to the cards, which say the lag).
+  - **Cards** (220 px, 11–13 px text): a server's id, a crown and "Leader", its state as an icon and a word;
+    its lag in words with a bar (or commits/s and "scheduler" on the leader); CPU and memory with thin bars;
+    and a **cache strip**: hit rate, the LRU's occupancy "3.1k/5k" with a bar, invalidations per second.
+    Clients: a device icon and the count. Store: a generic database mark per driver (no brand logos), the
+    lease holder and TTL, latency and size.
+  - **Edges**: clients → follower "385 ws" (dashed); the commit stream leader → follower "3 commits · 50 ms"
+    (", lagging" / ", down"), width by commits/s, colour by the follower's state, labelled near the follower;
+    leader → store "110 commits/s" with a lock. **Particles** move along the stream and the store edge, their
+    number and speed from commits/s; none under `prefers-reduced-motion`.
+  - Hovering a node, or picking one of the events, lights its edges and dims the rest; a click or Enter on a
+    focused node opens the panel (`?node=`). Nodes are focusable with descriptive labels ("node-d, follower,
+    lagging, 73 commits · 740 ms behind, 88 clients, cache 89% hits, 3,900 of 5,000 entries, press Enter
+    for details").
+- **Node panel**: **Overview** (role, state, version, lag, vitals, CPU and lag or connections sparklines) and
+  **Cache** (hit rate and invalidations-per-second sparklines, entries and bytes against the limits with the
+  occupancy bar, evictions, the most-cached queries with their counts).
+- The List view and its `?view=` are gone (the owner's call): the summary line and the nodes' labels carry
+  the picture in words.
+- Tests: the words; the wide and narrow layouts (positions stable across updates, spacing); the stream's
+  look; the edges' words and node labels (pure — happy-dom cannot measure, so draws no edge); the mock's LRU
+  (capacity, evictions, invalidations following commits); the screen: one node, the cache strips, Enter and
+  the Cache tab, the docked events lighting a node, permission, not offered; axe; the contract for 1 and 4
+  nodes. e2e (real Chromium): nodes, edges, labels, particles and cache strips in both themes, hover dimming,
+  the Cache tab, none under reduced motion, the phone layout; Topology in the axe sweep with contrast.

@@ -21,7 +21,15 @@ export function expectTopology(t: Topology) {
   for (const n of t.nodes) {
     expect(["ok", "lagging", "down"]).toContain(n.state);
     if (n.cpu !== null) expect(n.cpu >= 0 && n.cpu <= 1).toBe(true);
-    if (n.cacheHitRate !== null) expect(n.cacheHitRate >= 0 && n.cacheHitRate <= 1).toBe(true);
+    if (n.cache) {
+      const c = n.cache;
+      expect(c.entries >= 0 && c.entries <= c.maxEntries).toBe(true);
+      if (c.bytes !== undefined && c.maxBytes !== undefined) expect(c.bytes <= c.maxBytes).toBe(true);
+      if (c.hitRate !== null) expect(c.hitRate >= 0 && c.hitRate <= 1).toBe(true);
+      expect(c.invalidationsPerSecond >= 0 && c.evictions >= 0).toBe(true);
+      const top = c.topQueries ?? [];
+      expect(top.every((q, i) => q.entries >= 0 && (i === 0 || q.entries <= top[i - 1]!.entries))).toBe(true);
+    }
     expect(n.history.every((h, i) => i === 0 || h.time >= n.history[i - 1]!.time)).toBe(true);
   }
   if (t.store.leaseHolder !== null) expect(t.store.leaseHolder).toBe(leader!.id);

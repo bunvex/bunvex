@@ -22,6 +22,31 @@ export type NodeSample = {
   /** Followers: how far behind the leader, in ms. `null` on the leader. */
   lagMs: number | null;
   connections: number;
+  /** The node's query cache: hit rate 0–1 (`null` before any query) and invalidations per second. */
+  cacheHitRate?: number | null;
+  invalidationsPerSecond?: number;
+};
+
+/**
+ * A node's own query cache: an in-process LRU of query results, as each Convex process keeps its own
+ * (`CacheManager`); there is no cache shared between nodes. Entries are invalidated by the commit stream
+ * (STUDY-24 §4.5), so invalidations follow the commits a node applies.
+ */
+export type NodeCache = {
+  entries: number;
+  /** The LRU's capacity in entries. */
+  maxEntries: number;
+  /** What the entries hold, and the limit, when the node measures it. */
+  bytes?: number;
+  maxBytes?: number;
+  /** 0–1 over the recent window; `null` before any query ran. */
+  hitRate: number | null;
+  /** Entries dropped because a commit touched what they read, per second over the recent window. */
+  invalidationsPerSecond: number;
+  /** Entries pushed out by the LRU (capacity), since the node started. */
+  evictions: number;
+  /** The functions with the most cached entries, most first. */
+  topQueries?: { function: string; entries: number }[];
 };
 
 export type TopologyNode = {
@@ -41,8 +66,8 @@ export type TopologyNode = {
   connections: number;
   /** Live query subscriptions across those connections. */
   subscriptions: number;
-  /** 0–1 over the recent window; `null` before any query ran. */
-  cacheHitRate: number | null;
+  /** The node's own query cache (absent when the source cannot tell). */
+  cache?: NodeCache;
   /** Followers: how far behind the leader's commit stream. Absent on the leader. */
   lag?: { commits: number; ms: number };
   /** The leader: commits per second over the recent window. */

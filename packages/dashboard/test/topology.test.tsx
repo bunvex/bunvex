@@ -6,7 +6,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { streamLook, toFlow } from "../src/topology/diagram.tsx";
 import { layoutTopology, neighbourhood } from "../src/topology/layout.ts";
-import { eventText, lagText, summary, uptime } from "../src/topology/words.ts";
+import { compact, eventText, lagText, summary, uptime } from "../src/topology/words.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 9, 1, 12);
@@ -19,12 +19,13 @@ function mount(path: string, src: DashboardDataSource = source()) {
   return { history, src };
 }
 const heading = () => screen.findByRole("heading", { level: 1, name: "Topology" });
-/** The screen with its picture loaded. */
-const loaded = async () => {
+/** The screen with its picture loaded and the diagram's cards drawn. */
+const loaded = async (cards: number) => {
   await heading();
   await screen.findByTestId("topology-summary");
+  await waitFor(() => expect(document.querySelectorAll(".react-flow__node").length).toBe(cards));
 };
-const lane = (name: string) => screen.getByRole("region", { name });
+const card = (id: string) => document.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!;
 
 /** A source whose topology is this picture, with no live updates (so a test controls the state). */
 async function withTopology(edit: (t: Topology) => void, opts = {}) {
@@ -37,7 +38,7 @@ async function withTopology(edit: (t: Topology) => void, opts = {}) {
 }
 
 describe("the topology in words", () => {
-  test("summary, lag, uptime and events", async () => {
+  test("summary, lag, uptime, events and compact counts", async () => {
     const t = await source({ nodes: 4 }).getTopology();
     expect(summary(t)).toMatch(/^Leader node-a · 3 followers · [\d,]+ clients · max lag [\d,]+ ms · Postgres OK$/);
     const one = await source().getTopology();
@@ -51,128 +52,28 @@ describe("the topology in words", () => {
     expect(eventText({ id: "2", time: 0, kind: "leader_changed", node: "node-b", detail: "node-a" })).toBe(
       "node-b became the leader (was node-a)",
     );
+    expect([compact(640), compact(3_100), compact(5_000)]).toEqual(["640", "3.1k", "5k"]);
   });
 });
 
-describe("the Topology screen", () => {
-  test("one node (bunvex today): the node and its store, and where followers will appear", async () => {
-    mount("/topology?view=list");
-    await loaded();
-    expect(screen.getByTestId("topology-summary").textContent).toMatch(/^Leader node-a · no followers/);
-    expect(screen.queryByRole("region", { name: "Followers" })).toBeNull();
-    const node = lane("Node");
-    expect(within(node).getByText("node-a")).toBeDefined();
-    expect(within(node).getByText("Followers appear here when bunvex runs more than one node.")).toBeDefined();
-    expect(within(node).getByText("Runs the scheduler")).toBeDefined();
-    expect(within(lane("Store")).getByText("One node: a file lock keeps a second one out.")).toBeDefined();
-    expect(within(lane("Clients")).getByText(/connections to/).textContent).toContain("node-a");
-    await expectAccessible();
-  });
-
-  test("several nodes: clients go to the followers, followers show their lag, the leader holds the lease", async () => {
-    mount("/topology?view=list", source({ nodes: 4 }));
-    await loaded();
-    expect(screen.getByTestId("topology-summary").textContent).toContain("3 followers");
-    const followers = within(lane("Followers")).getAllByRole("listitem");
-    expect(followers.map((li) => within(li).getByRole("button").textContent)).toEqual([
-      expect.stringContaining("node-b"),
-      expect.stringContaining("node-c"),
-      expect.stringContaining("node-d"),
-    ]);
-    for (const li of followers) expect(li.textContent).toMatch(/commits? · [\d,]+ ms behind/);
-    expect(
-      within(lane("Clients"))
-        .getAllByRole("listitem")
-        .map((li) => li.textContent),
-    ).toEqual([
-      expect.stringContaining("node-b"),
-      expect.stringContaining("node-c"),
-      expect.stringContaining("node-d"),
-    ]);
-    expect(within(lane("Leader")).getByText(/streams to 3 followers/)).toBeDefined();
-    expect(within(lane("Store")).getByText(/Lease held by/).textContent).toMatch(
-      /node-a, renews within \d+ s \(TTL 10 s\)/,
-    );
-    await expectAccessible();
-  });
-
-  test("a lagging follower says so in words, not colour alone", async () => {
-    const src = await withTopology((t) => {
-      const d = t.nodes.find((n) => n.id === "node-d")!;
-      d.state = "lagging";
-      d.lag = { commits: 101, ms: 840 };
-    });
-    mount("/topology?view=list", src);
-    await loaded();
-    const card = within(lane("Followers")).getAllByRole("button")[2]!;
-    expect(card.textContent).toContain("Lagging");
-    expect(card.textContent).toContain("101 commits · 840 ms behind");
-    expect(screen.getByTestId("topology-summary").textContent).toContain("max lag 840 ms");
-  });
-
-  test("the events feed, newest first", async () => {
-    const src = await withTopology((t) => {
-      t.events = [
-        { id: "e2", time: NOW, kind: "node_caught_up", node: "node-d" },
-        { id: "e1", time: NOW - 60_000, kind: "node_lagging", node: "node-d", detail: "840 ms behind" },
-      ];
-    });
-    mount("/topology", src);
-    await loaded();
-    const events = within(screen.getByRole("region", { name: "Events" })).getAllByRole("listitem");
-    expect(events.map((li) => li.textContent?.replace(/^.*?\d{1,2}:\d{2}:\d{2}\s?(AM|PM)?/, ""))).toEqual([
-      "node-d caught up",
-      "node-d fell behind (840 ms behind)",
-    ]);
-  });
-
-  test("a node opens its details beside the lanes, in the URL; Escape closes them", async () => {
-    const { history } = mount("/topology?view=list", source({ nodes: 4 }));
-    await loaded();
-    const user = userEvent.setup();
-    await user.click(within(lane("Followers")).getAllByRole("button")[0]!);
-    const panel = await screen.findByRole("complementary", { name: "node-b" });
-    expect(new URLSearchParams(history.location.search).get("node")).toBe("node-b");
-    expect(within(panel).getByText("Follower")).toBeDefined();
-    expect(within(panel).getByText("On the leader")).toBeDefined();
-    expect(within(panel).getByText(/^CPU, last \d+ s$/)).toBeDefined();
-    expect(within(panel).getByText(/^Lag, last \d+ s$/)).toBeDefined();
-    await expectAccessible();
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
-    expect(new URLSearchParams(history.location.search).has("node")).toBe(false);
-  });
-
-  test("a credential that cannot view metrics is told so", async () => {
-    mount("/topology", source({ capabilities: { operations: ["viewData"], readOnly: true } }));
-    await heading();
-    await screen.findByText("This credential cannot view the deployment's topology.");
-  });
-
-  test("a source without a topology says it does not offer one", async () => {
-    const src = source();
-    // biome-ignore lint/suspicious/noExplicitAny: removing an optional method
-    (src as any).getTopology = undefined;
-    mount("/topology", src);
-    await heading();
-    expect(screen.getByText("This deployment does not offer its topology yet.")).toBeDefined();
-  });
-});
-
-describe("the Topology diagram", () => {
-  test("fixed layers: positions depend on the nodes, never on their numbers", async () => {
-    const src = source({ nodes: 4, topologyIntervalMs: 60_000 });
+describe("the layout", () => {
+  test("wide: fixed layers; positions depend on the nodes, never on their numbers", async () => {
+    const src = source({ nodes: 4 });
     const before = layoutTopology(await src.getTopology());
     const changed = await src.getTopology();
     for (const n of changed.nodes) {
       n.connections += 500;
       if (n.lag) n.lag = { commits: 999, ms: 2000 };
+      if (n.cache) n.cache.entries = 1;
     }
     expect(layoutTopology(changed)).toEqual(before);
-    const y = (id: string) => before.placed.find((p) => p.id === id)!.y;
-    expect(y("clients:node-b")).toBeLessThan(y("node:node-b"));
-    expect(y("node:node-b")).toBeLessThan(y("node:node-a"));
-    expect(y("node:node-a")).toBeLessThan(y("store"));
+    const at = (id: string) => before.placed.find((p) => p.id === id)!;
+    expect(at("clients:node-b").y).toBeLessThan(at("node:node-b").y);
+    expect(at("node:node-b").y).toBeLessThan(at("node:node-a").y);
+    expect(at("node:node-a").y).toBeLessThan(at("store").y);
+    // followers side by side, well apart; the leader and the store centred under them
+    expect(at("node:node-c").x - at("node:node-b").x).toBeGreaterThanOrEqual(300);
+    expect(at("node:node-a").x).toBe(at("node:node-c").x);
     expect(before.links.map((l) => l.id)).toEqual([
       "ws:node-b",
       "ws:node-c",
@@ -189,6 +90,45 @@ describe("the Topology diagram", () => {
     );
   });
 
+  test("narrow (a phone): one column, each follower under its clients, then the leader and the store", async () => {
+    const { placed, width } = layoutTopology(await source({ nodes: 4 }).getTopology(), "narrow");
+    expect(placed.map((p) => p.id)).toEqual([
+      "clients:node-b",
+      "node:node-b",
+      "clients:node-c",
+      "node:node-c",
+      "clients:node-d",
+      "node:node-d",
+      "node:node-a",
+      "store",
+    ]);
+    expect(new Set(placed.map((p) => p.x)).size).toBe(1);
+    expect(placed.every((p, i) => i === 0 || p.y > placed[i - 1]!.y)).toBe(true);
+    expect(width).toBeLessThan(320);
+  });
+});
+
+describe("the mock's caches", () => {
+  test("each node's LRU stays within its capacity, evicting past it; invalidations follow the commits", async () => {
+    const { MockTopology } = await import("../src/mock/topology.ts");
+    const { createRandom } = await import("../src/mock/random.ts");
+    const topo = new MockTopology(createRandom(1), { nodes: 4, now: NOW, version: "x", persistence: "postgres" });
+    const before = topo.snapshot().nodes.map((n) => n.cache!.evictions);
+    for (let i = 0; i < 400; i++) topo.step(1000);
+    const t = topo.snapshot();
+    for (const [i, n] of t.nodes.entries()) {
+      const c = n.cache!;
+      expect(c.entries).toBeLessThanOrEqual(c.maxEntries);
+      expect(c.bytes!).toBeLessThanOrEqual(c.maxBytes!);
+      if (n.role === "follower") expect(c.evictions).toBeGreaterThan(before[i]!);
+      const cps = t.nodes[0]!.commitsPerSecond!;
+      expect(c.invalidationsPerSecond).toBeGreaterThan(cps * 0.25);
+      expect(c.invalidationsPerSecond).toBeLessThan(cps * 0.5);
+    }
+  });
+});
+
+describe("the diagram's edges and nodes", () => {
   test("the commit stream: width by commits/s, colour and particles by the follower's state", () => {
     const follower = (state: "ok" | "lagging" | "down") => ({ state }) as never;
     expect(streamLook(40, follower("ok")).width).toBeLessThan(streamLook(240, follower("ok")).width);
@@ -198,15 +138,20 @@ describe("the Topology diagram", () => {
     expect(streamLook(240, follower("ok")).particles).toBeGreaterThan(streamLook(40, follower("ok")).particles);
   });
 
-  test("the edges say what flows: clients, the commit stream (with its lag), the commits to the store", async () => {
-    const t = await withTopology((t) => {
-      const d = t.nodes.find((n) => n.id === "node-d")!;
-      d.state = "lagging";
-      d.lag = { commits: 101, ms: 840 };
-    }).then((s) => s.getTopology());
+  test("the edges say what flows; a node's label says its state, lag, clients and cache", async () => {
+    const t = await (
+      await withTopology((t) => {
+        const d = t.nodes.find((n) => n.id === "node-d")!;
+        d.state = "lagging";
+        d.lag = { commits: 101, ms: 840 };
+        d.cache = { ...d.cache!, hitRate: 0.9, entries: 3100, maxEntries: 5000 };
+        t.nodes.find((n) => n.id === "node-b")!.lag = { commits: 1, ms: 15 };
+      })
+    ).getTopology();
     const { edges, nodes } = toFlow(t, undefined);
     const label = (id: string) => edges.find((e) => e.id === id)!.data!.label;
     expect(label("stream:node-d")).toBe("101 commits · 840 ms · lagging");
+    expect(label("stream:node-b")).toBe("1 commit · 15 ms");
     expect(edges.find((e) => e.id === "stream:node-d")!.data!.tone).toBe("warning");
     expect(label("ws:node-b")).toMatch(/^[\d,]+ ws$/);
     expect(label("commits")).toMatch(/^[\d,]+ commits\/s$/);
@@ -214,42 +159,114 @@ describe("the Topology diagram", () => {
     expect(nodes.find((n) => n.id === "node:node-d")!.ariaLabel).toContain(
       "node-d, follower, lagging, 101 commits · 840 ms behind",
     );
+    expect(nodes.find((n) => n.id === "node:node-d")!.ariaLabel).toContain("cache 90% hits, 3,100 of 5,000 entries");
+    // on a phone the streams run along the left margin
+    const narrow = toFlow(t, undefined, "narrow").edges.find((e) => e.id === "stream:node-d")!;
+    expect([narrow.sourceHandle, narrow.targetHandle]).toEqual(["out-left", "in-left"]);
   });
+});
 
-  test("the diagram draws the nodes; a focused node opens with Enter; List switches the view, in the URL", async () => {
-    const { history } = mount("/topology", source({ nodes: 4 }));
-    await loaded();
-    await screen.findByRole("region", { name: "Topology diagram" });
-    await waitFor(() => expect(document.querySelectorAll(".react-flow__node").length).toBe(8));
-    expect(document.querySelectorAll(".react-flow__node-server").length).toBe(4);
-    const nodeB = document.querySelector<HTMLElement>('.react-flow__node-server[data-id="node:node-b"]')!;
-    expect(nodeB.getAttribute("aria-label")).toMatch(/^node-b, follower, /);
-    nodeB.focus();
-    const user = userEvent.setup();
-    await user.keyboard("{Enter}");
-    await screen.findByRole("complementary", { name: "node-b" });
-    expect(new URLSearchParams(history.location.search).get("node")).toBe("node-b");
-    await user.click(screen.getByRole("button", { name: "List" }));
-    expect(new URLSearchParams(history.location.search).get("view")).toBe("list");
-    expect(screen.queryByRole("region", { name: "Topology diagram" })).toBeNull();
-    expect(lane("Followers")).toBeDefined();
+describe("the Topology screen", () => {
+  test("one node (bunvex today): clients, the node and its store; where followers will appear", async () => {
+    mount("/topology");
+    await loaded(3);
+    expect(screen.getByTestId("topology-summary").textContent).toMatch(/^Leader node-a · no followers/);
+    expect(screen.getByText(/followers appear when bunvex runs more than one/)).toBeDefined();
+    expect(card("node:node-a").getAttribute("aria-label")).toMatch(/^node-a, the only node, OK/);
+    expect(card("store").textContent).toContain("One node: a file lock keeps a second one out");
+    expect(screen.queryByRole("button", { name: "List" })).toBeNull();
     await expectAccessible();
   });
 
-  test("an event picked in the feed lights its node (and dims the rest)", async () => {
+  test("each server card ends in its own cache strip: hit rate, occupancy, invalidations per second", async () => {
     const src = await withTopology((t) => {
-      t.events = [{ id: "e1", time: NOW, kind: "node_lagging", node: "node-d", detail: "840 ms behind" }];
+      const b = t.nodes.find((n) => n.id === "node-b")!;
+      b.cache = { ...b.cache!, hitRate: 0.9, entries: 3100, maxEntries: 5000, invalidationsPerSecond: 42 };
     });
     mount("/topology", src);
-    await loaded();
-    await waitFor(() => expect(document.querySelectorAll(".react-flow__node").length).toBe(8));
-    const event = within(screen.getByRole("region", { name: "Events" })).getByRole("button");
-    await userEvent.setup().click(event);
-    expect(event.getAttribute("aria-pressed")).toBe("true");
-    const dim = (id: string) =>
-      document.querySelector(`.react-flow__node[data-id="${id}"] > div`)!.className.includes("opacity-30");
+    await loaded(8);
+    const strips = document.querySelectorAll("[data-cache-strip]");
+    expect(strips.length).toBe(4);
+    const strip = card("node:node-b").querySelector("[data-cache-strip]")!;
+    expect(strip.textContent).toBe("Cache90%3.1k/5k42/s");
+  });
+
+  test("a focused node opens with Enter; its Cache tab shows the node's own cache", async () => {
+    const src = await withTopology((t) => {
+      const b = t.nodes.find((n) => n.id === "node-b")!;
+      b.cache = {
+        ...b.cache!,
+        entries: 3100,
+        maxEntries: 5000,
+        evictions: 950,
+        topQueries: [
+          { function: "tasks:list", entries: 1200 },
+          { function: "messages:list", entries: 900 },
+        ],
+      };
+    });
+    const { history } = mount("/topology", src);
+    await loaded(8);
+    card("node:node-b").focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    const panel = await screen.findByRole("complementary", { name: "node-b" });
+    expect(new URLSearchParams(history.location.search).get("node")).toBe("node-b");
+    expect(within(panel).getByText("On the leader")).toBeDefined();
+    await user.click(within(panel).getByRole("tab", { name: "Cache" }));
+    const cache = await within(panel).findByTestId("cache-details");
+    expect(within(cache).getByText("3,100 of 5,000")).toBeDefined();
+    expect(within(cache).getByText("950")).toBeDefined();
+    expect(within(cache).getByText(/^Hit rate, last \d+ s$/)).toBeDefined();
+    expect(within(cache).getByText(/^Invalidations per second, last \d+ s$/)).toBeDefined();
+    const top = within(cache)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(top).toEqual(["tasks:list1,200", "messages:list900"]);
+    await expectAccessible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
+  });
+
+  test("the events, docked under the diagram: the newest in a line; opened, one lights its node", async () => {
+    const src = await withTopology((t) => {
+      t.events = [
+        { id: "e2", time: NOW, kind: "node_caught_up", node: "node-d" },
+        { id: "e1", time: NOW - 60_000, kind: "node_lagging", node: "node-d", detail: "840 ms behind" },
+      ];
+    });
+    mount("/topology", src);
+    await loaded(8);
+    const region = screen.getByRole("region", { name: /^Events/ });
+    const toggle = within(region).getByRole("button", { expanded: false });
+    expect(within(region).queryAllByRole("listitem").length).toBe(0); // collapsed: the canvas keeps its height
+    expect(toggle.textContent).toContain("node-d caught up");
+    const user = userEvent.setup();
+    await user.click(toggle);
+    const events = within(region).getAllByRole("listitem");
+    expect(events.map((li) => li.textContent?.replace(/^.*?\d{1,2}:\d{2}:\d{2}\s?(AM|PM)?/, ""))).toEqual([
+      "node-d caught up",
+      "node-d fell behind (840 ms behind)",
+    ]);
+    await user.click(within(events[0]!).getByRole("button"));
+    const dim = (id: string) => card(id).querySelector(":scope > div")!.className.includes("opacity-30");
     await waitFor(() => expect(dim("node:node-b")).toBe(true));
     expect(dim("node:node-d")).toBe(false);
     expect(dim("node:node-a")).toBe(false);
+  });
+
+  test("a credential that cannot view metrics is told so", async () => {
+    mount("/topology", source({ capabilities: { operations: ["viewData"], readOnly: true } }));
+    await heading();
+    await screen.findByText("This credential cannot view the deployment's topology.");
+  });
+
+  test("a source without a topology says it does not offer one", async () => {
+    const src = source();
+    // biome-ignore lint/suspicious/noExplicitAny: removing an optional method
+    (src as any).getTopology = undefined;
+    mount("/topology", src);
+    await heading();
+    expect(screen.getByText("This deployment does not offer its topology yet.")).toBeDefined();
   });
 });

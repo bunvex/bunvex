@@ -712,7 +712,9 @@ the List view.
 | T2 | ~~Lanes by role only~~ → a **React Flow canvas in fixed layers** (Clients, Followers, Leader, Store; no ELK), positions stable across updates, Fit to re-frame; a **Diagram \| List** toggle with the lanes as List | yes (revised 1 Oct 2026) |
 | T7 | Edges: "385 ws"; the commit stream "3 commits · 50 ms", width by commits/s, colour by lag (with the word); "110 commits/s" + a lock to the store; **particles** along the stream, none under reduced motion | yes |
 | T8 | Hover (or an event picked in the feed) lights a node's edges and dims the rest; click opens the side panel | yes |
-| T9 | A phone opens on the List, the canvas needing pinching at that width | my call, owner can veto |
+| T9 | ~~A phone opens on the List~~ → **diagram only** (no List, no `?view=`); a phone gets a one-column layout framed to the width, panned vertically | yes (revised 1 Oct 2026) |
+| T10 | **Each node's own query cache** (an in-process LRU, invalidated by the commit stream; **no cache shared between nodes**, as each Convex process keeps its own `CacheManager`): a cache strip on every server card, a Cache tab in the node panel | yes |
+| T11 | Laid out like the Schema screen: full-bleed, a slim title bar with the summary, events docked under the canvas (collapsed to one line), shared canvas controls | yes |
 | T3 | v1: nodes, roles, state and lag; store and lease; per-node vitals; an events feed | yes |
 | T4 | One node (bunvex today) shows the node and its store, and says where followers will appear | yes |
 | T5 | The contract's optional `getTopology` / `watchTopology`, needing `viewMetrics` (no new operation) | my call, owner can veto |

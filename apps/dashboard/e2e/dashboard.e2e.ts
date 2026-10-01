@@ -307,10 +307,11 @@ describe("the dashboard in a browser", () => {
     expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
   });
 
-  test("Topology: one node today; with four, the diagram's nodes, edges and particles in both themes", async () => {
-    const one = await open("/topology?view=list");
+  test("Topology: the diagram in both themes — nodes, edges, particles, cache strips, the Cache tab", async () => {
+    const one = await open("/topology");
     await heading(one.page, "Topology");
-    await one.page.getByText("Followers appear here when bunvex runs more than one node.").waitFor();
+    await one.page.getByRole("region", { name: "Topology diagram" }).locator(".react-flow__edge").nth(1).waitFor();
+    expect(await one.page.locator(".react-flow__node").count()).toBe(3);
     await one.close();
     for (const colorScheme of ["light", "dark"] as const) {
       const { page, errors, close } = await open("/topology?nodes=4", { colorScheme });
@@ -319,6 +320,8 @@ describe("the dashboard in a browser", () => {
       await canvas.locator(".react-flow__edge").nth(6).waitFor();
       expect(await canvas.locator(".react-flow__node").count()).toBe(8);
       expect(await canvas.locator(".react-flow__edge").count()).toBe(7);
+      expect(await page.locator("[data-cache-strip]").count()).toBe(4);
+      expect(await page.locator("[data-cache-strip]").first().textContent()).toMatch(/^Cache\d+%[\d.]+k?\/5k\d+\/s$/);
       expect(await page.locator("[data-edge-label]").allTextContents()).toContainEqual(
         expect.stringMatching(/commits\/s$/),
       );
@@ -331,7 +334,9 @@ describe("the dashboard in a browser", () => {
         ),
       );
       await canvas.locator('.react-flow__node[data-id="node:node-b"]').click();
-      await page.getByRole("complementary", { name: "node-b" }).waitFor();
+      const panel = page.getByRole("complementary", { name: "node-b" });
+      await panel.getByRole("tab", { name: "Cache" }).click();
+      await panel.getByText("Most cached queries").waitFor();
       expect(errors).toEqual([]);
       await close();
     }
@@ -345,6 +350,24 @@ describe("the dashboard in a browser", () => {
     expect(await still.page.locator("[data-reduced-motion]").count()).toBe(1);
     expect(await still.page.locator("[data-particle]").count()).toBe(0);
     await still.close();
+  });
+
+  test("Topology on a phone: one column framed to the width, readable, panned vertically; a tap opens a node", async () => {
+    const { page, errors, close } = await open("/topology?nodes=4", { viewport: { width: 390, height: 844 } });
+    await heading(page, "Topology");
+    const canvas = page.getByRole("region", { name: "Topology diagram" });
+    expect(await canvas.getAttribute("data-layout")).toBe("narrow");
+    const first = canvas.locator('.react-flow__node[data-id="node:node-b"]');
+    await first.waitFor();
+    await page.waitForTimeout(300);
+    const box = (await first.boundingBox())!;
+    // the cards are drawn near their real size (readable), inside the screen's width
+    expect(box.width).toBeGreaterThan(220);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    await first.click();
+    await page.getByRole("complementary", { name: "node-b" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
   });
 
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
@@ -527,7 +550,6 @@ describe("the dashboard in a browser", () => {
         ["/settings/authentication", "Settings"],
         ["/settings/snapshots", "Settings"],
         ["/topology?nodes=4", "Topology"],
-        ["/topology?nodes=4&view=list", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
