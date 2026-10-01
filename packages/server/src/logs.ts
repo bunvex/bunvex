@@ -70,6 +70,31 @@ export function withoutLogs<T>(fn: () => T): T {
   return current.exit(fn);
 }
 
+/**
+ * A query's lines kept with its cached result (STUDY-20 D2), for `Engine` queries: on a miss the body runs in
+ * its own execution, whose lines are stored with the result; on a hit the stored lines join the current
+ * invocation. One shared object, so a cache hit allocates nothing for it.
+ */
+export const cachedQueryLogs = {
+  wrap<A extends unknown[], R>(body: (...args: A) => R): { body: (...args: A) => R; capture(): string[] } {
+    let own: Execution | undefined;
+    return {
+      body: (...args) => {
+        const parent = current.getStore();
+        if (!parent) return body(...args);
+        own = newExecution();
+        parent.entries.push(own);
+        return current.run(own, () => body(...args));
+      },
+      capture: () => (own ? logLinesOf(own) : []),
+    };
+  },
+  replay(extra: unknown) {
+    const parent = current.getStore();
+    if (parent && Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as string[]));
+  },
+};
+
 /** The lines the current invocation has logged so far (none outside an invocation). */
 export function currentLogLines(): string[] {
   const e = current.getStore();

@@ -48,7 +48,8 @@ The full map, with status and dependency rules, is [ARCHITECTURE.md](ARCHITECTUR
 ```sh
 bun install
 bun run check          # lint, typecheck, dependency rules, tests
-bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL / MONGO_URL when set)
+bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL / MONGO_URL when set;
+                       #   MongoDB must be a replica set — a single-node one is enough)
 
 PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions on :3210
 ```

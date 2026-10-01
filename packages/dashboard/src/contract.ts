@@ -7,6 +7,7 @@
 // suite may fill and empty — never point it at data you want to keep.
 import { test as bunTest, describe, expect } from "bun:test";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
+import { describeMetricsContract } from "./contract-metrics.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import {
   type DashboardDataSource,
@@ -554,6 +555,7 @@ export function describeDataSourceContract(
     // -------------------------------------------------------------- the deployment's other features (§14)
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
     describeDeploymentStateContract({ make, test, opts });
+    describeMetricsContract({ make, test });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;

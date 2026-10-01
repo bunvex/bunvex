@@ -60,7 +60,8 @@ export type ServerOptions = {
  */
 const fromWire = (args: unknown) => parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
 
-const envFlag = (v: string | undefined) => v !== undefined && v !== "" && v !== "false" && v !== "0";
+/** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
+const envFlag = (v: string | undefined) => v !== undefined && v !== "";
 
 /** `,"<field>":[…]` for the log lines a client may see, or nothing (Convex omits empty `logLines`). */
 const linesField = (field: string, lines: string[], redact: boolean) =>
