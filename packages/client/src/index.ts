@@ -14,6 +14,7 @@ export {
   type OptionalRestArgs,
   v1,
 } from "@bunvex/protocol";
+export type { AuthTokenFetcher } from "./authentication-manager.ts";
 export {
   BaseBunvexClient,
   type BaseBunvexClientOptions,
