@@ -195,6 +195,13 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| # | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-154 | Index retention reads the index log (rows by ts) and deletes, per key, what a newer row in the window supersedes | derives the same entries from the document log's revision pairs (`row_index_retention.rs`) | no (same rows deleted) | accept: uses the existing ts index (C11), needs no `prev_ts` | [STUDY-33 R1](../study/STUDY-33-retention.md#4-divergences) |
+| DV-155 | Document retention reads `documents` by a new ts index (layout 2) and deletes, per id, what a newer version supersedes, with no `prev_ts` column | walks the log with `prev_ts` | no (same rows deleted) | accept; `prev_ts` (DV-66) stays for export | [STUDY-33 R2](../study/STUDY-33-retention.md#4-divergences) |
+| DV-156 | The memory driver prunes old versions in RAM but does not compact its durable log file | (no such driver) | no | accept | [STUDY-33 R3](../study/STUDY-33-retention.md#4-divergences) |
+| DV-157 | `DOCUMENT_RETENTION_DELAY` defaults to 14 days, Convex's knob default (its self-hosted docker-compose sets 2 days) | 14 d knob, 2 d in docker-compose | operational | 14 days, settable by env | [STUDY-33 R4](../study/STUDY-33-retention.md#4-divergences) |
+
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
