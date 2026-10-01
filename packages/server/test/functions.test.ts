@@ -72,8 +72,14 @@ describe("functions with args / returns validators (STUDY-13)", () => {
   test("functions without args accept any object; internal ones are not callable from clients", async () => {
     const { fns } = await setup();
     expect(await fns.runQuery("m:loose", { anything: 3 })).toBe(3);
-    await expect(fns.runQuery("m:secret", {})).rejects.toThrow("function not found: m:secret");
-    await expect(fns.runMutation("m:bump", {})).rejects.toThrow("function not found: m:bump");
+    // Convex's messages (crates/udf/src/validation.rs): an internal function reads as missing.
+    await expect(fns.runQuery("m:secret", {})).rejects.toThrow("Could not find public function for 'm:secret'.");
+    await expect(fns.runMutation("m:bump", {})).rejects.toThrow("Could not find public function for 'm:bump'.");
+    await expect(fns.runQuery("m:nope", {})).rejects.toThrow("Could not find public function for 'm:nope'.");
+    await expect(fns.runQuery("m:default", {})).rejects.toThrow("Could not find public function for 'm'.");
+    await expect(fns.runQuery("m:addUser", {})).rejects.toThrow(
+      "Trying to execute m.js:addUser as Query, but it is defined as Mutation.",
+    );
     expect(await fns.runAction("m:viaAction", {})).toBe("internal"); // actions may call internal functions
   });
 

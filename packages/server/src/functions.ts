@@ -14,7 +14,8 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
-import { currentLogLines, perAttempt } from "./logs.ts";
+import { FunctionPathError } from "./errors.ts";
+import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -109,8 +110,18 @@ export class Functions {
 
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean) {
     const f = this.fns.get(name);
-    if (!f || f.kind !== kind || (fromClient && f.visibility === "internal"))
-      throw new Error(`function not found: ${name}`);
+    // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
+    // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
+    // names the canonical path (`module.js:name`) and both kinds.
+    if (!f || (fromClient && f.visibility === "internal"))
+      throw new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+    if (f.kind !== kind) {
+      const i = name.lastIndexOf(":");
+      const kindName = (k: string) => k[0].toUpperCase() + k.slice(1);
+      throw new FunctionPathError(
+        `Trying to execute ${name.slice(0, i)}.js${name.slice(i)} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`,
+      );
+    }
     return f as Extract<FunctionDef, { kind: K }>;
   }
 
@@ -145,11 +156,11 @@ export class Functions {
   }
 
   async runQuery(name: string, args: unknown, fromClient = true): Promise<unknown> {
-    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args));
+    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args), cachedQueryLogs);
   }
-  /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored). */
+  /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored, with its log lines). */
   async runQueryJson(name: string, args: unknown): Promise<string> {
-    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args));
+    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args), cachedQueryLogs);
   }
 
   /** A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Never cached. */
