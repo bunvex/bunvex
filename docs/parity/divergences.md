@@ -109,6 +109,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-136 | Rate limits and origin checks done by bunvex, not better-auth | — | yes | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B8](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 | DV-137 | Dashboard Users / Organizations / Settings / Audit via `_system/auth:*` with the admin key | no user management | yes (dashboard) | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B9](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 | DV-138 | Order: spike, then scheduler / HTTP actions / env / admin keys, then the phases | — | no | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B10](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
+| DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-145 | Request bodies capped by Bun's `maxRequestBodySize` (128 MiB, configurable) | no limit in code (docs: 20 MB) | yes (very large bodies) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H3](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-146 | No hard stop of an HTTP action at 1800 s (the 408 at 300 s stays) | the isolate is terminated | yes (runaway actions) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H4](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-147 | Site port `/version` answers `bunvex` | `unknown` | yes (meta route) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H5](../study/STUDY-31-http-actions.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -196,15 +201,8 @@ None as of 2026-10-01: the owner decided every pending row ("approve all recomme
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
-[Decided divergences](#decided-divergences).
+[Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day.
 
-| ID | bunvex | Convex | Observable | Note | Source |
-|---|---|---|---|---|---|
-| DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | Recommended: yes | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
-| DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | Recommended: yes | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
-| DV-145 | Request bodies capped by Bun's `maxRequestBodySize` (128 MiB, configurable) | no limit in code (docs: 20 MB) | yes (very large bodies) | Recommended: yes | [STUDY-31 H3](../study/STUDY-31-http-actions.md#4-divergences) |
-| DV-146 | No hard stop of an HTTP action at 1800 s (the 408 at 300 s stays) | the isolate is terminated | yes (runaway actions) | Recommended: yes | [STUDY-31 H4](../study/STUDY-31-http-actions.md#4-divergences) |
-| DV-147 | Site port `/version` answers `bunvex` | `unknown` | yes (meta route) | Recommended: yes | [STUDY-31 H5](../study/STUDY-31-http-actions.md#4-divergences) |
 
 ## Gaps recorded in studies
 

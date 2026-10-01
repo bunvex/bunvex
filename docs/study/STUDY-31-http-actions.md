@@ -1,6 +1,6 @@
 # STUDY-31 — HTTP actions (`httpRouter`, `httpAction`)
 
-- **Status:** draft — H1–H5 open
+- **Status:** accepted: H1–H5 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** server-api.md §16, platform.md §8; STUDY-30 S1 (registration at start); STUDY-27 (auth); STUDY-20
   (errors, redaction). HTTP actions come before file storage in the roadmap (owner, 2026-10-01); built-in
@@ -178,13 +178,13 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| H1 | The router is passed to `createServer({ http })` and checked at start, not discovered in `convex/http.ts` at push | no push until the CLI (same as STUDY-30 S1); the API is Convex's | owner |
-| H2 | The generated request-id header is `bunvex-request-id`, not `convex-request-id` | owner rule: no "convex" in shipped names (as DV-97's `Bunvex <key>`) | owner |
-| H3 | Request bodies: Convex's code enforces no limit (one docs page says 20 MB). Bun needs a ceiling for the whole server (`maxRequestBodySize`, 128 MiB by default) | recommended: keep Bun's 128 MiB, configurable (`maxRequestBodySize`) | owner |
-| H4 | No hard stop at 1800 s: a running action cannot be killed in-process (Convex terminates its isolate); the client still gets the 408 at 300 s and the action keeps running, as in Convex | one process, no isolate per function (DV-02's reason) | owner |
-| H5 | The site port's `/version` answers what the API port does (`bunvex`), not `unknown` | the same meta route on both ports; Convex's `unknown` is a placeholder service name | owner |
+| H1 | The router is passed to `createServer({ http })` and checked at start, not discovered in `convex/http.ts` at push | no push until the CLI (same as STUDY-30 S1); the API is Convex's | **accepted** (owner, 2026-10-01) |
+| H2 | The generated request-id header is `bunvex-request-id`, not `convex-request-id` | owner rule: no "convex" in shipped names (as DV-97's `Bunvex <key>`) | **accepted** (owner, 2026-10-01) |
+| H3 | Request bodies: Convex's code enforces no limit (one docs page says 20 MB). Bun needs a ceiling for the whole server (`maxRequestBodySize`, 128 MiB by default) | recommended: keep Bun's 128 MiB, configurable (`maxRequestBodySize`) | **accepted** (owner, 2026-10-01) |
+| H4 | No hard stop at 1800 s: a running action cannot be killed in-process (Convex terminates its isolate); the client still gets the 408 at 300 s and the action keeps running, as in Convex | one process, no isolate per function (DV-02's reason) | **accepted** (owner, 2026-10-01) |
+| H5 | The site port's `/version` answers what the API port does (`bunvex`), not `unknown` | the same meta route on both ports; Convex's `unknown` is a placeholder service name | **accepted** (owner, 2026-10-01) |
 
-Rows go in [docs/parity/divergences.md](../parity/divergences.md) as DV-143–DV-147 (pending).
+Rows go in [docs/parity/divergences.md](../parity/divergences.md) as DV-143–DV-147 (decided).
 
 ## 5. Tests
 
