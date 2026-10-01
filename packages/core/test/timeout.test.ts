@@ -51,6 +51,33 @@ describe("withTimeout (STUDY-25 L3)", () => {
     expect(err).toBeInstanceOf(DatabaseTimeoutError);
   });
 
+  test("a call that timed out issues nothing more: its next progress() throws (STUDY-25 §3.5)", async () => {
+    // A driver calls progress() before each statement of a multi-step call. Once the call has timed out, the
+    // caller has moved on (the committer retries the flush): the abandoned attempt must not send its next
+    // statement, let alone a COMMIT that would race the retry.
+    const sent: string[] = [];
+    let answer: () => void = () => {};
+    let thrown: unknown = null;
+    const call = withTimeout("Test", 40, async (progress) => {
+      sent.push("fence");
+      await new Promise<void>((r) => {
+        answer = r; // its answer comes after the timeout
+      });
+      try {
+        progress();
+      } catch (e) {
+        thrown = e;
+        throw e;
+      }
+      sent.push("insert", "commit");
+    });
+    expect(await call.catch((e) => e)).toBeInstanceOf(DatabaseTimeoutError);
+    answer();
+    await sleep(10);
+    expect(sent).toEqual(["fence"]);
+    expect(thrown).toBeInstanceOf(DatabaseTimeoutError);
+  });
+
   test("an answer that arrives after the timeout is ignored", async () => {
     const err = await withTimeout("Test", 30, async () => (await sleep(80), "late")).catch((e) => e);
     expect(err).toBeInstanceOf(DatabaseTimeoutError);

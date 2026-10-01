@@ -22,7 +22,14 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, type Conflict, ConflictError, type Interval, overlaps } from "./committer.ts";
+import {
+  Committer,
+  type Conflict,
+  ConflictError,
+  type FlushRetryOptions,
+  type Interval,
+  overlaps,
+} from "./committer.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -139,6 +146,11 @@ export class Engine {
       lease?: { ttlMs?: number; waitMs?: number };
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
+      /**
+       * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
+       * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
+       */
+      flushRetry?: FlushRetryOptions;
     } = {},
   ) {
     installDeterminism();
@@ -148,7 +160,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence);
+    this.committer = new Committer(persistence, undefined, undefined, opts.flushRetry);
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
