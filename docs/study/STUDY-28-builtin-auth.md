@@ -462,7 +462,7 @@ Built-in auth is a feature Convex does not have, so each choice is the owner's.
 | B9 | Dashboard Users / Organizations / Settings / Audit through `_system/auth:*` with the admin key | yes, after admin keys | the operator is not a user; impersonation needs a deploy-scoped key | **accepted** (owner, 2026-10-01) |
 | B10 | Order: the spike first, then the prerequisites (scheduler, HTTP actions, env, admin keys), then §3.8 | yes | the spike settles B5 and whether scrypt-in-mutation holds before anything is built on it | **accepted** (owner, 2026-10-01) |
 
-They are in [docs/parity/divergences.md](../parity/divergences.md) as DV-102–DV-111 (decided).
+They are in [docs/parity/divergences.md](../parity/divergences.md) as DV-129–DV-138 (decided).
 
 ## 5. Tests
 
