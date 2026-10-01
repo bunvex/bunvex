@@ -1,6 +1,6 @@
 # STUDY-28 — Built-in authentication (users, sessions, a Users dashboard) on better-auth
 
-- **Status:** draft — owner decisions B1–B10 open
+- **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); the spike (§3.8 step 0) is next
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (dashboard, docs); get-convex/convex-auth
   `7eab860` (v0.0.96); get-convex/better-auth `2f9fcf6` (v0.12.5); better-auth 1.7.6 (installed dist)
 - **Related:** STUDY-27 (`ctx.auth`, JWT / OIDC, sync and client auth), STUDY-12 (dashboard), the owner's
@@ -451,18 +451,18 @@ Built-in auth is a feature Convex does not have, so each choice is the owner's.
 
 | # | Decision | Recommendation | Why | Decision |
 |---|---|---|---|---|
-| B1 | Ship built-in auth (Convex has none) | yes, opt-in; Convex-compatible auth unchanged | the main gap against Supabase, Firebase, Appwrite and PocketBase | owner |
-| B2 | How: A beside / B bridged / C hosted / D native | **C**, behind a bunvex-owned surface | atomic, reactive and fast; better-auth's breadth; replaceable | owner |
-| B3 | Identity: JWT over the protocol + session row tracked for revocation | yes | protocol and official client unchanged; revocation reaches subscriptions at once | owner |
-| B4 | Tables: `users` (and orgs) in the app schema; secrets in system tables; better-auth-owned fields read-only through `ctx.db` | yes | joinable users without leaking hashes or tokens; no desync | owner |
-| B5 | The auth dispatcher's executions use the real CSPRNG (app mutations still throw) | yes | secrets cannot come from a seeded PRNG; retries discard everything | owner |
-| B6 | Transport: auth endpoints are function calls over the socket; HTTP only for redirects, email links, SSR cookies, JWKS | yes | no auth domain, no faked cookies, no proxies | owner |
-| B7 | Plugins: allowlist with a manifest + conformance test each; better-auth pinned to a minor | yes; tiers as §3.5 | better-auth's churn (minivex, #433) stays out of apps | owner |
-| B8 | Rate limits and origin checks done by bunvex (`auth.api` skips better-auth's) | yes | atomic under OCC; IP from the server, not `X-Forwarded-For` | owner |
-| B9 | Dashboard Users / Organizations / Settings / Audit through `_system/auth:*` with the admin key | yes, after admin keys | the operator is not a user; impersonation needs a deploy-scoped key | owner |
-| B10 | Order: the spike first, then the prerequisites (scheduler, HTTP actions, env, admin keys), then §3.8 | yes | the spike settles B5 and whether scrypt-in-mutation holds before anything is built on it | owner |
+| B1 | Ship built-in auth (Convex has none) | yes, opt-in; Convex-compatible auth unchanged | the main gap against Supabase, Firebase, Appwrite and PocketBase | **accepted** (owner, 2026-10-01) |
+| B2 | How: A beside / B bridged / C hosted / D native | **C**, behind a bunvex-owned surface | atomic, reactive and fast; better-auth's breadth; replaceable | **accepted** (owner, 2026-10-01) |
+| B3 | Identity: JWT over the protocol + session row tracked for revocation | yes | protocol and official client unchanged; revocation reaches subscriptions at once | **accepted** (owner, 2026-10-01) |
+| B4 | Tables: `users` (and orgs) in the app schema; secrets in system tables; better-auth-owned fields read-only through `ctx.db` | yes | joinable users without leaking hashes or tokens; no desync | **accepted** (owner, 2026-10-01) |
+| B5 | The auth dispatcher's executions use the real CSPRNG (app mutations still throw) | yes | secrets cannot come from a seeded PRNG; retries discard everything | **accepted** (owner, 2026-10-01) |
+| B6 | Transport: auth endpoints are function calls over the socket; HTTP only for redirects, email links, SSR cookies, JWKS | yes | no auth domain, no faked cookies, no proxies | **accepted** (owner, 2026-10-01) |
+| B7 | Plugins: allowlist with a manifest + conformance test each; better-auth pinned to a minor | yes; tiers as §3.5 | better-auth's churn (minivex, #433) stays out of apps | **accepted** (owner, 2026-10-01) |
+| B8 | Rate limits and origin checks done by bunvex (`auth.api` skips better-auth's) | yes | atomic under OCC; IP from the server, not `X-Forwarded-For` | **accepted** (owner, 2026-10-01) |
+| B9 | Dashboard Users / Organizations / Settings / Audit through `_system/auth:*` with the admin key | yes, after admin keys | the operator is not a user; impersonation needs a deploy-scoped key | **accepted** (owner, 2026-10-01) |
+| B10 | Order: the spike first, then the prerequisites (scheduler, HTTP actions, env, admin keys), then §3.8 | yes | the spike settles B5 and whether scrypt-in-mutation holds before anything is built on it | **accepted** (owner, 2026-10-01) |
 
-They are in [docs/parity/divergences.md](../parity/divergences.md) as DV-102–DV-111, pending.
+They are in [docs/parity/divergences.md](../parity/divergences.md) as DV-102–DV-111 (decided).
 
 ## 5. Tests
 
