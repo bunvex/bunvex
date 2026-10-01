@@ -1,6 +1,6 @@
 # STUDY-20 — Function errors, redaction and log lines
 
-- **Status:** implemented (this PR); divergences D1–D6 await the owner
+- **Status:** implemented; divergences D1–D8 decided by the owner (2026-09-30); D3 and D6 resolved with protocol v1 (#50, v0 deleted in #94)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-11](STUDY-11-function-results-and-errors.md): the retroactive study of results and errors. This
@@ -164,10 +164,10 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
 |---|---|---|---|
 | D1 | HTTP function errors answer **200**, as the open-source backend does. Convex's hosted service answers 560 | Both are accepted by Convex's clients. 200 is what the source we match does. Switching to 560 is a one-line change | already as Convex's open-source backend (owner, 2026-09-30; DV-58) |
 | D2 | A cached query result carries no `logLines`; Convex returns the lines stored with the cache entry | The query cache lives in `core`, which knows nothing of logs. Fixing it means storing the lines in the engine's cache entry, in a follow-up | resolved: a cache hit answers the stored lines (owner, 2026-09-30; DV-74) |
-| D3 | Subscription updates (`upd`/`err`) carry no log lines; Convex's `QueryUpdated`/`QueryFailed` do | Part of the protocol v1 work (Transition messages) | owner (with protocol v1) |
+| D3 | Subscription updates (`upd`/`err`) carry no log lines; Convex's `QueryUpdated`/`QueryFailed` do | Part of the protocol v1 work (Transition messages) | resolved with protocol v1 (#50; DV-75) |
 | D4 | The frames are Bun's raw stack frames, including bunvex's own internal frames and absolute paths; Convex source-maps them and shows the user's modules | No bundling/source-map step exists yet. Frames only show when not redacted | later, with the deploy/bundle step (owner, 2026-09-30; DV-76) |
 | D5 | Captured lines are also printed to the server's stdout; Convex's backend sends them to log streams only | bunvex has no log streaming or dashboard log view yet; stdout is where developers see them today | later, once log streaming exists (owner, 2026-09-30; DV-77) |
-| D6 | A system error during a WebSocket mutation is sent as that mutation's error, with the fixed internal message; Convex fails the sync worker and the connection closes | bunvex's default `onFatal` exits the process anyway; revisit with protocol v1's `FatalError` | owner |
+| D6 | A system error during a WebSocket mutation is sent as that mutation's error, with the fixed internal message; Convex fails the sync worker and the connection closes | bunvex's default `onFatal` exits the process anyway; revisit with protocol v1's `FatalError` | resolved with protocol v1: close 1011 (#50; DV-78) |
 | D7 | `REDACT_LOGS_TO_CLIENT=false` or `0` leaves redaction off; Convex's Docker script enables it for any non-empty value | Avoids a surprising reading of `false` | resolved: any non-empty value, as Convex (owner, 2026-09-30; DV-79) |
 | D8 | Only `CommitterStoppedError` is classified as a system error. Other internal failures (e.g. a driver error during a read) surface as function errors with their message | Convex tells them apart with `ErrorMetadata`; bunvex has no such tagging yet | later, gradually (owner, 2026-09-30; DV-80) |
 

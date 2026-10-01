@@ -1,9 +1,11 @@
 // An audit event in words (UI-01 §14.5): "Added 3 documents to tasks", "Deleted environment variable
 // LOG_LEVEL". Unknown actions show their name.
 import type { AuditEvent, Json } from "../data-source.ts";
+import { formatCount } from "../screens/stats.ts";
 
+// counts with the thousands separators the other screens use ("1,452 documents")
 const n = (v: Json | undefined, one: string, many = `${one}s`) =>
-  typeof v === "number" ? `${v} ${v === 1 ? one : many}` : many;
+  typeof v === "number" ? `${formatCount(v)} ${v === 1 ? one : many}` : many;
 const str = (v: Json | undefined) => (typeof v === "string" ? v : "");
 
 /** The actions the dashboard has words for, in the order a filter lists them. */
@@ -56,6 +58,12 @@ export function describeEvent(e: AuditEvent): string {
       return `Canceled ${n(m.count, "scheduled run")}${m.function ? ` of ${str(m.function)}` : ""}`;
     case "push_config":
       return "Deployed functions";
+    case "request_export":
+      return `Requested a snapshot export${m.include_storage === true ? ", with the stored files" : ""}`;
+    case "snapshot_import":
+      return `Imported ${typeof m.count === "number" ? n(m.count, "document") : "a snapshot"}${
+        Array.isArray(m.table_names) && m.table_names.length > 0 ? ` into ${m.table_names.join(", ")}` : ""
+      }${m.import_mode === "replace" || m.import_mode === "replaceAll" ? " (replacing)" : ""}`;
     case "pause_deployment":
       return "Paused the deployment";
     case "unpause_deployment":

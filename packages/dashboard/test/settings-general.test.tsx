@@ -28,7 +28,7 @@ describe("Settings: General", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["General", "Environment variables"]);
+    ).toEqual(["General", "Environment variables", "Authentication", "Snapshots"]);
     expect(within(nav).getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 
@@ -46,7 +46,7 @@ describe("Settings: General", () => {
       value: { writeText: async (t: string) => void writes.push(t) },
       configurable: true,
     });
-    await user.click(within(s).getByRole("button", { name: "Copy the HTTP actions URL" }));
+    await user.click(within(s).getByRole("button", { name: "Copy HTTP actions URL" }));
     expect(writes).toEqual(["http://127.0.0.1:3211"]);
     await expectAccessible();
   });

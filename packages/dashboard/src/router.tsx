@@ -31,19 +31,24 @@ export type DashboardRouterContext = { queryClient: QueryClient; scope: QuerySco
 // ------------------------------------------------------------------ search params
 
 /** The Database screen's URL state (UI-01 §12.3): the applied filter, the open document, the open panel. */
-export type TableSearch = { filter?: string; doc?: string; panel?: "schema" | "indexes" | "add" | "columns" };
+export type TableSearch = {
+  filter?: string;
+  doc?: string;
+  panel?: "schema" | "indexes" | "add" | "columns" | "metrics";
+};
 
 const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 
 /** The Functions screen's URL state: the open function (`module:name`), as in Convex. */
 /** The open function, and its log filters (as the Logs screen's `type` and `q`). */
-export type FunctionsSearch = { function?: string; type?: string; q?: string };
+export type FunctionsSearch = { function?: string; type?: string; q?: string; tab?: "statistics" | "logs" };
 
 export function validateFunctionsSearch(input: Record<string, unknown>): FunctionsSearch {
   const fn = str(input.function);
   const { type, q } = validateLogsSearch(input);
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  return { function: fn, type, q };
+  const tab = input.tab === "statistics" || input.tab === "logs" ? input.tab : undefined;
+  return { function: fn, type, q, tab };
 }
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
@@ -54,7 +59,13 @@ export function validateTableSearch(input: Record<string, unknown>): TableSearch
   const doc = str(input.doc);
   if (filter) out.filter = filter;
   if (doc) out.doc = doc;
-  if (input.panel === "schema" || input.panel === "indexes" || input.panel === "add" || input.panel === "columns")
+  if (
+    input.panel === "schema" ||
+    input.panel === "indexes" ||
+    input.panel === "add" ||
+    input.panel === "columns" ||
+    input.panel === "metrics"
+  )
     out.panel = input.panel;
   return out;
 }
@@ -111,6 +122,11 @@ const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx")
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
+const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
+const AuthenticationSettingsScreen = lazyRouteComponent(
+  () => import("./settings/auth.tsx"),
+  "AuthenticationSettingsScreen",
+);
 const EnvironmentVariablesScreen = lazyRouteComponent(
   () => import("./settings/screen.tsx"),
   "EnvironmentVariablesScreen",
@@ -217,6 +233,18 @@ export const envVarsRoute = createRoute({
   component: EnvironmentVariablesScreen,
 });
 
+export const authSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/authentication",
+  component: AuthenticationSettingsScreen,
+});
+
+export const snapshotsSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/snapshots",
+  component: SnapshotsSettingsScreen,
+});
+
 /** `/schedules` opens the scheduled functions, as Convex's sidebar does. */
 export const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -255,6 +283,8 @@ export const routeTree = rootRoute.addChildren([
   settingsRoute,
   generalSettingsRoute,
   envVarsRoute,
+  authSettingsRoute,
+  snapshotsSettingsRoute,
 ]);
 
 // ------------------------------------------------------------------ the router

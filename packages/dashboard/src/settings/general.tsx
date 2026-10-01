@@ -38,7 +38,7 @@ function Url({ href, label }: { href: string; label: string }) {
   return (
     <span className="flex flex-wrap items-center gap-2">
       <code className="min-w-0 font-mono text-xs break-all">{href}</code>
-      <CopyButton text={href} label={`Copy the ${label}`} />
+      <CopyButton text={href} label={`Copy ${label}`} iconOnly />
     </span>
   );
 }

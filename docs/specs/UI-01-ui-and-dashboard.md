@@ -1304,6 +1304,166 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
   seconds (UX-18).
 
+### 18.2 A function's Statistics tab (STUDY-12 §12, L1)
+
+- The open function's header (name, kind, path, Run, validators) is followed by **Statistics** and **Logs**
+  tabs; Statistics comes first, as Convex's `FunctionsView.tsx`. The tab is in the URL (`?tab=statistics` /
+  `logs`); without it, a link with log filters (`type`, `q`) opens the logs, any other the statistics.
+  Changing the filters keeps the tab, so restoring a function's kept filters never switches it.
+- **Statistics** (`metrics/function-stats.tsx`), the last hour per minute, as Convex's `PerformanceGraphs.tsx`:
+  **Function calls**, **Errors**, **Execution time** (p50, p90, p95, p99 — one blue, light to dark,
+  labelled at the lines' ends) and, for a query, **Cache hit rate**. Without metrics it says why.
+
+### 18.3 A table's metrics (STUDY-12 §12)
+
+- **Metrics** beside Schema and Indexes on the Database screen (shown when the source has `tableRate`)
+  opens the side panel (`?panel=metrics`), as Convex's table **Metrics** tool (`TableMetrics.tsx`): the rows
+  the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
+  same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
+
+## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
+
+### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+- **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
+  `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,
+  in the config's order. Needs `viewData` and `viewEnvironmentVariables`. **Contract suite**: when offered and
+  allowed, every provider is well-formed (`isAuthProvider`).
+- **Page** (`settings/auth.tsx`, lazy): a list item per provider named by its kind and domain / issuer, its
+  values as code with copy buttons; none → "This deployment has no authentication providers yet." and where they
+  are declared (Convex links its docs; bunvex has no docs site yet); without both operations the page says why and asks nothing of the source; a source without the method
+  gets the "not offered" screen.
+- **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
+
+### 19.2 Settings → Snapshots (STUDY-12 §13.2, a bunvex addition)
+
+- **Contract** (`data-source-snapshot.ts`, every method optional): `getLatestSnapshotExport`,
+  `requestSnapshotExport({ includeStorage })`, `downloadSnapshotExport(id)` → the zip as a `Blob`;
+  `startSnapshotImport({ file, format, mode, table? })` → `failed` with why, or `waiting_for_confirmation` with
+  `changes` (per table: added, deleted); `confirmSnapshotImport`, `cancelSnapshotImport`, `getSnapshotImport`
+  (progress, checkpoints, rows written). Operations `viewBackups`, `createBackups`, `downloadBackups`,
+  `importBackups` (Convex's names); importing also needs to write. **Contract suite**: the latest export is
+  read when offered; an export (opt-in) is requested, followed to `completed` and downloaded (a zip of its
+  size); an import (opt-in, into a scratch table) refuses a bad file, then is confirmed and written.
+- **Page** (`settings/snapshots.tsx`, lazy): **Export** — include stored files, Export a snapshot, its state
+  while it runs (polled every 500 ms), then when, how large, until when, and Download (a `snapshot-<time>.zip`);
+  **Import** — a file (the format guessed from its extension, the table from its name), the format, the
+  table for a single-table format, and what to do when a table has documents (the four modes; replacing
+  everything only for a zip); Upload and review shows what will change per table; the confirm button says how
+  many documents it deletes; then progress, the steps done, and the documents written. Every half follows its
+  operations; a source without either gets the "not offered" screen.
+- **Mock** (`mock/snapshots.ts`, `mock/zip.ts`): exports and imports advance a step per table every
+  `snapshotStepMs` (300 ms); the zip is Convex's layout, stored uncompressed, and the reader also takes deflated
+  entries; ids and creation times in a file are kept (an `append` that repeats an id fails); CSV numbers and
+  booleans are read as such, empty cells left out; `request_export` and `snapshot_import` go to the audit log
+  (History says them in words).
+
+### 19.3 Volume
+
+Measured in headless Chrome against the production build (`vite preview`), with the dev host's new volume
+knobs `?tasks=100000&executions=4000` (100 000 tasks; ~10 000 log lines): the Database screen opened on
+`tasks`, then scrolled to the end 15 times (16 pages, 1 600 rows); a field filter (`done = true`); the Logs
+screen scrolled until ~8 450 lines were loaded, then 10 characters typed in its filter. "Long tasks" are the
+browser's (> 50 ms on the main thread).
+
+| | before | after |
+|---|---|---|
+| Database: long tasks while loading 15 more pages | 16, max 186 ms, total 2 779 ms | **1, 71 ms** |
+| Database: first rows | 594 ms | 483 ms |
+| Logs: long tasks while scrolling to ~8 450 lines, and while filtering them | none | none |
+
+- The cost was the **mock's** `listDocuments`: every page filtered, sorted with a key built per comparison,
+  and cloned every matching document — 170 ms a page at 100 000 documents (in Bun). It now builds each key
+  once and clones only the page: **13 ms** a page. The dashboard's own work (the grid, virtualized; React)
+  stays under the long-task line; a profile of the scrolling shows the rest is React rendering the new rows.
+- Left as is: opening the page with 100 000 tasks has one ~260 ms task — the mock generating them, in the
+  dev host only. A real server pages from an index.
+
+### 19.4 Every screen in the browser
+
+The e2e suite (`apps/dashboard/e2e`, against the production build in Chromium) now opens every screen: to the
+Database, Monaco, Schedules, Files, Settings → Environment variables, History, the design system's page and
+the phone-width pass already there, it adds **Health** (its counters, nothing fetched elsewhere),
+**Functions** (a function's page; its query subscribed in the runner), **Logs** (a line's details follow the
+arrows), **Settings → General** (pause, the banner on another screen, resume), **Authentication** (the
+providers, copyable) and **Snapshots** (export, download a real zip, import a file and confirm). The axe pass
+(colour contrast included, both themes) now also covers a function's page, Logs, General, Authentication and
+Snapshots. 22 tests, about a minute.
+
+## 20. Amendment — UX review (30 Sep 2026)
+
+Every screen was captured in both themes at 1 440 px and at phone width and reviewed for consistency; the
+owner approved all 25 findings (UX-1…UX-25; UX-18 went to the Health redesign). They land in five grouped
+pull requests.
+
+### 20.1 Database: polish and bugs
+
+- **UX-1** The document panel shows the document as the JavaScript literal the rest of the dashboard uses
+  (`credits: 10n`, `Bytes("…")`, bare keys), through `database/literal-view.tsx` — no more wire form
+  (`{"$integer": …}`).
+- **UX-2** A filter row just added is silent until something is typed in it; it does not apply meanwhile.
+- **UX-12** The schema panel's code wraps long lines with a hanging indent instead of running past its edge.
+- **UX-20** On a phone the toolbar keeps Add documents and ⋯ on the title row; Schema, Indexes and Columns
+  move into the ⋯ menu (`TableMenu panels`).
+- **UX-21** Every cell value truncates with an ellipsis; numbers (and int64) are right-aligned.
+- **UX-22** The cell menu groups the cell's actions, the document's, and Delete document on its own.
+- **UX-23** A right-click with no click before targets the cell under the pointer (tested). The review's
+  capture likely hit a layout shift while the table settled.
+- **UX-25** Add documents has no reserved line between the editor and its button.
+- **Submenu** (owner's note): "Filter by …" closed before it could be clicked when the pointer moved fast.
+  Base UI focuses the parent menu when the pointer leaves an item — the submenu's own trigger on the way into
+  it — and the submenu closed as "focus-out". `DropdownMenuSub` (`@bunvex/ui`) ignores a focus-out that stays
+  in the menu tree; a sibling item, Escape, a click outside or picking an item still close it. Reproduced and
+  checked in Chrome.
+
+### 20.2 Logs
+
+- **UX-5** The Time column stays in view when a long message scrolls the list sideways: `DataTable`
+  gains `stickyColumn`.
+- **UX-6** On a phone the message comes right after the time (Time, Message, Level, Function, Outcome,
+  Request).
+- **UX-24** A line's details say who started the request once (the explanation is its tooltip), show the
+  function's kind as the list's Q/M/A badge, and keep the copy button in the body font.
+
+### 20.3 Shell layout and lists
+
+- **UX-4** On a phone the header shows the deployment as one muted line (`local · memory · 0.0.0-mock`,
+  labelled for assistive tech) and Run functions as an icon (its name kept for assistive tech); the
+  labelled list returns from `md` up.
+- **UX-9** An environment variable's actions sit at the row's right edge, on the name's line; each Copy
+  button says "Copy" (named for its variable), so they line up.
+- **UX-14** One place for counts: next to the title (Database, Files, History) or above the list (each
+  Schedules tab); a footer only says "N loaded" while more are still to load. History's counts (its title's
+  and an event's, "Added 1,452 documents") use the shared count format, with thousands separators.
+- **UX-16** Files' Open button is as tall as the storage-ID box.
+- **UX-17** No reserved status line between a toolbar and its table (Files, Scheduled functions).
+
+
+
+### 20.4 Functions and the runner
+
+- **UX-3** The header's Run functions (and Ctrl+`) opens the runner on the function the Functions screen
+  shows, as Convex's runner follows the selected function; elsewhere it keeps the last one.
+- **UX-12, UX-13** A function's Arguments and Returns validators wrap long lines with a hanging indent, grow
+  to 12 lines, and past that scroll with a note ("N lines: scroll for the rest.").
+
+### 20.5 Shared components
+
+- **UX-7** The schema panel's Saved / Generated are underlined tabs (`TabsList variant="line"`), as every
+  switch between sibling views is; Settings' vertical nav already had the sidebar's active treatment.
+- **UX-8** A copy next to a value is an icon (`CopyButton iconOnly`) named by its label ("Copy client URL"),
+  with the label, then "Copied", as its tooltip; page-level copies keep their text.
+- **UX-10** Destructive actions read the same: a row's delete is `destructive-ghost` (quiet, red); a
+  reversible but disruptive action (Pause deployment) is `destructive-outline`; confirmations keep the strong
+  one.
+- **UX-11** One `StatusBadge` (`@bunvex/ui`): an icon and a sentence-case word in the status colours, with
+  optional detail (a duration), for a log line's outcome, a scheduled run's state and a cron's last run.
+- **UX-15** `DayInput` (`@bunvex/ui`): the design system's input, typed as `YYYY-MM-DD` (it applies once
+  complete and valid; a wrong day says so) or picked from a month's calendar in a popover — not the
+  browser's date field.
+- **UX-19** The "bright bar" on a phone was the open function's row, cut by the short tree; the tree now
+  scrolls the open function into view.
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens

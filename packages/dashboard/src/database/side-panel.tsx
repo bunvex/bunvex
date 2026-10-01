@@ -4,7 +4,6 @@
 import { Badge } from "@bunvex/ui/components/badge";
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
-import { JsonView } from "@bunvex/ui/components/json-view";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import type { ColumnState } from "@bunvex/ui/lib/column-state";
 import { cn } from "@bunvex/ui/lib/utils";
@@ -14,12 +13,14 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
+import { TableMetrics } from "../metrics/table-metrics.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { AddDocuments } from "./add-documents.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
 import { formatLiteral } from "./literal.ts";
+import { LiteralView } from "./literal-view.tsx";
 import { generatedSchemaCode, type SchemaCode, schemaCode } from "./schema-code.ts";
 import { formatTime } from "./values.ts";
 
@@ -28,6 +29,7 @@ export type PanelState =
   | { kind: "document"; id: string; canEdit: boolean; editRequest?: number }
   | { kind: "schema" }
   | { kind: "indexes" }
+  | { kind: "metrics" }
   | { kind: "add"; onAdded: (ids: string[]) => void }
   | { kind: "columns"; fields: string[]; state: ColumnState; onChange: (s: ColumnState) => void };
 
@@ -81,6 +83,12 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
     return (
       <Panel title={`Add documents to ${info.name}`} onClose={onClose}>
         <AddDocuments table={info.name} onAdded={state.onAdded} />
+      </Panel>
+    );
+  if (state.kind === "metrics")
+    return (
+      <Panel title={`Metrics of ${info.name}`} onClose={onClose}>
+        <TableMetrics table={info.name} />
       </Panel>
     );
   return <IndexesPanel info={info} onClose={onClose} />;
@@ -145,7 +153,7 @@ function DocumentPanel(props: {
               Saved.
             </p>
           )}
-          <JsonView className="mt-3" value={doc} label={`Document ${id}`} />
+          <LiteralView className="mt-3" value={doc} label={`Document ${id}`} />
         </>
       )}
     </Panel>
@@ -194,9 +202,14 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
     <Panel title={`Schema of ${info.name}`} onClose={onClose}>
       {canGenerate ? (
         <Tabs value={shown} onValueChange={(v) => setTab(v as "saved" | "generated")}>
-          <TabsList>
-            <TabsTrigger value="saved">Saved</TabsTrigger>
-            <TabsTrigger value="generated">Generated</TabsTrigger>
+          {/* underlined, as every switch between sibling views (Schedules' tabs) is (UX-7) */}
+          <TabsList variant="line">
+            <TabsTrigger value="saved" className="text-sm">
+              Saved
+            </TabsTrigger>
+            <TabsTrigger value="generated" className="text-sm">
+              Generated
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="saved" className="pt-3">
             {savedView}
@@ -231,7 +244,8 @@ function GeneratedSchema({ table }: { table: string }) {
       <pre
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must be reachable by keyboard
         tabIndex={0}
-        className="max-h-[60svh] overflow-auto border bg-muted/40 p-2 font-mono text-xs"
+        // long lines wrap with a hanging indent instead of running past the panel's edge (UX-12)
+        className="max-h-[60svh] overflow-auto border bg-muted/40 p-2 pl-6 -indent-4 font-mono text-xs break-words whitespace-pre-wrap"
       >
         {code}
       </pre>
@@ -275,9 +289,9 @@ function SavedSchema({ code, table }: { code: SchemaCode; table?: string }) {
               key={i}
               ref={mine && n === range.from ? first : undefined}
               data-table-line={mine ? "" : undefined}
-              // as wide as the longest line, so a marked line's tint runs under all of it
+              // a long line wraps with a hanging indent, inside the panel (UX-12)
               className={cn(
-                "block w-max min-w-full border-l-2 px-2",
+                "block border-l-2 pr-2 pl-6 -indent-4 break-words whitespace-pre-wrap",
                 mine ? "border-info bg-info/10" : "border-transparent",
               )}
             >
