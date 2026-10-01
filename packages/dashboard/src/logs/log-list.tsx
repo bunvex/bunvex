@@ -1,7 +1,9 @@
 // Log lines as a data grid (STUDY-12 §7): newest first, one row per line — time, request, the execution's
 // outcome on its last line, level, function, message. Arrows move between lines; Enter or a click opens a
 // line's details, which then follow the current line.
+
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
+import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { cn } from "@bunvex/ui/lib/utils";
 import { type ReactNode, useEffect, useState } from "react";
 import type { FunctionKind, LogEntry } from "../data-source.ts";
@@ -44,11 +46,7 @@ const columns: DataTableColumn<LogRow>[] = [
     cell: (c) => {
       const x = c.getValue() as LogEntry["execution"];
       if (!x) return null;
-      return (
-        <span className={cn("text-xs", x.status === "failure" ? "text-destructive" : "text-muted-foreground")}>
-          {x.status} <span className="tabular-nums">{formatDuration(x.durationMs)}</span>
-        </span>
-      );
+      return <StatusBadge status={x.status}>{formatDuration(x.durationMs)}</StatusBadge>;
     },
   }),
   col.accessor((e) => e.level, {

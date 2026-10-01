@@ -92,7 +92,7 @@ export function LogDetails(props: {
             <dt className="text-muted-foreground">Request</dt>
             <dd className="flex min-w-0 items-center gap-1">
               <span className="truncate font-mono text-xs">{line.requestId}</span>
-              <CopyButton text={line.requestId} label="Copy the request id" />
+              <CopyButton text={line.requestId} label="Copy request ID" iconOnly />
             </dd>
           </>
         )}

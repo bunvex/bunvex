@@ -36,7 +36,7 @@ bunvex/
 │   ├── core/                        @bunvex/core                     ← the ENGINE
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
 │   │   ├── schema                   declared tables + indexes, Convex name rules ✅ · document validation N
-│   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, backfill ✅
+│   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, index states ✅
 │   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
@@ -44,7 +44,7 @@ bunvex/
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
-│   │   ├── indexing                 backfill a new index over existing data                   M
+│   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions                              M
 │   │   ├── search                   text and vector search (or its own package)               D
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
@@ -54,7 +54,8 @@ bunvex/
 │   ├── persistence/                 @bunvex/persistence               ← external databases
 │   │   ├── postgres                 (optional peer: postgres)                                 ✅
 │   │   ├── mysql                    (optional peer: mysql2)                                   ✅
-│   │   └── mongodb                  (optional peer: mongodb)                                  ✅
+│   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
+│   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the K1–K7 suite, published ✅
 │   │
@@ -72,7 +73,7 @@ bunvex/
 │   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·
 │   │   │                            admin keys M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
-│   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
+│   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │

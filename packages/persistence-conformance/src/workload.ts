@@ -9,6 +9,12 @@ export const schema = defineSchema({
   counters: defineTable(v.any()).index("by_key", ["key"]),
 });
 
+/** The same schema with one more index on `items` (K24: added to a store that has documents, then backfilled). */
+export const schemaWithAmount = defineSchema({
+  items: defineTable(v.any()).index("by_tenant_created", ["tenantId", "createdAt"]).index("by_amount", ["amount"]),
+  counters: defineTable(v.any()).index("by_key", ["key"]),
+});
+
 export const newEngine = (p: Persistence, opts?: ConstructorParameters<typeof Engine>[2]) =>
   new Engine(schema, p, opts).init();
 

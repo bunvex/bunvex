@@ -18,8 +18,11 @@ function store() {
   // Each open replays the log: a restart of the same store.
   return async (schema: SchemaDefinition, fn: (e: Engine) => Promise<void>) => {
     const p = await MemoryPersistence.open(path, { durable: false });
-    await fn(await new Engine(schema, p).init());
-    await p.close();
+    const e = await new Engine(schema, p).init();
+    // New indexes are backfilled in the background (STUDY-29): wait for them, as a push would.
+    await e.indexesReady();
+    await fn(e);
+    await e.close();
   };
 }
 const numbers = (e: Engine) => Object.fromEntries([...e.catalog.tables.values()].map((t) => [t.name, t.number]));
@@ -35,7 +38,8 @@ describe("catalog (_tables / _index)", () => {
           _index: 514,
           _instance: 515,
           _session_requests: 516,
-          _scheduled_functions: 517,
+          _index_backfills: 517,
+          _scheduled_functions: 518,
           users: 10001,
           posts: 10002,
         });
