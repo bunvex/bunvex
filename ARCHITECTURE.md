@@ -37,7 +37,7 @@ bunvex/
 │   │   ├── keyenc                   order-preserving byte keys                                ✅
 │   │   ├── schema                   declared tables + indexes, Convex name rules ✅ · document validation N
 │   │   ├── catalog                  _tables/_index: persistent table numbers + index ids, index states ✅
-│   │   ├── committer                timestamps, group commit, optimistic validation, write log ✅
+│   │   ├── committer                timestamps, group commit in write batches, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M

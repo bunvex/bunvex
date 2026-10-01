@@ -1,6 +1,6 @@
 # STUDY-09 — Persistence layout and drivers
 
-- **Status:** decided — D1, D2 fixed (#8); D3 fixed (#17, Phase 0 B4); D7, D8 kept (DV-67, DV-68); D5, D6, D9 to match Convex, gaps tracked in docs/parity (DV-62, DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#8); D3 fixed (#17, Phase 0 B4); D7, D8 kept (DV-67, DV-68); D9 built to match Convex (DV-62, STUDY-06 §10; one batch at a time, DV-152, decided); D5, D6 to match Convex, gaps tracked in docs/parity (DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -159,7 +159,7 @@ Common to all drivers:
 | D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-66). **Partially built:** the by-ts log read on `indexes`, with a ts index on every driver (PERSIST-01 C11; the log is `indexes` by ts, STUDY-24 H11, owner 2026-10-01). Its `prevTs` is per commit, for gap detection, not Convex's per-document `prev_ts` (§1.5). Still missing: `prev_ts` and documents by ts (retention, export) |
 | D7 | Documents are joined by "newest ≤ ts" per id, not by exact `ts` from the index entry | INTERNAL | Same answer, one extra ordered lookup per row | Decided (owner, 2026-10-01): keep bunvex's (DV-67) |
 | D8 | Column types: `id text`/`varchar(64)`, `table_id int`, JSON as text, vs Convex's `BYTEA` ids and binary JSON | INTERNAL | Follows from STUDY-01. `varchar(64)` must fit the final id format | Decided (owner, 2026-10-01): keep bunvex's (DV-68) |
-| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-62) |
+| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | Decided (owner, 2026-10-01): match Convex (DV-62). **Built:** write batches of whole commits (64 documents / 64 KiB), Postgres statements of ≤1 024 rows, MySQL `INSERT`s of ≤10 MiB ([STUDY-06 §10](STUDY-06-transactions-and-occ.md#10-d12-bounded-flushes-convexs-write-batcher)); batches one at a time, decided by the owner (DV-152) |
 
 ## 5. Tests
 

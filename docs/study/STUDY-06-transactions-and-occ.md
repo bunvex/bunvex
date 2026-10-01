@@ -1,9 +1,9 @@
 # STUDY-06 — Transactions, OCC and the committer
 
-- **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D11 resolved to match Convex in #120 (DV-61); D3 resolved to match Convex in #134 (DV-57, §9); D8, D12 to match Convex, gaps tracked in docs/parity (DV-59, DV-62). Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D11 resolved to match Convex in #120 (DV-61); D3 resolved to match Convex in #134 (DV-57, §9); D12 built as Convex's write batcher (DV-62, §10), with one decided divergence (D13, DV-152: one batch in flight, not 16); D8 to match Convex, a gap tracked in docs/parity (DV-59). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`; for D10 (§1.6, §7), `main` at `9c9bd14` (2026-10-01); for D11
-  (§1.7, §8), `feat/occ-time-window` at `da84195` (#118); for D3 (§1.1, §9), `main` at `6fcb525` (2026-10-01)
+  (§1.7, §8), `feat/occ-time-window` at `da84195` (#118); for D3 (§1.1, §9), `main` at `6fcb525` (2026-10-01); for D12 (§10), `main` at `6fcb525`
 - **Related:**
   - [STUDY-02](STUDY-02-read-own-writes.md) and [STUDY-03](STUDY-03-deterministic-execution.md): not
     repeated here.
@@ -311,7 +311,8 @@ There are no transaction limits, no mutation idempotency, and no `db.vars.commit
 | D9 | Commit timestamps are a counter, not nanosecond wall-clock values | ~~INTERNAL~~ observable since sync protocol v1 (transition and mutation `ts`, `maxObservedTimestamp`) | A recreated store restarts the counter at 1 and refuses clients that saw a higher ts; `maxTs` errors reuse a ts (STUDY-24 S2) | **Decided (owner, 2026-09-30): as Convex.** `ts = max(last + 1, wall clock)`, in **microseconds** internally (a JS number is exact only to 2^53) and × 1000 on the wire, so clients see Convex's wall-clock nanoseconds at µs resolution. The write log's window is tracked explicitly (`purgedTs`), since timestamps are sparse. Built in #64 (DV-30) |
 | D10 | The write log is trimmed by count (20 000 commits), not by time or size, and a snapshot outside it is a retried conflict, not `OutOfRetention` | INTERNAL | Very long mutations fail differently; rare. Under load the count runs out in well under a second (STUDY-24 §4.2: 60 % of lagged attempts conflicted) | **Decided (owner, 2026-10-01): as Convex.** Resolved to match Convex in #118 (DV-60): see §7. Plus a hard byte cap Convex does not have, **on by default at 256 MiB** (DV-128, decided by the owner on 2026-10-01; may be revisited) |
 | D11 | Validation is linear over log entries × writes × read intervals; Convex indexes the log per index | INTERNAL | Performance only (ENGINE-00 M4). With D10 the log holds seconds of commits (~50k entries at 500 ms of full load), so the scan matters | **Decided (owner, 2026-10-01): as Convex.** Resolved to match Convex in #120 (DV-61): see §8 |
-| D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-62) |
+| D12 | Group size is unbounded; Convex batches ≤64 docs / 64 KiB with up to 16 batches in flight | INTERNAL | Performance and latency only; a large group can exceed a store's packet limit | Decided (owner, 2026-10-01): match Convex (DV-62). **Built (§10):** Convex's batches and statement chunking. One part differs, decided by the owner (D13, DV-152): batches are flushed one at a time, not up to 16 concurrently, to keep the durable state a prefix |
+| D13 | Write batches are flushed one at a time in ts order; Convex keeps up to 16 in flight, each its own transaction | INTERNAL (crash state: a prefix in bunvex, possibly a hole below `max_ts` in Convex) | §10.6: PERSIST-01 C4/C7/C11 rest on one durable prefix (`max_ts`, written by each fenced flush); concurrent batches would need a new fence and a weaker contract. Cost: bulk seeding −1 to −59 % commits/s by driver (§10.7) | **decided** (owner, 2026-10-01; DV-152): keep as built |
 
 ## 5. Tests
 
@@ -582,3 +583,163 @@ Per query, encoding the last key costs about a microsecond: through `queryTracke
 and `take(10)` 6.4 → 7.9 µs. Scans of 10 000 rows (`for await`, a filtered `collect`, a filtered `first()`
 that matches late, `collect`): 9.0 → 9.7 ms for `for await` (one `handOut` per row), the others within
 noise (8.1–9.9 ms both sides).
+
+## 10. D12: bounded flushes (Convex's write batcher)
+
+Convex source read: commit `4577b9031`. bunvex: `main` at `6fcb525` (2026-10-01).
+
+### 10.1 How Convex bounds a persistence write
+
+Two layers: the committer's write batcher bounds what one `Persistence::write` (one database transaction)
+carries, and each driver splits that write into statements.
+
+**The write batcher** (`crates/database/src/write_batcher.rs`, knobs in `crates/common/src/knobs.rs`):
+
+- **Caps.** `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS` = 64 document rows and `COMMITTER_MAX_WRITE_BATCH_BYTES` =
+  64 KiB (`knobs.rs:402-408`), both *soft*: a batch takes commits while it is not full
+  (`Batch::is_full`, `write_batcher.rs:156-158`, checked before each `push`, `:186-196`), so the commit that
+  crosses a cap stays in the batch. The bytes are `DocumentLogEntry::size` + `PersistenceIndexEntry::size` of
+  each row (ts, id, value; ts, index id, key, value: `crates/common/src/persistence/mod.rs:69-77, 116-122`),
+  summed in `track_and_write_to_persistence` (`committer.rs:1059-1085`).
+- **Whole commits.** "A commit's rows are never split across `Persistence::write` calls"
+  (`write_batcher.rs:86-89`). A commit above the caps is one batch of its own (or the last of one). Its size is
+  bounded only by the transaction limits: 16 000 user writes / 16 MiB, plus 40 000 system writes / 128 MiB
+  (`knobs.rs:392-397, 489-497`; the comment ties them to the drivers' `MAX_INSERT_SIZE` = 56 000).
+- **When it batches.** Only once `COMMITTER_BATCH_WRITE_THRESHOLD` = 3 writes are in flight, counting the one
+  about to start (`knobs.rs:421-422`, `write_batcher.rs:184`); below that, each commit is written alone. A
+  partly filled batch waits at most `COMMITTER_MAX_COMMIT_DELAY` = 1 ms for more commits (`knobs.rs:412-413`,
+  `write_batcher.rs:185-196`).
+- **Concurrency.** Up to `COMMITTER_MAX_CONCURRENT_WRITE_BATCHES` = 16 batches in flight, each its own
+  transaction (`knobs.rs:416-417`, `write_batcher.rs:167-177, 198-201`), retried on a transient error with the
+  100 ms → 10 s backoff (`write_batcher.rs:205-237`; STUDY-25 L4).
+- **Publication in order.** Each commit's write is a future in `persistence_writes`, a `FuturesOrdered`
+  (`committer.rs:278`): the committer takes them in commit order (`:438-459`), so a commit is published, and
+  acknowledged, only after every earlier one, however the batches finish. "The batcher acking the write is the
+  commit point" (`committer.rs:1026-1030`); a failed write stops the committer ("Write failed. Unsure if
+  transaction committed to disk.", `:440`). Commits validated but not yet durable are in `pending_writes`, and
+  a later commit is validated against them (`:1016`), so it never depends on a write that might not land.
+- **Crash state.** Concurrent batches commit in any order. A crash can leave a later batch durable and an
+  earlier one not: the database then holds commits up to its `max_ts` with a hole below it (never a torn
+  commit: a batch is one transaction). Restart loads at `max_ts` (`database.rs:417-422`). No client saw the
+  missing commits acknowledged, and none of the surviving ones read them (they were validated against
+  `pending_writes`), so the state is still serializable; it is just not a prefix of the commit order. The
+  lease does not serialize the batches: Postgres checks it with a shared row lock (`SELECT … FOR SHARE`,
+  `crates/postgres/src/sql.rs:721-742`). SQLite writes each batch in its own transaction behind one mutex
+  (`crates/sqlite/src/lib.rs:84, 291-300`), so its batches are serial.
+
+**The drivers** split one write into statements of one transaction:
+
+- Postgres: at most 1 024 rows per `INSERT` (`INSERTS_PER_STATEMENT`, `crates/postgres/src/lib.rs:577-615`:
+  "Split up statements to avoid hitting timeouts"), and at most `MAX_INSERT_SIZE` documents per write (`:175`,
+  `:535`).
+- MySQL: `fill_chunks` fills each `INSERT` up to `MYSQL_MAX_CHUNK_BYTES` = 10 MiB of approximate row size,
+  any row count; a larger row gets a chunk of its own (`crates/mysql/src/chunks.rs:170-204`, `knobs.rs:1181-1184`:
+  "Max packet size is 16MiB"; used by `crates/mysql/src/v6/persistence.rs:685-745`).
+
+### 10.2 What apps observe
+
+Nothing directly: batching changes latency and throughput, not results. Indirectly, a commit is
+acknowledged once its batch, and every earlier one, is durable; and a store with a packet or statement limit
+(MySQL's `max_allowed_packet`) accepts every write, whatever the load, because no write is larger than a
+batch (or one commit) and no statement larger than a chunk.
+
+### 10.3 bunvex before
+
+`packages/core/src/committer.ts` wrote a *group* (every commit queued while the previous flush ran) as one
+`flush()`, one transaction, with no cap. Under load a group was thousands of commits. The drivers sent it as:
+Postgres, one `jsonb` parameter per table (one statement whatever the size); MySQL, `INSERT`s of 2 000 rows
+(one overflows MySQL 8.4's default 64 MiB `max_allowed_packet` at 32 KiB per document, a 16 MiB one at 8 KiB);
+MongoDB, `insertMany` (the client splits it into 48 MB messages); SQLite and memory, row by row or one log
+write.
+
+### 10.4 bunvex as built
+
+- **Write batches** (`committer.ts` `drainGroups`, `batchEnd`, `writeBatchOf`). The group is validated and
+  given timestamps as before (each commit against the ones before it in the group, as Convex's
+  `pending_writes`), then written as Convex's batches: whole commits, each batch closed once it holds 64
+  document versions or 64 KiB (`WRITE_BATCH_MAX_DOCUMENTS`, `WRITE_BATCH_MAX_BYTES`, the same soft rule;
+  `commitWriteBytes` sizes a commit as Convex does). Each batch is applied to persistence, flushed (retried as
+  before, STUDY-25 L4), and published: `visibleTs` moves to its last commit, the commit listeners run, its
+  commits are acknowledged. The next batch starts after that. The caps are the `Engine` option `writeBatch`.
+- **One batch at a time** (proposed divergence, §10.6). Batches are flushed one after the other in ts order,
+  never concurrently. Each is a fenced flush that sets the lease's `max_ts` to its last commit (PERSIST-01 C7),
+  so the durable state is always a prefix of whole commits (C4), the log by ts has no hole (C11), and a retried
+  batch is recognised by `max_ts` (C9, DV-124) exactly as a group was.
+- **A failure** stops the committer as before. Batches already flushed stay acknowledged (they are durable);
+  the failing batch and the rest of the group are refused. A committer stopped from outside (a lost lease)
+  between two batches writes nothing more.
+- **Statements.** Postgres sends at most 1 024 rows per statement (the fence CTE carries the first chunk);
+  MySQL fills each `INSERT` up to 10 MiB of SQL text (an upper bound of the escaped row: 3 bytes per string
+  character, 2 per key byte); both as Convex, inside the batch's one transaction (`chunkRows`,
+  `packages/core/src/persistence/chunks.ts`). MongoDB keeps `insertMany` (its client already splits by message
+  size; Convex has no MongoDB driver). SQLite and memory are unchanged.
+- **Not modelled:** Convex's threshold (no batching below 3 writes in flight) and its 1 ms hold. bunvex's
+  group is what queued during the previous flush, as before; those knobs only decide how full a batch gets
+  when the committer is not busy, and with one batch in flight there is nothing to wait for.
+
+### 10.5 Tests
+
+- `packages/core/test/write-batch.test.ts`: a 300-commit group splits into batches that obey the soft rule,
+  each full but the last, flushed and published in ts order; 64 one-document commits fill one batch exactly; a
+  commit above the caps is never split; custom caps; a failed batch keeps the earlier ones acknowledged,
+  refuses the rest, and the reopened store holds that prefix; a transient failure of a later batch is retried;
+  a stop between batches writes nothing more; `chunkRows`.
+- Conformance **K26** (PERSIST-01), every driver, through the engine: (1) 64 writers of 2 KiB documents and a
+  1 100-document commit, under an injected limit that fails any flush breaking the batch rule (as a packet
+  limit would): groups are split, no flush is over, the large commit is visible whole at its ts, every
+  document is stored; (2) flushes of split groups failing transiently, before the store or after it (the answer
+  lost): every commit acknowledged once and stored once (`auditRowsAt`), in ts order; (3) SIGKILL in the middle
+  of split groups (a child announces each flush's timestamps before it starts): `maxTs` ≥ the last
+  acknowledged commit, no torn commit, and every announced commit at or below `maxTs` in `readLog` (a prefix).
+- **Sabotage** (each went red, then was reverted): the bound removed → the unit tests, and K26 (1)–(3) on all
+  five drivers (the injected limit stops the committer); a commit torn across two batches (its index entries
+  flushed with the next batch) → K26 (3) on memory and Postgres ("torn commit", entries missing at `maxTs`) and
+  K26 (2) everywhere; batches flushed in swapped pairs → K26 (3) ("maxTs < last acknowledged", 27 flushed
+  commits missing below `maxTs`); no stop check between batches → the unit test; Postgres sending only its first
+  two statements → K26 (1) (374 of 1 484 documents). On a real store: MySQL with `max_allowed_packet` = 1 MiB
+  and 512 writers of 2 KiB documents (1 MiB groups): all commits pass with the bound (59 flushes for 5 groups);
+  without it the first group fails with "Got a packet bigger than 'max_allowed_packet' bytes" and the committer
+  stops. A 24 MiB commit (2 000 documents of 12 KiB) on a 16 MiB packet: flushed in 10 MiB statements; with
+  main's 2 000-row chunks, the same packet error.
+
+### 10.6 Divergence: one batch at a time (decided)
+
+Convex keeps up to 16 batches in flight; bunvex flushes them one after the other (D13, DV-152, **decided**:
+the owner accepted (a) on 2026-10-01). Why:
+
+- **The contract is a prefix.** PERSIST-01 C4 promises that after a crash the store holds every commit up to
+  `M` and nothing above it. Concurrent batches break that (§10.1, "Crash state"): Convex can come back with a
+  hole below its `max_ts`. The by-ts log (C11) promises an unbroken `prevTs` chain over durable commits, and a
+  follower or export reading it would take a hole for the history.
+- **The fence serializes flushes anyway.** bunvex's fence (C7) writes the lease's `max_ts` in each flush, on
+  every remote driver: an exclusive row lock on Postgres and MySQL, a write conflict on MongoDB. Convex's
+  fence takes a shared lock (`FOR SHARE`) and keeps `max_ts` out of it. Sixteen flushes in flight would queue
+  on that row; running them truly in parallel needs a different fence and a durable prefix computed some other
+  way (C9's landed-group rule reads `max_ts` too).
+- **SQLite is serial in Convex too** (one connection behind a mutex), so only Postgres and MySQL lose
+  parallelism, and only when a group spans several batches.
+
+Options put to the owner: **(a)** as built (recommended, **accepted 2026-10-01**): Convex's caps, one batch at a time, the prefix kept;
+**(b)** up to 16 in flight as Convex: a new fence, and C4/C11 weakened to "every acknowledged commit, whole,
+possibly with unacknowledged holes"; **(c)** Convex's statement chunking only, one transaction per group as
+before: no throughput cost, bounds every statement and packet but not the transaction (not Convex's batches).
+
+### 10.7 Measurements
+
+`bench/_cb.ts`-style runs (lab script, not committed): 64 writers for 4 s through the engine, this branch vs
+`main` (`6fcb525`), interleaved, 3 runs each, medians; Apple M-series laptop, Postgres 17, MySQL 8.4 and the
+store on the same machine. *small*: one ~150-byte document per mutation; *seed*: 100 documents of ~300 bytes
+per mutation (each commit is above the caps, so each is a batch of its own: ~60 flushes per group).
+
+| Driver | small: commits/s, branch / main | seed: commits/s, branch / main | seed: flushes per group | seed: flush p99, ms | seed: commit p50 / p99, ms, branch | main |
+|---|---|---|---|---|---|---|
+| SQLite | 9 584 / 9 360 | 105 / 256 (−59 %) | 38 / 1 | 29 / 158 | 706 / 864 | 252 / 338 |
+| Postgres | 19 105 / 18 432 | 221 / 224 (−1 %) | 59 / 1 | 18 / 271 | 287 / 514 | 292 / 351 |
+| MySQL | 12 235 / 13 392 | 142 / 176 (−19 %) | 63 / 1 | 23 / 410 | 457 / 662 | 355 / 483 |
+| memory (+log) | 43 984 / 45 021 | 545 / 592 (−8 %) | 62 / 1 | 4.5 / 13.7 | 115 / 171 | 110 / 170 |
+
+Small commits: unchanged (a group of 64 one-document commits is one batch; differences are run-to-run noise,
+e.g. Postgres 12.7k–22.0k on the branch, 14.9k–22.0k on main). Bulk seeding: every flush is bounded (its p99
+drops 6–18×), at the cost of one transaction per batch: free on Postgres here, −19 % on MySQL, −59 % on
+SQLite, where each transaction commit is an fsync. Convex's SQLite pays the same per batch; Convex's Postgres
+and MySQL overlap up to 16 batches (§10.6).

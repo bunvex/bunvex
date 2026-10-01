@@ -1,4 +1,4 @@
-// Runs @bunvex/persistence-conformance (PERSIST-01, K1–K25) against every first-party driver.
+// Runs @bunvex/persistence-conformance (PERSIST-01, K1–K26) against every first-party driver.
 //   bun bench/conformance.ts                    memory + sqlite (+ postgres/mysql/mongodb when their URL is set)
 //   DRIVERS=sqlite,postgres PG_URL=… bun bench/conformance.ts
 //   KILLS=8 (K6 cycles)   CHECKS=K1,K2,K3,K6,K7,K20,K22 (subset; K3 covers K3–K5, K10 covers K10–K19)
