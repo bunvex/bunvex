@@ -270,9 +270,16 @@ export class Engine {
   }
 
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
-  private async execute<T>(kind: ExecutionKind, snapshot: number, body: TxBody<T>, system = false) {
+  private async execute<T>(
+    kind: ExecutionKind,
+    snapshot: number,
+    body: TxBody<T>,
+    system = false,
+    caller: Caller = ANONYMOUS,
+  ) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    tx.identity = caller.identity;
     tx.instanceSecret = this.instanceSecret;
     if (kind === "mutation") tx.docValidators = this.docValidators;
     const value = await runDeterministic(kind, now, () => body(tx));
