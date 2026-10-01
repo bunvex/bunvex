@@ -90,15 +90,16 @@ describe("navigation", () => {
 describe("data", () => {
   test("the header shows the deployment and the host's actions", async () => {
     mount("/", { headerActions: <button type="button">Account</button> });
-    await screen.findByText("memory");
-    expect(screen.getByText("local")).toBeDefined();
+    // twice in the DOM: one muted line on a phone, the labelled list from md up (UX-4)
+    await screen.findAllByText("memory");
+    expect(screen.getAllByText("local").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Account" })).toBeDefined();
   });
 
   test("the host's QueryClient holds the dashboard's cache, under its scope", async () => {
     const queryClient = createDashboardQueryClient();
     mount("/", { queryClient, scope: "p1" });
-    await screen.findByText("memory");
+    await screen.findAllByText("memory");
     expect(queryClient.getQueryData(dashboardKeys.deployment("p1"))).toMatchObject({ persistence: "memory" });
   });
 

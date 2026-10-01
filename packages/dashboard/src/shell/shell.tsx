@@ -162,7 +162,8 @@ export function Shell() {
                   onClick={() => (runner.context.shown ? runner.context.close() : runner.context.open())}
                 >
                   <Play aria-hidden="true" />
-                  Run functions
+                  {/* an icon on a phone; its name stays for assistive tech (UX-4) */}
+                  <span className="sr-only sm:not-sr-only">Run functions</span>
                 </Button>
               )}
               {headerActions}
@@ -236,13 +237,25 @@ function DeploymentSummary() {
     ["Version", data?.version],
   ];
   return (
-    <dl className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm" aria-busy={!data}>
-      {items.map(([label, value]) => (
-        <div key={label} className="flex items-baseline gap-1.5">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className={cn("font-medium", label === "Version" && "font-mono text-xs")}>{value ?? "…"}</dd>
-        </div>
-      ))}
-    </dl>
+    <>
+      {/* on a phone, one muted line instead of three labelled ones (UX-4) */}
+      <p className="truncate text-xs text-muted-foreground md:hidden" aria-busy={!data}>
+        {items.map(([label, value]) => (
+          <span key={label}>
+            <span className="sr-only">{label} </span>
+            {value ?? "…"}
+            {label !== "Version" && <span aria-hidden="true"> · </span>}
+          </span>
+        ))}
+      </p>
+      <dl className="hidden flex-wrap items-baseline gap-x-5 gap-y-1 text-sm md:flex" aria-busy={!data}>
+        {items.map(([label, value]) => (
+          <div key={label} className="flex items-baseline gap-1.5">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className={cn("font-medium", label === "Version" && "font-mono text-xs")}>{value ?? "…"}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }

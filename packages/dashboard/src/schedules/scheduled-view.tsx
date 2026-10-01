@@ -148,7 +148,11 @@ export function ScheduledView() {
             />
           )}
         </div>
-        <p role="status" className="min-h-5 text-sm text-muted-foreground">
+        {/* the count before the list, as on the other list screens (UX-14) */}
+        {!list.isPending && !list.error && (
+          <p className="text-sm text-muted-foreground tabular-nums">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</p>
+        )}
+        <p role="status" className="text-sm text-muted-foreground empty:-mt-3">
           {outcome}
         </p>
         {liveError && <ErrorState error={liveError} />}
@@ -171,7 +175,7 @@ export function ScheduledView() {
                   ? `No run of ${search.function} is scheduled.`
                   : "Nothing is scheduled. Functions scheduled with ctx.scheduler.runAfter or runAt wait here until they run."
             }
-            footer={<span aria-live="polite">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled`}</span>}
+            footer={list.hasNextPage ? <span>{`${runs.length} loaded`}</span> : undefined}
           />
         )}
       </div>
