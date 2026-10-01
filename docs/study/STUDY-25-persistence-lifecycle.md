@@ -1,6 +1,7 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
-- **Status:** draft. Divergences L1–L12 (§4) await the owner, except L9 and L10 (decided 2026-09-30).
+- **Status:** accepted. L1–L12 (§4) decided by the owner: L9 and L10 on 2026-09-30, the rest on 2026-10-01
+  ("approve all recommendations"). L1 is done; L3–L8 are to be built.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -167,18 +168,18 @@ Throwaway runs, 30 Sep 2026:
 
 | # | Divergence | Convex | bunvex | Risk / why | Recommendation | Decision |
 |---|---|---|---|---|---|---|
-| L1 | DDL on every open | Guarded (`to_regclass`, table count, sentinel) | Guarded on Postgres (#62). **MySQL: unguarded `IF NOT EXISTS` on every open**; MongoDB: `createIndex` ×3 | A paused peer can wedge startup; MDL contention (MySQL bug 63144) | **Bug.** Guard MySQL (table count, as Convex v5) and MongoDB (index list) | owner |
-| L2 | First-start serialization | None | Advisory lock on Postgres | An improvement: concurrent first opens crashed without it (STUDY-24) | Keep; add the equivalent to MySQL (`GET_LOCK` around bootstrap DDL only) | owner |
-| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | None | A hung connection hangs startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | owner |
-| L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff; an ambiguous commit is fatal | Fail-stop on any error | A network blip or database restart kills the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | owner |
-| L5 | Retries of reads and init | Once, on a fresh connection | None | Spurious query errors after a database restart | Bug (minor). One retry | owner |
-| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
-| L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | owner |
-| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | owner |
-| L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70) |
-| L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** |
-| L11 | Shutdown | SIGINT only; committer aborted; lease not released; SIGTERM kills | Drain, release, close; SIGINT and SIGTERM (`bench/server`) | Deploys hand over at once; no in-flight commit is left in doubt | Keep; wire into the product CLI when it exists | owner |
-| L12 | Pools | 128; idle 90 s; MySQL lifetime 600 s | 16; driver defaults | Throughput under load; stale connections behind load balancers | Expose `POOL` (exists); add idle and lifetime settings; measure before changing defaults | owner |
+| L1 | DDL on every open | Guarded (`to_regclass`, table count, sentinel) | Guarded on Postgres (#62). **MySQL: unguarded `IF NOT EXISTS` on every open**; MongoDB: `createIndex` ×3 | A paused peer can wedge startup; MDL contention (MySQL bug 63144) | **Bug.** Guard MySQL (table count, as Convex v5) and MongoDB (index list) | **Decided (owner, 2026-10-01): match Convex.** Done: Postgres (#62), MySQL (#67), MongoDB (#84) (DV-102, resolved) |
+| L2 | First-start serialization | None | Advisory lock on Postgres | An improvement: concurrent first opens crashed without it (STUDY-24) | Keep; add the equivalent to MySQL (`GET_LOCK` around bootstrap DDL only) | **Decided (owner, 2026-10-01): keep bunvex's** (an improvement; MySQL has `GET_LOCK`, #67) (DV-103) |
+| L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | None | A hung connection hangs startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **Decided (owner, 2026-10-01): match Convex** (bug; to be built) (DV-104) |
+| L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff; an ambiguous commit is fatal | Fail-stop on any error | A network blip or database restart kills the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | **Decided (owner, 2026-10-01): match Convex** (bug; to be built) (DV-105) |
+| L5 | Retries of reads and init | Once, on a fresh connection | None | Spurious query errors after a database restart | Bug (minor). One retry | **Decided (owner, 2026-10-01): match Convex** (bug; to be built) (DV-106) |
+| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | **Decided (owner, 2026-10-01): match Convex** (bug; to be built): a stored layout version; unknown or foreign layouts refused (DV-107) |
+| L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | **Decided (owner, 2026-10-01): match Convex**, built with L6 (DV-108) |
+| L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | **Decided (owner, 2026-10-01):** TLS required by default (`sslmode=require`, can be turned off) and `target_session_attrs=read-write`, as Convex (to be built, DV-109); the database name is **not** derived from the instance name, the URL decides (divergence, DV-110). Convex's env names are accepted as aliases (DV-88) |
+| L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70; DV-99) |
+| L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** (#62; DV-14) |
+| L11 | Shutdown | SIGINT only; committer aborted; lease not released; SIGTERM kills | Drain, release, close; SIGINT and SIGTERM (`bench/server`) | Deploys hand over at once; no in-flight commit is left in doubt | Keep; wire into the product CLI when it exists | **Decided (owner, 2026-10-01): keep bunvex's** (DV-111) |
+| L12 | Pools | 128; idle 90 s; MySQL lifetime 600 s | 16; driver defaults | Throughput under load; stale connections behind load balancers | Expose `POOL` (exists); add idle and lifetime settings; measure before changing defaults | **Decided (owner, 2026-10-01): keep bunvex's** — 16, settings exposed; defaults change only after measuring (DV-112) |
 | — | Multitenant layouts | `instance_name` / `deployment_id` columns | None | Not needed for self-hosting | Not supported (record only) | — |
 | — | MongoDB recovery delete | (no MongoDB) | Deletes rows above the marker at open, with no lease | Data loss with two processes (STUDY-24 S1) | Covered by the MongoDB lease (C7) | — |
 
@@ -198,5 +199,6 @@ These become conformance checks where they apply to every driver.
 
 - L4: how many retries before fail-stop? Convex retries indefinitely with backoff, and relies on the
   duplicate-key signal.
-- L8: adopt Convex's `POSTGRES_URL` / `MYSQL_URL` / `INSTANCE_NAME` names as the primary configuration, or
-  only as aliases?
+- ~~L8: adopt Convex's `POSTGRES_URL` / `MYSQL_URL` / `INSTANCE_NAME` names as the primary configuration, or
+  only as aliases?~~ Answered (owner, 2026-10-01): Convex's database env names are aliases of bunvex's
+  (DV-88); the database name comes from the URL, not the instance name (DV-110).

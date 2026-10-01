@@ -492,7 +492,7 @@ functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tab
 | S1 | Scheduled functions and cron runs refresh on a `watch…` signal (refetch), not a reactive query | the same approach as the documents (D3) | follows D3 (decided) |
 | S2 | No component picker | bunvex has no components yet | follow-up |
 | F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **decided** (30 Sep 2026): images only, as Convex |
-| H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | follows the data |
+| H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | Decided (owner, 2026-10-01): keep bunvex's (DV-72) |
 | H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |
 
 ## 10. The runner and the logs, second pass (added 30 Sep 2026)
