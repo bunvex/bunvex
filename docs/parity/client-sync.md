@@ -52,8 +52,8 @@ idempotency or reconnect logic.
 | `Remove` {queryId} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
 | `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | done (STUDY-23) | Runs in the connection's queue, answers with the commit ts, and is idempotent by (sessionId, requestId). |
 | `Action` {requestId, udfPath, args, componentPath?} over the WebSocket | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Concurrent, at most 1000 in flight. |
-| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | partial (STUDY-23) | Answered with `AuthError` until `@bunvex/auth` verifies tokens (P9). |
-| `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | partial (STUDY-23) | As "User". |
+| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | done (STUDY-27) | Verified by `@bunvex/auth`; the official client's `setAuth` works against bunvex (oracle test). |
+| `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | partial (STUDY-27) | Answered with `AuthError` until admin keys exist (Phase 3 item 6). |
 | `Authenticate` {tokenType: "None", baseVersion} (logout) | `browser/sync/protocol.ts` | done (STUDY-23) | Advances the identity version; every query re-runs. |
 | `Event` {eventType, event} for client telemetry (ClientConnect marks, ClientReceivedTransition, NetworkRecoveryReconnect) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Accepted and ignored (P11). |
 
@@ -69,7 +69,7 @@ idempotency or reconnect logic.
 | `MutationResponse` success {requestId, result, ts, logLines} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) |  |
 | `MutationResponse` failure {requestId, result: message, logLines, errorData?} | `browser/sync/protocol.ts` | done (STUDY-23) | `ts` null. |
 | `ActionResponse` success/failure {requestId, success, result, logLines, errorData?} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
-| `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | partial (STUDY-23) | Sent for tokens the server cannot verify yet, then close. |
+| `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | done (STUDY-27) | A token that fails verification: `authUpdateAttempted: true`; an expired identity: `false`. Then close. |
 | `FatalError` {error} sent before closing on a deterministic user error (BadRequest, Unauthenticated, …); the client logs it and terminates | `crates/local_backend/src/subs/mod.rs`, `browser/sync/client.ts` | done (STUDY-23) | Malformed frames and a `BaseVersionMismatch`. |
 | `TransitionChunk` (see §1) | `browser/sync/protocol.ts` | missing | — |
 | `Ping` (see §1) | `browser/sync/protocol.ts` | done (STUDY-23) |  |
@@ -144,9 +144,9 @@ idempotency or reconnect logic.
 | Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | missing | — |
 | Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | missing | — |
 | `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | missing | — |
-| Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | missing | — |
-| Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | missing | Note for bunvex: Subs are shared across sockets by path+args, so once `ctx.auth` exists the key must include identity, or per-user queries will leak between users. |
-| Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | missing | — |
+| Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
+| Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
+| Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | partial (STUDY-27) | User tokens: checked before every transition, mutation and action. Admin revalidation comes with admin keys. |
 | Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | missing | Used by the dashboard and tests. |
 
 ### 8. Optimistic updates
