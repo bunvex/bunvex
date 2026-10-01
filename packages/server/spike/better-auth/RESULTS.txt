@@ -1,0 +1,19 @@
+✗ sign-up WITHOUT real crypto: Can't use crypto.getRandomValues() in mutations. Use an action instead.
+✓ sign-up in one mutation: 55.6 ms; user j57ea6hcdhg4tzggkdar123xr18feb83
+  rows: user 1, account 1, session 1, outbox 1
+✓ sign-in in one mutation: 54.3 ms; set-cookie names: better-auth.session_token
+✓ signing key created at startup (a mutation); jwks rows 1
+✓ getSession in a query: 0.9 ms; user ada@x.dev
+  getSession ×200: p50 0.28 ms, p99 1.67 ms
+✓ sign-up with a failure between user and account: failed (injected failure after the user was created); users before 1, after 1; outbox 1
+✓ 20 concurrent distinct sign-ups: 20 ok in 199 ms, OCC retries 0
+✓ 10 concurrent sign-ups of one email: 1 ok, users with that email 1, OCC retries 9; errors: User already exists. Use another email.
+✓ admin listUsers (search "u1") in a query: 3.7 ms; total 11: u1@x.dev, u10@x.dev, u11@x.dev, u12@x.dev, u13@x.dev
+✓ banUser in a mutation; the banned user's getSession now: null
+  sign-in after ban: refused: You have been banned from this application. Please contact support if you believe this is an error.
+✓ getToken in a mutation: 0.8 ms; alg ES256, sub j57ea6hcdhg4tzggkdar123xr18feb83, iss http://localhost:3210, exp−iat 900s; jwks rows 1
+✓ getToken in a query once keys exist: ok
+✓ sign-up from an action: 52.6 ms; user created; adapter calls outside an execution: 0
+✓ action sign-up with an injected failure: failed; users before 23, after 23 (atomic through transaction())
+  getSession headers: access-control-expose-headers, cache-control, pragma, set-auth-jwt; same response twice: true; same set-auth-jwt twice: false
+adapter: 818 calls, 0 outside an execution, 44 transaction() calls

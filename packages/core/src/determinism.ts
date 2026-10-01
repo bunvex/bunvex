@@ -22,6 +22,8 @@ type Execution = {
   perfStart: number;
   /** The real monotonic clock at the start, to count a mutation's elapsed time from. */
   monotonicStart: number;
+  /** SPIKE (STUDY-28 B5): the auth dispatcher's executions use the real CSPRNG. */
+  realCrypto?: boolean;
 };
 
 const executions = new AsyncLocalStorage<Execution>();
@@ -128,7 +130,7 @@ export function installDeterminism() {
   };
   crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
     const e = executions.getStore();
-    if (e) throw notAllowed("crypto.getRandomValues()", e.kind);
+    if (e && !e.realCrypto) throw notAllowed("crypto.getRandomValues()", e.kind);
     return realGetRandomValues(array as never) as T;
   }) as typeof crypto.getRandomValues;
 }
@@ -149,6 +151,12 @@ export function runDeterministic<T>(kind: ExecutionKind, now: number, fn: () => 
     monotonicStart: realPerformanceNow(),
   };
   return executions.run(execution, fn);
+}
+
+/** SPIKE (STUDY-28 B5): run `fn` in the current execution with the real `crypto.getRandomValues`. */
+export function withRealCrypto<T>(fn: () => T): T {
+  const e = executions.getStore();
+  return e ? executions.run({ ...e, realCrypto: true }, fn) : fn();
 }
 
 /** Run engine work (a persistence call) outside the current execution: real globals, no restrictions. */

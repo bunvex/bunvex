@@ -9,7 +9,7 @@ export {
   type LogEntry,
   overlaps,
 } from "./committer.ts";
-export { type ExecutionKind, wallClock } from "./determinism.ts";
+export { type ExecutionKind, wallClock, withRealCrypto } from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,
