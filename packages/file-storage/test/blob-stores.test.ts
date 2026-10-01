@@ -1,5 +1,5 @@
 // Every backend against the conformance suite. S3 runs when a bucket is configured for tests
-// (S3_TEST_BUCKET, with S3_ENDPOINT_URL and credentials; CI uses MinIO).
+// (S3_TEST_BUCKET, with S3_ENDPOINT_URL and credentials; CI uses SeaweedFS).
 import { afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

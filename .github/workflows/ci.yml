@@ -185,17 +185,24 @@ jobs:
         run: bun run conformance
 
   file-storage-s3:
-    name: file storage · S3 (MinIO)
+    name: file storage · S3 (SeaweedFS)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: bunvex
+      AWS_SECRET_ACCESS_KEY: bunvex-secret
+      AWS_REGION: us-east-1
     steps:
-      # The blob store conformance suite against an S3-compatible store (STUDY-32): MinIO, path-style.
-      - name: MinIO, with a test bucket
+      # The blob store conformance suite against an S3-compatible store (STUDY-32). SeaweedFS (MinIO no longer
+      # publishes public images), all in one, its S3 API on :8333 with no identities configured (any key is
+      # accepted); the bucket is made with the runner's aws CLI.
+      - name: SeaweedFS with an S3 bucket
         run: |
-          docker run -d --name minio -p 9000:9000 -e MINIO_ROOT_USER=bunvex -e MINIO_ROOT_PASSWORD=bunvex-secret minio/minio server /data
-          for i in $(seq 1 60); do curl -sf http://127.0.0.1:9000/minio/health/ready && break; sleep 1; done
-          docker run --rm --network host --entrypoint sh minio/mc -c "mc alias set m http://127.0.0.1:9000 bunvex bunvex-secret && mc mb m/bunvex-test"
+          docker run -d --name seaweed -p 8333:8333 chrislusf/seaweedfs:4.48 server -s3
+          for i in $(seq 1 90); do curl -s -o /dev/null http://127.0.0.1:8333/ && break; sleep 1; done
+          for i in $(seq 1 30); do aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://bunvex-test && break; sleep 2; done
+          aws --endpoint-url http://127.0.0.1:8333 s3 ls
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -204,11 +211,8 @@ jobs:
       - name: blob store conformance on S3
         env:
           S3_TEST_BUCKET: bunvex-test
-          S3_ENDPOINT_URL: http://127.0.0.1:9000
-          AWS_REGION: us-east-1
+          S3_ENDPOINT_URL: http://127.0.0.1:8333
           AWS_S3_FORCE_PATH_STYLE: "true"
-          AWS_ACCESS_KEY_ID: bunvex
-          AWS_SECRET_ACCESS_KEY: bunvex-secret
         run: bun test packages/file-storage
 
   conformance:
