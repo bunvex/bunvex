@@ -128,11 +128,11 @@ Common to all drivers:
 | D2 | Postgres uses `LIMIT limit * 2` after `DISTINCT ON`, without paging; tombstones consume it (`postgres.ts:64`, `:98`) | BUG | Short or `null` results after deletes, e.g. a queue whose head was consumed | **fixed in #8** |
 | D3 | MySQL `key varbinary(512)`; Postgres full key in the primary key (about 2.7 KB max); no prefix/sha256 split | BUG | Indexing a long string makes the flush fail, and with STUDY-06 D1 the failed commit even becomes visible. Convex splits keys at 2 500 bytes plus a SHA-256 | owner |
 | D4 | The conformance suite does not exercise small limits with many versions and tombstones | BUG (test gap) | D1/D2 pass K1–K7. The suite should include them | owner |
-| D5 | No retention of old versions or tombstones | INTERNAL | Storage and memory grow without bound; scans slow down as tombstones accumulate. Not observable in results. Convex keeps index versions 4 min and documents 14 days | owner |
-| D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | owner |
-| D7 | Documents are joined by "newest ≤ ts" per id, not by exact `ts` from the index entry | INTERNAL | Same answer, one extra ordered lookup per row | owner |
-| D8 | Column types: `id text`/`varchar(64)`, `table_id int`, JSON as text, vs Convex's `BYTEA` ids and binary JSON | INTERNAL | Follows from STUDY-01. `varchar(64)` must fit the final id format | owner |
-| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | owner |
+| D5 | No retention of old versions or tombstones | INTERNAL | Storage and memory grow without bound; scans slow down as tombstones accumulate. Not observable in results. Convex keeps index versions 4 min and documents 14 days | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-65) |
+| D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-66) |
+| D7 | Documents are joined by "newest ≤ ts" per id, not by exact `ts` from the index entry | INTERNAL | Same answer, one extra ordered lookup per row | Decided (owner, 2026-10-01): keep bunvex's (DV-67) |
+| D8 | Column types: `id text`/`varchar(64)`, `table_id int`, JSON as text, vs Convex's `BYTEA` ids and binary JSON | INTERNAL | Follows from STUDY-01. `varchar(64)` must fit the final id format | Decided (owner, 2026-10-01): keep bunvex's (DV-68) |
+| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-62) |
 
 ## 5. Tests
 

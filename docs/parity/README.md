@@ -55,6 +55,8 @@ wrong.
 | B12 | **Fixed in #12** (with Convex's transaction read limits). `collect()` is silently capped at 8192 rows; `take(0)` or a negative `take` misbehaves on the memory driver | STUDY-07 D1/D2 |
 | B13 | Once `ctx.auth` exists, cache and subscription keys would serve one user's results to another (latent) | STUDY-08 D6 |
 | B14 | **Fixed in #11.** One socket subscribing twice to the same key leaks a reference count | client-sync.md |
+| B15 | No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
+| B16 | No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
 
 ### Phase 1 — the core behaves like Convex
 

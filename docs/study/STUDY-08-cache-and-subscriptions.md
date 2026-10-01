@@ -133,9 +133,9 @@ resolving only once its effect is visible" as open "N" items.
 | D5 | A mutation resolves before the client's subscriptions reflect it (no ts in `res`, no client-side wait) | OBSERVABLE | Breaks Convex's read-your-writes-after-await guarantee. Known "N" item | owner |
 | D6 | The cache key and subscription key have no identity | BUG (latent) | Harmless today (no auth). The moment `ctx.auth` lands, one user's cached or subscribed result would be served to another unless identity is added, as in Convex's `observed_identity` rule | owner |
 | D7 | The cache/subscription key depends on argument field order (`JSON.stringify(args)`) | INTERNAL | Duplicate entries and executions; no wrong results | owner |
-| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | owner |
-| D9 | Invalidation is a linear scan over subscriptions × writes × intervals, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | owner |
-| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | owner |
+| D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-63) |
+| D9 | Invalidation is a linear scan over subscriptions × writes × intervals, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-64) |
+| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-57) |
 | D11 | `err` has no `errorData` | OBSERVABLE | `ConvexError` data is lost (STUDY-11) | owner |
 
 ## 5. Tests

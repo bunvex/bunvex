@@ -146,7 +146,7 @@ An **object field set to `undefined` is omitted** (`if (v !== undefined)`).
 | D9 | No `replace` | OBSERVABLE | Missing API | owner |
 | D10 | `patch({f: undefined})`: inside the same mutation the field is still present with the value `undefined` | OBSERVABLE | `"f" in doc` / `Object.keys` differ within the mutation (after commit it matches) | owner |
 | D11 | Field order: insertion order with `_id`/`_creationTime` last, vs Convex's sorted order | OBSERVABLE | Visible in `Object.keys`, `JSON.stringify` and snapshot tests | owner |
-| D12 | No table-name rules and no read-only system tables | OBSERVABLE | Relevant once system tables (`_storage`, `_scheduled_functions`) exist | owner |
+| D12 | No table-name rules and no read-only system tables | OBSERVABLE | Relevant once system tables (`_storage`, `_scheduled_functions`) exist | table-name rules done (#6); read-only system tables and `db.system`: Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-69) |
 
 ## 5. Tests
 

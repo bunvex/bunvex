@@ -55,12 +55,12 @@ to a spec.
 | [STUDY-16](STUDY-16-query-chaining.md) | Query chaining, `unique()`, `fullTableScan()`, async iteration | implemented (#40) |
 | [STUDY-17](STUDY-17-paginate.md) | `.paginate()`, cursors, reactive page boundaries, the instance secret | implemented (#42) |
 | [STUDY-18](STUDY-18-value-model.md) | The value model: types, order, index keys, JSON | implemented (#15, #21) |
-| [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 await the owner |
+| [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 decided (owner, 2026-09-30 and 2026-10-01) |
 | [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1–D3 await the owner |
-| [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 awaits the owner |
+| [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 decided (owner, 2026-10-01) |
 | [STUDY-23](STUDY-23-sync-protocol-v1.md) | Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | accepted: P1–P12 as recommended (owner, 2026-09-30); implementation in steps |
-| [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H5, H7 and H8 decided (#62, #70); the rest await the owner; S1–S4 fixed or in review, S5 open |
-| [STUDY-25](STUDY-25-persistence-lifecycle.md) | Persistence lifecycle: open, schema and versioning, timeouts, retries, shutdown (with runs of the real Convex binary) | draft: L1–L12 await the owner (L9, L10 decided) |
+| [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H1–H12 decided (owner, 2026-09-30 and 2026-10-01); S1–S4 fixed, S5 open (DV-54) |
+| [STUDY-25](STUDY-25-persistence-lifecycle.md) | Persistence lifecycle: open, schema and versioning, timeouts, retries, shutdown (with runs of the real Convex binary) | accepted: L1–L12 decided (owner, 2026-09-30 and 2026-10-01); L1 done, L3–L8 to be built |
 | [STUDY-26](STUDY-26-sync-client.md) | The sync client: base client, local and remote state, requests, optimistic updates, reconnect and backoff, `BunvexClient` | accepted: C3–C7 as recommended (owner, 2026-09-30) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
