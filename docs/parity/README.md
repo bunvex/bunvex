@@ -91,9 +91,10 @@ Then `@bunvex/client` (base client, reconnect, backoff, optimistic updates, reac
 In this order:
 
 1. auth (OIDC and custom JWT, `ctx.auth`);
-2. scheduler and crons;
-3. file storage;
-4. HTTP actions;
+2. scheduler and crons (STUDY-30);
+3. HTTP actions;
+4. file storage (it uses HTTP actions for uploads and downloads; built-in auth, STUDY-28, needs them too —
+   swapped with HTTP actions by the owner, 2026-10-01);
 5. retention and garbage collection of old versions;
 6. admin keys;
 7. the CLI and codegen;
