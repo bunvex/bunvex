@@ -163,7 +163,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-12 D11, D12](../study/STUDY-12-dashboard.md#4-divergences) | Dashboard: custom query, per-table metrics; function metrics on the Health screen |
 | [STUDY-12 L6](../study/STUDY-12-dashboard.md#73-divergences) | Dashboard logs: deployment events, usage and identity, "act as a user", run history, live runner results |
 | [STUDY-12 S2, H2](../study/STUDY-12-dashboard.md#93-divergences) | Dashboard: component picker; server-recorded events (pushes, index builds) |
-| [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: auth helpers and `usePreloadedQuery` (with `@bunvex/auth` and `@bunvex/nextjs`); `usePaginatedQuery` comes in the next PR |
+| [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: `usePreloadedQuery` (with `@bunvex/nextjs`); `usePaginatedQuery` and the auth helpers (STUDY-27) landed |
 | [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery` |
 | [STUDY-26 H3](../study/STUDY-26-sync-client.md#93-divergences) | HTTP client `function(name, componentPath, args)` and `/api/function` (with components) |
 | [STUDY-27 A5](../study/STUDY-27-auth.md#4-divergences) | React: `BunvexProviderWithClerk` / `BunvexProviderWithAuth0` (after `BunvexProviderWithAuth`) |

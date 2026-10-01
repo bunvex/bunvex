@@ -210,10 +210,10 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexProviderWithAuth({client, useAuth})` where `useAuth()` → `{isLoading, isAuthenticated, fetchAccessToken}` | `react/ConvexAuthState.tsx` | missing | — |
-| Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | missing | — |
-| `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | missing | — |
-| `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | missing | — |
+| `ConvexProviderWithAuth({client, useAuth})` where `useAuth()` → `{isLoading, isAuthenticated, fetchAccessToken}` | `react/ConvexAuthState.tsx` | done (STUDY-27) | `BunvexProviderWithAuth`. Tested differentially against `convex/react` (`sync-e2e/react/auth.test.tsx`). |
+| Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | done (STUDY-27) | Tested: a query never runs signed out, on mount or on sign-out. |
+| `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | done (STUDY-27) | `useBunvexAuth()`. |
+| `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | done (STUDY-27) | |
 | `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | missing | ARCHITECTURE: D. |
 | `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | missing | ARCHITECTURE: D. |
 
