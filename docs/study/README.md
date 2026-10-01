@@ -42,9 +42,9 @@ to a spec.
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
 | [STUDY-04](STUDY-04-table-and-index-metadata.md) | Table and index metadata (`_tables`, `_index`) | implemented (#6) |
 | [STUDY-05](STUDY-05-index-keys-and-ordering.md) | Value order, index keys and system indexes | implemented / decided: all fixed (B5, B6, B11) or resolved (DV-33–DV-37) |
-| [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | decided; D3, D8, D10–D12 are gaps to build (DV-57, DV-59–DV-62) |
+| [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | decided; D3, D10, D11 resolved to match Convex (DV-57, DV-60, DV-61); D8, D12 are gaps to build (DV-59, DV-62) |
 | [STUDY-07](STUDY-07-query-semantics.md) | Query semantics (`withIndex`, `take`, `collect`, limits) | implemented / decided: all fixed or resolved (DV-40–DV-43) |
-| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | decided; D6 (sync path, B13) and D8–D10 (DV-57, DV-63, DV-64) to build |
+| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build |
 | [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | decided; D3 fixed (#17, B4); D5, D6, D9 gaps (DV-62, DV-65, DV-66; D6 partly built, #117); D4 not tracked |
 | [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | implemented / decided; D12 (`db.system`) a gap (DV-69) |
 | [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | implemented / decided: all resolved (DV-31, DV-44, DV-46, DV-49, DV-70, DV-71) |
