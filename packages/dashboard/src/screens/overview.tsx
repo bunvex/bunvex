@@ -8,6 +8,7 @@ import { cn } from "@bunvex/ui/lib/utils";
 import type { ReactNode } from "react";
 import { useStatsHistory } from "../data/live.ts";
 import type { DeploymentStats } from "../data-source.ts";
+import { HealthMetrics } from "../metrics/health.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { cacheHitRate, commitRates, formatCount, formatPercent, formatRate, ratePerSecond } from "./stats.ts";
 
@@ -32,6 +33,7 @@ export function Overview() {
       ) : (
         !error && <Loading />
       )}
+      <HealthMetrics />
     </>
   );
 }
