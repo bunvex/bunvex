@@ -72,6 +72,10 @@
     "packages/auth": {
       "name": "@bunvex/auth",
       "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/values": "workspace:*",
+        "jose": "^6.2.12",
+      },
     },
     "packages/bunvex": {
       "name": "bunvex",
@@ -185,6 +189,7 @@
       "name": "@bunvex/server",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/auth": "workspace:*",
         "@bunvex/core": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/values": "workspace:*",
@@ -193,6 +198,7 @@
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
         "@types/object-inspect": "^1.13.0",
+        "jose": "^6.2.12",
       },
       "peerDependencies": {
         "@bunvex/persistence": "workspace:*",
