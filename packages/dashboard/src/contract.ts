@@ -8,6 +8,7 @@
 import { test as bunTest, describe, expect } from "bun:test";
 import { describeAuthContract } from "./contract-auth.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
+import { describeMetricsContract } from "./contract-metrics.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import {
   type DashboardDataSource,
@@ -555,6 +556,7 @@ export function describeDataSourceContract(
     // -------------------------------------------------------------- the deployment's other features (§14)
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
     describeDeploymentStateContract({ make, test, opts });
+    describeMetricsContract({ make, test });
     describeAuthContract({ make, test });
 
     // -------------------------------------------------------------- writes (opt-in)
