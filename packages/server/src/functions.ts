@@ -11,6 +11,7 @@ import {
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
+import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   checkValue,
   displayValue,
@@ -22,20 +23,34 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
+import { ActionPermits } from "./action-permits.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
+import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import { SYSTEM_QUERIES } from "./system-functions.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
 
+/** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
+const registryKey = (name: string) => {
+  const i = name.lastIndexOf(":");
+  const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
+  return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
+};
+
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
 export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
 export type QueryCtx = { db: Tx; auth: Auth };
-export type MutationCtx = { db: Tx; auth: Auth };
+export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler };
+/** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
+export type FunctionRef = AnyFunctionReference | string;
 export type ActionCtx = {
   auth: Auth;
-  runQuery: (name: string, args?: unknown) => Promise<unknown>;
-  runMutation: (name: string, args?: unknown) => Promise<unknown>;
+  runQuery: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runMutation: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runAction: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  scheduler: Scheduler;
 };
 
 /** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
@@ -121,7 +136,15 @@ export const internalAction = builder<ActionCtx>("action", "internal");
 export class Functions {
   private fns = new Map<string, FunctionDef>();
 
-  constructor(private engine: Engine) {}
+  /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
+  readonly actionPermits: ActionPermits;
+
+  constructor(
+    private engine: Engine,
+    opts: { actionPermits?: ActionPermits } = {},
+  ) {
+    this.actionPermits = opts.actionPermits ?? ActionPermits.fromEnv();
+  }
 
   register(module: string, fns: Record<string, FunctionDef>) {
     for (const [n, f] of Object.entries(fns)) this.fns.set(`${module}:${n}`, f);
@@ -175,11 +198,86 @@ export class Functions {
     return async (db: Tx) => this.checkReturns(f, await f.handler({ db, auth: txAuth(db) }, this.checkArgs(f, args)));
   }
 
-  /** The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's. */
-  private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown) {
+  /**
+   * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
+   * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
+   */
+  private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
     return perAttempt(async (db: Tx) =>
-      this.checkReturns(f, await f.handler({ db, auth: txAuth(db) }, this.checkArgs(f, args))),
+      this.checkReturns(
+        f,
+        await f.handler({ db, auth: txAuth(db), scheduler: makeScheduler(this, { db, job }) }, this.checkArgs(f, args)),
+      ),
     );
+  }
+
+  /**
+   * The canonical name (`module.js:function`) of a function to schedule, which must exist, of any kind or
+   * visibility (Convex's `validate_schedule_args`; the kind is checked when the job runs).
+   */
+  scheduledTarget(name: string): string {
+    const key = registryKey(name);
+    const i = key.lastIndexOf(":");
+    const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
+    if (![...this.fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
+      throw new Error(`Attempted to schedule function at nonexistent path: ${module}.js`);
+    if (!this.fns.has(key))
+      throw new Error(
+        `Attempted to schedule function, but no exported function ${fn} found in the file: ${module}.js. Did you forget to export it?`,
+      );
+    return `${module}.js:${fn}`;
+  }
+
+  /**
+   * A dashboard system query (`_system/frontend/*`, system-functions.ts), as an admin: Convex's names,
+   * argument checks and result shapes. Not reachable from clients (no `_system` name is public).
+   */
+  async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
+    const q = SYSTEM_QUERIES[name.replace(/:default$/, "")];
+    if (!q) throw new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+    const a = args ?? {};
+    if (!isSimpleObject(a))
+      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    const msg = checkValue(v.object(q.args), a as Value, this.tableOf);
+    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    return this.engine.query((db) => q.handler(db, a as never));
+  }
+
+  /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
+  cronTarget(identifier: string, name: string): string {
+    const key = registryKey(name);
+    const canonical = `${key.slice(0, key.lastIndexOf(":"))}.js${key.slice(key.lastIndexOf(":"))}`;
+    const f = this.fns.get(key);
+    if (!f) throw new Error(`The cron job '${identifier}' schedules a function that does not exist: ${canonical}`);
+    if (f.kind === "query")
+      throw new Error(
+        `The cron job '${identifier}' schedules a query function, only actions and mutations can be scheduled: ${canonical}`,
+      );
+    return canonical;
+  }
+
+  /** What a scheduled job runs, or why it cannot run (Convex's run-time check: the module may have changed). */
+  scheduledKind(canonical: string): { kind: "mutation" | "action" } | { error: string } {
+    const key = registryKey(canonical);
+    const i = key.lastIndexOf(":");
+    const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
+    const f = this.fns.get(key);
+    if (!f) {
+      if (![...this.fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
+        return { error: `Couldn't find JavaScript module '${module}.js'.` };
+      return { error: `Couldn't find "${fn}" in module "${module}.js".` };
+    }
+    if (f.kind === "mutation" || f.kind === "action") return { kind: f.kind };
+    // Convex's message, its stray quotes and line break included.
+    const kind = f.kind[0].toUpperCase() + f.kind.slice(1);
+    return {
+      error: `Unsupported function type. FunctionName("${fn}") in module "${module}.js" is defined as a ${kind}. "\n                            "Only Mutation and Action can be scheduled.`,
+    };
+  }
+
+  /** @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction. */
+  scheduledMutationBody(canonical: string, args: unknown, job?: string) {
+    return this.mutationBody(this.fn(registryKey(canonical), "mutation", false), args, job);
   }
 
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
@@ -237,16 +335,50 @@ export class Functions {
     );
   }
 
-  /** An action; the queries and mutations it runs act as its caller (Convex passes the identity on). */
-  async runAction(name: string, args: unknown, caller?: Caller): Promise<unknown> {
-    const f = this.fn(name, "action", true);
-    const identity = (caller?.identity ?? null) as UserIdentity | null;
-    const ctx: ActionCtx = {
-      auth: { getUserIdentity: async () => copy(identity) },
-      runQuery: (n, a) => this.runQuery(n, a, false, caller),
-      runMutation: (n, a) => this.runMutation(n, a, false, caller),
-    };
+  /**
+   * An action; the queries and mutations it runs act as its caller (Convex passes the identity on). `job`:
+   * the scheduled job it runs as (what it schedules after that job is canceled is born canceled).
+   */
+  async runAction(
+    name: string,
+    args: unknown,
+    caller?: Caller,
+    opts: { job?: string; internal?: boolean } = {},
+  ): Promise<unknown> {
+    const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal);
+    const ctx = this.actionCtx(caller, null, opts.job);
     const a = this.checkArgs(f, args);
-    return Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r));
+    return this.actionPermits.run(() => Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
+  }
+
+  /**
+   * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
+   * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
+   */
+  private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string): ActionCtx {
+    const identity = (caller?.identity ?? null) as UserIdentity | null;
+    return {
+      auth: {
+        getUserIdentity: async () => {
+          if (authError) throw authError;
+          return copy(identity);
+        },
+      },
+      runQuery: (n, a) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
+      runMutation: (n, a) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
+      runAction: (n, a) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      scheduler: makeScheduler(this, { engine: this.engine, job }),
+    };
+  }
+
+  /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */
+  runHttpAction(
+    handler: (ctx: ActionCtx, request: Request) => Promise<Response> | Response,
+    request: Request,
+    caller: Caller,
+    authError: Error | null,
+  ): Promise<unknown> {
+    const ctx = this.actionCtx(caller, authError);
+    return this.actionPermits.run(async () => handler(ctx, request));
   }
 }

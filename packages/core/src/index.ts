@@ -1,5 +1,13 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
-export { IndexBackfillingError, IndexStagedError, type IndexState } from "./catalog.ts";
+export {
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  IndexBackfillingError,
+  IndexStagedError,
+  type IndexState,
+  SCHEDULED_FUNCTIONS_TABLE,
+} from "./catalog.ts";
 export {
   Committer,
   CommitterStoppedError,
@@ -67,6 +75,23 @@ export {
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
+  cancelJob,
+  completeJob,
+  deleteCompletedJobs,
+  dueJobs,
+  getJob,
+  insertJob,
+  isJobId,
+  type JobDoc,
+  type JobState,
+  nextJobTs,
+  type PublicJob,
+  patchJob,
+  publicJob,
+  TRANSACTION_MAX_NUM_SCHEDULED,
+  TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+} from "./scheduled-jobs.ts";
+export {
   type DeclaredTable,
   type Doc,
   defineSchema,
@@ -85,4 +110,5 @@ export {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
+export { SystemReader } from "./system-reader.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

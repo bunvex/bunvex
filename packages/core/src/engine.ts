@@ -8,6 +8,9 @@ import {
   bootstrapCatalog,
   buildCatalog,
   type Catalog,
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -18,6 +21,7 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   planCatalog,
+  SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
   TABLES_TABLE,
   type TableMeta,
@@ -48,6 +52,7 @@ import {
 } from "./persistence/index.ts";
 import { ReadSetIndex } from "./read-set-index.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
+import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
   deleteSessionRequestsBefore,
@@ -328,6 +333,14 @@ export class Engine {
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
+      { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
+      {
+        name: CRON_NEXT_RUN_TABLE,
+        indexes: { by_cron_job_id: ["cronJobId"], by_next_ts: ["nextTs"] },
+        document: v.any(),
+      },
+      { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }

@@ -40,15 +40,36 @@ describe("the Schedules screen", () => {
     await expectAccessible();
   });
 
-  test("the function picker narrows the list, in the URL", async () => {
+  test("the filter column: a function (by the source) and states (here), with their counts, in the URL", async () => {
     const { history, source } = mount("/schedules/functions");
     await waitFor(() => expect(rows("Scheduled functions").length).toBeGreaterThan(3));
-    const fn = (await source.listScheduledFunctions({ numItems: 100, cursor: null })).page[2]!.function;
+    const all = (await source.listScheduledFunctions({ numItems: 100, cursor: null })).page;
+    const fn = all[2]!.function;
+    const column = screen.getByRole("navigation", { name: "Schedule filters" });
+    const radio = within(column).getByRole("radio", { name: fn });
+    // the count of each function among the loaded runs, in text
+    expect(radio.parentElement!.lastElementChild!.textContent).toBe(
+      String(all.filter((r) => r.function === fn).length),
+    );
     const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Function" }));
-    await user.click(await screen.findByRole("option", { name: fn }));
+    await user.click(radio);
     await waitFor(() => expect(params(history)).toEqual({ function: fn }));
     await waitFor(() => expect(rows("Scheduled functions").every((r) => cells(r)[2]!.endsWith(fn))).toBe(true));
+    await user.click(within(column).getByRole("radio", { name: "All functions" }));
+    await waitFor(() => expect(params(history)).toEqual({}));
+    // states: keep the running ones only
+    const pending = all.filter((r) => r.state === "pending").length;
+    expect(within(column).getByRole("checkbox", { name: "Pending" }).closest("li")!.lastElementChild!.textContent).toBe(
+      String(pending),
+    );
+    await user.click(within(column).getByRole("checkbox", { name: "Pending" }));
+    await waitFor(() => expect(params(history)).toEqual({ state: "inProgress" }));
+    await waitFor(() =>
+      expect(screen.getByText(/^\d+ scheduled runs?$/).textContent).toBe(
+        `${all.length - pending} scheduled ${all.length - pending === 1 ? "run" : "runs"}`,
+      ),
+    );
+    await expectAccessible();
   });
 
   test("a run's details: arguments, and Cancel run after a confirmation", async () => {

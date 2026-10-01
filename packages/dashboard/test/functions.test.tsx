@@ -26,6 +26,11 @@ const fn = (path: string, kind: FunctionInfo["kind"] = "query"): FunctionInfo =>
   visibility: "public",
 });
 
+const checkedTypes = () =>
+  ["success", "failure", "debug", "info", "warn", "error"].filter(
+    (name) => screen.getByRole("checkbox", { name }).getAttribute("aria-checked") === "true",
+  );
+
 describe("the function tree", () => {
   test("folders from module paths, before files; everything alphabetical", () => {
     const tree = buildFunctionTree([
@@ -81,9 +86,15 @@ describe("the Functions screen", () => {
     const fns = within(grid)
       .getAllByRole("row")
       .slice(1)
-      .map((r) => within(r).getAllByRole("gridcell")[4]!.textContent);
+      .map((r) => within(r).getAllByRole("gridcell")[2]!.textContent);
     expect(new Set(fns)).toEqual(new Set(["Ausers:syncFromAuth"]));
-    expect(screen.queryByRole("button", { name: /^Functions:/ })).toBeNull(); // one function: no picker
+    // one function: its filter column has the time range and the types, no functions or kinds (UI-01 §22.4)
+    const filters = screen.getByRole("navigation", { name: "Log filters" });
+    expect(within(filters).getByRole("region", { name: "Time range" })).toBeDefined();
+    expect(within(filters).getByRole("region", { name: "Type" })).toBeDefined();
+    expect(within(filters).queryByRole("region", { name: "Functions" })).toBeNull();
+    expect(within(filters).queryByRole("region", { name: "Function kind" })).toBeNull();
+    expect(screen.getByRole("application", { name: "Log lines per time bucket" })).toBeDefined();
     await expectAccessible();
   });
 
@@ -102,7 +113,7 @@ describe("the Functions screen", () => {
   });
 
   test("a function shows its declared validators as code, or says it declares none", async () => {
-    mount("/functions?function=tasks:byOwner&tab=logs");
+    mount("/functions?function=tasks:byOwner");
     await screen.findByRole("heading", { level: 1, name: "byOwner" });
     const args = screen.getByRole("region", { name: "Arguments validator" });
     expect(args.querySelector("pre")?.textContent).toBe('v.object({ owner: v.id("users") })');
@@ -110,7 +121,7 @@ describe("the Functions screen", () => {
     expect(returns).toStartWith("v.array(v.object({\n");
     await expectAccessible();
     cleanup();
-    mount("/functions?function=tasks:summarize&tab=logs");
+    mount("/functions?function=tasks:summarize");
     await screen.findByRole("heading", { level: 1, name: "summarize" });
     expect(screen.getByText("None declared: any arguments are accepted.")).toBeDefined();
   });
@@ -118,7 +129,7 @@ describe("the Functions screen", () => {
   test("a function's log filters are its own", async () => {
     mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
-    await userEvent.setup().type(screen.getByRole("searchbox", { name: "Filter logs" }), "ran");
+    await userEvent.setup().type(screen.getByRole("searchbox", { name: "Search logs" }), "ran");
     await waitFor(() => expect(localStorage.getItem("bunvex:function-logs:default:tasks:list")).toContain("ran"));
     expect(localStorage.getItem("bunvex:logs:default")).toBeNull();
   });
@@ -127,12 +138,12 @@ describe("the Functions screen", () => {
     const source = mockSource();
     const { history } = mount("/functions?function=tasks:list&type=failure&q=ran", source);
     await screen.findByRole("heading", { level: 1, name: "list" });
-    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
-    expect((screen.getByRole("searchbox", { name: "Filter logs" }) as HTMLInputElement).value).toBe("ran");
+    expect(checkedTypes()).toEqual(["failure"]);
+    expect((screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement).value).toBe("ran");
     // another function opens with its own (none), then tasks:list comes back with the kept view in the URL
     act(() => history.push("/functions?function=tasks:create&tab=logs"));
     await screen.findByRole("heading", { level: 1, name: "create" });
-    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    expect(checkedTypes()).toHaveLength(6);
     cleanup();
     const again = mount("/functions?function=tasks:list", source);
     await screen.findByRole("heading", { level: 1, name: "list" });
@@ -149,7 +160,7 @@ describe("the Functions screen", () => {
   test("an unknown type in the URL is dropped", async () => {
     const { history } = mount("/functions?function=tasks:list&type=loud&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
-    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    expect(checkedTypes()).toHaveLength(6);
     expect(history.location.search).toBe("?function=tasks%3Alist&tab=logs");
   });
 
@@ -157,14 +168,14 @@ describe("the Functions screen", () => {
     const { history } = mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Types: All types" }));
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
-    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("checkbox", { name: "debug" }));
     const params = () => Object.fromEntries(new URLSearchParams(history.location.search));
-    await waitFor(() => expect(params()).toEqual({ function: "tasks:list", type: "none", tab: "logs" }));
+    await waitFor(() =>
+      expect(params()).toEqual({ function: "tasks:list", type: "success,failure,info,warn,error", tab: "logs" }),
+    );
     act(() => history.back());
     await waitFor(() => expect(params()).toEqual({ function: "tasks:list", tab: "logs" }));
-    await screen.findByRole("button", { name: "Types: All types" });
+    await waitFor(() => expect(checkedTypes()).toHaveLength(6));
   });
 
   test("a long validator scrolls past 12 lines and says so; a short one does not (UX-13)", () => {
