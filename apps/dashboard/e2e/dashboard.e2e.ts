@@ -643,6 +643,7 @@ describe("the dashboard in a browser", () => {
       ["/schedules/crons", "Schedules", "Cron jobs"],
       ["/logs", "Logs", "Logs"],
       ["/history", "History", "History"],
+      ["/files?view=images", "Files", "Files"],
     ] as const) {
       const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
       await heading(page, h1);

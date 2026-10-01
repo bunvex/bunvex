@@ -1747,3 +1747,22 @@ what happened. **Manage** (Authentication) joins with §25.
   column on Database, Logs and History; the phone sheet (a pick closes it). e2e at 1440: the column header and
   Bar 1 on one line, no page scroll, on Database, Settings, Schedules, Logs, History; at 390 the column hidden
   and the Pages sheet navigating.
+
+## 24. Files on the section column (the owner's call, 1 Oct 2026)
+
+- **Column** (`files/column.tsx`): "Files" with **Upload** on top (it left Bar 1); then the **storage used** —
+  bytes in N files, a bar of the bytes by kind (2 px gaps; the chart tokens, with a legend in words and bytes,
+  so colour is never alone); the **views** — All files, Images, Documents, Other, each with its count
+  (`?view=images|documents|other`); the **filters** — *Uploaded* (Any time, Today, Last 7 days, Last 30 days:
+  they set `from`, as History's) and *Size* (Under 1 KB, 1 KB – 1 MB, Over 1 MB: `?size=small|medium|large`),
+  each choice counted under the other sections' choices; and **Buckets**, only "Default" (see STUDY-12 §7.7).
+  The custom day range and the order stay in Bar 2 with the storage-id lookup. Phones: a Views sheet.
+- **Kinds** (`fileKind`, in the contract): `image/*` is an image; text, PDF, JSON, XML, RTF and office
+  formats are documents; the rest (and no content type) is other.
+- **Contract**: an optional `fileStats(filter?)` — count and bytes in all and per kind for the files matching
+  a filter (time, kind, size) — and, from a source that offers it, `listFiles` honours `kind`, `minSize`,
+  `maxSize`. Without `fileStats` the screen keeps §14.3's filters only (no views, sizes or counts). The mock
+  implements both; the contract suite checks the counts, the bytes and the filtered lists.
+- Tests: usage, views with counts and the URL, the current view marked, size counts under the view, Reset, the
+  bucket; contract: stats and filters (sabotaged: a source ignoring `kind` fails it). e2e: the column header
+  on Bar 1's line.

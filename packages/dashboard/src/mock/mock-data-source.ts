@@ -21,7 +21,9 @@ import {
   type EnvironmentVariable,
   type EnvironmentVariableChange,
   type FieldPatch,
+  type FileFilter,
   type FileQuery,
+  type FileStats,
   type FilterExpression,
   type FunctionInfo,
   type FunctionMetric,
@@ -810,6 +812,10 @@ export class MockDataSource implements DashboardDataSource {
 
   countFiles(opts?: CallOptions): Promise<number> {
     return this.call(opts?.signal, () => this.files.count());
+  }
+
+  fileStats(filter?: FileFilter, opts?: CallOptions): Promise<FileStats> {
+    return this.call(opts?.signal, () => this.files.stats(filter));
   }
 
   getFile(id: string, opts?: CallOptions): Promise<StoredFile | null> {

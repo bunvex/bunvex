@@ -95,7 +95,16 @@ export type TopologySearch = { node?: string };
 export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
-export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
+export type FilesSearch = {
+  order?: "asc";
+  from?: string;
+  to?: string;
+  file?: string;
+  /** A view by kind (UI-01 §24): images, documents, other. */
+  view?: "images" | "documents" | "other";
+  /** A size range: under 1 KB, 1 KB – 1 MB, over 1 MB. */
+  size?: "small" | "medium" | "large";
+};
 const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
 export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch => ({
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
@@ -103,6 +112,8 @@ export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch
   from: day(input.from),
   to: day(input.to),
   file: str(input.file),
+  view: input.view === "images" || input.view === "documents" || input.view === "other" ? input.view : undefined,
+  size: input.size === "small" || input.size === "medium" || input.size === "large" ? input.size : undefined,
 });
 
 /** History (UI-01 §14.5, §22.5): actions (a comma list), a day range (`YYYY-MM-DD`, the viewer's zone), the open event. */

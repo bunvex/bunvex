@@ -396,6 +396,15 @@ sidebar in `DeploymentSettingsLayout.tsx`, the Schedules tabs). bunvex gives eve
 (name and primary action, nav groups, the current page's filters) and labels the sidebar's groups — the
 owner's call (L18), with Supabase-like screens as layout references only.
 
+### 7.7 Files: views, filters, storage used, buckets (added 1 Oct 2026, UI-01 §24)
+
+Convex's Files (`features/files`) lists every file with a date filter and a storage-id lookup; it has no views
+by kind, size filter, usage summary or buckets (Convex storage has one bucket per deployment). bunvex adds,
+as the owner's calls: the views and filters with counts and the usage bar, backed by an optional
+`fileStats` and `listFiles`' `kind` / size filters (L19); and a **Buckets** section showing only "Default" —
+a **placeholder** for named buckets, which neither Convex nor bunvex has (L20, a bunvex addition; it does
+nothing until a bucket concept exists).
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
