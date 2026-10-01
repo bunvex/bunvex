@@ -1,5 +1,15 @@
 // Package @bunvex/react — React bindings (STUDY-26 §7), the counterpart of Convex's `convex/react`:
-// `BunvexReactClient` shared through `BunvexProvider`, and the hooks.
+// `BunvexReactClient` shared through `BunvexProvider`, the hooks, and auth (`BunvexProviderWithAuth`).
+
+export {
+  Authenticated,
+  AuthLoading,
+  AuthRefreshing,
+  type BunvexAuthState,
+  BunvexProviderWithAuth,
+  Unauthenticated,
+  useBunvexAuth,
+} from "./auth.ts";
 export {
   type BaseClientInterface,
   BunvexReactClient,

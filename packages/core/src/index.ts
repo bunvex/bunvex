@@ -61,5 +61,4 @@ export {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
-export { type FormatError, type Publish, type SubResult, Subscriptions } from "./subscriptions.ts";
 export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

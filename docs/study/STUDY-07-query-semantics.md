@@ -1,6 +1,6 @@
 # STUDY-07 — Query semantics: withIndex, order, take/first/unique/collect, filter, paginate
 
-- **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
+- **Status:** implemented / decided — D1–D4 fixed (#8, #10, #12; Phase 0 B1, B5, B12); D5–D8 resolved to match Convex (DV-40–DV-43). `.limit()` is still a gap. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -107,14 +107,14 @@ oldest of 10 documents were deleted, `first()` returned **null** (probe, `Sqlite
 
 | # | Divergence | Class | Why / impact | Decision |
 |---|---|---|---|---|
-| D1 | `collect()` is silently capped at 8 192 rows (`tx.ts` `collect: () => run(8192)`) | BUG | Silent truncation. Convex returns all rows, or fails with `TooManyDocumentsRead` at 32 000 | owner |
-| D2 | `take(n)` is not validated; `take(0)`/negative returns 1 row on the memory driver, 0 on SQLite (`memory.ts` `scan` checks the limit after pushing) | BUG | Wrong result, and it differs across drivers | owner |
-| D3 | `withIndex` range fields are not validated (STUDY-05 D5) | BUG | Wrong rows instead of `FieldNotInIndex` / `InvalidIndexRange` / `AlreadyDefinedBound` / `BoundsOnMultipleFields` | owner |
-| D4 | Driver scans can return fewer rows than exist (STUDY-09 D1/D2), so `first()` can be `null` and `take(n)` short | BUG | Wrong query results on SQLite, Postgres, MySQL and MongoDB once documents are deleted or patched | owner |
-| D5 | Missing: `filter`, `unique`, `paginate`, async iteration, `limit` | OBSERVABLE | ARCHITECTURE lists filter/paginate as M. Apps using them do not run | owner |
-| D6 | `order()` can be called repeatedly, `withIndex` after `order`, and a query reused; Convex throws | OBSERVABLE | Code that is invalid on Convex runs on bunvex | owner |
-| D7 | A query or `get` on an undeclared table throws, and so does an insert; Convex reads it as empty and creates the table on insert, even with a schema (`DatabaseSchema::check_value` skips tables not in the schema, `crates/common/src/schemas/mod.rs`) | OBSERVABLE | A schema-less or partially declared app fails on bunvex | owner |
-| D8 | `db.get(table, id)` with an id from another table returns `null` without a check | OBSERVABLE | Depends on the STUDY-01 id format; with table-tagged ids, a mismatch can be detected as in Convex | owner |
+| D1 | `collect()` is silently capped at 8 192 rows (`tx.ts` `collect: () => run(8192)`) | BUG | Silent truncation. Convex returns all rows, or fails with `TooManyDocumentsRead` at 32 000 | **fixed in #12** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B12) |
+| D2 | `take(n)` is not validated; `take(0)`/negative returns 1 row on the memory driver, 0 on SQLite (`memory.ts` `scan` checks the limit after pushing) | BUG | Wrong result, and it differs across drivers | **fixed in #12** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B12) |
+| D3 | `withIndex` range fields are not validated (STUDY-05 D5) | BUG | Wrong rows instead of `FieldNotInIndex` / `InvalidIndexRange` / `AlreadyDefinedBound` / `BoundsOnMultipleFields` | **fixed in #10** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B5) |
+| D4 | Driver scans can return fewer rows than exist (STUDY-09 D1/D2), so `first()` can be `null` and `take(n)` short | BUG | Wrong query results on SQLite, Postgres, MySQL and MongoDB once documents are deleted or patched | **fixed in #8** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B1) |
+| D5 | Missing: `filter`, `unique`, `paginate`, async iteration, `limit` | OBSERVABLE | ARCHITECTURE lists filter/paginate as M. Apps using them do not run | resolved to match Convex in #37, #40, #42 (DV-40); `.limit()` is still missing (a gap) |
+| D6 | `order()` can be called repeatedly, `withIndex` after `order`, and a query reused; Convex throws | OBSERVABLE | Code that is invalid on Convex runs on bunvex | resolved to match Convex in #40 (DV-41) |
+| D7 | A query or `get` on an undeclared table throws, and so does an insert; Convex reads it as empty and creates the table on insert, even with a schema (`DatabaseSchema::check_value` skips tables not in the schema, `crates/common/src/schemas/mod.rs`) | OBSERVABLE | A schema-less or partially declared app fails on bunvex | resolved to match Convex in #33 (DV-42) |
+| D8 | `db.get(table, id)` with an id from another table returns `null` without a check | OBSERVABLE | Depends on the STUDY-01 id format; with table-tagged ids, a mismatch can be detected as in Convex | resolved to match Convex in #7 (DV-43) |
 
 ## 5. Tests
 

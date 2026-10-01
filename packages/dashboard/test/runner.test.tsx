@@ -58,7 +58,7 @@ describe("arguments", () => {
 
 describe("the function runner", () => {
   test("Run on a function opens the runner on it; a query is subscribed: its value and log lines show, it is logged, and it updates", async () => {
-    const source = mount("/functions?function=tasks:list");
+    const source = mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));
@@ -76,7 +76,7 @@ describe("the function runner", () => {
     expect(within(runner()).getByRole("heading", { name: "Logs" })).toBeDefined();
     const grid = screen.getByRole("grid", { name: "Log lines of tasks:list" });
     await waitFor(() =>
-      expect(within(within(grid).getAllByRole("row")[1]!).getAllByRole("gridcell")[2]!.textContent).toMatch(/^success/),
+      expect(within(within(grid).getAllByRole("row")[1]!).getAllByRole("gridcell")[2]!.textContent).toMatch(/^Success/),
     );
     await expectAccessible();
   });
@@ -288,5 +288,13 @@ describe("the function runner", () => {
       box.getAttribute("aria-disabled") === "true" || box.hasAttribute("disabled") || box.hasAttribute("data-disabled"),
     ).toBe(true);
     expect(within(runner()).getByText("This credential cannot act as a user.")).toBeDefined();
+  });
+
+  test("the header's Run functions opens the runner on the function the Functions screen shows (UX-3)", async () => {
+    mount("/functions?function=tasks:create");
+    await screen.findByRole("heading", { level: 1, name: "create" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run functions" }));
+    await screen.findByRole("region", { name: "Run a function" }); // its own chunk
+    expect(within(runner()).getByRole("combobox").textContent).toContain("tasks:create");
   });
 });

@@ -1,6 +1,6 @@
 // `BunvexClient`, the counterpart of Convex's `ConvexClient` (`browser/simple_client.ts`): subscriptions by
 // callback, one-shot queries, mutations and actions, for code that is not React (STUDY-26 §1.5). The
-// paginated `onPaginatedUpdate` and `setAuth` come later (STUDY-26 C6).
+// paginated `onPaginatedUpdate` comes later.
 import {
   type AnyFunctionReference,
   type FunctionArgs,
@@ -8,6 +8,7 @@ import {
   getFunctionName,
 } from "@bunvex/protocol";
 import type { Value } from "@bunvex/values";
+import type { AuthTokenFetcher } from "./authentication-manager.ts";
 import {
   BaseBunvexClient,
   type BaseBunvexClientOptions,
@@ -198,6 +199,21 @@ export class BunvexClient {
   subscribeToConnectionState(cb: (connectionState: ConnectionState) => void): () => void {
     if (this.disabled) return () => {};
     return this.client.subscribeToConnectionState(cb);
+  }
+
+  /**
+   * Authenticate with the tokens `fetchToken` returns; it is called again when a token is about to expire or
+   * the server refuses one. Return null when there is no token. `onChange` hears whether the server accepted it.
+   */
+  setAuth(fetchToken: AuthTokenFetcher, onChange?: (isAuthenticated: boolean) => void) {
+    if (this.disabled) return;
+    this.client.setAuth(fetchToken, onChange ?? (() => {}));
+  }
+
+  /** The current token and its claims (decoded locally, not verified), or undefined. */
+  getAuth(): { token: string; decoded: Record<string, unknown> } | undefined {
+    if (this.disabled) return undefined;
+    return this.client.getCurrentAuthClaims();
   }
 
   /** @internal */

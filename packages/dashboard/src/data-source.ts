@@ -70,7 +70,12 @@ export type Operation =
   | "pauseDeployment"
   | "resumeDeployment"
   // STUDY-12 §10.3: Convex's ActAsUser — run functions as a user (the runner's "Act as a user")
-  | "actAsUser";
+  | "actAsUser"
+  // UI-01 §19.2 (snapshots): Convex's ViewBackups, CreateBackups, DownloadBackups, ImportBackups
+  | "viewBackups"
+  | "createBackups"
+  | "downloadBackups"
+  | "importBackups";
 export const OPERATIONS: readonly Operation[] = [
   "viewData",
   "writeData",
@@ -83,6 +88,10 @@ export const OPERATIONS: readonly Operation[] = [
   "actAsUser",
   "pauseDeployment",
   "resumeDeployment",
+  "viewBackups",
+  "createBackups",
+  "downloadBackups",
+  "importBackups",
 ];
 
 export type Capabilities = {
@@ -357,14 +366,23 @@ import type { DeploymentFeatures } from "./data-source-deployment.ts";
 /** A field update in `patchDocuments`: a new value, or removing the field. */
 export type FieldPatch = Value | { $unset: true };
 
+import type { AuthFeatures } from "./data-source-auth.ts";
 import type { MetricsFeatures } from "./data-source-metrics.ts";
+import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
 
+export * from "./data-source-auth.ts";
 export * from "./data-source-deployment.ts";
 export * from "./data-source-metrics.ts";
+export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
 
-export interface DashboardDataSource extends DeploymentFeatures, DeploymentStateFeatures, MetricsFeatures {
+export interface DashboardDataSource
+  extends DeploymentFeatures,
+    DeploymentStateFeatures,
+    MetricsFeatures,
+    AuthFeatures,
+    SnapshotFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;

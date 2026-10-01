@@ -1,5 +1,6 @@
 // The History screen (UI-01 §14.5, STUDY-12 §9): the deployment's audit log, newest first, between two days
 // and for one action if asked; an event's details beside the list. Live: new events come in as recorded.
+
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { infiniteQueryOptions, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import { type AuditEvent, type AuditEventQuery, toDataSourceError } from "../dat
 import { formatLiteral } from "../database/literal.ts";
 import { formatTime } from "../database/values.ts";
 import { type HistorySearch, historyRoute } from "../router.tsx";
+import { formatCount } from "../screens/stats.ts";
 import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
@@ -85,7 +87,15 @@ function History() {
     // full-bleed inside <main>: the details panel runs to its edges
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] md:-m-6">
       <div className="flex min-w-0 flex-1 flex-col gap-3 p-4 md:p-6">
-        <h1 className="text-xl font-semibold tracking-tight">History</h1>
+        {/* the count next to the title, as every list screen has it (UX-14) */}
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
+          <h1 className="text-xl font-semibold tracking-tight">History</h1>
+          {allowed && !list.isPending && (
+            <span className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
+              {`${formatCount(events.length)}${list.hasNextPage ? "+" : ""} ${events.length === 1 && !list.hasNextPage ? "event" : "events"}`}
+            </span>
+          )}
+        </div>
         {!allowed ? (
           <p className="text-sm text-muted-foreground">This credential cannot view the audit log.</p>
         ) : (
@@ -139,7 +149,7 @@ function History() {
                       ? "Nothing matches these filters."
                       : "Nothing has been recorded yet. Changes made from the dashboard and deploys appear here."
                 }
-                footer={<span aria-live="polite">{`${events.length}${list.hasNextPage ? "+" : ""} events`}</span>}
+                footer={list.hasNextPage ? <span>{`${events.length} loaded`}</span> : undefined}
               />
             )}
           </>
