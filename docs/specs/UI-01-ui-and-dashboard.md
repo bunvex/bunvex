@@ -1278,3 +1278,29 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   nothing to the dashboard's first load.
 - An e2e case loads it and runs axe, colour contrast included, over both themes at once.
 
+## 18. Amendment — metrics (30 Sep 2026)
+
+### 18.1 The contract's metrics and the Health charts (STUDY-12 §12)
+
+- **Contract** (`data-source-metrics.ts`): `MetricsWindow` `{ start, end, numBuckets }`, `Timeseries` (a
+  bucket's start and value or `null`), and optional `functionRate`, `cacheHitPercentage`,
+  `latencyPercentiles`, `topFunctions` (+ `REST`), `tableRate`, `scheduledJobLag`, behind `viewMetrics`.
+  The contract suite checks them when offered (bucket times, errors and cache hits within the calls,
+  percentiles in order, top-k bounded and ranked, an unknown table `not_found`, a bucketless window
+  `invalid_request`), over the six hours before the newest log line.
+- **Mock** (`mock/metrics.ts`): measured from its log history (an execution's last line); a query's cache
+  hit and a function's rows are derived from its execution id, so they never change between calls.
+- **`LineChart`** (`@bunvex/ui/components/line-chart`): one y-axis from zero, round ticks, 2 px lines broken
+  at missing buckets, a crosshair tooltip by pointer or keyboard (the chart is a focusable `figure`: Left /
+  Right / Home / End / Escape, the values said through a live region), a legend for two or more series,
+  optional direct labels, and **Show as table**. Colours are `--series-1…5`, `--series-other` and
+  `--series-p50…p99`, a set per theme, validated with the dataviz skill's script (categorical: colour-blind
+  separation ≥ 8.4, normal ≥ 19.3; three light slots under 3:1 on white, so the legend and table carry them).
+- **Health** (`metrics/health.tsx`, below the engine's counters): **Function calls**, **Failure rate**,
+  **Cache hit rate** (top 5 and "Other functions") and **Scheduler lag**, the last hour in minutes,
+  refreshed every minute. A function keeps its colour whatever its rank (STUDY-12 M3). Without metrics it
+  says why: the deployment does not report them, or the credential may not view them.
+- The commit clock's card is one row now — the timestamp, its rates and a compact sparkline labelled with
+  the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
+  seconds (UX-18).
+
