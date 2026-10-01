@@ -35,7 +35,7 @@ describe("BunvexHttpClient", () => {
     expect(e).toBeInstanceOf(BunvexError);
     expect(e.data).toEqual({ code: "nope", n: 7n });
     expect(e.message).toStartWith("[Request ID: ");
-    await expect(http.query(api.messages.nope)).rejects.toThrow("function not found: messages:nope");
+    await expect(http.query(api.messages.nope)).rejects.toThrow("Could not find public function for 'messages:nope'.");
   });
 
   test("mutations run one at a time, in order; skipQueue does not wait", async () => {

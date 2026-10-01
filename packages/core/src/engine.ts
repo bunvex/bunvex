@@ -85,7 +85,18 @@ export class OccError extends Error {
 }
 
 /** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
-type CacheEntry = { json: string; reads: Interval[] };
+type CacheEntry = { json: string; reads: Interval[]; extra?: unknown };
+
+/**
+ * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
+ * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
+ */
+export type CacheCompanion = {
+  /** On a miss: the body to run instead, and what to store with its result afterwards. */
+  wrap<T>(body: TxBody<T>): { body: TxBody<T>; capture(): unknown };
+  /** On a hit: hand back what was stored. */
+  replay(extra: unknown): void;
+};
 
 export class Engine {
   readonly committer: Committer;
@@ -287,8 +298,8 @@ export class Engine {
   }
 
   /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
-  async query<T>(body: TxBody<T>, cacheKey?: string): Promise<T> {
-    const r = await this.cachedQuery(body, cacheKey);
+  async query<T>(body: TxBody<T>, cacheKey?: string, companion?: CacheCompanion): Promise<T> {
+    const r = await this.cachedQuery(body, cacheKey, companion);
     return "json" in r ? (parseValue(r.json) as T) : r.value;
   }
 
@@ -296,22 +307,28 @@ export class Engine {
    * The same, as the result's JSON: a cache hit goes straight to the transport without a parse or a
    * stringify (the HTTP API).
    */
-  async queryJson(body: TxBody<unknown>, cacheKey?: string): Promise<string> {
-    const r = await this.cachedQuery(body, cacheKey);
+  async queryJson(body: TxBody<unknown>, cacheKey?: string, companion?: CacheCompanion): Promise<string> {
+    const r = await this.cachedQuery(body, cacheKey, companion);
     return "json" in r ? r.json : stringifyValue(r.value);
   }
 
-  private async cachedQuery<T>(body: TxBody<T>, cacheKey?: string): Promise<{ json: string } | { value: T }> {
+  private async cachedQuery<T>(
+    body: TxBody<T>,
+    cacheKey?: string,
+    companion?: CacheCompanion,
+  ): Promise<{ json: string } | { value: T }> {
     if (cacheKey !== undefined) {
       const hit = this.cache.get(cacheKey);
       if (hit) {
         this.stats.cacheHits++;
+        companion?.replay(hit.extra);
         return { json: hit.json };
       }
       this.stats.cacheMisses++;
     }
     const snapshot = this.committer.visibleTs;
-    const { tx, value } = await this.execute("query", snapshot, body);
+    const wrapped = cacheKey !== undefined ? companion?.wrap(body) : undefined;
+    const { tx, value } = await this.execute("query", snapshot, wrapped?.body ?? body);
     // Cache only if nothing committed after the snapshot (it would have been invalidated had it been
     // cached already — the same rule, checked at insertion). The caller keeps `value`; the cache keeps
     // its own serialized copy.
@@ -319,7 +336,7 @@ export class Engine {
       const max = this.opts.cacheMax ?? 1000;
       if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
       const json = stringifyValue(value);
-      this.cache.set(cacheKey, { json, reads: tx.reads });
+      this.cache.set(cacheKey, { json, reads: tx.reads, extra: wrapped?.capture() });
       return { json };
     }
     return { value };
