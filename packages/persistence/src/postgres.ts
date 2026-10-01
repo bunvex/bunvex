@@ -8,6 +8,9 @@
 // is current AND inserts the group only if it did: the fence costs no extra round trip, and max_ts (the
 // durable prefix) is written in the same transaction as the group.
 //
+// Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version') and
+// `read_only`, Convex's table names. Open checks both before writing anything and refuses a foreign, future
+// or read-only store; a new store's version record is written under the lease.
 // Timeouts (STUDY-25 L3), as Convex's Postgres driver: every database call is bounded on the client side
 // (30 s by default, Convex's POSTGRES_TIMEOUT_SECONDS), per round trip. A timed-out call's connection is never
 // reused: postgres.js does not expose its connections, so the whole pool is retired (in-flight calls on it
@@ -22,14 +25,21 @@
 // commit is acknowledged without writing (DV-124). One that lands after that read hits the primary key:
 // `UnsureCommitError`.
 import {
+  checkLayoutVersion,
+  checkUnversionedTables,
   DatabaseTimeoutError,
   type DocWrite,
+  decodeLayoutVersion,
   type IndexWrite,
+  LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
   MAX_KEY_PREFIX_LEN,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -48,6 +58,21 @@ type DocRow = [number, string, number, string | null, boolean];
 // index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
 type IdxRow = [number, string, string | null, string, number, boolean, string | null];
 const hex = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
+
+const STORE = "this Postgres database";
+/** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
+const COLUMNS = {
+  documents: ["table_id integer", "id text", "ts bigint", "json_value text", "deleted boolean"],
+  indexes: [
+    "index_id integer",
+    "key_prefix bytea",
+    "key_suffix bytea",
+    "key_suffix_hash bytea",
+    "ts bigint",
+    "deleted boolean",
+    "document_id text",
+  ],
+};
 
 /** postgres.js and socket codes of a connection that is gone, and the server's codes for "this session is
  *  over": admin_shutdown, crash_shutdown, cannot_connect_now, and the connection_exception class (08xxx). */
@@ -72,7 +97,7 @@ export const connectionLost = (e: unknown) => {
   return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
-export class PostgresPersistence implements Persistence, ScanDocs, Lease {
+export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush (the group's top, written to the lease row as max_ts). */
@@ -105,7 +130,11 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
    * database (a statement, BEGIN, COMMIT, a new connection) may take before the call fails with
    * `DatabaseTimeoutError` and its connection is dropped (STUDY-25 L3). 0 disables it.
    */
-  static async open(url: string, pool = 16, opts: { idleInTransactionMs?: number; timeoutMs?: number } = {}) {
+  static async open(
+    url: string,
+    pool = 16,
+    opts: { idleInTransactionMs?: number; timeoutMs?: number } & OpenOptions = {},
+  ) {
     const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
@@ -123,7 +152,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
       });
     const store = new PostgresPersistence(newPool, conn, timeoutMs);
     try {
-      await store.bootstrap();
+      await store.bootstrap(opts);
     } catch (e) {
       await store.close().catch(() => {});
       throw e;
@@ -176,18 +205,21 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
     this.retired.add(ending);
   }
 
-  /** The tables, created only when one is missing. */
-  private async bootstrap() {
+  /** The store's checks (C10), then the tables, created only when one is missing. */
+  private async bootstrap(opts: OpenOptions) {
+    // What is there decides what may happen: read-only, never waiting on a lock, before any write.
+    const [have] = await this.read(
+      (sql) => sql`select to_regclass('documents') is not null as documents,
+        to_regclass('indexes') is not null as indexes, to_regclass('bunvex_lease') is not null as lease,
+        to_regclass('persistence_globals') is not null as globals, to_regclass('read_only') is not null as ro`,
+    );
+    await this.checkStore(have, opts);
     // DDL only when a table is missing: a `create … if not exists` still waits for locks another process
     // holds, so a paused process must not wedge every later open (STUDY-24 S3). Concurrent first opens are
     // serialized by an advisory lock (two concurrent `create table` race on the catalog and one fails).
-    const [have] = await this.read(
-      (sql) => sql`select to_regclass('documents') is not null and to_regclass('indexes') is not null
-      and to_regclass('bunvex_lease') is not null as ok`,
-    );
     // The whole transaction runs again if it fails on a lost or timed-out connection: every statement in it
     // is idempotent, and a failed run left nothing behind.
-    if (!have.ok)
+    if (!(have.documents && have.indexes && have.lease && have.globals && have.ro))
       await this.read((sql, progress) =>
         sql.begin(async (tx) => {
           progress();
@@ -203,10 +235,45 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
           -- (key, ts desc): an ascending scan reads each key's newest version first, straight off the index.
           create unique index if not exists indexes_by_key on indexes (index_id, key_prefix, key_suffix_hash, ts desc);
           create table if not exists bunvex_lease (id int primary key check (id = 1), epoch bigint not null,
-            holder text, holder_conn text, expires_at timestamptz not null, max_ts bigint not null);`);
+            holder text, holder_conn text, expires_at timestamptz not null, max_ts bigint not null);
+          create table if not exists persistence_globals (key text primary key, json_value text not null);
+          create table if not exists read_only (id bigint primary key);`);
           progress(); // COMMIT
         }),
       );
+  }
+
+  /**
+   * PERSIST-01 C10, before anything is written: the recorded layout version must be this bunvex's; a store
+   * without one must have bunvex's columns (written before C10: the same layout) or no tables at all; and a
+   * store marked read-only opens only with `allowReadOnly`. Refusing needs no lease: nothing is written.
+   */
+  private async checkStore(have: Record<string, boolean>, opts: OpenOptions) {
+    const [r] = await this.read((sql) =>
+      sql.unsafe(
+        `select ${have.globals ? "(select json_value::text from persistence_globals where key = 'layout_version')" : "null"} as v,
+         ${have.ro ? "exists (select 1 from read_only)" : "false"} as ro`,
+      ),
+    );
+    const version = decodeLayoutVersion(r.v);
+    if (version !== null) checkLayoutVersion(version, STORE);
+    else if (have.documents || have.indexes) {
+      const cols = await this.read(
+        (sql) => sql`select table_name::text as t, column_name || ' ' || data_type as c
+          from information_schema.columns where table_schema = current_schema() and table_name in ('documents', 'indexes')`,
+      );
+      const found: Record<string, string[]> = {};
+      for (const c of cols) found[c.t] = [...(found[c.t] ?? []), c.c as string];
+      checkUnversionedTables(STORE, found, COLUMNS);
+    }
+    if (r.ro && !opts.allowReadOnly) throw new ReadOnlyError(STORE);
+  }
+
+  /** Convex's `set_read_only`: no lease needed; the next open for writing is refused while it is set. */
+  async setReadOnly(readOnly: boolean) {
+    await this.call((sql) =>
+      readOnly ? sql`insert into read_only (id) values (1) on conflict do nothing` : sql`delete from read_only`,
+    );
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
@@ -258,6 +325,18 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
       );
       progress();
       if (won) {
+        // PERSIST-01 C10: a new (or pre-C10) store gets its layout version now, under the lease, in the same
+        // transaction; one stamped in the meantime by another bunvex is checked again (a mismatch rolls the
+        // acquisition back).
+        const [v] = await tx.unsafe(
+          `with ins as (insert into persistence_globals (key, json_value) values ('layout_version', $1)
+             on conflict (key) do nothing returning json_value)
+           select coalesce((select json_value from ins),
+                           (select json_value::text from persistence_globals where key = 'layout_version')) as v`,
+          [JSON.stringify(LAYOUT_VERSION)],
+        );
+        progress();
+        checkLayoutVersion(decodeLayoutVersion(v.v), STORE);
         this.epoch = Number(won.epoch);
         this.ttlMs = opts.ttlMs;
         return { epoch: this.epoch };
