@@ -117,7 +117,8 @@ export function fromDraft(d: FilterDraft): { expr: FilterExpression; errors: Dra
             : { ok: false as const, error: "Pick a type" }
           : parseValueInput(c.text);
     if (!c.field) {
-      if (c.enabled) errors[c.id] = "Pick a field";
+      // a clause just added (no field, nothing typed) is not an error yet: it applies once filled in (UX-2)
+      if (c.enabled && c.text.trim() !== "") errors[c.id] = "Pick a field";
       clauses.push({ id: c.id, field: c.field, op: c.op, enabled: false });
     } else if (parsed.ok) clauses.push({ id: c.id, field: c.field, op: c.op, value: parsed.value, enabled: c.enabled });
     else {

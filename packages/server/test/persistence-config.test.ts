@@ -1,6 +1,6 @@
 // Database selection from the environment: bunvex's names, Convex's as aliases (DV-88) with Convex's
 // precedence (run_backend.sh:17-32), DO_NOT_REQUIRE_SSL as Convex reads it, and the URL naming the database
-// (DV-110). STUDY-25 L8.
+// (DV-110). STUDY-25 L8. And the remote drivers' call timeouts (STUDY-25 L3) under Convex's names.
 import { describe, expect, test } from "bun:test";
 import { openPersistence, persistenceConfigFromEnv, urlDatabase } from "../src/persistence.ts";
 
@@ -104,5 +104,21 @@ describe("the URL names the database (DV-110)", () => {
     await expect(openPersistence(cfg({ PERSISTENCE: "postgres" }))).rejects.toThrow(
       "PERSISTENCE=postgres needs PERSISTENCE_URL (or POSTGRES_URL)",
     );
+  });
+});
+
+describe("call timeouts (STUDY-25 L3)", () => {
+  test("each remote driver reads its call timeout from its own variable, in seconds", () => {
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "postgres", POSTGRES_TIMEOUT_SECONDS: "5" }).timeoutMs).toBe(5000);
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2.5" }).timeoutMs).toBe(2500);
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "mongodb", MONGODB_TIMEOUT_SECONDS: "7" }).timeoutMs).toBe(7000);
+    // another driver's variable is ignored; unset leaves the driver's default
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "postgres", MYSQL_TIMEOUT_SECONDS: "5" }).timeoutMs).toBeUndefined();
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "sqlite" }).timeoutMs).toBeUndefined();
+  });
+
+  test("a driver selected by Convex's URL name reads its timeout too", () => {
+    expect(cfg({ POSTGRES_URL: PG, POSTGRES_TIMEOUT_SECONDS: "4" }).timeoutMs).toBe(4000);
+    expect(cfg({ MYSQL_URL: MY, MYSQL_TIMEOUT_SECONDS: "3" }).timeoutMs).toBe(3000);
   });
 });

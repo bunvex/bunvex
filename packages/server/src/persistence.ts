@@ -3,6 +3,9 @@
 //   PERSISTENCE=postgres|mysql|mongodb   from @bunvex/persistence (plus the driver's native package)
 //   PERSISTENCE_URL=…                    for the external ones
 //   DATA=./.data  DURABLE=1  POOL=16
+//   POSTGRES_TIMEOUT_SECONDS=30  MYSQL_TIMEOUT_SECONDS=19  MONGODB_TIMEOUT_SECONDS=30
+//                                        the client-side timeout of one database call (STUDY-25 L3); the
+//                                        first two are Convex's names and defaults
 //
 // Convex's names are accepted too (DV-88; self-hosted/docker-build/run_backend.sh:17-32): when PERSISTENCE
 // is not set, POSTGRES_URL selects Postgres, else MYSQL_URL selects MySQL, else DATABASE_URL (deprecated
@@ -28,6 +31,15 @@ export type PersistenceConfig = {
   requireSsl?: boolean;
   /** Postgres and MySQL: a PEM file of extra trusted CA certificates (PG_CA_FILE, MYSQL_CA_FILE). */
   caFile?: string;
+  /** The client-side timeout of one database call, for the remote drivers (default: each driver's). */
+  timeoutMs?: number;
+};
+
+/** The environment variable that sets each remote driver's call timeout, in seconds. */
+const TIMEOUT_ENV: Record<string, string> = {
+  postgres: "POSTGRES_TIMEOUT_SECONDS",
+  mysql: "MYSQL_TIMEOUT_SECONDS",
+  mongodb: "MONGODB_TIMEOUT_SECONDS",
 };
 
 type Env = Record<string, string | undefined>;
@@ -66,6 +78,7 @@ export function persistenceConfigFromEnv(
   if (urlFrom === "DATABASE_URL")
     warn("DATABASE_URL is deprecated: use PERSISTENCE=postgres with PERSISTENCE_URL, or POSTGRES_URL");
   kind ??= "memory";
+  const timeout = TIMEOUT_ENV[kind] && env[TIMEOUT_ENV[kind]];
   const caFile =
     kind === "postgres" ? set(env, "PG_CA_FILE") : kind === "mysql" ? set(env, "MYSQL_CA_FILE") : undefined;
   return {
@@ -77,6 +90,7 @@ export function persistenceConfigFromEnv(
     pool: Number(env.POOL ?? 16),
     requireSsl: !set(env, "DO_NOT_REQUIRE_SSL"),
     caFile,
+    ...(timeout ? { timeoutMs: Number(timeout) * 1000 } : {}),
   };
 }
 
@@ -122,15 +136,15 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
     }
     case "postgres": {
       const { PostgresPersistence } = await external<typeof import("@bunvex/persistence/postgres")>("postgres");
-      return PostgresPersistence.open(needDatabase(), c.pool, tls);
+      return PostgresPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
     }
     case "mysql": {
       const { MysqlPersistence } = await external<typeof import("@bunvex/persistence/mysql")>("mysql");
-      return MysqlPersistence.open(needDatabase(), c.pool, tls);
+      return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
     }
     case "mongodb": {
       const { MongoPersistence } = await external<typeof import("@bunvex/persistence/mongodb")>("mongodb");
-      return MongoPersistence.open(needUrl(), { pool: c.pool });
+      return MongoPersistence.open(needUrl(), { pool: c.pool, timeoutMs: c.timeoutMs });
     }
     default:
       throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql, mongodb)`);
