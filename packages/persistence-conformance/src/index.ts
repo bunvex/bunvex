@@ -3,38 +3,100 @@
 //
 //   K1 byte order          K2 snapshots          K3 no lost update       K4 cache invalidation
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
-// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K18.
+// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
+// stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
+// stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
+// (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
+// driver; for drivers with the log by timestamp (C11, `readLog`), K25.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
 //   tearTail?(nextTs: number): void | Promise<void> — log-based drivers only: append half a record (K7)
+//   target?() / openThrough?(via, { timeoutMs }) — remote stores only: where the store listens, and an open
+//     through another address with a given call timeout (K20 puts a freezable TCP proxy in between)
 //
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
 import { spawn } from "node:child_process";
 import {
   compareKeys,
-  type Engine,
+  type Doc,
+  Engine,
   encodeKey,
   hasLease,
+  indexKey,
   type KeyValue,
+  LAYOUT_VERSION,
+  LayoutError,
   LeaseHeldError,
   LeaseLostError,
   OccError,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   type ScanDocs,
 } from "@bunvex/core";
-import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
+import { fromJsonValue } from "@bunvex/values";
+import { logChecks } from "./log.ts";
+import { freezableProxy } from "./proxy.ts";
+import {
+  allOfTenant,
+  counter,
+  increment,
+  insertItem,
+  listTenant,
+  newEngine,
+  pair,
+  schemaWithAmount,
+  seedCounters,
+} from "./workload.ts";
 
 export type DriverModule = {
-  open(fresh: boolean): Promise<Persistence>;
+  /** `opts.allowReadOnly` (K23): open a store marked read-only, as Convex's readers and tools do. */
+  open(fresh: boolean, opts?: OpenOptions): Promise<Persistence>;
+  /** K22 (PERSIST-01 C10): the layout version recorded in the store, read raw, or null if none. */
+  layoutVersion?(): Promise<unknown>;
+  /** K22: record `v` raw (a future or unknown version), or remove the record (null: a store written
+   *  before C10). The store's data stays. */
+  setLayoutVersion?(v: unknown): Promise<void>;
+  /** K22: replace the store with one bunvex did not write (e.g. Convex's own tables, with a row). */
+  makeForeign?(): Promise<void>;
+  /** K22: whether that foreign store is exactly as `makeForeign` left it (a refused open wrote nothing). */
+  foreignIntact?(): Promise<boolean>;
   tearTail?(nextTs: number): void | Promise<void>;
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
   writerInsideFlush?(): Promise<boolean>;
+  /** Remote stores (K20): the address the store listens on. */
+  target?(): { host: string; port: number };
+  /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
+   *  address, with the given client-side call timeout (STUDY-25 L3). */
+  openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
+  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
+  dropLogIndex?(): Promise<void>;
+  /** Whether the store has its ts index (K25: it is built once the lease is held). */
+  hasLogIndex?(): Promise<boolean>;
+  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
+  strayLogRow?(ts: number): Promise<void>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10"; // K3 also runs K4–K5; K10 runs K10–K18
+// K3 also runs K4–K5; K10 runs K10–K19
+export type Check =
+  | "K1"
+  | "K2"
+  | "K3"
+  | "K6"
+  | "K7"
+  | "K8"
+  | "K9"
+  | "K10"
+  | "K20"
+  | "K21"
+  | "K22"
+  | "K23"
+  | "K24"
+  | "K25";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -46,6 +108,12 @@ export type ConformanceOptions = {
   log?: (line: string) => void;
   /** The driver claims PERSIST-01 C7 (single writer): its absence is a failure, not a skip. */
   requireLease?: boolean;
+  /** The driver claims PERSIST-01 C10 (layout version, read-only flag): K22/K23's hooks must exist. */
+  requireLayout?: boolean;
+  /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
+  requireTimeouts?: boolean;
+  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
+  requireReadLog?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -56,6 +124,13 @@ const IDLE_TX_BOUND_MS = 2500;
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 const rnd = (n: number) => Math.floor(Math.random() * n);
+
+type Rows = { docs: number; idx: number };
+/** The rows an engine's store holds at exactly `ts` (audit), or null when the driver cannot tell. */
+const rowsOf = async (e: Engine, ts: number): Promise<Rows | null> =>
+  e.persistence.auditRowsAt ? await e.persistence.auditRowsAt(ts) : null;
+const sameRows = (a: Rows | null, b: Rows | null) =>
+  a === null || b === null ? a === b : a.docs === b.docs && a.idx === b.idx && a.docs > 0;
 
 export async function runConformance(opts: ConformanceOptions): Promise<{ failures: number }> {
   const { name } = opts;
@@ -343,6 +418,79 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       `K5 no reader saw half a mutation (${odd} odd reads, ${final.length}/1920)`,
     );
     await e.close();
+  }
+
+  // K24 — a background index backfill (STUDY-29) under concurrent writers: an index added to a table that has
+  // documents is filled in chunks at the same time as 8 writers insert, move the indexed value and delete;
+  // once it is enabled, every live document has exactly one entry, in key order, at several snapshots.
+  async function k24() {
+    let e = await newEngine(await mod.open(true));
+    for (let i = 0; i < 3000; i += 500)
+      await e.mutation(async (db) => {
+        for (let j = 0; j < 500; j++) await insertItem(`t${(i + j) % 10}`)(db);
+      });
+    const ids = (await e.query((db) => db.query("items").collect())).map((d) => d._id);
+    await e.close();
+    // Slow on purpose (2 000 entries/s): the writers overlap the whole backfill. The backfill's range reads
+    // are delayed too (the writers do none), so writes land between a chunk's snapshot and its commit.
+    const st = await mod.open(false);
+    let delayScans = true;
+    for (const m of ["scan", "scanDocs"] as const) {
+      const f = (st as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[m]?.bind(st);
+      if (f)
+        (st as unknown as Record<string, unknown>)[m] = async (...a: unknown[]) => {
+          if (delayScans) await new Promise((r) => setTimeout(r, 3));
+          return f(...a);
+        };
+    }
+    e = await new Engine(schemaWithAmount, st, {
+      indexBackfill: { chunkSize: 200, chunkRate: 10, readSize: 100 },
+    }).init();
+    let stop = false;
+    let writes = 0;
+    const writers = Array.from({ length: 8 }, async (_, w) => {
+      for (let i = 0; !stop; i++) {
+        const id = ids[(w * 7919 + i * 104729) % ids.length];
+        const wrote = await e.mutation(async (db) => {
+          if (i % 4 === 0) ids.push(await insertItem(`t${w}`)(db));
+          else if (!(await db.get("items", id))) return false;
+          else if (i % 4 === 3) await db.delete("items", id);
+          else await db.patch("items", id, { amount: rnd(10_000) });
+          return true;
+        });
+        if (wrote) writes++;
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    await e.indexesReady();
+    delayScans = false;
+    const snapshots = [e.committer.visibleTs];
+    stop = true;
+    await Promise.all(writers);
+    snapshots.push(e.committer.visibleTs);
+    const t = e.catalog.table("items");
+    const ix = t.indexes.get("by_amount")!;
+    let bad = 0;
+    for (const ts of snapshots) {
+      const live = await e.persistence.scan(t.byId.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      const want: [Uint8Array, string][] = [];
+      for (const id of live) {
+        const doc = fromJsonValue(JSON.parse((await e.persistence.get(t.id, id, ts))!)) as unknown as Doc;
+        want.push([indexKey(ix, doc), id]);
+      }
+      want.sort((a, b) => compareKeys(a[0], b[0]));
+      const got = await e.persistence.scan(ix.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      if (got.length !== want.length || got.some((id, i) => id !== want[i][1])) {
+        bad++;
+        log(`  K24 at ts ${ts}: ${got.length} entries for ${want.length} live documents`);
+      }
+    }
+    const stats = e.indexWorker?.stats;
+    await e.close();
+    check(
+      bad === 0 && writes > 100,
+      `K24 a background backfill under ${writes} concurrent writes: one entry per live document at ${snapshots.length} snapshots (${stats?.chunks} chunks, ${stats?.conflicts} refused and redone)`,
+    );
   }
 
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
@@ -726,6 +874,415 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }
   }
 
+  /** What `f` threw (or null), opening the store and an engine on it as a writer would. */
+  const refusal = async (f: () => Promise<Persistence>) => {
+    let st: Persistence | null = null;
+    try {
+      st = await f();
+      const e = await newEngine(st);
+      await e.close();
+      return null;
+    } catch (err) {
+      await Promise.resolve(st?.close()).catch(() => {});
+      return err as Error;
+    }
+  };
+
+  // K22 — PERSIST-01 C10, the layout version: a new store records it; a store written before C10 (no record,
+  // bunvex's tables) opens and gets it; a future or unknown version, or a store bunvex did not write, is
+  // refused with LayoutError, and the refused store is left as it was.
+  async function k22() {
+    const items = async (e: Engine) => (await e.query(allOfTenant("k22"))).length;
+    const e1 = await newEngine(await mod.open(true));
+    for (let i = 0; i < 5; i++) await e1.mutation(insertItem("k22"));
+    await e1.close();
+    const fresh = await mod.layoutVersion!();
+    const e2 = await newEngine(await mod.open(false));
+    const reopened = await items(e2);
+    await e2.close();
+    check(
+      fresh === LAYOUT_VERSION && reopened === 5,
+      `K22 a new store records layout version ${LAYOUT_VERSION} (found ${JSON.stringify(fresh)}) and reopens (${reopened}/5 items)`,
+    );
+
+    await mod.setLayoutVersion!(null);
+    const e3 = await mod
+      .open(false)
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    const legacyItems = e3 instanceof Error ? -1 : await items(e3);
+    if (!(e3 instanceof Error)) await e3.close();
+    const stamped = await mod.layoutVersion!();
+    check(
+      legacyItems === 5 && stamped === LAYOUT_VERSION,
+      `K22 a store without a version record (written before C10) opens with its data (${e3 instanceof Error ? e3.message : `${legacyItems}/5 items`}) and gets version ${JSON.stringify(stamped)}`,
+    );
+
+    let bad = 0;
+    for (const v of [LAYOUT_VERSION + 1, 999, "v1-beta"]) {
+      await mod.setLayoutVersion!(v);
+      const err = await refusal(() => mod.open(false));
+      const after = await mod.layoutVersion!();
+      if (
+        !(err instanceof LayoutError) ||
+        !err.message.includes(JSON.stringify(v).replace(/^"|"$/g, "")) ||
+        after !== v
+      ) {
+        bad++;
+        log(
+          `  K22 version ${JSON.stringify(v)}: ${err ? `${err.name}: ${err.message}` : "opened"}; record now ${JSON.stringify(after)}`,
+        );
+      }
+    }
+    await mod.setLayoutVersion!(LAYOUT_VERSION);
+    const e4 = await newEngine(await mod.open(false));
+    const back = await items(e4);
+    await e4.close();
+    check(
+      bad === 0 && back === 5,
+      `K22 a future or unknown layout version is refused with LayoutError naming it, and left as it was (${bad} violations; ${back}/5 items once restored)`,
+    );
+
+    await mod.makeForeign!();
+    const foreign = await refusal(() => mod.open(false));
+    const intact = await mod.foreignIntact!();
+    check(
+      foreign instanceof LayoutError && intact,
+      `K22 a store bunvex did not write is refused with LayoutError and not written to (${foreign ? `${foreign.name}: ${foreign.message}` : "opened"}; intact: ${intact})`,
+    );
+    await mod.open(true).then((st) => st.close());
+  }
+
+  // K23 — PERSIST-01 C10, the read-only flag (Convex's `read_only`): a store marked read-only does not open
+  // for writing (ReadOnlyError); `allowReadOnly` opens it (readers, migration tools); clearing it lets a
+  // writer open again.
+  async function k23() {
+    const e1 = await newEngine(await mod.open(true));
+    for (let i = 0; i < 3; i++) await e1.mutation(insertItem("k23"));
+    await e1.close();
+    const flag = (await mod.open(false, { allowReadOnly: true })) as Persistence & Partial<ReadOnlyFlag>;
+    if (typeof flag.setReadOnly !== "function") {
+      await flag.close();
+      check(false, "K23 the driver claims PERSIST-01 C10 but has no setReadOnly");
+      return;
+    }
+    await flag.setReadOnly(true);
+    await flag.close();
+    const refused = await refusal(() => mod.open(false));
+    const reader = await mod
+      .open(false, { allowReadOnly: true })
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    let read = -1;
+    if (!(reader instanceof Error)) {
+      read = (await reader.query(allOfTenant("k23"))).length;
+      await (reader.persistence as Persistence & ReadOnlyFlag).setReadOnly(false);
+      await reader.close();
+    }
+    const writer = await mod
+      .open(false)
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    let wrote = false;
+    if (!(writer instanceof Error)) {
+      await writer.mutation(insertItem("k23"));
+      wrote = (await writer.query(allOfTenant("k23"))).length === 4;
+      await writer.close();
+    }
+    check(
+      refused instanceof ReadOnlyError && read === 3 && wrote,
+      `K23 a read-only store refuses to open for writing (${refused ? refused.name : "opened"}), opens with allowReadOnly (${read}/3 items read), and opens for writing once cleared (${writer instanceof Error ? writer.message : wrote ? "wrote" : "write lost"})`,
+    );
+    await mod.open(true).then((st) => st.close());
+  }
+
+  // K20 — a store that stops answering (STUDY-25 L3). A TCP proxy between the driver and the store stops
+  // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
+  // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
+  // connections the timed-out calls waited on must be dropped by the client, the store must work again once
+  // it answers; through the engine, a commit whose flush times out is retried (C9), and the timed-out attempt
+  // sends nothing more once the store answers.
+  async function k20() {
+    const T = 1500; // the call timeout under test
+    const TTL = 2000; // a renewal is bounded by TTL / 4 = 500 ms, under T
+    const SLACK = 1000;
+    const HUNG = 8 * T; // the suite's own guard: past this, the call is reported as hung
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const timed = async <T>(p: Promise<T>) => {
+      const t0 = Date.now();
+      const r = await Promise.race([
+        p.then(
+          (value) => ({ value, error: null as unknown }),
+          (error: unknown) => ({ value: undefined, error }),
+        ),
+        sleep(HUNG).then(() => null),
+      ]);
+      const took = Date.now() - t0;
+      const what =
+        r === null
+          ? `hung > ${HUNG} ms`
+          : r.error
+            ? `${(r.error as Error)?.constructor?.name ?? r.error} after ${took} ms`
+            : `answered after ${took} ms`;
+      return { failed: r !== null && !!r.error, answered: r !== null && !r.error, value: r?.value, took, what };
+    };
+    await (await mod.open(true)).close();
+    const proxy = await freezableProxy(mod.target!());
+    try {
+      const st = await mod.openThrough!(proxy, { timeoutMs: T });
+      const leased = hasLease(st);
+      if (leased) await st.acquireLease({ holder: "k20", ttlMs: TTL });
+      const put = (ts: number, id: string) =>
+        st.apply(ts, [{ table: 960, id, json: `{"ts":${ts}}` }], [{ index: 961, key: encodeKey([id]), id }]);
+      put(10, "a");
+      await st.flush();
+      const healthy = await st.get(960, "a", 10);
+
+      proxy.freeze();
+      const read = await timed(Promise.resolve(st.get(960, "a", 10)));
+      // A driver may run a timed-out read once more (STUDY-25 L5: Convex's Postgres driver does), so up to two
+      // timeouts.
+      check(
+        read.failed && read.took <= 2 * T + SLACK,
+        `K20 a read on a frozen store fails within the ${T} ms timeout, or two with one retry (${read.what})`,
+      );
+      put(20, "b");
+      const flush = await timed(Promise.resolve(st.flush()));
+      check(
+        flush.failed && flush.took <= T + SLACK,
+        `K20 a flush on a frozen store fails within the timeout (${flush.what})`,
+      );
+      if (leased) {
+        const renew = await timed(st.renewLease());
+        check(
+          renew.failed && renew.took <= TTL / 4 + SLACK * 0.7,
+          `K20 a lease renewal on a frozen store fails within a quarter of the TTL (${TTL / 4} ms) (${renew.what})`,
+        );
+      }
+      // Every connection a timed-out call waited on is dropped by the client: never reused.
+      await sleep(2 * T + SLACK);
+      const now = Date.now();
+      const waited = proxy.connections.filter(
+        (c) => c.sentWhileFrozenAt !== null && c.sentWhileFrozenAt <= now - (2 * T + SLACK),
+      );
+      const kept = waited.filter((c) => c.clientClosedAt === null);
+      check(
+        waited.length > 0 && kept.length === 0,
+        `K20 the client drops the connections its timed-out calls waited on (${waited.length - kept.length}/${waited.length} closed)`,
+      );
+
+      proxy.thaw();
+      const again = await timed(Promise.resolve(st.get(960, "a", 10)));
+      check(
+        again.answered && again.value === healthy && healthy !== null,
+        `K20 once the store answers again, so do calls, without reopening (${again.what})`,
+      );
+      if (leased) await st.releaseLease();
+      await st.close();
+
+      // Through the engine: a commit whose flush times out is not acknowledged while the store does not answer;
+      // the committer retries it (STUDY-25 L4, transient), and once the store answers it is acknowledged, its
+      // rows stored once.
+      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
+      await e.mutation(insertItem("k20"));
+      const base = await rowsOf(e, e.committer.visibleTs);
+      proxy.freeze();
+      let settled = false;
+      const pending = timed(e.mutation(insertItem("k20"))).finally(() => {
+        settled = true;
+      });
+      await sleep(2 * T + SLACK);
+      const held = !settled && e.committer.appliedTs > e.committer.visibleTs;
+      const retrying = e.committer.stopped === null && e.committer.flushFailures >= 1;
+      proxy.thaw();
+      const m = await pending;
+      const rows = m.answered ? await rowsOf(e, e.committer.visibleTs) : null;
+      check(
+        held && retrying && m.answered && e.committer.stopped === null && sameRows(rows, base),
+        `K20 a commit whose flush times out is held and retried while the store does not answer, then acknowledged once, its rows stored once (${m.what}${e.committer.stopped ? `: ${e.committer.stopped.message}` : ""}; ${e.committer.flushFailures} failed attempt(s); rows ${JSON.stringify(rows)} vs ${JSON.stringify(base)})`,
+      );
+      await e.close().catch(() => {});
+
+      // A failed attempt stays failed (C9): once its flush timed out, an attempt sends nothing more when the
+      // store answers again, while the committer's retry waits. Otherwise it races the retry for the group (it
+      // did on MongoDB: withTransaction ran the timed-out callback again and committed the group under the
+      // retry, which then stopped as "unsure" — a flaky K20). The retries are held until 1 s after the thaw;
+      // in that second, the proxy counts the requests that carry the group's marker or commit.
+      let failedOnce = false;
+      let releaseRetries = () => {};
+      const retriesReleased = new Promise<void>((r) => {
+        releaseRetries = r;
+      });
+      const st3 = await mod.openThrough!(proxy, { timeoutMs: T });
+      const holdRetries = new Proxy(st3, {
+        get(target, key) {
+          if (key === "flush")
+            return async () => {
+              if (failedOnce) await retriesReleased;
+              try {
+                return await target.flush();
+              } catch (err) {
+                failedOnce = true;
+                throw err;
+              }
+            };
+          const v = (target as any)[key];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const e3 = await newEngine(holdRetries, { lease: { ttlMs: 60_000 }, flushRetry: { onRetry: () => {} } });
+      await e3.mutation(insertItem("k20"));
+      const base3 = await rowsOf(e3, e3.committer.visibleTs);
+      proxy.freeze();
+      const abandoned = timed(e3.mutation(insertItem("k20-abandoned")));
+      const deadline = Date.now() + 3 * T;
+      while (!failedOnce && Date.now() < deadline) await sleep(5);
+      proxy.watch(/k20-abandoned/);
+      proxy.thaw();
+      await sleep(1000);
+      const sentAfter = proxy.fired.watched;
+      proxy.watch(null);
+      releaseRetries();
+      const m3 = await abandoned;
+      const rows3 = m3.answered ? await rowsOf(e3, e3.committer.visibleTs) : null;
+      check(
+        failedOnce && sentAfter === 0 && m3.answered && e3.committer.stopped === null && sameRows(rows3, base3),
+        `K20 a flush attempt that timed out sends nothing more once the store answers (${sentAfter} request(s) with the group or a COMMIT in the second after the thaw); its retry is acknowledged once (${m3.what}${e3.committer.stopped ? `: ${e3.committer.stopped.message}` : ""}; rows ${JSON.stringify(rows3)} vs ${JSON.stringify(base3)})`,
+      );
+      await e3.close().catch(() => {});
+    } finally {
+      await proxy.close();
+    }
+  }
+
+  // K21 — transient errors are retried (STUDY-25 L4/L5, PERSIST-01 C9). The proxy of K20 acts on the requests
+  // that carry a marker: it resets their connection (lost to a restart or the network), freezes before them,
+  // or lets a COMMIT through and drops every answer after it (the commit lands; the client never hears so).
+  //   - L5: a read whose connection is lost runs once more on a fresh one; a read that fails twice surfaces.
+  //   - L4: a connection lost in the middle of a flush is retried (on Postgres too: DV-123), and the commit is
+  //     acknowledged once, its rows stored once.
+  //   - L4: a retry of a group whose first attempt did commit finds it through the lease record and
+  //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
+  //     key on its rows: the lease record is what tells).
+  async function k21() {
+    const T = 1000;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const settle = async <V>(p: Promise<V>) => {
+      const t0 = Date.now();
+      try {
+        const value = await p;
+        return { ok: true as const, value, error: null as unknown, what: `answered after ${Date.now() - t0} ms` };
+      } catch (error) {
+        const name = (error as Error)?.constructor?.name ?? String(error);
+        return { ok: false as const, value: undefined, error, what: `${name} after ${Date.now() - t0} ms` };
+      }
+    };
+    await (await mod.open(true)).close();
+    const proxy = await freezableProxy(mod.target!());
+    try {
+      // L5: reads.
+      const st = await mod.openThrough!(proxy, { timeoutMs: T });
+      const leased = hasLease(st);
+      if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
+      st.apply(
+        10,
+        [{ table: 970, id: "k21read", json: `{"v":1}` }],
+        [{ index: 971, key: encodeKey(["k21read"]), id: "k21read" }],
+      );
+      await st.flush();
+      proxy.resetOn(/k21read/, 1);
+      const once = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      check(
+        proxy.fired.resets === 1 && once.ok && once.value === `{"v":1}`,
+        `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
+      );
+      proxy.resetOn(/k21read/, 2);
+      const twice = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      check(
+        proxy.fired.resets === 3 && !twice.ok,
+        `K21 a read that loses its connection twice fails: one retry only (L5; ${twice.what}, ${proxy.fired.resets - 1} resets)`,
+      );
+      if (leased) await st.releaseLease();
+      await st.close();
+
+      // L4: a connection lost in the middle of a flush.
+      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
+      await e.mutation(insertItem("k21-base"));
+      const base = await rowsOf(e, e.committer.visibleTs);
+      proxy.resetOn(/k21-reset/, 1);
+      const lost = await settle(e.mutation(insertItem("k21-reset")));
+      const lostTs = e.committer.appliedTs;
+      const lostStopped = e.committer.stopped;
+      const lostFailures = e.committer.flushFailures;
+      // A stopped engine keeps its lease (a store in doubt is not handed over); the check hands it over itself.
+      if (lostStopped && hasLease(e.persistence)) await e.persistence.releaseLease().catch(() => {});
+      await e.close().catch(() => {});
+      const lostRows = await rowsOfStore(lostTs);
+      check(
+        proxy.fired.resets === 4 && lost.ok && lostStopped === null && sameRows(lostRows, base),
+        `K21 a connection lost during a flush is retried and acknowledged once, its rows stored once (L4; DV-123 on Postgres; ${lost.what}${lostStopped ? `: ${lostStopped.message}` : ""}; ${lostFailures} failed attempt(s); rows ${JSON.stringify(lostRows)} vs ${JSON.stringify(base)})`,
+      );
+
+      // L4: the first attempt committed, but its answer was lost.
+      const e2 = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
+        lease: { ttlMs: 60_000 },
+        flushRetry: { onRetry: () => {} },
+      });
+      proxy.loseAnswersAfterCommit(/k21-unsure/);
+      const restore = (async () => {
+        const deadline = Date.now() + 30 * T;
+        while (!proxy.fired.loseAnswers && Date.now() < deadline) await sleep(5);
+        await sleep(2.5 * T);
+        proxy.keepAnswers();
+      })();
+      const unsure = await settle(e2.mutation(insertItem("k21-unsure")));
+      await restore;
+      const unsureTs = e2.committer.appliedTs;
+      const stopped = e2.committer.stopped;
+      if (stopped && hasLease(e2.persistence)) await e2.persistence.releaseLease().catch(() => {});
+      await e2.close().catch(() => {});
+      const after = await rowsOfStore(unsureTs);
+      const durable = await maxTsOfStore();
+      const unsureFailures = e2.committer.flushFailures;
+      check(
+        proxy.fired.loseAnswers &&
+          unsure.ok &&
+          stopped === null &&
+          unsureFailures >= 1 &&
+          sameRows(after, base) &&
+          durable === unsureTs,
+        `K21 a COMMIT whose answer is lost: the retry finds the group landed and acknowledges it once; after a reopen the store holds it exactly once (L4, DV-124; ${unsure.what}${stopped ? `: ${stopped.message}` : ""}; ${unsureFailures} failed attempt(s); rows ${JSON.stringify(after)} vs ${JSON.stringify(base)}; maxTs ${durable === unsureTs ? "= the group's ts" : `${durable} ≠ ${unsureTs}`})`,
+      );
+    } finally {
+      proxy.keepAnswers();
+      await proxy.close();
+    }
+  }
+
+  /** The rows at `ts`, read through a fresh open of the store (no lease needed to read). */
+  async function rowsOfStore(ts: number): Promise<Rows | null> {
+    const st = await mod.open(false);
+    try {
+      return st.auditRowsAt ? await st.auditRowsAt(ts) : null;
+    } finally {
+      await st.close();
+    }
+  }
+  async function maxTsOfStore() {
+    const st = await mod.open(false);
+    try {
+      return Number(await st.maxTs?.());
+    } finally {
+      await st.close();
+    }
+  }
+
   // K1, K2, K8 and K9 drive the store directly: under C7 they hold its lease like a writer would.
   const st = await mod.open(true);
   const leased = hasLease(st);
@@ -737,12 +1294,31 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (leased) await st.releaseLease();
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
+  if (want("K24")) await k24();
+  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();
   if (want("K10")) {
     if (leased) await leaseChecks();
     else if (opts.requireLease) check(false, "K10–K18 the driver claims PERSIST-01 C7 but has no lease");
+  }
+  const layoutHooks = !!(mod.layoutVersion && mod.setLayoutVersion && mod.makeForeign && mod.foreignIntact);
+  if (want("K22")) {
+    if (layoutHooks) await k22().catch((e) => check(false, `K22 threw: ${e}`));
+    else if (opts.requireLayout)
+      check(false, "K22 the driver claims PERSIST-01 C10 but its module has no layout hooks");
+  }
+  if (want("K23") && (layoutHooks || opts.requireLayout)) await k23().catch((e) => check(false, `K23 threw: ${e}`));
+  if (want("K20")) {
+    if (mod.target && mod.openThrough) await k20();
+    else if (opts.requireTimeouts)
+      check(false, "K20 the driver is a remote store but its module has no target/openThrough");
+  }
+  if (want("K21")) {
+    if (mod.target && mod.openThrough) await k21();
+    else if (opts.requireTimeouts)
+      check(false, "K21 the driver is a remote store but its module has no target/openThrough");
   }
   return { failures };
 }

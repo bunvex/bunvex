@@ -38,10 +38,13 @@ describe("layout and lists after the UX review", () => {
     expect(screen.getByRole("button", { name: "Open" }).className).toContain("h-8");
   });
 
-  test("UX-9: every variable's copy button says Copy, named for its variable", async () => {
+  test("UX-9 / UX-8: every variable's copy button is the same icon, named for its variable", async () => {
     mount("/settings/environment-variables");
     const copies = await screen.findAllByRole("button", { name: /^Copy [A-Z_]/ });
     expect(copies.length).toBeGreaterThan(1);
-    for (const c of copies) expect(c.textContent).toBe("Copy");
+    for (const c of copies) {
+      expect(c.textContent).toBe("");
+      expect(c.getAttribute("title")).toBe(c.getAttribute("aria-label"));
+    }
   });
 });

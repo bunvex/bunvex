@@ -278,13 +278,7 @@ function ViewRow(props: {
           {props.shown ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
         </Button>
         {/* the same short label in every row (its name for assistive tech), so the buttons line up */}
-        <CopyButton
-          text={`${row.name}=${row.value}`}
-          label="Copy"
-          aria-label={`Copy ${row.name}`}
-          size="sm"
-          variant="ghost"
-        />
+        <CopyButton text={`${row.name}=${row.value}`} label={`Copy ${row.name}`} iconOnly />
         {props.canWrite && !row.deleted && (
           <Button size="sm" variant="ghost" aria-label={`Edit ${row.name}`} onClick={props.onEdit}>
             Edit
@@ -293,7 +287,7 @@ function ViewRow(props: {
         {props.canWrite && (
           <Button
             size="sm"
-            variant="ghost"
+            variant={row.deleted ? "ghost" : "destructive-ghost"}
             aria-label={`${row.deleted ? "Keep" : "Delete"} ${row.name}`}
             onClick={props.onDelete}
           >

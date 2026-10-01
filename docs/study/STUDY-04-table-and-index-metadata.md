@@ -72,15 +72,20 @@
 - **Indexes.** An index document holds `{ table, name, fields, indexId, state }`. The index id is the next
   unused persistence index id.
 - **At `Engine.init()`**, the catalog is read at the durable snapshot and reconciled with the declared
-  schema in one mutation:
+  schema in one mutation (Convex's push start, STUDY-29 §3):
   - a missing table is created, with its two system indexes;
   - a missing index is created in state `backfilling`;
-  - an index whose fields changed is replaced by a new index id;
-  - an index no longer declared is removed from `_index`. Its entries stay until retention exists.
-- **Backfill.** A `backfilling` index is then filled from the table's live documents, in batches of
-  commits, and marked `enabled`.
-  - If the process crashes midway, the next start finds it still `backfilling` and runs the backfill
-    again. That is idempotent: the same keys are rewritten.
+  - an index whose fields changed gets a new version under a new index id; the old one serves until the
+    new one is enabled;
+  - an index no longer declared is removed from `_index` when the schema change finishes (a pending one
+    at once). Its entries stay until retention exists.
+- **Backfill** ([STUDY-29](STUDY-29-index-backfill.md)). `init()` returns without waiting: a background
+  worker fills a `backfilling` index from the table's live documents, in chunks committed under OCC while
+  every write already maintains it. Then it is `backfilled`, and the schema change enables it
+  (`indexesReady()` resolves). Until then a query on it fails with Convex's `IndexBackfillingError`, and a
+  changed index keeps serving its old version.
+  - Progress is checkpointed in `_index_backfills`; after a crash the next start resumes from there.
+  - Staged indexes (`{ fields, staged: true }`) are backfilled and never enabled, as Convex's.
 - **Resolved catalog.** Each `Engine` owns its resolved catalog (`engine.catalog`). The declared `Schema`
   is never mutated, so one schema object can serve several engines on different stores (the
   conformance suite does this).
@@ -90,11 +95,11 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | The tablet id is a small integer allocated from a counter, not a random 16-byte id; `_tables` and `_index` have fixed ids instead of persistence globals | PERSIST-01 stores integer ids. Fixed bootstrap ids replace the globals. Not observable. | owner |
+| D1 | The tablet id is a small integer allocated from a counter, not a random 16-byte id; `_tables` and `_index` have fixed ids instead of persistence globals | PERSIST-01 stores integer ids. Fixed bootstrap ids replace the globals. Not observable. | Decided (owner, 2026-10-01): keep bunvex's (DV-53) |
 | D2 | ~~Tables exist only if the schema declares them~~ Fixed in #33: a first insert creates the table in the same transaction | — | done |
-| D3 | Backfill runs synchronously at startup, before the server accepts requests, instead of in the background | Simple and correct for now; a large table delays startup. Background backfill is a parity gap. | owner (gap) |
-| D4 | No `Backfilled`/staged state and no namespaces (components) | Parity gaps, with their own studies later | owner (gap) |
-| D5 | Stores created before this change are not readable (no migration) | Pre-alpha; bench data is reseeded | owner |
+| D3 | ~~Backfill runs synchronously at startup, before the server accepts requests, instead of in the background~~ | Decided (owner, 2026-10-01): match Convex. Done in [STUDY-29](STUDY-29-index-backfill.md) (#115): background worker, checkpoints, resume. What differs is STUDY-29 B1 and B2, decided as divergences (owner, 2026-10-01: DV-126, revisit with `bunvex deploy`; DV-127, until `prev_ts` (DV-66) exists). | done (DV-54) |
+| D4 | ~~No `Backfilled`/staged state~~ and no namespaces (components) | Decided (owner, 2026-10-01): match Convex. `backfilled` and staged indexes done in STUDY-29 (#115); namespaces (components) remain a gap. | partly done (DV-55) |
+| D5 | Stores created before this change are not readable (no migration) | Pre-alpha; bench data is reseeded | Decided (owner, 2026-10-01): keep bunvex's for now: pre-alpha; a stored layout version (STUDY-25 L6) first, migrations later (DV-56) |
 
 ## 6. Tests
 
