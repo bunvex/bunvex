@@ -13,6 +13,7 @@ import {
   FunctionSquare,
   History,
   Menu,
+  Network,
   Play,
   ScrollText,
   Settings,
@@ -107,6 +108,12 @@ export function Shell() {
               <DashLink link={{ to: "/database" }} className={NAV_LINK}>
                 <Database className={ICON} aria-hidden="true" />
                 Database
+              </DashLink>
+            </li>
+            <li>
+              <DashLink link={{ to: "/schema" }} className={NAV_LINK}>
+                <Network className={ICON} aria-hidden="true" />
+                Schema
               </DashLink>
             </li>
             <li>
