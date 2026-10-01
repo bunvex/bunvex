@@ -2,17 +2,16 @@
 import { MysqlPersistence } from "@bunvex/persistence/mysql";
 import mysql from "mysql2/promise";
 
+/** TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none). */
+const tls = () => ({ requireSsl: !process.env.DO_NOT_REQUIRE_SSL, caFile: process.env.MYSQL_CA_FILE || undefined });
+
 export async function open(fresh: boolean) {
   if (fresh) {
     const c = await mysql.createConnection(process.env.MYSQL_URL!);
     await c.query(`drop table if exists documents, indexes, bunvex_lease`);
     await c.end();
   }
-  // TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none).
-  return MysqlPersistence.open(process.env.MYSQL_URL!, undefined, {
-    requireSsl: !process.env.DO_NOT_REQUIRE_SSL,
-    caFile: process.env.MYSQL_CA_FILE || undefined,
-  });
+  return MysqlPersistence.open(process.env.MYSQL_URL!, undefined, tls());
 }
 
 /** K14: another session holds a lock on the lease row, i.e. a writer is inside a flush. */
@@ -36,5 +35,5 @@ export async function openThrough(via: { host: string; port: number }, opts: { t
   const u = new URL(process.env.MYSQL_URL!);
   u.hostname = via.host;
   u.port = String(via.port);
-  return MysqlPersistence.open(u.toString(), 16, { timeoutMs: opts.timeoutMs });
+  return MysqlPersistence.open(u.toString(), 16, { ...tls(), timeoutMs: opts.timeoutMs });
 }

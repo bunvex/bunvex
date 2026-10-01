@@ -2,17 +2,16 @@
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 import postgres from "postgres";
 
+/** TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none). */
+const tls = () => ({ requireSsl: !process.env.DO_NOT_REQUIRE_SSL, caFile: process.env.PG_CA_FILE || undefined });
+
 export async function open(fresh: boolean) {
   if (fresh) {
     const sql = postgres(process.env.PG_URL!, { max: 1, onnotice: () => {} });
     await sql.unsafe(`drop table if exists documents, indexes, bunvex_lease`);
     await sql.end();
   }
-  // TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none).
-  return PostgresPersistence.open(process.env.PG_URL!, undefined, {
-    requireSsl: !process.env.DO_NOT_REQUIRE_SSL,
-    caFile: process.env.PG_CA_FILE || undefined,
-  });
+  return PostgresPersistence.open(process.env.PG_URL!, undefined, tls());
 }
 
 /** K14: a session other than ours holds the lease row's write lock, i.e. a writer is inside a flush. */
@@ -33,5 +32,5 @@ export async function openThrough(via: { host: string; port: number }, opts: { t
   const u = new URL(process.env.PG_URL!);
   u.hostname = via.host;
   u.port = String(via.port);
-  return PostgresPersistence.open(u.toString(), 16, { timeoutMs: opts.timeoutMs });
+  return PostgresPersistence.open(u.toString(), 16, { ...tls(), timeoutMs: opts.timeoutMs });
 }
