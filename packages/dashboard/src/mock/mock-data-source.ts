@@ -420,11 +420,14 @@ export class MockDataSource implements DashboardDataSource {
       const inOrder = (a: Key, b: Key) => sign * compareValues(a, b);
       const query = canonicalFilter(q.table, q.filter);
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+      // each document's key once (not per comparison), and only the page is cloned: at 100 000 documents a
+      // page went from ~230 ms to a fraction of it in the browser (UI-01 §19.3)
       const matching = t.documents
         .filter((d) => matchesFilter(d, expr, ix))
-        .sort((a, b) => inOrder(key(a), key(b)))
-        .map((d) => structuredClone(d));
-      return paginate(matching, key, inOrder, after, q.numItems, query);
+        .map((d) => ({ d, k: key(d) }))
+        .sort((a, b) => inOrder(a.k, b.k));
+      const page = paginate(matching, (m) => m.k, inOrder, after, q.numItems, query);
+      return { ...page, page: page.page.map((m) => structuredClone(m.d)) };
     });
   }
 
