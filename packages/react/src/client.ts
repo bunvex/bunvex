@@ -4,6 +4,7 @@
 // when a transition changes its query.
 import {
   type AnyFunctionReference,
+  type AuthTokenFetcher,
   BaseBunvexClient,
   type BaseBunvexClientOptions,
   type ConnectionState,
@@ -53,6 +54,7 @@ export type BaseClientInterface = Pick<
   | "action"
   | "connectionState"
   | "subscribeToConnectionState"
+  | "setAuth"
   | "setAdminAuth"
   | "clearAuth"
   | "close"
@@ -145,6 +147,24 @@ export class BunvexReactClient {
     if (this.cachedSync) this.sync.setAdminAuth(token);
   }
 
+  /**
+   * Authenticate with the tokens `fetchToken` returns; it is called again when a token is about to expire or
+   * the server refuses one. Return null when there is no token. `onChange` hears whether the server accepted
+   * it; `onRefreshChange` is true while a replacement for a refused token is fetched.
+   */
+  setAuth(
+    fetchToken: AuthTokenFetcher,
+    onChange?: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
+  ) {
+    if (typeof fetchToken === "string")
+      throw new Error(
+        "Passing a string to BunvexReactClient.setAuth is no longer supported, please upgrade to passing in an async function to handle reauthentication.",
+      );
+    this.sync.setAuth(fetchToken, onChange ?? (() => {}), onRefreshChange);
+  }
+
+  /** Clear the current authentication token, if any. */
   clearAuth() {
     this.sync.clearAuth();
   }
