@@ -18,7 +18,7 @@ export function ConfirmButton(props: {
   label: ReactNode;
   disabled?: boolean;
   size?: "sm" | "default";
-  variant?: "destructive" | "outline" | "default";
+  variant?: "destructive" | "destructive-outline" | "outline" | "default";
   /** The dialog's confirming button; destructive unless the action is not (e.g. resuming). */
   confirmVariant?: "destructive" | "default";
   title: string;

@@ -9,7 +9,9 @@ Reference: Convex `convex-backend` at commit 4577b9031. Paths are relative to th
   - query, mutation and action definitions, and internal functions;
   - `POST /api/{query,mutation,action,query_ts,query_at_ts}`, the sync WebSocket at `/api/{version}/sync`,
     `GET /version` and `GET /stats` (JSON);
-  - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration.
+  - `PERSISTENCE` / `PERSISTENCE_URL` / `DATA` / `DURABLE` / `POOL` configuration, with Convex's
+    `POSTGRES_URL` / `MYSQL_URL` / `DATABASE_URL`, `DO_NOT_REQUIRE_SSL`, `PG_CA_FILE` / `MYSQL_CA_FILE`, and
+    the database call timeouts `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` / `MONGODB_TIMEOUT_SECONDS`.
 - `@bunvex/core` keeps every version with no GC. Its schema has the system indexes `by_id` and `by_creation_time` plus declared indexes, with no validators and no backfill.
 - `ctx.auth` (STUDY-27) and `ctx.scheduler` (STUDY-30) exist; there is no ctx.storage yet.
 
@@ -71,7 +73,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `ctx.storage.getMetadata` (deprecated) | syscall `1.0/storageGetMetadata` | missing | Replaced by `ctx.db.system.get("_storage", id)`. |
 | `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | missing | Physical table `_file_storage` holds `storageId` (uuid), `storageKey`, `sha256`, `size` and `contentType`, with index `by_storage_id`. |
 | `ctx.db.system.get/query` for virtual system tables | `npm/convex/server/database.ts` (system reader) | missing | Also needed for `_scheduled_functions`. |
-| Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | missing | A doc id from another table is rejected. Divergence? bunvex could accept only doc ids. |
+| Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | missing | A doc id from another table is rejected. Decided (owner, 2026-10-01): accept both, as Convex (DV-84). |
 | Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | missing | |
 | Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | missing | Planned as `@bunvex/file-storage` local and s3. Convex splits blobs by use case: Files, Exports, SnapshotImports, Modules, SearchIndexes. |
 | Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | missing | Switching local↔S3 after init is an error. |
@@ -103,7 +105,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | partial (STUDY-30) | `createServer({ crons })`, checked at start with Convex's messages (S1, DV-139); `crons.ts` discovery comes with the CLI. |
 | `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | The last 5 logs per cron; results and log lines truncated to 1000 chars. |
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
-| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex, `CRON_SPLAY_SECONDS` (0 turns it off). |
+| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
 | No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
 | Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | missing | |
 
@@ -139,7 +141,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | missing | ARCHITECTURE marks it M. Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH. HEAD is served as GET. `/.files/` is reserved. |
 | `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | missing | Uses the action ctx: runQuery, runMutation, runAction, scheduler, storage, auth, vectorSearch. |
-| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | missing | Divergence? bunvex could serve both on one port, by path or host. |
+| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | missing | Decided (owner, 2026-10-01): as Convex, `/http/*` and a separate site origin on port 3211 (DV-86). |
 | Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | missing | |
 | CORS is left to the app (no backend CORS on `/http`) | `router.rs` | missing | |
 | Component HTTP mounts (`httpPrefix`) | `application_function_runner/http_routing.rs` | missing | |
@@ -148,7 +150,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `"use node"` directive and a separate runtime for those modules | `npm/convex/bundler`; `crates/node_executor`; `npm-packages/node-executor` | missing | bunvex already runs on Bun, which has Node APIs, so this may collapse to "accept and ignore the directive". Divergence? |
+| `"use node"` directive and a separate runtime for those modules | `npm/convex/bundler`; `crates/node_executor`; `npm-packages/node-executor` | missing | **Divergence (owner, 2026-10-01, DV-87):** the directive is accepted and those modules run in Bun itself, which has the Node APIs; no separate Node runtime. |
 | Only actions allowed in "use node" files; not allowed in http, crons, schema or auth.config | `node_executor/executor.rs`; `bundler/index.ts` `mustBeIsolate` | missing | An app written for Convex expects these errors. |
 | `node.externalPackages` (installed server-side, `_external_deps_packages`) | `bundler/external.ts`; `crates/model/external_packages` | missing | |
 | Node action timeout 600 s vs V8 action 1800 s | knobs `NODE_ACTION_USER_TIMEOUT_SECS`, `V8_ACTION_USER_TIMEOUT_SECS` | missing | bunvex actions have no timeout at all. |
@@ -231,8 +233,8 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 |---|---|---|---|
 | System indexes `by_id` and `by_creation_time` on every table | `crates/common/bootstrap_model/index` | done | `packages/core/src/schema.ts`. |
 | Declared database indexes (up to 16 fields) | `crates/common/schemas` | partial | Declared in code via `Schema.table()`; no `defineSchema` / `defineTable().index()` API and no field-count limit. |
-| Index backfill over existing data | `crates/database/database_index_workers`; `_index_backfills` | partial (#6) | Synchronous at startup, in batched commits, idempotent after a crash (STUDY-04). Convex backfills in the background from a snapshot and persists progress. |
-| Index states Backfilling, Backfilled, Enabled; staged indexes | `crates/common/bootstrap_model/index/database_index/index_state.rs` | partial (#6) | `backfilling` → `enabled`; no `Backfilled`/staged state. |
+| Index backfill over existing data | `crates/database/database_index_workers`; `_index_backfills` | done (STUDY-29) | In the background, as Convex: `init()` does not wait; a worker in the process holding the lease fills new indexes in rate-limited chunks (Convex's knobs: 1024 entries, 16 chunks/s, reads of 500, 8 tables at once) while every write maintains them, checkpoints in `_index_backfills` every second and resumes from there after a crash. `engine.indexesReady()` is Convex's `wait_for_schema`. Chunks are OCC-validated commits rather than writes at each document's ts (**divergence, owner 2026-10-01, DV-127:** until `prev_ts` (DV-66) exists). |
+| Index states Backfilling, Backfilled, Enabled; staged indexes | `crates/common/bootstrap_model/index/database_index/index_state.rs` | done (STUDY-29) | `backfilling` → `backfilled` → `enabled`; `.index(name, { fields, staged: true })`; Convex's `IndexBackfillingError` / `IndexStagedError`; a changed index serves its old version until the new one is enabled. No push gate yet: code runs while its indexes backfill (**divergence, owner 2026-10-01, DV-126:** revisit with `bunvex deploy`). |
 | Index/table limits: 64 indexes per table (docs say 32), 10 000 tables, names up to 64 chars | `crates/common/schemas/mod.rs`; `database/bootstrap_model/table.rs` | missing | |
 | `_tables` (Active, Hidden, Deleting) and `_index` metadata tables | `crates/common/bootstrap_model/tables.rs`, `index/mod.rs` | partial (#6) | `_tables`/`_index` are persisted (STUDY-04); there are no Hidden/Deleting states. |
 | Deleting tables and clearing tables (dashboard / API) | `/api/delete_tables`; `system-udfs clearTablePage.ts` | missing | |
@@ -293,7 +295,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural. |
+| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural; the by-ts log read exists on `indexes` (PERSIST-01 C11), the documents side does not yet. |
 | `json_schemas`, `get_table_column_names`, `test_streaming_export_connection` | same | missing | |
 | Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | missing | |
 | Fivetran source/destination connectors | `crates/fivetran_source`, `fivetran_destination` | missing | Separate programs; low priority. |
@@ -335,22 +337,27 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 |---|---|---|---|
 | `GET /version`, `/instance_version`, `/instance_name`, `/`, `POST /echo` | `crates/local_backend/router.rs`; `crates/health_check` | partial | bunvex has `/version`, which returns "bunvex". docker-compose's healthcheck is `curl /version`. |
 | Pause / unpause deployment (`_backend_state`, `/api/v1/pause_deployment`) | `crates/model/backend_state` | missing | A paused deployment rejects functions and stops the scheduler and crons. |
-| Backend flags: `--port` 3210, `--site-proxy-port` 3211, `--interface`, `--convex-origin`, `--convex-site`, `--instance-name`, `--instance-secret`, `--local-storage`, `--s3-storage`, `--do-not-require-ssl`, `--disable-beacon`, `--redact-logs-to-client`, `--local-log-sink`, `--convex-http-proxy` | `crates/local_backend/config.rs` | partial | bunvex has a port option, defaulting to 3210, plus `PERSISTENCE*`, `DATA`, `DURABLE` and `POOL`. The rest are missing. |
-| Database selection: SQLite by default, `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL`; database name derived from the instance name | `self-hosted/docker-build/run_backend.sh`; `crates/postgres`, `mysql`, `sqlite` | done | bunvex covers the same stores plus memory and MongoDB, with its own env names (`PERSISTENCE`, `PERSISTENCE_URL`). Divergence? It could accept Convex's names as aliases. |
+| Backend flags: `--port` 3210, `--site-proxy-port` 3211, `--interface`, `--convex-origin`, `--convex-site`, `--instance-name`, `--instance-secret`, `--local-storage`, `--s3-storage`, `--do-not-require-ssl`, `--disable-beacon`, `--redact-logs-to-client`, `--local-log-sink`, `--convex-http-proxy` | `crates/local_backend/config.rs` | partial | bunvex has a port option, defaulting to 3210, plus `PERSISTENCE*`, `DATA`, `DURABLE` and `POOL`. `--do-not-require-ssl` is the `DO_NOT_REQUIRE_SSL` env var, as the image reads it (any non-empty value; STUDY-25 L8). The rest are missing. |
+| Database selection: SQLite by default, `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL`; database name derived from the instance name | `self-hosted/docker-build/run_backend.sh`; `crates/postgres`, `mysql`, `sqlite` | done | bunvex covers the same stores plus memory and MongoDB, with its own env names (`PERSISTENCE`, `PERSISTENCE_URL`); its default store is memory, not SQLite. Convex's names are accepted as aliases with Convex's precedence; bunvex's win when both are set (DV-88, STUDY-25 §3.7). TLS as Convex: required and verified, `DO_NOT_REQUIRE_SSL` lifts it, `PG_CA_FILE` / `MYSQL_CA_FILE`; Postgres `target_session_attrs=read-write`; a read-only MySQL refused at open (DV-109; Convex re-checks MySQL on every new connection). MongoDB's TLS is its URL's. **Divergence (DV-110):** the database is the one the URL names, not derived from the instance name; a URL without one is refused at start (confirmed by the owner, 2026-10-01). |
 | Single writer per database: the persistence lease (`leases` table; the newest process wins at once, the loser exits on its next write with `LeaseLostError`; `SELECT … FOR SHARE` before COMMIT fences writes) | `crates/postgres/src/lib.rs:1745-1893`, `sql.rs:721-755`; `crates/mysql/src/v6/persistence.rs` (SQLite: none) | partial | PERSIST-01 C7 (STUDY-24 H8): Postgres and MySQL have it; SQLite and memory+log hold an exclusive OS lock for the process's life — **a deliberate divergence: Convex's SQLite has no lock and loses writes with two processes** (STUDY-25 L9, owner 2026-09-30); MongoDB has it as a transaction per flush on a replica set (owner 2026-09-30; Convex has no MongoDB driver). **Divergence (owner, 2026-09-30, STUDY-24 H5):** bunvex's lease has a TTL on the store's clock and a graceful release, and a live lease is never taken — a second process fails to open with `LeaseHeldError` (or waits, with `lease.waitMs`), where Convex's newest process wins at once. The fence is an epoch checked inside each flush's first statement (Postgres: a data-modifying CTE, no extra round trip; MySQL: a first `UPDATE`, one round trip). |
+| Client-side timeouts on database calls: Postgres 30 s (`POSTGRES_TIMEOUT_SECONDS`), MySQL 19 s (`MYSQL_TIMEOUT_SECONDS`), per round trip (connection, statement, BEGIN, COMMIT); a timed-out connection is never reused | `crates/postgres/src/connection.rs:108-135, 209-220`; `crates/mysql/src/connection.rs:143-153, 280-318`; `crates/common/src/knobs.rs:1197` | done | As Convex (STUDY-25 L3, PERSIST-01 C8, conformance K20), same defaults and env names; MongoDB 30 s (`MONGODB_TIMEOUT_SECONDS`, no Convex counterpart). **Divergence (DV-122, owner 2026-10-01):** Postgres retires its whole pool on a timeout, and before the retry after a lost connection (postgres.js exposes no single connection). Lease renewals are bounded by TTL/4 (bunvex's lease, DV-14). Retries after a transient error: next row. |
+| Retries of transient database errors: commit writes retried with full-jitter backoff 100 ms → 10 s, no limit (`INITIAL_/MAX_PERSISTENCE_WRITES_BACKOFF_MS`); an ambiguous commit stops the committer ("Unsure if transaction committed to disk"); reads and init retried once on a fresh connection (Postgres after a lost connection or a timeout, MySQL after an operational error, `MYSQL_MAX_QUERY_RETRIES` = 1) | `crates/database/src/write_batcher.rs:205-246`, `committer.rs:440`; `crates/common/src/errors.rs:855-859`; `crates/postgres/src/connection.rs:209-264`, `lib.rs:1822-1846`; `crates/mysql/src/connection.rs:88-118, 280-318`; `knobs.rs:1245, 2083-2091` | done | As Convex (STUDY-25 L4/L5, PERSIST-01 C9, conformance K21), with Convex's per-driver classification, except two decided divergences (owner, 2026-10-01): **DV-123**, on Postgres a connection lost inside a flush is transient too (as on MySQL; Convex: only timeouts); **DV-124**, a retried group that already landed is acknowledged instead of stopping the process (the driver reads the lease record first: our epoch with `max_ts` ≥ the group's top means it committed; same rule on Postgres, MySQL and MongoDB). MongoDB (no Convex counterpart) classifies as the MySQL list (owner-approved). The backoff knobs are `Engine` options (`flushRetry`); env vars come with Convex's env names (DV-88). bunvex's lease TTL bounds the retries in practice. |
 | S3 env (`AWS_*`, `S3_ENDPOINT_URL`, `S3_STORAGE_{EXPORTS,SNAPSHOT_IMPORTS,MODULES,FILES,SEARCH}_BUCKET`, `AWS_S3_FORCE_PATH_STYLE`, `AWS_S3_DISABLE_SSE/CHECKSUMS`) | `crates/aws_s3`, `aws_utils` | missing | Planned `FILE_STORAGE=`. |
 | Knob env overrides (every knob is an env var) | `crates/common/knobs.rs`; `self-hosted/advanced/knobs.md` | missing | |
 | Docker image, docker-compose, credentials bootstrap (`read_credentials.sh`) | `self-hosted/docker*` | missing | ARCHITECTURE marks docker/ M. |
 | SSRF proxy for action `fetch` and OIDC (`--convex-http-proxy`) | `crates/local_backend/config.rs` | missing | |
-| Beacon / telemetry (hourly, `DISABLE_BEACON`), Sentry | `crates/local_backend/beacon.rs` | missing | Divergence? bunvex probably shouldn't ship one. |
-| In-place database migrations between versions (`migrations_model`) | `crates/migrations_model` | missing | bunvex needs a persistence format version story. |
+| Beacon / telemetry (hourly, `DISABLE_BEACON`), Sentry | `crates/local_backend/beacon.rs` | missing | **Divergence (owner, 2026-10-01, DV-89):** bunvex ships no beacon or telemetry. |
+| In-place database migrations between versions (`migrations_model`) | `crates/migrations_model` | missing | **Not for now (owner, 2026-10-01, DV-56):** pre-alpha. The version story comes first, and is built (#114): next row. An older layout is refused until an upgrade exists. |
+| Persistence layout version: chosen by configuration (V5/V6) and checked against the database (MySQL v5 refuses a non-V5 configuration; v6 refuses to initialize over a v5 or unversioned database, and checks its shared tables' columns) | `crates/common/src/types/mod.rs:175-197`; `crates/mysql/src/v5/persistence.rs:151-153`; `crates/mysql/src/v6/persistence.rs:207-271` | done | As Convex (STUDY-25 L6, PERSIST-01 C10, conformance K22; #114, DV-107 resolved). bunvex has one layout, so every store records it instead (`persistence_globals.layout_version`, MongoDB `meta`, the memory log's header) and every open checks it. A newer, unknown or older (no upgrade yet) version is refused with `LayoutError`, and so is a store that is not bunvex's (e.g. Convex's own tables), without being written to. A store written before this check opens as version 1 and gets its record under the lease. |
+| `read_only` flag: a writer's open fails with "persistence is read-only, data migration in progress" unless `allow_read_only` (readers pass it); `set_read_only` needs no lease; Postgres and MySQL only | `crates/postgres/src/lib.rs:220-224, 330-334, 357-389`, `sql.rs:198-215, 681-715`; `crates/mysql/src/v6/persistence.rs:168-180`; `crates/db_connection/src/lib.rs:181-196, 238-262` | done | As Convex (STUDY-25 L7, PERSIST-01 C10, conformance K23; #114, DV-108 resolved): `ReadOnlyError` unless `allowReadOnly`; `setReadOnly(on)` on every driver. No CLI yet; import/export will use it. **Divergence (owner, 2026-10-01, DV-125):** also on SQLite and memory+log, where Convex has none. |
+| Reading the commit log by timestamp (`load_documents` over a `TimestampRange`, bounded by the repeatable ts; Postgres pages `documents` by `(ts, table_id, id)`) | `crates/common/src/persistence/mod.rs:562`, `:774`; `crates/postgres/src/sql.rs:269` | partial | PERSIST-01 C11 (STUDY-24 H11, owner 2026-10-01): `readLog(afterTs, upToTs, limit)` on every driver reads **`indexes`** by ts (each commit's index write set, whole commits, a per-commit `prevTs` for gap detection, never above the durable prefix), with a ts index everywhere. Documents by ts and `prev_ts` (retention, export) are not built (DV-66). |
 | OpenAPI specs (`/api/public_openapi.json`, `/api/dashboard_openapi.json`, `/api/v1/openapi.json`) | `crates/local_backend/router.rs` | missing | |
 
 ### 23. Public HTTP function API (non-sync)
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500. Still no `format`, no auth header. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; the others missing. |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
@@ -372,6 +379,8 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
 | Page size / query operators / index key prefix | 1024 / 256 / 2500 bytes | missing | |
 | OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | done (STUDY-21) | Same budget and full-jitter backoff, plus the wait for the conflicting write. The knobs are `Engine` options. |
+| Write-log retention (how old a mutation's snapshot may be at commit) | 30 s floor, 300 s, 50 MiB soft (`WRITE_LOG_MIN_RETENTION_SECS`, `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`) | done (STUDY-06 D10) | Past it: `OutOfRetention`, HTTP 503 / close 1013, not retried as OCC. Knobs are the `Engine` option `writeLogRetention`. Divergence: a hard byte cap, 256 MiB by default (`hardMaxBytes`; `null`/`0` turns it off), DV-128 (owner, 2026-10-01). |
+| Transaction begin window | 10 s (`MAX_TRANSACTION_WINDOW`) | done (STUDY-06 D10) | Only `/api/query_at_ts` begins in the past; further back answers 503. |
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
@@ -386,10 +395,11 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 
 | Status | Count |
 |---|---|
-| done | 2 |
-| partial | 11 |
+| done | 4 |
+| partial | 12 |
 | missing | 224 |
 
-- The two done rows are system indexes and database selection.
-- The eleven partial rows are: the persistence lease (PERSIST-01 C7: every driver), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
+- The four done rows are system indexes, database selection, the client-side timeouts on database calls and
+  the retries of transient database errors.
+- The twelve partial rows are: the persistence lease (PERSIST-01 C7: every driver), the log by timestamp (PERSIST-01 C11: on `indexes`), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

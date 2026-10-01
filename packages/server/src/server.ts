@@ -6,7 +6,7 @@ import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
-import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
+import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
@@ -134,7 +134,8 @@ export function createServer(opts: ServerOptions) {
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
     if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
-    if (isSystemError(r.error)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+    if (isSystemError(r.error))
+      return requestError(isTryAgainError(r.error) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
     const e = formatError(r.error);
     const data = e.data === undefined ? "" : `,"errorData":${e.data}`;
     return jsonText(

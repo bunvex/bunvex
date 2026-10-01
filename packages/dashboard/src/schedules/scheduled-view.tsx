@@ -1,9 +1,10 @@
 // Scheduled functions (UI-01 §14.2, STUDY-12 §9): the runs waiting in the scheduler, nearest first, for
 // every function or one; a run's details beside the list, where it can be canceled; Cancel all.
+
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
-import { cn } from "@bunvex/ui/lib/utils";
+import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
@@ -37,8 +38,6 @@ function FunctionName({ path, kind }: { path: string; kind?: FunctionKind }) {
     </span>
   );
 }
-
-export const stateLabel = (s: ScheduledFunction["state"]) => (s === "pending" ? "Pending" : "Running");
 
 export function ScheduledView() {
   const scope = useQueryScope();
@@ -79,11 +78,7 @@ export function ScheduledView() {
     col.accessor((r) => r.state, {
       id: "state",
       header: "State",
-      cell: (c) => (
-        <span className={cn("text-xs", c.getValue() === "inProgress" ? "text-info" : "text-muted-foreground")}>
-          {stateLabel(c.getValue())}
-        </span>
-      ),
+      cell: (c) => <StatusBadge status={c.getValue() === "inProgress" ? "running" : "pending"} />,
     }),
     col.accessor((r) => r.function, {
       id: "function",
@@ -219,7 +214,7 @@ function RunDetails(props: {
             <dt className="text-muted-foreground">ID</dt>
             <dd className="flex items-center gap-2">
               <code className="truncate font-mono text-xs">{run.id}</code>
-              <CopyButton text={run.id} label="Copy ID" size="xs" />
+              <CopyButton text={run.id} label="Copy run ID" iconOnly />
             </dd>
             <dt className="text-muted-foreground">Scheduled for</dt>
             <dd>
@@ -231,7 +226,9 @@ function RunDetails(props: {
               <time dateTime={new Date(run.creationTime).toISOString()}>{formatTime(run.creationTime)}</time>
             </dd>
             <dt className="text-muted-foreground">State</dt>
-            <dd>{stateLabel(run.state)}</dd>
+            <dd>
+              <StatusBadge status={run.state === "inProgress" ? "running" : "pending"} />
+            </dd>
           </dl>
           <section aria-label="Arguments">
             <h3 className="mb-1 font-medium">Arguments</h3>
