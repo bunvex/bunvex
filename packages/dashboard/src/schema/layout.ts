@@ -53,7 +53,12 @@ const ROOT_OPTIONS = {
   "elk.spacing.edgeNode": "24",
 };
 export const CLUSTER_TOP = 40;
-const CLUSTER_OPTIONS = { "elk.padding": `[top=${CLUSTER_TOP},left=20,bottom=20,right=20]` };
+// a group box lays its tables out with the same spacing as the root: ELK reads spacing per parent, and
+// without it the tables inside sat 20 px apart, their reference lines squeezed along the cards' borders
+const CLUSTER_OPTIONS = {
+  ...ROOT_OPTIONS,
+  "elk.padding": `[top=${CLUSTER_TOP},left=20,bottom=20,right=20]`,
+};
 
 /** Positions for every table (and group box), absolute. */
 export async function computeLayout(graph: SchemaGraph, clusters: Cluster[] = []): Promise<Layout> {

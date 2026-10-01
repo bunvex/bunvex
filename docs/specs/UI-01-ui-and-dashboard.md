@@ -1614,3 +1614,10 @@ Both canvases fit never past 100 % zoom and share their controls and dot grid.
   and 1024: the grid ends at the viewport's bottom, Bar 1's bottom line and the panel header's within 1 px, no
   page scroll, a click on another row switches the panel. Follow-up: the same full-bleed, two-bar layout for
   Logs, Files, Schedules and History (each has its own header and toolbar today).
+
+### 22.6 Schema: spacing inside a group box (1 Oct 2026)
+
+A group box (a cluster of linked tables, §15) lays its tables out with the root's spacing — 96 px between
+layers, 56 between tables. ELK reads its spacing options per parent, so the boxes had used its defaults: the
+tables sat 20 px apart and the reference lines ran along the cards' borders, between `tasks`, `messages` and
+`users`. Test: inside a box, consecutive layers are at least 90 px apart.
