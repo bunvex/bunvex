@@ -12,13 +12,23 @@
 // (owner's decision, 2026-09-30; STUDY-24 §4.4). Stores written by earlier versions used a commit marker
 // (`meta` {_id: "commit"}) and rows written before it; they are read as such, and the rows a crash left
 // above the marker are deleted — under the lease only, never by a mere open.
+//
+// Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `meta` {_id: "layout", version} and
+// `meta` {_id: "read_only"}. Open checks both before writing anything (index builds included) and refuses a
+// foreign, future or read-only store; a new store's version record is written under the lease.
 import {
+  checkLayoutVersion,
+  checkUnversionedTables,
   type DocWrite,
   type IndexWrite,
+  LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   type ScanDocs,
   scanLatest,
 } from "@bunvex/core/persistence";
@@ -30,6 +40,13 @@ type IdxRow = { x: number; k: string; ts: number; d: string | null };
 
 const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
 
+const STORE = "this MongoDB database";
+/** bunvex's fields: how an unversioned store is recognised (a sample of each collection). */
+const FIELDS = {
+  documents: ["_id", "t", "i", "ts", "j"],
+  indexes: ["_id", "x", "k", "ts", "d"],
+};
+
 type LeaseDoc = {
   _id: string;
   epoch: number;
@@ -39,7 +56,7 @@ type LeaseDoc = {
   maxTs: number;
 };
 
-export class MongoPersistence implements Persistence, ScanDocs, Lease {
+export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
   /** Our lease's epoch, 0 when we hold none. */
@@ -55,7 +72,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     private app: string,
   ) {}
 
-  static async open(url: string, opts: { fresh?: boolean; pool?: number } = {}) {
+  static async open(url: string, opts: { fresh?: boolean; pool?: number } & OpenOptions = {}) {
     const { MongoClient: Client } = await loadPeer<typeof import("mongodb")>("mongodb", "mongodb");
     const app = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
     const client = new Client(url, { maxPoolSize: opts.pool ?? 16, appName: app });
@@ -72,6 +89,12 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     const docs = db.collection<DocRow>("documents");
     const idx = db.collection<IdxRow>("indexes");
     const meta = db.collection<any>("meta");
+    try {
+      await MongoPersistence.checkStore(docs, idx, meta, opts);
+    } catch (e) {
+      await client.close();
+      throw e;
+    }
     // Indexes only when missing (STUDY-25 L1): every open should not take the locks of index builds.
     const want: [Collection<any>, Record<string, 1 | -1>][] = [
       [docs, { t: 1, i: 1, ts: -1 }],
@@ -86,6 +109,45 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
       if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
     }
     return new MongoPersistence(client, docs, idx, meta, app);
+  }
+
+  /**
+   * PERSIST-01 C10, before anything is written: the recorded layout version must be this bunvex's; a store
+   * without one must hold bunvex's fields (written before C10: the same layout) or nothing; and a store
+   * marked read-only opens only with `allowReadOnly`. Refusing needs no lease: nothing is written.
+   */
+  private static async checkStore(
+    docs: Collection<DocRow>,
+    idx: Collection<IdxRow>,
+    meta: Collection<any>,
+    opts: OpenOptions,
+  ) {
+    const flags = await meta.find({ _id: { $in: ["layout", "read_only"] } }).toArray();
+    const layout = flags.find((f) => f._id === "layout");
+    if (layout) checkLayoutVersion(layout.version, STORE);
+    else {
+      const found: Record<string, string[]> = {};
+      for (const [name, c] of [
+        ["documents", docs],
+        ["indexes", idx],
+      ] as const) {
+        const one = await (c as Collection<any>).findOne({});
+        if (one) found[name] = Object.keys(one);
+      }
+      checkUnversionedTables(STORE, found, FIELDS, ["collection", "fields"]);
+    }
+    if (flags.some((f) => f._id === "read_only") && !opts.allowReadOnly) throw new ReadOnlyError(STORE);
+  }
+
+  /** Convex's `set_read_only`: no lease needed; the next open for writing is refused while it is set. */
+  async setReadOnly(readOnly: boolean) {
+    if (readOnly)
+      await this.meta.updateOne(
+        { _id: "read_only" },
+        { $set: { since: new Date() } },
+        { upsert: true, writeConcern: { w: "majority" } },
+      );
+    else await this.meta.deleteOne({ _id: "read_only" }, { writeConcern: { w: "majority" } });
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
@@ -143,6 +205,20 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
       if (won) {
         this.epoch = won.epoch;
         this.ttlMs = opts.ttlMs;
+        // PERSIST-01 C10: a new (or pre-C10) store gets its layout version now, under the lease; one stamped in
+        // the meantime by another bunvex is checked again, before any recovery below touches its rows.
+        await this.meta.updateOne(
+          { _id: "layout" },
+          { $setOnInsert: { version: LAYOUT_VERSION } },
+          { upsert: true, writeConcern: { w: "majority" } },
+        );
+        const layout = await this.meta.findOne({ _id: "layout" });
+        try {
+          checkLayoutVersion(layout?.version, STORE);
+        } catch (e) {
+          await this.releaseLease();
+          throw e;
+        }
         // Rows above the durable prefix are the remains of an interrupted flush of an earlier version
         // (commit-marker stores): delete them now that no one else can be writing.
         await this.docs.deleteMany({ ts: { $gt: won.maxTs } });

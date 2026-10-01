@@ -30,11 +30,16 @@ export {
   type DocWrite,
   hasLease,
   type IndexWrite,
+  LAYOUT_VERSION,
+  LayoutError,
   type Lease,
   type LeaseAcquire,
   LeaseHeldError,
   LeaseLostError,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   type ScanDocs,
 } from "./persistence/index.ts";
 export {

@@ -1,7 +1,9 @@
 # PERSIST-01 — the persistence contract
 
 > v1, 29 Sep 2026 (written as STORAGE-01; renamed by ARCH-01 D2 — "storage" is the FILE API, as in
-> Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5.
+> **v2.3, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7 (C8/C9 and
+> K20/K21 are STUDY-25 L3–L5). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -122,6 +124,34 @@ unless the engine was given a wait (`lease.waitMs`): it then retries until the l
 runs out. The lease is renewed every TTL/3; `LeaseLostError`, or a renewal still failing when the TTL
 runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` releases it.
 
+## C10 — layout version and read-only flag
+
+A store says which layout wrote it, and whether it may be opened for writing (STUDY-25 L6/L7, as Convex:
+its configured layout, refused over a different one, and its `read_only` table). The helpers and errors
+are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_VERSION` (1).
+
+- **The record.** Every store holds its layout version: a `layout_version` row of `persistence_globals`
+  (SQL stores), `meta` `{_id: "layout"}` (MongoDB), or the log's first record `{"layout":N}` (memory+log).
+  Each driver's file header says where.
+- **Open checks, writing nothing.** Before any write (DDL included) and without the lease, since refusing
+  is safe:
+  - A recorded version other than `LAYOUT_VERSION` fails the open with `LayoutError`, naming it: newer,
+    unknown, or older with no upgrade. An upgrade, when one exists, runs under the lease only, as recovery
+    does (C7). None exists yet.
+  - A store with no record is bunvex's only if its tables (collections) have bunvex's columns (fields), or
+    do not exist. It is then a store written before C10, the same layout. Anything else is refused with
+    `LayoutError` and left untouched.
+  - A store marked read-only fails the open with `ReadOnlyError` ("… read-only, data migration in
+    progress"), unless the caller passes `allowReadOnly` (readers, migration tools).
+- **Stamping under the lease.** A store with no record gets one when the lease is acquired, in the same
+  atomic step where the store allows it. A record found there is checked again; on a mismatch the
+  acquisition fails and the lease is not kept.
+- **The flag.** A driver implements `ReadOnlyFlag.setReadOnly(on)`: no lease is needed (as Convex's
+  `set_read_only`). It is read at open only; a running writer keeps writing.
+- A third-party driver claims C10 by passing K22 and K23. Its conformance module then exports the
+  `layoutVersion`, `setLayoutVersion`, `makeForeign` and `foreignIntact` hooks, and an `open` that takes
+  `allowReadOnly`.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -144,6 +174,8 @@ runs out, stops the committer (fail-stop, as a failed flush). `Engine.close()` r
 | K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
 | K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
 | K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
+| K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
+| K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

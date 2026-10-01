@@ -91,5 +91,15 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export {
+  checkLayoutVersion,
+  checkUnversionedTables,
+  decodeLayoutVersion,
+  LAYOUT_VERSION,
+  LayoutError,
+  type OpenOptions,
+  ReadOnlyError,
+  type ReadOnlyFlag,
+} from "./layout.ts";
 export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
