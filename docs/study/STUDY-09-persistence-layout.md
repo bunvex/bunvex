@@ -1,6 +1,6 @@
 # STUDY-09 — Persistence layout and drivers
 
-- **Status:** decided — D1, D2 fixed (#8); D3 an open bug (Phase 0 B4); D7, D8 kept (DV-67, DV-68); D5, D6, D9 to match Convex, gaps tracked in docs/parity (DV-62, DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#8); D3 fixed (#17, Phase 0 B4); D7, D8 kept (DV-67, DV-68); D5, D6, D9 to match Convex, gaps tracked in docs/parity (DV-62, DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
