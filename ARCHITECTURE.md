@@ -92,7 +92,8 @@ bunvex/
 │   │   ├── pagination               paginated queries (usePaginatedQuery, STUDY-26 §8)        ✅
 │   │   └── http                     plain HTTP client (BunvexHttpClient, STUDY-26 §9)         ✅
 │   │
-│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  ✅
+│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery,
+│   │                                BunvexProviderWithAuth, useBunvexAuth (STUDY-27)          ✅
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D
 │   │
 │   ├── ui/                          @bunvex/ui       design system (UI-01): Tailwind v4 tokens,

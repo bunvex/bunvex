@@ -289,7 +289,7 @@ Recorded in [docs/parity/divergences.md](../parity/divergences.md): R1 under DV-
 |---|---|---|---|
 | R1 | Names say bunvex: `BunvexReactClient`, `BunvexProvider`, `useBunvex`, `useBunvexConnectionState`; the guard messages name `BunvexProvider` and drop the docs link | Owner's naming rule | follows the rule |
 | R2 | `useSubscription` is built on `useSyncExternalStore` (Convex: a hand-written state + effect hook) | The replacement Convex's own comment suggests; the same observable behavior (value on first render, re-read after subscribing, one render per change) | **accepted** |
-| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order |
+| R3 | `usePaginatedQuery`, the auth helpers and `usePreloadedQuery` come in later PRs | They need the paginated client, `@bunvex/auth` and `@bunvex/nextjs` | **accepted** this order; `usePaginatedQuery` and the auth helpers landed (STUDY-27) |
 
 ## 8. Paginated queries (`usePaginatedQuery`)
 

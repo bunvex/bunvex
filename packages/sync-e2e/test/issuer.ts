@@ -16,6 +16,8 @@ export async function startIssuer(opts: { alg?: Alg; cacheControl?: string; jwks
   };
   await addKey("k1");
   const hits = { discovery: 0, jwks: 0 };
+  // Bun's Response, also under happy-dom (react/dom.ts keeps it aside).
+  const Response = (globalThis as { BunResponse?: typeof globalThis.Response }).BunResponse ?? globalThis.Response;
   const server: ReturnType<typeof Bun.serve> = Bun.serve({
     port: 0,
     fetch(req): Response {
