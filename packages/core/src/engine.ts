@@ -28,7 +28,6 @@ import {
   ConflictError,
   type FlushRetryOptions,
   type Interval,
-  overlaps,
   type WriteLogRetention,
 } from "./committer.ts";
 import {
@@ -40,7 +39,8 @@ import {
 } from "./determinism.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { hasLease, type Lease, LeaseHeldError, LeaseLostError, type Persistence } from "./persistence/index.ts";
-import { type DeclaredTable, type Doc, documentValidator, type SchemaDefinition } from "./schema.ts";
+import { ReadSetIndex } from "./read-set-index.ts";
+import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -92,8 +92,11 @@ export class OccError extends Error {
   }
 }
 
-/** A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values. */
-type CacheEntry = { json: string; reads: Interval[]; extra?: unknown };
+/**
+ * A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values.
+ * Its read-set lives in `cacheReads`, under the same key.
+ */
+type CacheEntry = { json: string; extra?: unknown };
 
 /**
  * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
@@ -125,6 +128,8 @@ export class Engine {
   /** Document validators of the declared tables (empty when `schemaValidation` is off). */
   private readonly docValidators = new Map<string, GenericValidator>();
   private cache = new Map<string, CacheEntry>();
+  /** The read-sets of the cached results, by cache key: what a commit invalidates (STUDY-08 D9). */
+  readonly cacheReads = new ReadSetIndex<string>();
   stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
 
   constructor(
@@ -169,15 +174,11 @@ export class Engine {
     });
     this.ready.catch(() => {}); // a rejection nobody awaits is not an error
     this.committer.onFatal((e) => this.settleReady(e));
-    // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
+    // Invalidation: a durable commit drops every cached result whose read-set it overlaps, found through
+    // the index of the cached read-sets rather than by testing every entry.
     this.committer.onCommit((entries) => {
       if (this.cache.size === 0) return;
-      for (const [k, c] of this.cache)
-        for (const e of entries)
-          if (overlaps(e.writes, c.reads)) {
-            this.cache.delete(k);
-            break;
-          }
+      for (const k of this.cacheReads.matchingEntries(entries)) this.dropCached(k);
     });
   }
 
@@ -456,13 +457,21 @@ export class Engine {
     // its own serialized copy.
     if (precise !== undefined && this.committer.visibleTs === snapshot) {
       const max = this.opts.cacheMax ?? 1000;
-      if (this.cache.size >= max) this.cache.delete(this.cache.keys().next().value!);
+      if (this.cache.size >= max) this.dropCached(this.cache.keys().next().value!);
       const json = stringifyValue(value);
       // Keyed by the caller only if the run read the identity (STUDY-27 §1.4).
-      this.cache.set(tx.identityObserved ? precise! : shared!, { json, reads: tx.reads, extra: wrapped?.capture() });
+      const key = tx.identityObserved ? precise! : shared!;
+      this.cache.set(key, { json, extra: wrapped?.capture() });
+      this.cacheReads.set(key, tx.reads);
       return { json };
     }
     return { value };
+  }
+
+  /** Drop a cached result and its read-set (invalidation and eviction). */
+  private dropCached(key: string) {
+    this.cache.delete(key);
+    this.cacheReads.delete(key);
   }
 
   /**

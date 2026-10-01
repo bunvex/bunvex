@@ -168,7 +168,7 @@ bunvex is strictly single-process. ENGINE-00 R5 defers "replicas fed by the comm
 | Catalog | `Engine` | Extended only in the process that created the table |
 | Instance secret | generated if absent | |
 | Query cache | per process, 1000 entries FIFO | Linear invalidation per commit |
-| Subscriptions | per process | Linear matching per commit (STUDY-08 D9) |
+| Subscriptions | per process | Matched per commit through an interval index of the read-sets (STUDY-08 D9, §3.4) |
 | Memory-driver data | maps + B-trees; log replayed at open | |
 
 **User functions run in the server's realm.** "This is not a sandbox"; there are no time or memory limits
@@ -501,8 +501,15 @@ Two findings along the way:
   Postgres Changes at about 64 changes/s. Rules:
   - **Match sublinearly:** an interval index over subscribed read-set ranges, per index. This replaces
     today's linear scan (STUDY-08 D9).
+    - **Built** (STUDY-08 §3.4): `ReadSetIndex` in `@bunvex/core`, a treap per index as Convex's
+      `IntervalMap`, used by the query cache and the sync hub (and core subscriptions until #94 deleted them). With 10 000
+      live subscriptions and 10 000 cached queries, one writer went from 485 to 14 500 commits/s; matching one
+      commit against 100 000 read-sets costs about 5 µs instead of 13 ms. Splaying the notifications of a
+      very wide invalidation, as Convex does, is not built yet (DV-64).
   - **Dedup:** run each distinct `(function, args, identity-if-read)` once per node and fan the result out.
     Queries that do not read the identity keep an identity-free key.
+    - The index reports each owner once per group of commits; the sync hub's owners are its shared
+      executions, so a commit costs one lookup per write, not one per session.
   - **Coalesce:** fold many commits into one transition per tick, so a write burst is not one push per
     commit.
   - Optionally route subscriptions by a rendezvous hash of the query.
