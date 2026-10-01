@@ -6,7 +6,8 @@
 // and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
-// (read-only flag).
+// (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
+// driver.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -19,9 +20,11 @@
 import { spawn } from "node:child_process";
 import {
   compareKeys,
-  type Engine,
+  type Doc,
+  Engine,
   encodeKey,
   hasLease,
+  indexKey,
   type KeyValue,
   LAYOUT_VERSION,
   LayoutError,
@@ -34,8 +37,19 @@ import {
   type ReadOnlyFlag,
   type ScanDocs,
 } from "@bunvex/core";
+import { fromJsonValue } from "@bunvex/values";
 import { freezableProxy } from "./proxy.ts";
-import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
+import {
+  allOfTenant,
+  counter,
+  increment,
+  insertItem,
+  listTenant,
+  newEngine,
+  pair,
+  schemaWithAmount,
+  seedCounters,
+} from "./workload.ts";
 
 export type DriverModule = {
   /** `opts.allowReadOnly` (K23): open a store marked read-only, as Convex's readers and tools do. */
@@ -61,7 +75,7 @@ export type DriverModule = {
 };
 
 // K3 also runs K4–K5; K10 runs K10–K19
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K21" | "K22" | "K23";
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K21" | "K22" | "K23" | "K24";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -381,6 +395,79 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       `K5 no reader saw half a mutation (${odd} odd reads, ${final.length}/1920)`,
     );
     await e.close();
+  }
+
+  // K24 — a background index backfill (STUDY-29) under concurrent writers: an index added to a table that has
+  // documents is filled in chunks at the same time as 8 writers insert, move the indexed value and delete;
+  // once it is enabled, every live document has exactly one entry, in key order, at several snapshots.
+  async function k24() {
+    let e = await newEngine(await mod.open(true));
+    for (let i = 0; i < 3000; i += 500)
+      await e.mutation(async (db) => {
+        for (let j = 0; j < 500; j++) await insertItem(`t${(i + j) % 10}`)(db);
+      });
+    const ids = (await e.query((db) => db.query("items").collect())).map((d) => d._id);
+    await e.close();
+    // Slow on purpose (2 000 entries/s): the writers overlap the whole backfill. The backfill's range reads
+    // are delayed too (the writers do none), so writes land between a chunk's snapshot and its commit.
+    const st = await mod.open(false);
+    let delayScans = true;
+    for (const m of ["scan", "scanDocs"] as const) {
+      const f = (st as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[m]?.bind(st);
+      if (f)
+        (st as unknown as Record<string, unknown>)[m] = async (...a: unknown[]) => {
+          if (delayScans) await new Promise((r) => setTimeout(r, 3));
+          return f(...a);
+        };
+    }
+    e = await new Engine(schemaWithAmount, st, {
+      indexBackfill: { chunkSize: 200, chunkRate: 10, readSize: 100 },
+    }).init();
+    let stop = false;
+    let writes = 0;
+    const writers = Array.from({ length: 8 }, async (_, w) => {
+      for (let i = 0; !stop; i++) {
+        const id = ids[(w * 7919 + i * 104729) % ids.length];
+        const wrote = await e.mutation(async (db) => {
+          if (i % 4 === 0) ids.push(await insertItem(`t${w}`)(db));
+          else if (!(await db.get("items", id))) return false;
+          else if (i % 4 === 3) await db.delete("items", id);
+          else await db.patch("items", id, { amount: rnd(10_000) });
+          return true;
+        });
+        if (wrote) writes++;
+        await new Promise((r) => setTimeout(r, 1));
+      }
+    });
+    await e.indexesReady();
+    delayScans = false;
+    const snapshots = [e.committer.visibleTs];
+    stop = true;
+    await Promise.all(writers);
+    snapshots.push(e.committer.visibleTs);
+    const t = e.catalog.table("items");
+    const ix = t.indexes.get("by_amount")!;
+    let bad = 0;
+    for (const ts of snapshots) {
+      const live = await e.persistence.scan(t.byId.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      const want: [Uint8Array, string][] = [];
+      for (const id of live) {
+        const doc = fromJsonValue(JSON.parse((await e.persistence.get(t.id, id, ts))!)) as unknown as Doc;
+        want.push([indexKey(ix, doc), id]);
+      }
+      want.sort((a, b) => compareKeys(a[0], b[0]));
+      const got = await e.persistence.scan(ix.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      if (got.length !== want.length || got.some((id, i) => id !== want[i][1])) {
+        bad++;
+        log(`  K24 at ts ${ts}: ${got.length} entries for ${want.length} live documents`);
+      }
+    }
+    const stats = e.indexWorker?.stats;
+    await e.close();
+    check(
+      bad === 0 && writes > 100,
+      `K24 a background backfill under ${writes} concurrent writes: one entry per live document at ${snapshots.length} snapshots (${stats?.chunks} chunks, ${stats?.conflicts} refused and redone)`,
+    );
   }
 
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
@@ -1184,6 +1271,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (leased) await st.releaseLease();
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
+  if (want("K24")) await k24();
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();
