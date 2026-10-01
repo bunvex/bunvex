@@ -1,7 +1,8 @@
 // Cron jobs (UI-01 §14.2, STUDY-12 §9): each job with its schedule, function, last and next run; a job's
 // details beside the list, with its arguments and its recent runs (the source keeps a few, Convex 5).
+
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
-import { cn } from "@bunvex/ui/lib/utils";
+import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryScope } from "../context.tsx";
 import { type CronJob, type CronRun, toDataSourceError } from "../data-source.ts";
@@ -17,10 +18,8 @@ import { cronJobsQuery, cronRunsQuery, useSchedulesLive } from "./queries.ts";
 
 const col = dataTableColumns<CronJob>();
 
-const STATUS: Record<CronRun["status"], string> = { success: "Success", failure: "Failure", skipped: "Skipped" };
-
 function RunStatus({ run }: { run: CronRun }) {
-  return <span className={cn(run.status === "failure" && "text-destructive")}>{STATUS[run.status]}</span>;
+  return <StatusBadge status={run.status} />;
 }
 
 export function CronsView() {

@@ -46,7 +46,7 @@ describe("Settings: General", () => {
       value: { writeText: async (t: string) => void writes.push(t) },
       configurable: true,
     });
-    await user.click(within(s).getByRole("button", { name: "Copy the HTTP actions URL" }));
+    await user.click(within(s).getByRole("button", { name: "Copy HTTP actions URL" }));
     expect(writes).toEqual(["http://127.0.0.1:3211"]);
     await expectAccessible();
   });

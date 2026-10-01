@@ -76,7 +76,7 @@ describe("the function runner", () => {
     expect(within(runner()).getByRole("heading", { name: "Logs" })).toBeDefined();
     const grid = screen.getByRole("grid", { name: "Log lines of tasks:list" });
     await waitFor(() =>
-      expect(within(within(grid).getAllByRole("row")[1]!).getAllByRole("gridcell")[2]!.textContent).toMatch(/^success/),
+      expect(within(within(grid).getAllByRole("row")[1]!).getAllByRole("gridcell")[2]!.textContent).toMatch(/^Success/),
     );
     await expectAccessible();
   });

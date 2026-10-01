@@ -7,7 +7,7 @@ import { Input } from "@bunvex/ui/components/input";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
@@ -92,6 +92,14 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
   const [query, setQuery] = useState("");
   const searchId = useId();
   const tree = useMemo(() => buildFunctionTree(matchFunctions(functions, query)), [functions, query]);
+  // the open function in view inside the tree: stacked on a phone, the tree is short, and the open row
+  // otherwise showed as a sliver at its bottom edge (UX-19)
+  const list = useRef<HTMLUListElement>(null);
+  // a block body: scrollIntoView returns a Promise in recent browsers, and an effect may only return a cleanup
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the open function changes
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [current]);
   return (
     <nav
       aria-label="Functions"
@@ -109,7 +117,7 @@ function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; c
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <ul className="flex-1 overflow-y-auto pb-3">
+      <ul ref={list} className="flex-1 overflow-y-auto pb-3">
         {tree.map((n) => (
           <Branch
             key={n.kind === "folder" ? n.path : n.module}
@@ -205,7 +213,7 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
             </span>
             <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
               <code className="font-mono text-xs break-all">{fn.path}</code>
-              <CopyButton text={fn.path} label="Copy the function's path" />
+              <CopyButton text={fn.path} label="Copy function path" iconOnly />
               {runner.available && (
                 <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
                   <Play aria-hidden="true" />
