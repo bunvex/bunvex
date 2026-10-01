@@ -11,6 +11,7 @@ import {
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
+import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   checkValue,
   displayValue,
@@ -41,10 +42,13 @@ const registryKey = (name: string) => {
 export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
 export type QueryCtx = { db: Tx; auth: Auth };
 export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler };
+/** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
+export type FunctionRef = AnyFunctionReference | string;
 export type ActionCtx = {
   auth: Auth;
-  runQuery: (name: string, args?: unknown) => Promise<unknown>;
-  runMutation: (name: string, args?: unknown) => Promise<unknown>;
+  runQuery: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runMutation: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runAction: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
   scheduler: Scheduler;
 };
 
@@ -336,8 +340,9 @@ export class Functions {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     const ctx: ActionCtx = {
       auth: { getUserIdentity: async () => copy(identity) },
-      runQuery: (n, a) => this.runQuery(n, a, false, caller),
-      runMutation: (n, a) => this.runMutation(n, a, false, caller),
+      runQuery: (n, a) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
+      runMutation: (n, a) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
+      runAction: (n, a) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job: opts.job }),
     };
     const a = this.checkArgs(f, args);
