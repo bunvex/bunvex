@@ -50,6 +50,7 @@ import {
 } from "@bunvex/core/persistence";
 import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
+import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 type IdxRow = [number, Buffer, Buffer | null, Buffer, number, boolean, string | null];
@@ -133,16 +134,22 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   ) {}
 
   /**
+   * TLS (STUDY-25 L8, as Convex): required, with the CA and the host name verified, by default;
+   * `requireSsl: false` connects as the URL says (plain unless it asks for TLS or `caFile` is set).
+   * `caFile` adds a trusted CA.
+   *
    * `timeoutMs` (default 19 000, Convex's `MYSQL_TIMEOUT_SECONDS`): how long one round trip to the database
    * (a statement, BEGIN, COMMIT, getting a connection) may take before the call fails with
    * `DatabaseTimeoutError` and its connection is destroyed (STUDY-25 L3). 0 disables it.
    */
-  static async open(url: string, pool = 16, opts: OpenOptions & { timeoutMs?: number } = {}) {
+  static async open(url: string, pool = 16, opts: OpenOptions & TlsOptions & { timeoutMs?: number } = {}) {
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+    const { uri, ssl } = mysqlTls(url, opts);
     const timeoutMs = opts.timeoutMs ?? 19_000;
     const p = mysql.createPool({
-      uri: url,
+      uri,
+      ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
       connectionLimit: pool,
       multipleStatements: false,
       connectAttributes: { bunvex_conn: conn },
@@ -153,7 +160,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       await store.bootstrap(opts);
     } catch (e) {
       await store.close().catch(() => {});
-      throw e;
+      throw explainTlsError(e, "MySQL", "MYSQL_CA_FILE");
     }
     return store;
   }
@@ -209,8 +216,16 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return e instanceof DatabaseTimeoutError || operational(e);
   }
 
-  /** The store's checks (C10), then the tables, created only when one is missing. */
+  /** The server and store checks (C10), then the tables, created only when one is missing. */
   private async bootstrap(opts: OpenOptions) {
+    // A writable server only, as Convex's `require_leader` (crates/mysql/src/connection.rs:670-690), the
+    // counterpart of Postgres's target_session_attrs=read-write. Convex repeats it on every new connection;
+    // bunvex checks at open (a replica that becomes read-only later fails its writes).
+    const [ro] = (await this.call((c) =>
+      c.query(`select (@@global.innodb_read_only or @@global.read_only) as ro`),
+    )) as any;
+    if (Number(ro[0].ro))
+      throw new Error("MySQL is read-only (read_only or innodb_read_only is on): bunvex needs the writable primary");
     // What is there decides what may happen: read-only, before any write.
     const [rows] = (await this.read((c) =>
       c.query(
