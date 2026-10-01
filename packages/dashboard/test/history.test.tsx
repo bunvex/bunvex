@@ -72,6 +72,7 @@ describe("the History screen", () => {
     await waitFor(() => expect(rows().every((r) => what(r) === "Deployed functions")).toBe(true));
     expect(rows().length).toBe(3);
     fireEvent.change(screen.getByLabelText("Until"), { target: { value: "2020-01-01" } });
+    fireEvent.blur(screen.getByLabelText("Until")); // a typed day applies once complete (UX-15)
     await screen.findByText("Nothing matches these filters.");
   });
 

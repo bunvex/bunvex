@@ -111,7 +111,7 @@ describe("the Logs screen", () => {
     expect([...times].sort().reverse()).toEqual(times);
     // one request per mock execution; an action's calls are executions of their own, inside it
     const ends = history.filter((e) => e.execution && !e.parentExecutionId);
-    expect(rows().some((r) => /^(success|failure) \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
+    expect(rows().some((r) => /^(Success|Failure) \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
     expect(ends.length).toBe(12);
     await expectAccessible();
   });
@@ -182,7 +182,7 @@ describe("the Logs screen", () => {
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "success" }));
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(rows().every((r) => cells(r)[COL.outcome]!.startsWith("success"))).toBe(true));
+    await waitFor(() => expect(rows().every((r) => cells(r)[COL.outcome]!.startsWith("Success"))).toBe(true));
     expect(screen.getByRole("button", { name: "Types: success" })).toBeDefined();
     const fn = cells(rows()[0]!)[COL.function]!.slice(1); // after the kind's letter
     await user.type(screen.getByRole("searchbox", { name: "Filter logs" }), fn);
@@ -294,7 +294,7 @@ describe("the Logs screen", () => {
     await opened();
     const user = userEvent.setup();
     // a line that ends an execution: it carries the usage and the identity
-    const end = rows().find((r) => /^(success|failure)/.test(cells(r)[COL.outcome]!))!;
+    const end = rows().find((r) => /^(Success|Failure)/.test(cells(r)[COL.outcome]!))!;
     await user.click(within(end).getAllByRole("gridcell")[COL.message]!);
     const panel = await screen.findByRole("complementary");
     expect(within(panel).getByText("Started by")).toBeDefined();
