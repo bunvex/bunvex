@@ -99,12 +99,12 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `cronJobs()` with `interval`, `hourly`, `daily`, `weekly`, `monthly`, `cron("m h dom mon dow")` | `npm/convex/server/cron.ts` | missing | All UTC. `monthly` days above 28 skip short months. Identifiers are printable ASCII and unique. |
-| Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | missing | Must target a mutation or action; queries and HTTP actions are rejected. |
-| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | missing | Keeps the last 5 logs per cron, with results and log lines truncated to 1000 chars. |
-| Diff on push (added / updated / deleted) | `CronModel::apply` | missing | A new interval cron runs immediately. A schedule change recomputes the next run, using a 30 s heuristic. |
-| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | missing | Without `minuteUTC`, runs get a stable random offset within the hour. Divergence? It could be skipped. |
-| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | missing | Same exactly-once / at-most-once rules as the scheduler. |
+| `cronJobs()` with `interval`, `hourly`, `daily`, `weekly`, `monthly`, `cron("m h dom mon dow")` | `npm/convex/server/cron.ts` | done (STUDY-30) | Convex's messages. Cron strings follow saffron exactly (its quirks included), checked against saffron itself on 7143 cases. |
+| Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | partial (STUDY-30) | `createServer({ crons })`, checked at start with Convex's messages (S1, DV-139); `crons.ts` discovery comes with the CLI. |
+| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | The last 5 logs per cron; results and log lines truncated to 1000 chars. |
+| Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
+| Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex, `CRON_SPLAY_SECONDS` (0 turns it off). |
+| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
 | Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | missing | |
 
 ### 6. Full-text search

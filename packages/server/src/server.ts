@@ -4,6 +4,8 @@ import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } 
 import { type Caller, type Engine, OccError, parseValue, stringifyValue } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
+import { type Crons, cronSpecs } from "./cron.ts";
+import { CronJobExecutor } from "./cron-executor.ts";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -50,6 +52,12 @@ export type ServerOptions = {
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
    */
   scheduler?: SchedulerOptions;
+  /**
+   * The deployment's cron jobs (STUDY-30 S1): the default export of the app's `crons.ts`, as Convex's
+   * `convex/crons.ts`. Checked at start (an invalid one throws here) and diffed with the stored ones by name.
+   * The splay is `CRON_SPLAY_SECONDS` (60; 0 turns it off), as Convex.
+   */
+  crons?: Crons;
 };
 
 /**
@@ -144,6 +152,13 @@ export function createServer(opts: ServerOptions) {
   });
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
   scheduler.start();
+  const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
+  const splay = process.env.CRON_SPLAY_SECONDS;
+  const cronExecutor = new CronJobExecutor(engine, functions, specs, {
+    ...(splay === undefined || splay === "" ? {} : { cronSplaySeconds: Number(splay) }),
+  });
+  /** Resolves once the crons are registered (the diff with what was stored). */
+  const cronsReady = cronExecutor.start();
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
@@ -231,8 +246,10 @@ export function createServer(opts: ServerOptions) {
     server,
     sync,
     scheduler,
+    cronsReady,
     stop: () => {
       void scheduler.stop();
+      void cronExecutor.stop();
       stopCleanup();
       sync.stop();
       server?.stop(true);
@@ -241,6 +258,7 @@ export function createServer(opts: ServerOptions) {
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
       await scheduler.stop();
+      await cronExecutor.stop();
       sync.stop();
       server?.stop(true);
       await engine.close();

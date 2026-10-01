@@ -1,4 +1,5 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
+export { CRON_JOB_LOGS_TABLE, CRON_JOBS_TABLE, CRON_NEXT_RUN_TABLE, SCHEDULED_FUNCTIONS_TABLE } from "./catalog.ts";
 export {
   Committer,
   CommitterStoppedError,

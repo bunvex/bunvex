@@ -214,6 +214,19 @@ export class Functions {
     return `${module}.js:${fn}`;
   }
 
+  /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
+  cronTarget(identifier: string, name: string): string {
+    const key = registryKey(name);
+    const canonical = `${key.slice(0, key.lastIndexOf(":"))}.js${key.slice(key.lastIndexOf(":"))}`;
+    const f = this.fns.get(key);
+    if (!f) throw new Error(`The cron job '${identifier}' schedules a function that does not exist: ${canonical}`);
+    if (f.kind === "query")
+      throw new Error(
+        `The cron job '${identifier}' schedules a query function, only actions and mutations can be scheduled: ${canonical}`,
+      );
+    return canonical;
+  }
+
   /** What a scheduled job runs, or why it cannot run (Convex's run-time check: the module may have changed). */
   scheduledKind(canonical: string): { kind: "mutation" | "action" } | { error: string } {
     const key = registryKey(canonical);
@@ -233,8 +246,8 @@ export class Functions {
     };
   }
 
-  /** @internal The body of a scheduled mutation, for the executor to run in the job's transaction. */
-  scheduledMutationBody(canonical: string, args: unknown, job: string) {
+  /** @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction. */
+  scheduledMutationBody(canonical: string, args: unknown, job?: string) {
     return this.mutationBody(this.fn(registryKey(canonical), "mutation", false), args, job);
   }
 

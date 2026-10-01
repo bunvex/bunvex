@@ -160,6 +160,7 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-87 | `"use node"`: may collapse to "accept and ignore" since Bun has Node APIs | a separate Node runtime for those modules | yes | Parity "Divergence?" | [platform §9](platform.md#9-nodejs-actions-use-node) |
 | DV-88 | Database selection uses bunvex's own env names (`PERSISTENCE`, `PERSISTENCE_URL`); could accept Convex's as aliases | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | operational | Parity "Divergence?" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
 | DV-89 | No beacon / telemetry | an hourly beacon (`DISABLE_BEACON`), Sentry | operational | Parity "Divergence?": "bunvex probably shouldn't ship one" | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration) |
+| DV-142 | Cron `L-nW` (day of month) from certain Mondays: answered, the comparison taken as false | saffron underflows and the process aborts | yes (Convex crashes) | Recommended: yes | [STUDY-30 S4](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 
 ## Gaps recorded in studies
 

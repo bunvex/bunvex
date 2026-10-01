@@ -15,6 +15,10 @@ export const INSTANCE_TABLE = "_instance";
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
 export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
+/** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
+export const CRON_JOBS_TABLE = "_cron_jobs";
+export const CRON_NEXT_RUN_TABLE = "_cron_next_run";
+export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
