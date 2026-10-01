@@ -4,6 +4,8 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { streamLook, toFlow } from "../src/topology/diagram.tsx";
+import { layoutTopology, neighbourhood } from "../src/topology/layout.ts";
 import { eventText, lagText, summary, uptime } from "../src/topology/words.ts";
 import { expectAccessible } from "./axe.ts";
 
@@ -54,7 +56,7 @@ describe("the topology in words", () => {
 
 describe("the Topology screen", () => {
   test("one node (bunvex today): the node and its store, and where followers will appear", async () => {
-    mount("/topology");
+    mount("/topology?view=list");
     await loaded();
     expect(screen.getByTestId("topology-summary").textContent).toMatch(/^Leader node-a · no followers/);
     expect(screen.queryByRole("region", { name: "Followers" })).toBeNull();
@@ -68,7 +70,7 @@ describe("the Topology screen", () => {
   });
 
   test("several nodes: clients go to the followers, followers show their lag, the leader holds the lease", async () => {
-    mount("/topology", source({ nodes: 4 }));
+    mount("/topology?view=list", source({ nodes: 4 }));
     await loaded();
     expect(screen.getByTestId("topology-summary").textContent).toContain("3 followers");
     const followers = within(lane("Followers")).getAllByRole("listitem");
@@ -100,7 +102,7 @@ describe("the Topology screen", () => {
       d.state = "lagging";
       d.lag = { commits: 101, ms: 840 };
     });
-    mount("/topology", src);
+    mount("/topology?view=list", src);
     await loaded();
     const card = within(lane("Followers")).getAllByRole("button")[2]!;
     expect(card.textContent).toContain("Lagging");
@@ -125,12 +127,12 @@ describe("the Topology screen", () => {
   });
 
   test("a node opens its details beside the lanes, in the URL; Escape closes them", async () => {
-    const { history } = mount("/topology", source({ nodes: 4 }));
+    const { history } = mount("/topology?view=list", source({ nodes: 4 }));
     await loaded();
     const user = userEvent.setup();
     await user.click(within(lane("Followers")).getAllByRole("button")[0]!);
     const panel = await screen.findByRole("complementary", { name: "node-b" });
-    expect(history.location.search).toBe("?node=node-b");
+    expect(new URLSearchParams(history.location.search).get("node")).toBe("node-b");
     expect(within(panel).getByText("Follower")).toBeDefined();
     expect(within(panel).getByText("On the leader")).toBeDefined();
     expect(within(panel).getByText(/^CPU, last \d+ s$/)).toBeDefined();
@@ -138,7 +140,7 @@ describe("the Topology screen", () => {
     await expectAccessible();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
-    expect(history.location.search).toBe("");
+    expect(new URLSearchParams(history.location.search).has("node")).toBe(false);
   });
 
   test("a credential that cannot view metrics is told so", async () => {
@@ -154,5 +156,100 @@ describe("the Topology screen", () => {
     mount("/topology", src);
     await heading();
     expect(screen.getByText("This deployment does not offer its topology yet.")).toBeDefined();
+  });
+});
+
+describe("the Topology diagram", () => {
+  test("fixed layers: positions depend on the nodes, never on their numbers", async () => {
+    const src = source({ nodes: 4, topologyIntervalMs: 60_000 });
+    const before = layoutTopology(await src.getTopology());
+    const changed = await src.getTopology();
+    for (const n of changed.nodes) {
+      n.connections += 500;
+      if (n.lag) n.lag = { commits: 999, ms: 2000 };
+    }
+    expect(layoutTopology(changed)).toEqual(before);
+    const y = (id: string) => before.placed.find((p) => p.id === id)!.y;
+    expect(y("clients:node-b")).toBeLessThan(y("node:node-b"));
+    expect(y("node:node-b")).toBeLessThan(y("node:node-a"));
+    expect(y("node:node-a")).toBeLessThan(y("store"));
+    expect(before.links.map((l) => l.id)).toEqual([
+      "ws:node-b",
+      "ws:node-c",
+      "ws:node-d",
+      "stream:node-b",
+      "stream:node-c",
+      "stream:node-d",
+      "commits",
+    ]);
+    const one = layoutTopology(await source().getTopology());
+    expect(one.placed.map((p) => p.id)).toEqual(["clients:node-a", "node:node-a", "store"]);
+    expect(neighbourhood("node-b", before.links)).toEqual(
+      new Set(["node:node-b", "clients:node-b", "ws:node-b", "stream:node-b", "node:node-a"]),
+    );
+  });
+
+  test("the commit stream: width by commits/s, colour and particles by the follower's state", () => {
+    const follower = (state: "ok" | "lagging" | "down") => ({ state }) as never;
+    expect(streamLook(40, follower("ok")).width).toBeLessThan(streamLook(240, follower("ok")).width);
+    expect(streamLook(120, follower("ok")).tone).toBe("normal");
+    expect(streamLook(120, follower("lagging")).tone).toBe("warning");
+    expect(streamLook(120, follower("down"))).toMatchObject({ tone: "critical", particles: 0 });
+    expect(streamLook(240, follower("ok")).particles).toBeGreaterThan(streamLook(40, follower("ok")).particles);
+  });
+
+  test("the edges say what flows: clients, the commit stream (with its lag), the commits to the store", async () => {
+    const t = await withTopology((t) => {
+      const d = t.nodes.find((n) => n.id === "node-d")!;
+      d.state = "lagging";
+      d.lag = { commits: 101, ms: 840 };
+    }).then((s) => s.getTopology());
+    const { edges, nodes } = toFlow(t, undefined);
+    const label = (id: string) => edges.find((e) => e.id === id)!.data!.label;
+    expect(label("stream:node-d")).toBe("101 commits · 840 ms · lagging");
+    expect(edges.find((e) => e.id === "stream:node-d")!.data!.tone).toBe("warning");
+    expect(label("ws:node-b")).toMatch(/^[\d,]+ ws$/);
+    expect(label("commits")).toMatch(/^[\d,]+ commits\/s$/);
+    expect(edges.find((e) => e.id === "commits")!.data!.lock).toBe(true);
+    expect(nodes.find((n) => n.id === "node:node-d")!.ariaLabel).toContain(
+      "node-d, follower, lagging, 101 commits · 840 ms behind",
+    );
+  });
+
+  test("the diagram draws the nodes; a focused node opens with Enter; List switches the view, in the URL", async () => {
+    const { history } = mount("/topology", source({ nodes: 4 }));
+    await loaded();
+    await screen.findByRole("region", { name: "Topology diagram" });
+    await waitFor(() => expect(document.querySelectorAll(".react-flow__node").length).toBe(8));
+    expect(document.querySelectorAll(".react-flow__node-server").length).toBe(4);
+    const nodeB = document.querySelector<HTMLElement>('.react-flow__node-server[data-id="node:node-b"]')!;
+    expect(nodeB.getAttribute("aria-label")).toMatch(/^node-b, follower, /);
+    nodeB.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("complementary", { name: "node-b" });
+    expect(new URLSearchParams(history.location.search).get("node")).toBe("node-b");
+    await user.click(screen.getByRole("button", { name: "List" }));
+    expect(new URLSearchParams(history.location.search).get("view")).toBe("list");
+    expect(screen.queryByRole("region", { name: "Topology diagram" })).toBeNull();
+    expect(lane("Followers")).toBeDefined();
+    await expectAccessible();
+  });
+
+  test("an event picked in the feed lights its node (and dims the rest)", async () => {
+    const src = await withTopology((t) => {
+      t.events = [{ id: "e1", time: NOW, kind: "node_lagging", node: "node-d", detail: "840 ms behind" }];
+    });
+    mount("/topology", src);
+    await loaded();
+    await waitFor(() => expect(document.querySelectorAll(".react-flow__node").length).toBe(8));
+    const event = within(screen.getByRole("region", { name: "Events" })).getByRole("button");
+    await userEvent.setup().click(event);
+    expect(event.getAttribute("aria-pressed")).toBe("true");
+    const dim = (id: string) =>
+      document.querySelector(`.react-flow__node[data-id="${id}"] > div`)!.className.includes("opacity-30");
+    await waitFor(() => expect(dim("node:node-b")).toBe(true));
+    expect(dim("node:node-d")).toBe(false);
+    expect(dim("node:node-a")).toBe(false);
   });
 });

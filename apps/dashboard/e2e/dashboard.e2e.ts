@@ -60,6 +60,19 @@ async function open(
   return { page, external, errors, close: () => context.close() };
 }
 
+/** Retries an assertion for a moment (a hover's effect lands a frame later). */
+async function expect_(check: () => Promise<void>, ms = 2000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    try {
+      return await check();
+    } catch (e) {
+      if (Date.now() > until) throw e;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+}
+
 const heading = (page: Page, name: string) => page.getByRole("heading", { level: 1, name }).waitFor();
 const cellOf = (page: Page, text: RegExp) => page.getByRole("gridcell").filter({ hasText: text }).first();
 const inMonaco = (page: Page) => page.evaluate(() => !!document.activeElement?.closest(".monaco-editor"));
@@ -294,24 +307,44 @@ describe("the dashboard in a browser", () => {
     expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
   });
 
-  test("Topology: one node today; with four, the lanes, a follower's lag and its details", async () => {
-    const one = await open("/topology");
+  test("Topology: one node today; with four, the diagram's nodes, edges and particles in both themes", async () => {
+    const one = await open("/topology?view=list");
     await heading(one.page, "Topology");
     await one.page.getByText("Followers appear here when bunvex runs more than one node.").waitFor();
-    expect(await one.page.getByRole("region", { name: "Followers" }).count()).toBe(0);
     await one.close();
-    const { page, errors, close } = await open("/topology?nodes=4");
-    await heading(page, "Topology");
-    const followers = page.getByRole("region", { name: "Followers" });
-    expect(await followers.getByRole("button").count()).toBe(3);
-    expect(await followers.getByRole("button").first().textContent()).toMatch(/ms behind/);
-    await followers.getByRole("button").first().click();
-    const panel = page.getByRole("complementary", { name: "node-b" });
-    await panel.getByText(/^Lag, last \d+ s$/).waitFor();
-    await page.keyboard.press("Escape");
-    await panel.waitFor({ state: "detached" });
-    expect(errors).toEqual([]);
-    await close();
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/topology?nodes=4", { colorScheme });
+      await heading(page, "Topology");
+      const canvas = page.getByRole("region", { name: "Topology diagram" });
+      await canvas.locator(".react-flow__edge").nth(6).waitFor();
+      expect(await canvas.locator(".react-flow__node").count()).toBe(8);
+      expect(await canvas.locator(".react-flow__edge").count()).toBe(7);
+      expect(await page.locator("[data-edge-label]").allTextContents()).toContainEqual(
+        expect.stringMatching(/commits\/s$/),
+      );
+      expect(await page.locator("[data-particle]").count()).toBeGreaterThan(0);
+      // hovering a follower lights its edges and dims the others
+      await canvas.locator('.react-flow__node[data-id="node:node-b"]').hover();
+      await expect_(async () =>
+        expect(await page.locator('.react-flow__node[data-id="node:node-c"] > div').getAttribute("class")).toContain(
+          "opacity-30",
+        ),
+      );
+      await canvas.locator('.react-flow__node[data-id="node:node-b"]').click();
+      await page.getByRole("complementary", { name: "node-b" }).waitFor();
+      expect(errors).toEqual([]);
+      await close();
+    }
+    // reduced motion: the same edges, no particles
+    const still = await open("/topology?nodes=4", { reducedMotion: "reduce" });
+    await still.page
+      .getByRole("region", { name: "Topology diagram" })
+      .locator(".react-flow__edge")
+      .nth(6)
+      .waitFor({ state: "attached" });
+    expect(await still.page.locator("[data-reduced-motion]").count()).toBe(1);
+    expect(await still.page.locator("[data-particle]").count()).toBe(0);
+    await still.close();
   });
 
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
@@ -494,6 +527,7 @@ describe("the dashboard in a browser", () => {
         ["/settings/authentication", "Settings"],
         ["/settings/snapshots", "Settings"],
         ["/topology?nodes=4", "Topology"],
+        ["/topology?nodes=4&view=list", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });

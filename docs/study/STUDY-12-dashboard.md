@@ -700,14 +700,19 @@ store's clock, graceful release, H5), runs the **scheduler** (H6) and pushes the
 **followers** hold the clients' WebSockets and serve queries and subscriptions, catching up by commit
 timestamp, and a follower too far behind waits and then refuses new connections (H9); actions run on any node
 after an owner-tagged claim (H6); memory and SQLite keep one node behind a file lock (H7). The screen draws
-exactly that, in lanes by role (the owner's choice among four layouts): Clients → Followers ← Leader → Store.
+exactly that. First built as lanes by role (the owner's first pick); reworked the same day, at the owner's
+request, into a canvas like PlanetScale's primary/replicas and Railway's service flow, with the lanes kept as
+the List view.
 
 ### 15.2 Decisions (owner, 1 Oct 2026)
 
 | # | What | Decided |
 |---|---|---|
 | T1 | Its own nav entry, **Topology**, next to Health | yes |
-| T2 | Lanes by role (not a free canvas, a table, or a hybrid); links said in words on the cards | yes |
+| T2 | ~~Lanes by role only~~ → a **React Flow canvas in fixed layers** (Clients, Followers, Leader, Store; no ELK), positions stable across updates, Fit to re-frame; a **Diagram \| List** toggle with the lanes as List | yes (revised 1 Oct 2026) |
+| T7 | Edges: "385 ws"; the commit stream "3 commits · 50 ms", width by commits/s, colour by lag (with the word); "110 commits/s" + a lock to the store; **particles** along the stream, none under reduced motion | yes |
+| T8 | Hover (or an event picked in the feed) lights a node's edges and dims the rest; click opens the side panel | yes |
+| T9 | A phone opens on the List, the canvas needing pinching at that width | my call, owner can veto |
 | T3 | v1: nodes, roles, state and lag; store and lease; per-node vitals; an events feed | yes |
 | T4 | One node (bunvex today) shows the node and its store, and says where followers will appear | yes |
 | T5 | The contract's optional `getTopology` / `watchTopology`, needing `viewMetrics` (no new operation) | my call, owner can veto |

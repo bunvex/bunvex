@@ -1,11 +1,15 @@
-// The Topology screen (UI-01 §22, STUDY-12 §15) — a bunvex addition: who is running and how it connects, in
-// lanes by role, left to right: the clients, the followers they connect to, the leader that feeds them the
-// commit stream, and the store the leader holds the lease on (STUDY-24). Every link is also said in words on
-// the cards. A deployment of one node (bunvex today) shows that node and its store. Live from watchTopology.
+// The Topology screen (UI-01 §22, STUDY-12 §15) — a bunvex addition: who is running and how it connects (STUDY-24):
+// the clients, the followers they connect to, the leader that feeds them the commit stream, and the store the
+// leader holds the lease on. Two views of one picture: a **Diagram** (diagram.tsx, a canvas in fixed layers)
+// and a **List** (lanes of cards, every link said in words). A phone opens on the List — the canvas would need
+// pinching at that width — and either view can be picked; the choice is in the URL (`?view=`). A deployment of
+// one node (bunvex today) shows that node and its store. Live from watchTopology.
+
+import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Database, Network, Star, Users } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowLeft, ArrowRight, Database, List, Network, Star, Users, Workflow } from "lucide-react";
+import { lazy, type ReactNode, Suspense, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
@@ -17,6 +21,11 @@ import { NotOffered } from "../shell/not-offered.tsx";
 import { NodePanel } from "./node-panel.tsx";
 import { LagGauge, StateLabel } from "./parts.tsx";
 import { DRIVER, eventText, lagText, servesClients, summary, uptime } from "./words.ts";
+
+// React Flow loads with the diagram only: the List view never fetches it
+const TopologyDiagram = lazy(() => import("./diagram.tsx").then((m) => ({ default: m.TopologyDiagram })));
+
+const narrow = () => typeof matchMedia === "function" && matchMedia("(max-width: 639px)").matches;
 
 export function TopologyScreen() {
   const scope = useQueryScope();
@@ -40,6 +49,12 @@ export function TopologyScreen() {
   const navigate = topologyRoute.useNavigate();
   const open = (node: string | undefined) =>
     navigate({ search: (s: TopologySearch): TopologySearch => ({ ...s, node }), replace: true });
+  const [narrowAtStart] = useState(narrow);
+  const view = search.view ?? (narrowAtStart ? "list" : "diagram");
+  const setView = (v: "diagram" | "list") =>
+    navigate({ search: (s: TopologySearch): TopologySearch => ({ ...s, view: v }), replace: true });
+  /** A node lit from the events feed. */
+  const [highlight, setHighlight] = useState<string>();
 
   if (!offered) return <NotOffered title="Topology" what="its topology" />;
   const t = topology.data;
@@ -61,8 +76,29 @@ export function TopologyScreen() {
               {summary(t)}
             </p>
             {liveError && <ErrorState error={liveError} />}
-            <Lanes t={t} onOpen={open} opened={search.node} />
-            <Events t={t} />
+            <fieldset className="flex w-fit border">
+              <legend className="sr-only">View</legend>
+              {(["diagram", "list"] as const).map((v) => (
+                <Button
+                  key={v}
+                  variant={view === v ? "secondary" : "ghost"}
+                  size="sm"
+                  aria-pressed={view === v}
+                  onClick={() => setView(v)}
+                >
+                  {v === "diagram" ? <Workflow aria-hidden="true" /> : <List aria-hidden="true" />}
+                  {v === "diagram" ? "Diagram" : "List"}
+                </Button>
+              ))}
+            </fieldset>
+            {view === "diagram" ? (
+              <Suspense fallback={<p className="text-sm text-muted-foreground">Loading the diagram…</p>}>
+                <TopologyDiagram topology={t} opened={search.node} highlight={highlight} onOpen={open} />
+              </Suspense>
+            ) : (
+              <Lanes t={t} onOpen={open} opened={search.node} highlight={highlight} />
+            )}
+            <Events t={t} highlight={highlight} onPick={(n) => setHighlight((h) => (h === n ? undefined : n))} />
           </>
         )}
       </div>
@@ -73,7 +109,8 @@ export function TopologyScreen() {
 
 // ------------------------------------------------------------------ lanes
 
-function Lanes({ t, onOpen, opened }: { t: Topology; onOpen: (id: string) => void; opened?: string }) {
+function Lanes(props: { t: Topology; onOpen: (id: string) => void; opened?: string; highlight?: string }) {
+  const { t, onOpen, opened } = props;
   const leader = t.nodes.find((n) => n.role === "leader");
   const followers = t.nodes.filter((n) => n.role === "follower");
   const serving = t.nodes.filter((n) => servesClients(n, t));
@@ -101,7 +138,7 @@ function Lanes({ t, onOpen, opened }: { t: Topology; onOpen: (id: string) => voi
         <Lane title="Followers" icon={<Network />} toward="left" note="They serve queries and subscriptions.">
           {followers.map((n) => (
             <li key={n.id}>
-              <NodeCard node={n} t={t} onOpen={onOpen} opened={opened === n.id} />
+              <NodeCard node={n} t={t} onOpen={onOpen} opened={opened === n.id} lit={props.highlight === n.id} />
             </li>
           ))}
         </Lane>
@@ -114,7 +151,13 @@ function Lanes({ t, onOpen, opened }: { t: Topology; onOpen: (id: string) => voi
       >
         {leader && (
           <li>
-            <NodeCard node={leader} t={t} onOpen={onOpen} opened={opened === leader.id} />
+            <NodeCard
+              node={leader}
+              t={t}
+              onOpen={onOpen}
+              opened={opened === leader.id}
+              lit={props.highlight === leader.id}
+            />
           </li>
         )}
       </Lane>
@@ -155,7 +198,13 @@ function Lane(props: {
   );
 }
 
-function NodeCard(props: { node: TopologyNode; t: Topology; onOpen: (id: string) => void; opened: boolean }) {
+function NodeCard(props: {
+  node: TopologyNode;
+  t: Topology;
+  onOpen: (id: string) => void;
+  opened: boolean;
+  lit?: boolean;
+}) {
   const { node: n, t } = props;
   const followers = t.nodes.length - 1;
   return (
@@ -166,6 +215,7 @@ function NodeCard(props: { node: TopologyNode; t: Topology; onOpen: (id: string)
       className={cn(
         "flex w-full flex-col gap-2 border bg-card p-3 text-left outline-none hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring",
         props.opened && "border-ring",
+        props.lit && "ring-2 ring-info",
         n.state === "down" && "opacity-70",
       )}
     >
@@ -245,7 +295,7 @@ function StoreCard({ store: s, now }: { store: TopologyStore; now: number }) {
 
 const time = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 
-function Events({ t }: { t: Topology }) {
+function Events({ t, highlight, onPick }: { t: Topology; highlight?: string; onPick: (node: string) => void }) {
   return (
     <section aria-labelledby="topology-events" className="max-w-3xl">
       <h2 id="topology-events" className="mb-2 text-sm font-medium text-muted-foreground">
@@ -256,14 +306,25 @@ function Events({ t }: { t: Topology }) {
       ) : (
         <ol className="divide-y border">
           {t.events.map((e) => (
-            <li key={e.id} className="flex flex-wrap gap-x-4 gap-y-0.5 px-3 py-1.5 text-sm">
-              <time
-                dateTime={new Date(e.time).toISOString()}
-                className="font-mono text-xs text-muted-foreground tabular-nums"
+            <li key={e.id}>
+              <button
+                type="button"
+                disabled={!e.node}
+                aria-pressed={e.node !== undefined && highlight === e.node}
+                onClick={() => e.node && onPick(e.node)}
+                className={cn(
+                  "flex w-full flex-wrap gap-x-4 gap-y-0.5 px-3 py-1.5 text-left text-sm outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:hover:bg-transparent",
+                  e.node !== undefined && highlight === e.node && "bg-info/10",
+                )}
               >
-                {time.format(e.time)}
-              </time>
-              <span>{eventText(e)}</span>
+                <time
+                  dateTime={new Date(e.time).toISOString()}
+                  className="font-mono text-xs text-muted-foreground tabular-nums"
+                >
+                  {time.format(e.time)}
+                </time>
+                <span>{eventText(e)}</span>
+              </button>
             </li>
           ))}
         </ol>
