@@ -57,7 +57,7 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
-  type Retention,
+  type RetentionStore,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -130,7 +130,7 @@ export function operational(e: unknown): boolean {
   return false;
 }
 
-export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, Retention {
+export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
   /** Our lease's epoch, 0 when we hold none. */

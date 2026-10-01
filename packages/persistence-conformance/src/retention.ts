@@ -13,12 +13,12 @@ import {
   type IndexWrite,
   LeaseLostError,
   type Persistence,
-  type Retention,
+  type RetentionStore,
 } from "@bunvex/core";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
-type Store = Persistence & Retention;
+type Store = Persistence & RetentionStore;
 
 const rnd = (n: number) => Math.floor(Math.random() * n);
 const MAX = Number.MAX_SAFE_INTEGER;

@@ -48,7 +48,7 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
-  type Retention,
+  type RetentionStore,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -128,7 +128,7 @@ export function operational(e: unknown): boolean {
   return /connection is in closed state/.test(message);
 }
 
-export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, Retention {
+export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush: the group's top, recorded as max_ts by the fence. */

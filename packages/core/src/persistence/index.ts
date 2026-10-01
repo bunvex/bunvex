@@ -133,7 +133,7 @@ export type DocPrune = { table: number; id: string; ts: number };
  * What retention needs from a store (STUDY-33, Convex's `retention.rs`). Optional per driver: without it
  * the engine keeps every version, as before.
  */
-export interface Retention {
+export interface RetentionStore {
   /**
    * PERSIST-01 C12, the document log by timestamp: the stored document versions of the durable commits with
    * `afterTs < ts <= upToTs`, in ts order, whole commits only, at most `limit` commits. Like `readLog`, never
@@ -154,8 +154,8 @@ export interface Retention {
   setGlobal(key: string, value: unknown): void | Promise<void>;
 }
 
-export const hasRetention = (p: Persistence): p is Persistence & Retention =>
-  typeof (p as Partial<Retention>).pruneIndexes === "function";
+export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
+  typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
 /** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). */
 export interface ScanDocs {

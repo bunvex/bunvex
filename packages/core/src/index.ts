@@ -60,7 +60,7 @@ export {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
-  type Retention,
+  type RetentionStore,
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";

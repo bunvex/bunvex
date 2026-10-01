@@ -23,7 +23,7 @@ import type {
   LeaseAcquire,
   LogCommit,
   Persistence,
-  Retention,
+  RetentionStore,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -91,7 +91,7 @@ function visible<T>(vs: Version<T>[] | undefined, ts: number): Version<T> | unde
   return undefined;
 }
 
-export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Retention {
+export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   /** PERSIST-01 C7 as an OS lock next to the log, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The log's single-writer lock. Replaying (and truncating a torn tail) happens only under it: another

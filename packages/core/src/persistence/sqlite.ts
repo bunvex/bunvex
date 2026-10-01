@@ -20,7 +20,7 @@ import type {
   LeaseAcquire,
   LogCommit,
   Persistence,
-  Retention,
+  RetentionStore,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -43,7 +43,7 @@ const COLUMNS = {
   indexes: ["index_id integer", "key blob", "ts integer", "deleted integer", "document_id text"],
 };
 
-export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Retention {
+export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   /** PERSIST-01 C7 as an OS lock on the file, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The store's single-writer lock: taken at open when free, else by acquireLease once it is. */

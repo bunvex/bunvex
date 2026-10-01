@@ -51,7 +51,7 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
-  type Retention,
+  type RetentionStore,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -110,7 +110,7 @@ export const connectionLost = (e: unknown) => {
   return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
-export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, Retention {
+export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush (the group's top, written to the lease row as max_ts). */
