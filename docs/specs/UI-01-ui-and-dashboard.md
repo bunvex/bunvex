@@ -1347,7 +1347,8 @@ pull requests.
 - **UX-9** An environment variable's actions sit at the row's right edge, on the name's line; each Copy
   button says "Copy" (named for its variable), so they line up.
 - **UX-14** One place for counts: next to the title (Database, Files, History) or above the list (each
-  Schedules tab); a footer only says "N loaded" while more are still to load.
+  Schedules tab); a footer only says "N loaded" while more are still to load. History's counts (its title's
+  and an event's, "Added 1,452 documents") use the shared count format, with thousands separators.
 - **UX-16** Files' Open button is as tall as the storage-ID box.
 - **UX-17** No reserved status line between a toolbar and its table (Files, Scheduled functions).
 
