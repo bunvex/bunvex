@@ -17,7 +17,14 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import { Committer, type Conflict, ConflictError, type Interval, overlaps } from "./committer.ts";
+import {
+  Committer,
+  type Conflict,
+  ConflictError,
+  type FlushRetryOptions,
+  type Interval,
+  overlaps,
+} from "./committer.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -137,6 +144,11 @@ export class Engine {
        * another process holds before failing with `LeaseHeldError`.
        */
       lease?: { ttlMs?: number; waitMs?: number };
+      /**
+       * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
+       * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
+       */
+      flushRetry?: FlushRetryOptions;
     } = {},
   ) {
     installDeterminism();
@@ -146,7 +158,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence);
+    this.committer = new Committer(persistence, undefined, undefined, opts.flushRetry);
     // Invalidation: a durable commit drops every cached result whose read-set it overlaps.
     this.committer.onCommit((entries) => {
       if (this.cache.size === 0) return;
@@ -187,11 +199,19 @@ export class Engine {
       await new Promise((ok) => setTimeout(ok, Math.min(250, Math.max(10, deadline - Date.now()))));
     }
     // Renew every TTL/3. A lost lease, or renewals failing until the TTL runs out (the store may then give it
-    // to another process), stops the committer: fail-stop, as a failed flush.
+    // to another process), stops the committer: fail-stop, as a failed flush. So does a renewal still waiting
+    // for the store when the TTL runs out (a hung connection; drivers bound a renewal by a quarter of the TTL,
+    // STUDY-25 L3, but a driver without timeouts could wait forever): the lease may already be another
+    // process's, and this one must not keep serving as the writer.
     let renewedAt = Date.now();
     let renewing = false;
     const timer = setInterval(async () => {
-      if (renewing || this.committer.stopped) return;
+      if (this.committer.stopped) return;
+      if (renewing) {
+        if (Date.now() - renewedAt >= ttlMs)
+          this.committer.fail(new LeaseLostError("the store did not answer a lease renewal within the lease's TTL"));
+        return;
+      }
       renewing = true;
       try {
         await store.renewLease();

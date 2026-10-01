@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clipboardText, filterOps, withClause } from "../src/database/cell-menu.tsx";
 import { decodeFilter } from "../src/database/filter-url.ts";
@@ -246,5 +246,28 @@ describe("a cell's context menu and shortcuts on the Database screen", () => {
     await user.keyboard("{Shift>}{F10}{/Shift}");
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: "Delete document" }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  test("a right-click with no click before targets the cell under the pointer (UX-23)", async () => {
+    mount("/database/users");
+    await heading("users");
+    const t = grid("users");
+    const email = within(bodyRows(t)[1]!).getAllByRole("gridcell")[colIndex(t, "email")]!;
+    fireEvent.contextMenu(email, { clientX: 10, clientY: 10 });
+    const menu = await screen.findByRole("menu", { name: "Actions on email" });
+    expect(within(menu).getByRole("menuitem", { name: /^Filter by email/ })).toBeDefined();
+    expect(document.activeElement === email || email.getAttribute("aria-selected") === "true").toBe(true);
+  });
+
+  test("Delete document sits in a group of its own (UX-22)", async () => {
+    mount("/database/users");
+    await heading("users");
+    const user = userEvent.setup();
+    await toCell(user, "users", "name");
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    const menu = await screen.findByRole("menu");
+    const kids = [...menu.querySelectorAll('[role="menuitem"], [role="separator"]')];
+    const del = kids.findIndex((k) => k.textContent?.startsWith("Delete document"));
+    expect(kids[del - 1]?.getAttribute("role")).toBe("separator");
   });
 });

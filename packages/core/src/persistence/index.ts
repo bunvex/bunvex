@@ -34,6 +34,16 @@ export interface Persistence {
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): number | Promise<number>;
   /**
+   * Whether an error of `flush()` is transient (STUDY-25 L4, as Convex's `is_transient_db_error`): a timeout
+   * or an "operational" error (a lost connection, a server shutting down). The committer retries a transient
+   * flush failure with backoff, so a driver that classifies anything as transient MUST keep the group a failed
+   * `flush()` did not make durable: the next `flush()` first checks whether an earlier attempt did commit it
+   * (`retriedGroupLanded`: then it succeeds without writing), and otherwise writes the same rows at the same
+   * timestamps behind the same fence (PERSIST-01 C9). Absent: nothing is transient, any flush failure is
+   * fail-stop (the embedded drivers).
+   */
+  isTransient?(e: unknown): boolean;
+  /**
    * PERSIST-01 C11, the log by timestamp: the durable commits with `afterTs < ts <= upToTs`, in ts order, at
    * most `limit` of them and never part of one. Never a commit above the durable prefix (`maxTs`), so
    * never one of an unflushed group. Read from `indexes` by ts (every commit writes index entries).
@@ -42,6 +52,8 @@ export interface Persistence {
   readLog?(afterTs: number, upToTs: number, limit: number): LogCommit[] | Promise<LogCommit[]>;
   /** AUDIT ONLY (conformance K6, never used by the engine): live documents of a table at ts. */
   auditLiveDocs?(table: number, ts: number): number | Promise<number>;
+  /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
+  auditRowsAt?(ts: number): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
   close(): void | Promise<void>;
 }
 
@@ -75,6 +87,23 @@ export class LeaseLostError extends Error {
   }
 }
 
+/**
+ * Whether a group a driver failed to flush did commit after all (PERSIST-01 C9, STUDY-25 §3.5, DV-124): the
+ * one rule every remote driver applies, before re-running such a group, to the lease record it just read. The
+ * fence writes the lease's `max_ts` in the same transaction as the group, and only our own flushes write it
+ * under our epoch, in increasing order: our epoch with `max_ts` ≥ the group's top means the group is there
+ * (the flush then succeeds without writing: its commits are acknowledged, exactly once). Another epoch, or no
+ * lease record: `LeaseLostError`.
+ */
+export function retriedGroupLanded(
+  lease: { epoch: number; maxTs: number } | null | undefined,
+  epoch: number,
+  top: number,
+): boolean {
+  if (!lease || lease.epoch !== epoch) throw new LeaseLostError();
+  return lease.maxTs >= top;
+}
+
 /** The store is held by another live process (PERSIST-01 C7): only one process may write a store. */
 export class LeaseHeldError extends Error {
   constructor(
@@ -104,6 +133,18 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export {
+  checkLayoutVersion,
+  checkUnversionedTables,
+  decodeLayoutVersion,
+  LAYOUT_VERSION,
+  LayoutError,
+  type OpenOptions,
+  ReadOnlyError,
+  type ReadOnlyFlag,
+} from "./layout.ts";
 export { groupLog, type LogRow } from "./log.ts";
+export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
+export { DatabaseTimeoutError, renewTimeoutMs, withTimeout } from "./timeout.ts";

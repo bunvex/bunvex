@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.."
 CB="${CONVEX_BENCH:-$(cd "$(dirname "$0")/../.." && pwd)/convex-bench}"
 PGB=/opt/homebrew/opt/postgresql@17/bin; MYB=/opt/homebrew/opt/mysql@8.4/bin; MOB="$PWD/.data/mongo-bin/bin"
 export PG_URL=postgres://$USER@127.0.0.1:5434/bunvex MYSQL_URL=mysql://root@127.0.0.1:3307/bunvex MONGO_URL=mongodb://127.0.0.1:27018/bunvex
+# The local stores have no TLS (Postgres) or unverifiable certificates (MySQL): TLS is required by default.
+export DO_NOT_REQUIRE_SSL=1
 url_of() { case $1 in postgres) echo "$PG_URL" ;; mysql) echo "$MYSQL_URL" ;; mongodb) echo "$MONGO_URL" ;; esac; }
 stop() { pkill -f "bun bench/server.ts"; sleep 1; }
 fresh() {
