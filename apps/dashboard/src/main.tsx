@@ -19,8 +19,10 @@ const source = new MockDataSource({
   liveWritesMs: Number(params.get("writes") ?? 3000),
   // ?tables=0: a deployment with no tables yet
   tables: params.get("tables") !== "0",
-  // about ten calls a minute over the six hours of history, so the Health charts read as traffic
-  executions: 4000,
+  // about ten calls a minute over the six hours of history, so the Health charts read as traffic;
+  // ?tasks=100000&executions=… for volume, to see how the screens hold up (UI-01 §19.3)
+  executions: Number(params.get("executions") ?? 4000),
+  ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
 });
 
 createRoot(document.getElementById("root")!).render(

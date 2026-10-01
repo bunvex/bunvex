@@ -7,6 +7,7 @@ import { BunvexError, v } from "@bunvex/values";
 import { action, type FunctionDef, Functions, mutation, query } from "../src/functions.ts";
 import { formatLogLine, MAX_LOG_LINE_LENGTH } from "../src/logs.ts";
 import { createServer, type ServerOptions } from "../src/server.ts";
+import { add, syncUrl, updated, v1Client } from "./v1-client.ts";
 
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -293,51 +294,13 @@ test("a subscription re-run by a mutation's commit does not add its lines to the
       await db.insert("items", {});
     }),
   });
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-  const frames: any[] = [];
-  ws.onmessage = (m) => frames.push(JSON.parse(String(m.data)));
-  await new Promise((r) => (ws.onopen = r));
-  ws.send(JSON.stringify({ t: "sub", path: "m:list", args: {} }));
-  while (frames.length < 1) await Bun.sleep(5);
+  const c = await v1Client(syncUrl(port));
+  c.modify([add(1, "m:list")]);
+  await c.transition(0);
   const r = await call("mutation", "m:add");
   expect(r.body.logLines).toEqual(["[LOG] 'adding'"]);
-  while (frames.length < 2) await Bun.sleep(5);
-  expect(frames[1].v).toBe(1);
-  ws.close();
-});
-
-test("WebSocket: mutation results carry data and lines; subscription errors carry data", async () => {
-  const { port } = await serve({
-    fail: mutation(() => {
-      console.log("x");
-      throw new BunvexError({ code: 7 });
-    }),
-    ok: mutation(() => {
-      console.log("y");
-      return 5;
-    }),
-    q: query(() => {
-      throw new BunvexError({ code: 8 });
-    }),
-  });
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-  const frames: any[] = [];
-  ws.onmessage = (m) => frames.push(JSON.parse(String(m.data)));
-  await new Promise((r) => (ws.onopen = r));
-  ws.send(JSON.stringify({ t: "mut", id: 1, path: "m:fail", args: {} }));
-  ws.send(JSON.stringify({ t: "mut", id: 2, path: "m:ok", args: {} }));
-  ws.send(JSON.stringify({ t: "sub", path: "m:q", args: {} }));
-  while (frames.length < 3) await Bun.sleep(5);
-  const byId = (id: number) => frames.find((f) => f.t === "res" && f.id === id);
-  expect(byId(1).e).toMatch(REQUEST_ID);
-  expect(byId(1).e).toContain("Uncaught BunvexError:");
-  expect(byId(1).d).toEqual({ code: 7 });
-  expect(byId(1).l).toEqual(["[LOG] 'x'"]);
-  expect(byId(2)).toEqual({ t: "res", id: 2, v: 5, l: ["[LOG] 'y'"] });
-  const err = frames.find((f) => f.t === "err");
-  expect(err.e).toMatch(REQUEST_ID);
-  expect(err.d).toEqual({ code: 8 });
-  ws.close();
+  await c.until(() => c.transitions().some((t) => updated(t)[1] === 1));
+  c.ws.close();
 });
 
 test("a system failure is a 500 with the fixed message, not the function's error", async () => {

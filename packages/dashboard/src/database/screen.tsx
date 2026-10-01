@@ -299,6 +299,16 @@ function TableView({ info }: { info: TableInfo }) {
             >
               Indexes
             </Button>
+            {typeof scope.source.tableRate === "function" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-pressed={search.panel === "metrics" && !search.doc}
+                onClick={() => setSearch({ doc: undefined, panel: search.panel === "metrics" ? undefined : "metrics" })}
+              >
+                Metrics
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

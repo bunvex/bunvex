@@ -58,7 +58,7 @@ bunvex/
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the K1–K7 suite, published ✅
 │   │
-│   ├── protocol/                    @bunvex/protocol                  versioned wire messages N
+│   ├── protocol/                    @bunvex/protocol                  sync v1 + HTTP messages ✅
 │   │
 │   ├── server/                      @bunvex/server
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·

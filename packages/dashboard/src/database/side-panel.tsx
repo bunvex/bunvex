@@ -14,6 +14,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
+import { TableMetrics } from "../metrics/table-metrics.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { AddDocuments } from "./add-documents.tsx";
@@ -28,6 +29,7 @@ export type PanelState =
   | { kind: "document"; id: string; canEdit: boolean; editRequest?: number }
   | { kind: "schema" }
   | { kind: "indexes" }
+  | { kind: "metrics" }
   | { kind: "add"; onAdded: (ids: string[]) => void }
   | { kind: "columns"; fields: string[]; state: ColumnState; onChange: (s: ColumnState) => void };
 
@@ -81,6 +83,12 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
     return (
       <Panel title={`Add documents to ${info.name}`} onClose={onClose}>
         <AddDocuments table={info.name} onAdded={state.onAdded} />
+      </Panel>
+    );
+  if (state.kind === "metrics")
+    return (
+      <Panel title={`Metrics of ${info.name}`} onClose={onClose}>
+        <TableMetrics table={info.name} />
       </Panel>
     );
   return <IndexesPanel info={info} onClose={onClose} />;
