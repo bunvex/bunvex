@@ -1292,3 +1292,26 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   gets the "not offered" screen.
 - **Mock**: an OIDC and a custom JWT provider (`mock/auth.ts`; the `authProviders` option overrides).
 
+### 19.2 Settings → Snapshots (STUDY-12 §13.2, a bunvex addition)
+
+- **Contract** (`data-source-snapshot.ts`, every method optional): `getLatestSnapshotExport`,
+  `requestSnapshotExport({ includeStorage })`, `downloadSnapshotExport(id)` → the zip as a `Blob`;
+  `startSnapshotImport({ file, format, mode, table? })` → `failed` with why, or `waiting_for_confirmation` with
+  `changes` (per table: added, deleted); `confirmSnapshotImport`, `cancelSnapshotImport`, `getSnapshotImport`
+  (progress, checkpoints, rows written). Operations `viewBackups`, `createBackups`, `downloadBackups`,
+  `importBackups` (Convex's names); importing also needs to write. **Contract suite**: the latest export is
+  read when offered; an export (opt-in) is requested, followed to `completed` and downloaded (a zip of its
+  size); an import (opt-in, into a scratch table) refuses a bad file, then is confirmed and written.
+- **Page** (`settings/snapshots.tsx`, lazy): **Export** — include stored files, Export a snapshot, its state
+  while it runs (polled every 500 ms), then when, how large, until when, and Download (a `snapshot-<time>.zip`);
+  **Import** — a file (the format guessed from its extension, the table from its name), the format, the
+  table for a single-table format, and what to do when a table has documents (the four modes; replacing
+  everything only for a zip); Upload and review shows what will change per table; the confirm button says how
+  many documents it deletes; then progress, the steps done, and the documents written. Every half follows its
+  operations; a source without either gets the "not offered" screen.
+- **Mock** (`mock/snapshots.ts`, `mock/zip.ts`): exports and imports advance a step per table every
+  `snapshotStepMs` (300 ms); the zip is Convex's layout, stored uncompressed, and the reader also takes deflated
+  entries; ids and creation times in a file are kept (an `append` that repeats an id fails); CSV numbers and
+  booleans are read as such, empty cells left out; `request_export` and `snapshot_import` go to the audit log
+  (History says them in words).
+

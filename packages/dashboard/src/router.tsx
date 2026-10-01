@@ -106,6 +106,7 @@ const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx")
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
+const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
 const AuthenticationSettingsScreen = lazyRouteComponent(
   () => import("./settings/auth.tsx"),
   "AuthenticationSettingsScreen",
@@ -215,6 +216,12 @@ export const authSettingsRoute = createRoute({
   component: AuthenticationSettingsScreen,
 });
 
+export const snapshotsSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/snapshots",
+  component: SnapshotsSettingsScreen,
+});
+
 /** `/schedules` opens the scheduled functions, as Convex's sidebar does. */
 export const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -253,6 +260,7 @@ export const routeTree = rootRoute.addChildren([
   generalSettingsRoute,
   envVarsRoute,
   authSettingsRoute,
+  snapshotsSettingsRoute,
 ]);
 
 // ------------------------------------------------------------------ the router

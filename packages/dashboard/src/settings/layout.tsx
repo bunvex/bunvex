@@ -28,6 +28,11 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
                 Authentication
               </DashLink>
             </li>
+            <li>
+              <DashLink link={{ to: "/settings/snapshots" }} className={TAB}>
+                Snapshots
+              </DashLink>
+            </li>
           </ul>
         </nav>
         <div className="min-w-0 flex-1">{children}</div>

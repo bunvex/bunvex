@@ -587,3 +587,22 @@ each kind (`authProviders` overrides). One difference, from the repository's rul
 shipped code: with no providers the page says they are declared in `auth.config.ts` instead of linking Convex's
 docs (bunvex has no docs site yet). **Status: built** (UI-01 §19.1).
 
+### 13.2 Snapshots: export and import (B1, a bunvex addition)
+
+Convex: the **self-hosted** dashboard has neither. Its cloud has **Snapshot Export** (`/api/export/request/zip`,
+`latestExport`; states `requested` → `in_progress` → `completed` with an expiration, or `failed`; downloaded by
+id) and, besides cloud backups, imports run from the CLI: `npx convex import` (`npm-packages/convex/src/cli/lib/
+convexImport.ts`) — formats `zip` (a snapshot), `jsonLines`, `jsonArray`, `csv` (one table, `--table` required);
+modes `requireEmpty` (default), `append`, `replace`, `replaceAll`; the server parses the upload, waits for
+confirmation with a summary of what changes (`waiting_for_confirmation`), then runs with progress and
+checkpoint messages, ending `completed` (rows written) or `failed`. The audit log records `request_export` and
+`snapshot_import`. Operations: `ViewBackups`, `CreateBackups`, `DownloadBackups`, `ImportBackups`
+(`crates/keybroker/src/operations.rs`). The zip's layout: `README.md`, `_tables/documents.jsonl`,
+`<table>/documents.jsonl`, `_storage/documents.jsonl` with the blobs.
+
+bunvex: **Settings → Snapshots**, both halves in the dashboard — the owner's decision (30 Sep 2026): bunvex
+offers more than Convex where it helps, and a self-hosted deployment needs a way to back up and restore without
+the CLI. Optional contract methods (`data-source-snapshot.ts`) in Convex's states, modes and formats; the same
+operation names; the same audit actions. **A deliberate addition, not a divergence to decide.**
+**Status: built** on the mock (UI-01 §19.2); the server has neither yet (parity §18).
+
