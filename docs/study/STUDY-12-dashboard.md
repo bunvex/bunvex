@@ -602,3 +602,51 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 | M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
+## 14. The Schema screen (added 30 Sep 2026)
+
+Missed in the first lists and caught by the owner: Convex's sidebar has **Schema** between Data and Functions
+(`dashboard-common/src/layouts/DeploymentDashboardLayout.tsx`, `href: …/schema`; the self-hosted page is
+`dashboard-self-hosted/src/pages/schema.tsx` → `SchemaView`).
+
+### 14.1 How Convex does it
+
+`features/schema` (~5 000 lines, on `@xyflow/react` and `elkjs`):
+
+- **Data** (`SchemaView.tsx`): the saved schema (`getSchemas`, `active`) wins; tables that hold documents without
+  a schema entry join it, typed from their inferred shapes and flagged ("not defined in your schema",
+  `TableNode.tsx`); with no saved schema, the graph is built from the shapes alone. No tables: "This deployment
+  doesn't have any tables" and "Create a table and add a convex/schema.ts …"; no `ViewData`: a permission notice.
+- **Graph** (`lib/buildSchemaGraph.ts`): a node per table with its top-level fields — a compact TypeScript-style
+  label (`Id<users>`, `{ … }`) and the full type when the label hides detail — and an edge for every `v.id(…)`,
+  direct or nested in arrays, records, objects and unions. A union document type keeps its members, with a
+  discriminator detected from literal fields.
+- **Groups** (`lib/clustering.ts`, `SchemaClusters.tsx`): connected components; a large one split by Louvain
+  modularity; named after the most connected table; on by default, the choice kept per deployment; groups can be
+  renamed and dragged.
+- **Layout** (`lib/elkLayout.ts`): ELK `layered`, top to bottom, groups as compound nodes; ELK loaded on demand.
+- **Around it**: search over groups, tables, fields and indexes (`SchemaSearch.tsx`); a minimap
+  (`SchemaMinimap.tsx`); zoom in / out, fit, reset layout, the grouping toggle (`SchemaControls.tsx`); a side panel
+  with each field (a long type expands), a union's members and the discriminator, and the table's indexes
+  (`SchemaSidePanel.tsx`, reusing the data page's index view).
+
+### 14.2 What an app can observe
+
+Nothing: it is a view of the schema the app already declares.
+
+### 14.3 How bunvex does it
+
+`packages/dashboard/src/schema/` (UI-01 §21), with **@xyflow/react 12.12.0 and elkjs 0.12.0** (the owner's call,
+as Convex), both in the Schema route's chunk. Fed by the contract's `getSchema` (Convex's JSON validators, V2),
+`listTables` (indexes, counts, undeclared tables) and, where the source has it, `inferDocumentType` for tables
+without a declared type. The same model (fields, compact and full labels, references, union members with their
+discriminator), groups (connected components, Louvain's local moving for groups of 8 or more), ELK layout,
+search, minimap, controls and side panel. The open table is in the URL (`?table=`).
+
+### 14.4 Divergences
+
+| # | bunvex | why | status |
+|---|---|---|---|
+| SC1 | Groups cannot be renamed or dragged as a whole; tables can be dragged, and Reset layout lays everything out again | a first version; nothing an app observes | follow-up |
+| SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
+| SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
+

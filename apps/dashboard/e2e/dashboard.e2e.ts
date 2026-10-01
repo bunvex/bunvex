@@ -263,6 +263,37 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schema: the tables drawn with their references; a table opens with Enter; xyflow stays in its chunk", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, external, close } = await open("/schema", { colorScheme });
+      await heading(page, "Schema");
+      await page.locator(".react-flow__node-table").nth(3).waitFor();
+      expect(await page.locator(".react-flow__edge").count()).toBe(2);
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run(document, { resultTypes: ["violations"] });
+        return r.violations.map(
+          (v: { id: string; nodes: { html: string }[] }) =>
+            `${v.id}: ${v.nodes.map((n) => n.html.slice(0, 90)).join(" | ")}`,
+        );
+      });
+      expect([colorScheme, violations]).toEqual([colorScheme, []]);
+      await page.locator('.react-flow__node-table[data-id="tasks"]').focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("complementary", { name: "tasks" }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.waitForURL(`${ORIGIN}/schema`);
+      expect([errors, external]).toEqual([[], []]);
+      await close();
+    }
+    // the diagram's libraries load with the Schema screen only, never with the shell
+    const entry = readdirSync(`${import.meta.dir}/../dist/assets`).find((f) => /^index-.*\.js$/.test(f))!;
+    const code = readFileSync(`${import.meta.dir}/../dist/assets/${entry}`, "utf8");
+    expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");
