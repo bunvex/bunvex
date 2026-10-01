@@ -14,6 +14,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@bunvex/ui/components/dropdown-menu";
 import { Input } from "@bunvex/ui/components/input";
@@ -105,22 +106,48 @@ export function DeleteDialog(props: {
   );
 }
 
-/** The "More" menu: actions on the whole table. */
-export function TableMenu(props: { table: string; count?: number; canClear: boolean; onDone: (o: Outcome) => void }) {
+/**
+ * The "More" menu: actions on the whole table. On a phone it also holds the panels (`panels`) whose buttons
+ * the toolbar hides below `sm` (UX-20), so the title row keeps Add documents and ⋯ together.
+ */
+export function TableMenu(props: {
+  table: string;
+  count?: number;
+  canClear: boolean;
+  onDone: (o: Outcome) => void;
+  panels?: { label: string; open: () => void }[];
+}) {
   const [clearing, setClearing] = useState(false);
-  if (!props.canClear) return null;
+  const panels = props.panels ?? [];
+  if (!props.canClear && panels.length === 0) return null;
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="ghost" size="icon-sm" aria-label={`More actions on ${props.table}`} />}
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`More actions on ${props.table}`}
+              // with nothing to clear, the menu only holds the phone's panels
+              className={props.canClear ? undefined : "sm:hidden"}
+            />
+          }
         >
           <MoreHorizontal aria-hidden="true" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem variant="destructive" onClick={() => setClearing(true)}>
-            Clear table…
-          </DropdownMenuItem>
+          {panels.map((p) => (
+            <DropdownMenuItem key={p.label} className="sm:hidden" onClick={p.open}>
+              {p.label}
+            </DropdownMenuItem>
+          ))}
+          {panels.length > 0 && props.canClear && <DropdownMenuSeparator className="sm:hidden" />}
+          {props.canClear && (
+            <DropdownMenuItem variant="destructive" onClick={() => setClearing(true)}>
+              Clear table…
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <ClearTable {...props} open={clearing} onOpenChange={setClearing} />

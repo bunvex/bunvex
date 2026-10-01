@@ -6,6 +6,10 @@
 // max_ts). Each flush's FIRST statement updates the lease row only if our epoch is current, and records the
 // group's top as the durable prefix; the rest of the group runs only if it matched. MySQL has no data-
 // modifying CTE, so the fence costs one statement (a round trip) per flush.
+//
+// Timeouts (STUDY-25 L3), as Convex's MySQL driver: every database call is bounded on the client side (19 s by
+// default, Convex's MYSQL_TIMEOUT_SECONDS), per round trip, including getting a connection from the pool. The
+// MySQL protocol cannot cancel a statement, so a timed-out call's connection is destroyed, never reused.
 import {
   type DocWrite,
   type IndexWrite,
@@ -13,17 +17,27 @@ import {
   type LeaseAcquire,
   LeaseLostError,
   type Persistence,
+  renewTimeoutMs,
   type ScanDocs,
   type SplitRow,
   scanLatest,
   splitKey,
   splitPages,
+  withTimeout,
 } from "@bunvex/core/persistence";
 import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 type IdxRow = [number, Buffer, Buffer | null, Buffer, number, boolean, string | null];
+type Conn = mysqlDriver.PoolConnection;
+
+/** Destroy a connection: out of the pool, and its socket closed at once (a frozen server never answers a
+ *  polite close). */
+const drop = (c: Conn) => {
+  c.destroy();
+  (c as unknown as { connection?: { stream?: { destroy?(): void } } }).connection?.stream?.destroy?.();
+};
 
 export class MysqlPersistence implements Persistence, ScanDocs, Lease {
   private docs: DocRow[] = [];
@@ -38,40 +52,97 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     /** This instance's connections' `bunvex_conn` connect attribute, recorded in the lease row: a successor
      *  that finds us paused mid-flush after our lease expired kills exactly these connections. */
     private conn: string,
+    /** The client-side timeout of one round trip (STUDY-25 L3). */
+    private timeoutMs: number,
   ) {}
 
-  static async open(url: string, pool = 16) {
+  /**
+   * `timeoutMs` (default 19 000, Convex's `MYSQL_TIMEOUT_SECONDS`): how long one round trip to the database
+   * (a statement, BEGIN, COMMIT, getting a connection) may take before the call fails with
+   * `DatabaseTimeoutError` and its connection is destroyed (STUDY-25 L3). 0 disables it.
+   */
+  static async open(url: string, pool = 16, opts: { timeoutMs?: number } = {}) {
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
+    const timeoutMs = opts.timeoutMs ?? 19_000;
     const p = mysql.createPool({
       uri: url,
       connectionLimit: pool,
       multipleStatements: false,
       connectAttributes: { bunvex_conn: conn },
+      ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
     });
+    const store = new MysqlPersistence(p, conn, timeoutMs);
+    try {
+      await store.bootstrap();
+    } catch (e) {
+      await store.close().catch(() => {});
+      throw e;
+    }
+    return store;
+  }
+
+  /**
+   * One database call on one pooled connection, bounded by the client-side timeout per round trip
+   * (`progress()` marks the end of one; getting the connection is the first). On a timeout the connection is
+   * destroyed; otherwise it goes back to the pool.
+   */
+  private call<T>(fn: (c: Conn, progress: () => void) => Promise<T>, ms = this.timeoutMs): Promise<T> {
+    let c: Conn | null = null;
+    let timedOut = false;
+    return withTimeout(
+      "MySQL",
+      ms,
+      async (progress) => {
+        const got = await this.pool.getConnection();
+        if (timedOut) {
+          got.release(); // the call has failed already; this connection did nothing wrong
+          throw new Error("timed out");
+        }
+        c = got;
+        progress();
+        try {
+          return await fn(got, progress);
+        } finally {
+          if (!timedOut) got.release();
+        }
+      },
+      () => {
+        timedOut = true;
+        if (c) drop(c);
+      },
+    );
+  }
+
+  /** The tables, created only when one is missing. */
+  private async bootstrap() {
     // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
     // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
-    const [have] = (await p.query(
-      `select count(*) as n from information_schema.tables
+    const [have] = (await this.call((c) =>
+      c.query(
+        `select count(*) as n from information_schema.tables
        where table_schema = database() and table_name in ('documents', 'indexes', 'bunvex_lease')`,
+      ),
     )) as any;
-    if (Number(have[0].n) < 3) {
-      const c = await p.getConnection();
+    if (Number(have[0].n) >= 3) return;
+    await this.call(async (c, progress) => {
       try {
         await c.query(`select get_lock('bunvex_bootstrap', 10)`);
+        progress();
         await c.query(`create table if not exists documents (table_id int not null, id varchar(64) not null,
           ts bigint not null, json_value mediumtext, deleted boolean not null, primary key (table_id, id, ts))`);
+        progress();
         await c.query(`create table if not exists indexes (index_id int not null, key_prefix varbinary(2500) not null,
           key_suffix longblob, key_suffix_hash varbinary(32) not null, ts bigint not null, deleted boolean not null,
           document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc))`);
+        progress();
         await c.query(`create table if not exists bunvex_lease (id int primary key, epoch bigint not null,
           holder varchar(255), holder_conn varchar(64), expires_at datetime(6) not null, max_ts bigint not null)`);
+        progress();
       } finally {
         await c.query(`select release_lock('bunvex_bootstrap')`).catch(() => {});
-        c.release();
       }
-    }
-    return new MysqlPersistence(p, conn);
+    });
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
@@ -84,42 +155,55 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
       // The lease row is locked: its holder is inside a flush. A live holder is just writing: busy. An
       // expired one that still holds the row is paused mid-flush (a stopped or frozen process): end its
       // connections, so its uncommitted group rolls back (it was never acknowledged).
-      const [rows] = (await this.pool.query(
-        `select holder, holder_conn, expires_at <= now(6) as expired,
+      const [rows] = (await this.call((c) =>
+        c.query(
+          `select holder, holder_conn, expires_at <= now(6) as expired,
            greatest(0, timestampdiff(microsecond, now(6), expires_at)) / 1000 as ms
          from bunvex_lease where id = 1`,
+        ),
       )) as any;
       const s = rows[0];
       if (!Number(s.expired)) return { heldBy: s.holder as string, expiresInMs: Number(s.ms) };
-      const [stale] = (await this.pool.query(
-        `select processlist_id as id from performance_schema.session_connect_attrs
+      const [stale] = (await this.call((c) =>
+        c.query(
+          `select processlist_id as id from performance_schema.session_connect_attrs
          where attr_name = 'bunvex_conn' and attr_value = ? and processlist_id <> connection_id()`,
-        [s.holder_conn],
+          [s.holder_conn],
+        ),
       )) as any;
-      for (const r of stale) await this.pool.query(`kill ${Number(r.id)}`).catch(() => {});
+      for (const r of stale) await this.call((c) => c.query(`kill ${Number(r.id)}`)).catch(() => {});
     }
   }
 
-  private async tryAcquire(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
-    const c = await this.pool.getConnection();
+  private tryAcquire(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
+    return this.call((c, progress) => this.tryAcquireOn(c, progress, opts));
+  }
+
+  private async tryAcquireOn(c: Conn, progress: () => void, opts: { holder: string; ttlMs: number }) {
     try {
       // A holder paused inside a flush holds the row lock: give up after 1 s and look (acquireLease).
       await c.query(`set session innodb_lock_wait_timeout = 1`);
+      progress();
       await c.beginTransaction();
+      progress();
       const [n] = (await c.query(`select count(*) as n from bunvex_lease`)) as any;
+      progress();
       if (!Number(n[0].n))
         // A store written before the lease existed: its durable prefix is the newest row of either table.
         await c.query(`insert ignore into bunvex_lease (id, epoch, holder, holder_conn, expires_at, max_ts)
           select 1, 0, null, null, '1970-01-01', greatest((select coalesce(max(ts), 0) from documents),
                                                           (select coalesce(max(ts), 0) from indexes))`);
+      progress();
       const [won] = (await c.query(
         `update bunvex_lease set epoch = epoch + 1, holder = ?, holder_conn = ?,
            expires_at = now(6) + interval ? microsecond
          where id = 1 and (holder is null or expires_at <= now(6))`,
         [opts.holder, this.conn, opts.ttlMs * 1000],
       )) as any;
+      progress();
       if (won.affectedRows === 1) {
         const [e] = (await c.query(`select epoch from bunvex_lease where id = 1`)) as any;
+        progress();
         await c.commit();
         this.epoch = Number(e[0].epoch);
         this.ttlMs = opts.ttlMs;
@@ -131,6 +215,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
         `select holder, greatest(0, timestampdiff(microsecond, now(6), expires_at)) / 1000 as ms
          from bunvex_lease where id = 1 for share`,
       )) as any;
+      progress();
       await c.commit();
       return { heldBy: held[0].holder as string, expiresInMs: Number(held[0].ms) };
     } catch (e) {
@@ -138,21 +223,25 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
       throw e;
     } finally {
       await c.query(`set session innodb_lock_wait_timeout = default`).catch(() => {});
-      c.release();
     }
   }
 
+  /** Bounded by a quarter of the TTL (`renewTimeoutMs`, STUDY-25 L3). */
   async renewLease() {
-    const [r] = (await this.pool.query(
-      `update bunvex_lease set expires_at = now(6) + interval ? microsecond where id = 1 and epoch = ?`,
-      [this.ttlMs * 1000, this.epoch],
+    const [r] = (await this.call(
+      (c) =>
+        c.query(`update bunvex_lease set expires_at = now(6) + interval ? microsecond where id = 1 and epoch = ?`, [
+          this.ttlMs * 1000,
+          this.epoch,
+        ]),
+      renewTimeoutMs(this.timeoutMs, this.ttlMs),
     )) as any;
     if (r.affectedRows !== 1) throw new LeaseLostError();
   }
 
   async releaseLease() {
     if (!this.epoch) return;
-    await this.pool.query(`update bunvex_lease set holder = null where id = 1 and epoch = ?`, [this.epoch]);
+    await this.call((c) => c.query(`update bunvex_lease set holder = null where id = 1 and epoch = ?`, [this.epoch]));
     this.epoch = 0;
   }
 
@@ -181,29 +270,34 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     const top = this.top;
     this.docs = [];
     this.idx = [];
-    const c = await this.pool.getConnection();
-    try {
-      await c.beginTransaction();
-      // The fence: nothing of the group is written unless the lease row still carries our epoch. The row
-      // lock is held to COMMIT, so a takeover waits for this transaction and then sees max_ts.
-      const [f] = (await c.query(`update bunvex_lease set max_ts = ? where id = 1 and epoch = ?`, [
-        top,
-        this.epoch,
-      ])) as any;
-      if (f.affectedRows !== 1) throw new LeaseLostError();
-      // `values ?` with a nested array expands to a multi-row insert. Chunked to stay under
-      // max_allowed_packet on big groups (the seed).
-      for (let i = 0; i < docs.length; i += 2000)
-        await c.query(`insert into documents values ?`, [docs.slice(i, i + 2000)]);
-      for (let i = 0; i < idx.length; i += 2000)
-        await c.query(`insert into indexes values ?`, [idx.slice(i, i + 2000)]);
-      await c.commit();
-    } catch (e) {
-      await c.rollback();
-      throw e;
-    } finally {
-      c.release();
-    }
+    await this.call(async (c, progress) => {
+      try {
+        await c.beginTransaction();
+        progress();
+        // The fence: nothing of the group is written unless the lease row still carries our epoch. The row
+        // lock is held to COMMIT, so a takeover waits for this transaction and then sees max_ts.
+        const [f] = (await c.query(`update bunvex_lease set max_ts = ? where id = 1 and epoch = ?`, [
+          top,
+          this.epoch,
+        ])) as any;
+        if (f.affectedRows !== 1) throw new LeaseLostError();
+        progress();
+        // `values ?` with a nested array expands to a multi-row insert. Chunked to stay under
+        // max_allowed_packet on big groups (the seed).
+        for (let i = 0; i < docs.length; i += 2000) {
+          await c.query(`insert into documents values ?`, [docs.slice(i, i + 2000)]);
+          progress();
+        }
+        for (let i = 0; i < idx.length; i += 2000) {
+          await c.query(`insert into indexes values ?`, [idx.slice(i, i + 2000)]);
+          progress();
+        }
+        await c.commit();
+      } catch (e) {
+        await c.rollback();
+        throw e;
+      }
+    });
   }
 
   private latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
@@ -219,20 +313,24 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
       splitPages(
         {
           page: async (b) => {
-            const [rows] = (await this.pool.execute(
-              `select key_prefix, key_suffix, ts, deleted, document_id from indexes
+            const [rows] = (await this.call((c) =>
+              c.execute(
+                `select key_prefix, key_suffix, ts, deleted, document_id from indexes
                where index_id = ? and key_prefix ${b.loStrict ? ">" : ">="} ? and key_prefix ${b.hiInclusive ? "<=" : "<"} ?
                  and ts <= ?
                order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc limit ${Math.floor(b.n)}`,
-              [index, Buffer.from(b.lo), Buffer.from(b.hi), ts],
+                [index, Buffer.from(b.lo), Buffer.from(b.hi), ts],
+              ),
             )) as any;
             return (rows as any[]).map(toRow);
           },
           group: async (prefix) => {
-            const [rows] = (await this.pool.execute(
-              `select key_prefix, key_suffix, ts, deleted, document_id from indexes
+            const [rows] = (await this.call((c) =>
+              c.execute(
+                `select key_prefix, key_suffix, ts, deleted, document_id from indexes
                where index_id = ? and key_prefix = ? and ts <= ?`,
-              [index, Buffer.from(prefix), ts],
+                [index, Buffer.from(prefix), ts],
+              ),
             )) as any;
             return (rows as any[]).map(toRow);
           },
@@ -251,9 +349,11 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
   }
 
   async get(table: number, id: string, ts: number) {
-    const [rows] = (await this.pool.execute(
-      `select json_value, deleted from documents where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`,
-      [table, id, ts],
+    const [rows] = (await this.call((c) =>
+      c.execute(
+        `select json_value, deleted from documents where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`,
+        [table, id, ts],
+      ),
     )) as any;
     const r = rows[0];
     return r && !r.deleted ? (r.json_value as string) : null;
@@ -271,11 +371,13 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     const ids = await this.latestEntries(index, lo, hi, ts, limit, desc);
     if (!ids.length) return [];
     // One round trip for every document: the newest version <= ts of each id.
-    const [rows] = (await this.pool.query(
-      `select d.id, d.json_value, d.deleted from documents d
+    const [rows] = (await this.call((c) =>
+      c.query(
+        `select d.id, d.json_value, d.deleted from documents d
        join (select id, max(ts) ts from documents where table_id = ? and id in (?) and ts <= ? group by id) v
          on d.table_id = ? and d.id = v.id and d.ts = v.ts`,
-      [table, ids, ts, table],
+        [table, ids, ts, table],
+      ),
     )) as any;
     const byId = new Map<string, any>(rows.map((r: any) => [r.id, r]));
     const out: string[] = [];
@@ -289,23 +391,28 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store
    *  never leased has no row yet: the newest row of either table. */
   async maxTs() {
-    const [rows] = (await this.pool.query(
-      `select coalesce((select max_ts from bunvex_lease where id = 1),
+    const [rows] = (await this.call((c) =>
+      c.query(
+        `select coalesce((select max_ts from bunvex_lease where id = 1),
          greatest((select coalesce(max(ts), 0) from documents), (select coalesce(max(ts), 0) from indexes))) as m`,
+      ),
     )) as any;
     return Number(rows[0].m);
   }
 
   async auditLiveDocs(table: number, ts: number) {
-    const [rows] = (await this.pool.query(
-      `select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
+    const [rows] = (await this.call((c) =>
+      c.query(
+        `select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
        from documents where table_id = ? and ts <= ?) v where rn = 1 and json_value is not null`,
-      [table, ts],
+        [table, ts],
+      ),
     )) as any;
     return Number(rows[0].n);
   }
 
+  /** Ends the pool; on a database that does not answer, gives up after one timeout. */
   async close() {
-    await this.pool.end();
+    await withTimeout("MySQL", this.timeoutMs, () => this.pool.end());
   }
 }

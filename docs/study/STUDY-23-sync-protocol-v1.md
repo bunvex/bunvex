@@ -357,7 +357,7 @@ first.
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | P1 | Wire compatibility | (a) Convex's v1 JSON exactly, at `/api/{version}/sync`; (b) Convex's semantics in bunvex's own compact frames | **(a)**: lets the official client serve as a test oracle, costs nothing in naming (no "convex" strings), and frames are not the bottleneck |
-| P2 | Drop v0 (`/ws`, `sub`/`upd`/`res`) once v1 lands | keep both for a while / delete | **delete** (no production users; owner's "old APIs may be removed") |
+| P2 | Drop v0 (`/ws`, `sub`/`upd`/`res`) once v1 lands | keep both for a while / delete | **delete** (no production users; owner's "old APIs may be removed") — done: v0 deleted once nothing used it (the convex-bench `bunvex` flavor now uses the official client) |
 | P3 | Shared executions vs per-connection executions | (a) per-connection query runs, as in Convex; (b) shared `key@T` executions with per-connection transition assembly | **(b)**: same observable behaviour, keeps bunvex's fan-out advantage |
 | P4 | Transition timestamp | always `visibleTs` at computation start (Convex) / the max ts at which all results are already valid, avoiding reruns | **Convex's** (latest), simpler reasoning, same as Convex |
 | P5 | Idempotency storage | `_session_requests` system table in the engine, transactional (Convex) / an in-memory map | **system table**: exactly-once must survive a server restart |

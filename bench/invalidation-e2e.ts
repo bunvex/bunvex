@@ -1,8 +1,8 @@
-// DV-64 end to end, in process (memory driver): commits/s while N subscriptions and N cached queries are
-// live. Each subscription and cached query reads one owner's items (an index prefix range); each commit
-// patches one item of one random owner, so it invalidates about one subscription and one cache entry.
+// DV-64 end to end, in process (memory driver): commits/s while N cached queries are live. Each cached query
+// reads one owner's items (an index prefix range); each commit patches one item of one random owner, so it
+// invalidates about one cache entry. (The sync hub registers its subscriptions in the same kind of index.)
 //   bun bench/invalidation-e2e.ts            Env: N (default 10000), C (concurrent writers, default 1), SECS (default 5)
-import { defineSchema, defineTable, Engine, Subscriptions } from "@bunvex/core";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 
@@ -32,10 +32,7 @@ const byOwner = (owner: number) => (db: any) =>
     .withIndex("by_owner", (q: any) => q.eq("owner", owner))
     .collect();
 
-let published = 0;
-const subs = new Subscriptions(engine, () => published++);
 const t0 = performance.now();
-for (let o = 0; o < N; o++) await subs.subscribe(`sub:${o}`, byOwner(o));
 for (let o = 0; o < N; o++) await engine.query(byOwner(o), `cache:${o}`);
 const setupMs = performance.now() - t0;
 
@@ -67,8 +64,6 @@ console.log(
     commitsPerSec: Math.round(commits / SECS),
     p50ms: q(0.5),
     p99ms: q(0.99),
-    reruns: subs.stats.reruns,
-    published,
     cacheSize: engine.stats,
   }),
 );

@@ -52,15 +52,6 @@ test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; fro
     expect(a.status).toBe(200);
     expect(a.body.status).toBe("error");
     expect(a.body.errorMessage).toContain('Uncaught Error: Documents read from or written to the "counters" table');
-    // Over the WebSocket (v0): the mutation's result carries the OCC message (STUDY-21 D2).
-    const ws = new WebSocket(`ws://127.0.0.1:${server!.port}/ws`);
-    const frames: { id?: number; e?: string }[] = [];
-    ws.onmessage = (m) => frames.push(JSON.parse(String(m.data)));
-    await new Promise((r) => (ws.onopen = r));
-    ws.send(JSON.stringify({ t: "mut", id: 1, path: "m:bump", args: {} }));
-    while (frames.length < 1) await Bun.sleep(5);
-    expect(frames[0].e).toMatch(/^\[Request ID: [0-9a-f]{16}\] Documents read from or written to the "counters" table/);
-    ws.close();
   } finally {
     stop();
   }

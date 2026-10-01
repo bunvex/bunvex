@@ -3,11 +3,14 @@
 //
 //   K1 byte order          K2 snapshots          K3 no lost update       K4 cache invalidation
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
-// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K18.
+// and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
+// stops answering: calls fail within the timeout).
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
 //   tearTail?(nextTs: number): void | Promise<void> — log-based drivers only: append half a record (K7)
+//   target?() / openThrough?(via, { timeoutMs }) — remote stores only: where the store listens, and an open
+//     through another address with a given call timeout (K20 puts a freezable TCP proxy in between)
 //
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
@@ -24,6 +27,7 @@ import {
   type Persistence,
   type ScanDocs,
 } from "@bunvex/core";
+import { freezableProxy } from "./proxy.ts";
 import { allOfTenant, counter, increment, insertItem, listTenant, newEngine, pair, seedCounters } from "./workload.ts";
 
 export type DriverModule = {
@@ -32,9 +36,14 @@ export type DriverModule = {
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
   writerInsideFlush?(): Promise<boolean>;
+  /** Remote stores (K20): the address the store listens on. */
+  target?(): { host: string; port: number };
+  /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
+   *  address, with the given client-side call timeout (STUDY-25 L3). */
+  openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
 };
 
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10"; // K3 also runs K4–K5; K10 runs K10–K18
+export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20"; // K3 also runs K4–K5; K10 runs K10–K19
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -46,6 +55,8 @@ export type ConformanceOptions = {
   log?: (line: string) => void;
   /** The driver claims PERSIST-01 C7 (single writer): its absence is a failure, not a skip. */
   requireLease?: boolean;
+  /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
+  requireTimeouts?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -726,6 +737,106 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }
   }
 
+  // K20 — a store that stops answering (STUDY-25 L3). A TCP proxy between the driver and the store stops
+  // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
+  // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
+  // connections the timed-out calls waited on must be dropped by the client, the store must work again once
+  // it answers, and a flush that times out must stop the committer (fail-stop: the commit is in doubt).
+  async function k20() {
+    const T = 1500; // the call timeout under test
+    const TTL = 2000; // a renewal is bounded by TTL / 4 = 500 ms, under T
+    const SLACK = 1000;
+    const HUNG = 8 * T; // the suite's own guard: past this, the call is reported as hung
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const timed = async <T>(p: Promise<T>) => {
+      const t0 = Date.now();
+      const r = await Promise.race([
+        p.then(
+          (value) => ({ value, error: null as unknown }),
+          (error: unknown) => ({ value: undefined, error }),
+        ),
+        sleep(HUNG).then(() => null),
+      ]);
+      const took = Date.now() - t0;
+      const what =
+        r === null
+          ? `hung > ${HUNG} ms`
+          : r.error
+            ? `${(r.error as Error)?.constructor?.name ?? r.error} after ${took} ms`
+            : `answered after ${took} ms`;
+      return { failed: r !== null && !!r.error, answered: r !== null && !r.error, value: r?.value, took, what };
+    };
+    await (await mod.open(true)).close();
+    const proxy = await freezableProxy(mod.target!());
+    try {
+      const st = await mod.openThrough!(proxy, { timeoutMs: T });
+      const leased = hasLease(st);
+      if (leased) await st.acquireLease({ holder: "k20", ttlMs: TTL });
+      const put = (ts: number, id: string) =>
+        st.apply(ts, [{ table: 960, id, json: `{"ts":${ts}}` }], [{ index: 961, key: encodeKey([id]), id }]);
+      put(10, "a");
+      await st.flush();
+      const healthy = await st.get(960, "a", 10);
+
+      proxy.freeze();
+      const read = await timed(Promise.resolve(st.get(960, "a", 10)));
+      check(
+        read.failed && read.took <= T + SLACK,
+        `K20 a read on a frozen store fails within the ${T} ms timeout (${read.what})`,
+      );
+      put(20, "b");
+      const flush = await timed(Promise.resolve(st.flush()));
+      check(
+        flush.failed && flush.took <= T + SLACK,
+        `K20 a flush on a frozen store fails within the timeout (${flush.what})`,
+      );
+      if (leased) {
+        const renew = await timed(st.renewLease());
+        check(
+          renew.failed && renew.took <= TTL / 4 + SLACK * 0.7,
+          `K20 a lease renewal on a frozen store fails within a quarter of the TTL (${TTL / 4} ms) (${renew.what})`,
+        );
+      }
+      // Every connection a timed-out call waited on is dropped by the client: never reused.
+      await sleep(2 * T + SLACK);
+      const now = Date.now();
+      const waited = proxy.connections.filter(
+        (c) => c.sentWhileFrozenAt !== null && c.sentWhileFrozenAt <= now - (2 * T + SLACK),
+      );
+      const kept = waited.filter((c) => c.clientClosedAt === null);
+      check(
+        waited.length > 0 && kept.length === 0,
+        `K20 the client drops the connections its timed-out calls waited on (${waited.length - kept.length}/${waited.length} closed)`,
+      );
+
+      proxy.thaw();
+      const again = await timed(Promise.resolve(st.get(960, "a", 10)));
+      check(
+        again.answered && again.value === healthy && healthy !== null,
+        `K20 once the store answers again, so do calls, without reopening (${again.what})`,
+      );
+      if (leased) await st.releaseLease();
+      await st.close();
+
+      // Through the engine: a commit whose flush times out stops the committer, as any failed flush.
+      const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), { lease: { ttlMs: 60_000 } });
+      await e.mutation(insertItem("k20"));
+      proxy.freeze();
+      const m = await timed(e.mutation(insertItem("k20")));
+      check(
+        m.failed && m.took <= T + SLACK && e.committer.stopped !== null,
+        `K20 a commit whose flush times out fails within the timeout and stops the committer (${m.what}; ${e.committer.stopped ? "stopped" : "still running"})`,
+      );
+      // Thaw only once the client has dropped what it was waiting on: the held bytes of a dropped connection
+      // are discarded, so no half-sent transaction reaches the store to hold its locks after the check.
+      await sleep(2 * T + SLACK);
+      proxy.thaw();
+      await e.close().catch(() => {});
+    } finally {
+      await proxy.close();
+    }
+  }
+
   // K1, K2, K8 and K9 drive the store directly: under C7 they hold its lease like a writer would.
   const st = await mod.open(true);
   const leased = hasLease(st);
@@ -743,6 +854,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K10")) {
     if (leased) await leaseChecks();
     else if (opts.requireLease) check(false, "K10–K18 the driver claims PERSIST-01 C7 but has no lease");
+  }
+  if (want("K20")) {
+    if (mod.target && mod.openThrough) await k20();
+    else if (opts.requireTimeouts)
+      check(false, "K20 the driver is a remote store but its module has no target/openThrough");
   }
   return { failures };
 }

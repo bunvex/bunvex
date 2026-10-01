@@ -74,7 +74,7 @@
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | The validator marker is `isValidator`, not Convex's `isConvexValidator` | No "convex" in public names | accepted (owner rule) |
-| D2 | `v.commitTs()` is not implemented | `db.vars.commitTs` doesn't exist yet (parity gap) | gap |
+| D2 | `v.commitTs()` is not implemented | `db.vars.commitTs` doesn't exist yet (parity gap) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-59) |
 | D3 | Error messages keep Convex's structure but never name Convex or link to its docs | Owner rule | accepted |
 | D4 | Bytes in messages print as `ArrayBuffer(n bytes)` | Rust's `Bytes` display is internal; any readable form will do | accepted |
 

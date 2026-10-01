@@ -11,15 +11,10 @@ Paths are shortened: `browser/…`, `react/…`, `nextjs/…`, `react-clerk/…`
 Status: **done** = behaviour an app can rely on exists · **partial** = something exists but misses part of the
 semantics · **missing** = nothing yet.
 
-Since STUDY-23 step 2, bunvex also speaks Convex's sync protocol v1 at `/api/{version}/sync`
-(`packages/server/src/sync.ts`): per-connection state versions, transitions at one ts, shared executions,
-mutations with their commit ts, actions, `Ping`, `FatalError`. The rows below say which. The v0 socket is
-deleted once `@bunvex/client` speaks v1. What v0 has, in one paragraph: an unversioned JSON WebSocket at `/ws` with `sub`/`unsub` keyed by
-`path + NUL + JSON(args)`, `mut` with a numeric id, and `upd`/`err`/`res` replies. Subscriptions are shared across
-all connections per key, invalidated by read-set/write-set overlap, and re-published only when the JSON payload
-changes. Each subscription reruns and publishes by itself, at its own snapshot. The HTTP API is `POST /api/{query,mutation,action}`
-returning `{status, value | errorMessage}`. There is no client library, React binding, auth, timestamps, versions,
-idempotency or reconnect logic.
+bunvex speaks Convex's sync protocol v1 at `/api/{version}/sync` (`packages/server/src/sync.ts`, STUDY-23),
+with `@bunvex/client` and `@bunvex/react` on top (STUDY-26); the official `convex` client also works against
+it (`packages/sync-e2e`). The first, unversioned protocol (v0, `/ws`) was deleted (STUDY-23 P2). The HTTP API
+is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 ---
 
@@ -27,7 +22,7 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). v0 `/ws` remains until the client moves. |
+| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). |
 | Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | done (STUDY-26) | `/api/<client version>/sync`. |
 | Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | missing | No client-version negotiation. |
 | JSON text frames, one message per frame, discriminated by `type` | `browser/sync/protocol.ts` | done (STUDY-23) | v1 frames are Convex's (`@bunvex/protocol` `v1`). |
@@ -52,8 +47,8 @@ idempotency or reconnect logic.
 | `Remove` {queryId} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
 | `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | done (STUDY-23) | Runs in the connection's queue, answers with the commit ts, and is idempotent by (sessionId, requestId). |
 | `Action` {requestId, udfPath, args, componentPath?} over the WebSocket | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Concurrent, at most 1000 in flight. |
-| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | partial (STUDY-23) | Answered with `AuthError` until `@bunvex/auth` verifies tokens (P9). |
-| `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | partial (STUDY-23) | As "User". |
+| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | done (STUDY-27) | Verified by `@bunvex/auth`; the official client's `setAuth` works against bunvex (oracle test). |
+| `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | partial (STUDY-27) | Answered with `AuthError` until admin keys exist (Phase 3 item 6). |
 | `Authenticate` {tokenType: "None", baseVersion} (logout) | `browser/sync/protocol.ts` | done (STUDY-23) | Advances the identity version; every query re-runs. |
 | `Event` {eventType, event} for client telemetry (ClientConnect marks, ClientReceivedTransition, NetworkRecoveryReconnect) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Accepted and ignored (P11). |
 
@@ -69,7 +64,7 @@ idempotency or reconnect logic.
 | `MutationResponse` success {requestId, result, ts, logLines} | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) |  |
 | `MutationResponse` failure {requestId, result: message, logLines, errorData?} | `browser/sync/protocol.ts` | done (STUDY-23) | `ts` null. |
 | `ActionResponse` success/failure {requestId, success, result, logLines, errorData?} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
-| `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | partial (STUDY-23) | Sent for tokens the server cannot verify yet, then close. |
+| `AuthError` {error, baseVersion, authUpdateAttempted} | `browser/sync/protocol.ts`, `crates/local_backend/src/subs/mod.rs` | done (STUDY-27) | A token that fails verification: `authUpdateAttempted: true`; an expired identity: `false`. Then close. |
 | `FatalError` {error} sent before closing on a deterministic user error (BadRequest, Unauthenticated, …); the client logs it and terminates | `crates/local_backend/src/subs/mod.rs`, `browser/sync/client.ts` | done (STUDY-23) | Malformed frames and a `BaseVersionMismatch`. |
 | `TransitionChunk` (see §1) | `browser/sync/protocol.ts` | missing | — |
 | `Ping` (see §1) | `browser/sync/protocol.ts` | done (STUDY-23) |  |
@@ -79,7 +74,7 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | done (STUDY-23) | v1: one transition per connection at `T = visibleTs`. v0 still tears. |
+| All of a client's subscribed queries advance together: one Transition carries every changed query, all evaluated at the same `ts` | `crates/sync/src/worker.rs` (`begin_update_queries` → `ExecuteQueryTimestamp::At(new_ts)`) | done (STUDY-23) | One transition per connection at `T = visibleTs`. |
 | Transitions are gapless: `startVersion` must equal the client's current version, or the client throws | `browser/sync/remote_query_set.ts` | done (STUDY-23, STUDY-26) | The client throws `Invalid start version: …`, as Convex. |
 | Server version never goes backwards (`advance_version` asserts it) | `crates/sync/src/state.rs` | done (STUDY-23) | `T` is `visibleTs`, monotonic. |
 | Query-set versioning: server rejects a `ModifyQuerySet` whose `baseVersion` doesn't match (`BaseVersionMismatch`) | `crates/sync/src/state.rs` (`modify_query_set`) | done (STUDY-23) | `FatalError` "Base version … passed up doesn't match the current version …". |
@@ -90,14 +85,14 @@ idempotency or reconnect logic.
 | Mutations from one connection run serially, in the order they were sent | `crates/sync/src/worker.rs` (`mutation_futures … buffered(1)`) | done (STUDY-22) | A per-connection queue. A 1001st pending mutation closes the connection with 1013 `TooManyConcurrentMutations` (`OPERATION_QUEUE_BUFFER_SIZE`). Queued mutations of a closed connection never start. |
 | Actions run concurrently and are decoupled from the transition ordering | `crates/sync/src/worker.rs` (`action_futures: FuturesUnordered`) | done (STUDY-23) |  |
 | Result dedupe: re-executed query with an identical result (hash of value + log lines) produces no modification | `crates/sync/src/state.rs` (`complete_fetch`, `hash_result`) | done (STUDY-23) | v1 hashes the result and its log lines, as Convex. |
-| Subscription invalidation by read set vs committed writes | `crates/database` subscriptions, `crates/sync/src/state.rs` (`next_invalidated_query`) | done | `onCommit` matches the commit's writes through `ReadSetIndex`, an interval index per index as Convex's `IntervalMap` (STUDY-08 §3.4); a running Sub is marked dirty and reruns. Convex's splaying of very wide invalidations is not built (DV-64). |
+| Subscription invalidation by read set vs committed writes | `crates/database` subscriptions, `crates/sync/src/state.rs` (`next_invalidated_query`) | done | The sync hub matches each commit's writes through `ReadSetIndex`, an interval index per index as Convex's `IntervalMap` (STUDY-08 §3.4), and re-runs the executions it hits. Convex's splaying of very wide invalidations is not built (DV-64). |
 | Cheap "refresh": an unchanged subscription just extends its validity to the new ts instead of rerunning | `crates/sync/src/worker.rs` (`extend_validity`) | done (STUDY-23) | `Committer.changedBetween(reads, from, to)` over the write log; a result valid at one ts is reused at a later one. |
 | Linearizability across backends: `Connect.maxObservedTimestamp` > server's latest ts → error (client saw a future the server doesn't know) | `crates/sync/src/worker.rs` (`Connect` handler) | done (STUDY-23) | The connection closes with 1011, as Convex's internal error. |
 | Client tracks `maxObservedTimestamp` from Transitions and MutationResponses | `browser/sync/client.ts` (`observedTimestamp`) | done (STUDY-26) | `getMaxObservedTimestamp()` is a bigint (C5). |
 | Backpressure / single-flight: at most N (=2) unsent Transitions queued per client; later updates coalesce into the next one | `crates/sync/src/worker.rs` (`SingleFlightSender`, `SYNC_MAX_SEND_TRANSITION_COUNT`) | partial (STUDY-23) | One transition computed at a time per connection, later triggers coalesced; no cap on unsent frames yet. |
 | Query reruns in parallel with bounded concurrency (20) and retry with backoff on retriable errors | `crates/sync/src/worker.rs` (`UPDATE_QUERY_CONCURRENCY`, `SYNC_WORKER_QUERY_RETRY_*`) | partial | Reruns run in parallel, unbounded, with no retry. |
 | Temporarily-unavailable features (search index bootstrapping) → skip, then retry later | `crates/sync/src/worker.rs` | missing | Not applicable until search exists. |
-| Shared execution across clients for identical queries | `crates/application` query cache | done (STUDY-23) | v1: one execution per (path, args, journal, identity) and ts, single-flight; frames assembled per connection (P3). Costs ~1.4× v0 per delivery (`packages/server/bench/sync-fanout.ts`), mostly in the per-socket send. |
+| Shared execution across clients for identical queries | `crates/application` query cache | done (STUDY-23) | v1: one execution per (path, args, journal, identity) and ts, single-flight; frames assembled per connection (P3). About 100 deliveries/ms (`packages/server/bench/sync-fanout.ts`), about 1.4× the deleted v0 per delivery, mostly in the per-socket send. |
 
 ### 5. Mutation idempotency, request ids and resend
 
@@ -107,7 +102,7 @@ idempotency or reconnect logic.
 | Monotonic per-client `requestId` shared by mutations and actions | `browser/sync/client.ts` | done (STUDY-26) |  |
 | Mutations idempotent by (sessionId, requestId): a resent mutation that already committed returns the stored result + original ts instead of running again | `crates/application/src/application_function_runner/mod.rs` (`check_mutation_status` / `write_mutation_status`), `crates/model/src/session_requests` | done (STUDY-23) | A replay answers the recorded result and log lines. Its ts is the snapshot that saw the record, ≥ the original (P13, open). |
 | Session request records are written in the same transaction as the mutation and garbage-collected after a retention window (default 2 weeks) | `crates/application/src/system_table_cleanup/mod.rs`, `crates/common/src/knobs.rs` (`MAX_SESSION_CLEANUP_DURATION`) | done (STUDY-23) | Same transaction as the writes; cleanup by `_creationTime`, 64 per transaction, ≤ 256/s, `MAX_SESSION_CLEANUP_DURATION_HOURS`. |
-| Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | v0 closes on mutations only; v1 on both. |
+| Per-socket cap on pending mutations/actions (1000) → `TooManyConcurrentMutations` / `TooManyInflightActionsForSingleClient` | `crates/sync/src/worker.rs` | done (STUDY-23) | Mutations and actions. |
 | 60 s timeout per WS mutation | `crates/sync/src/worker.rs` (`SYNC_WORKER_PROCESS_TIMEOUT`) | missing | — |
 | Server request id derived from session + request id (tracing / logs correlation) | `crates/sync/src/worker.rs` (`RequestId::new_for_ws_session`) | missing | — |
 
@@ -135,18 +130,18 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `setAuth(fetchToken, onChange, onRefreshChange?)` with `fetchToken({forceRefreshToken})` → JWT \| null | `browser/sync/client.ts`, `browser/sync/authentication_manager.ts` | missing | No `@bunvex/auth` either. |
-| Pause the socket while fetching the first token, then resume (queries don't run unauthenticated first) | `browser/sync/authentication_manager.ts` (`setConfig`), `browser/sync/local_state.ts` (`pause`/`resume`) | missing | — |
-| Auth state machine: cached token → server confirmation → fresh token refetch → scheduled refetch before `exp` (leeway 10 s, max delay 20 days) | `browser/sync/authentication_manager.ts` | missing | — |
-| Server confirms auth by a Transition whose `identity` version advanced | `browser/sync/authentication_manager.ts` (`onTransition`) | missing | — |
-| On `AuthError`: stop socket, force-refresh token, reconnect; after 2 failed confirmations clear auth and report unauthenticated | `browser/sync/authentication_manager.ts` (`tryToReauthenticate`) | missing | — |
-| Ignore stale AuthErrors for older identity versions, and function-level token-expired errors while confirming | `browser/sync/authentication_manager.ts` | missing | — |
-| Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | missing | — |
-| Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | missing | — |
-| `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | missing | — |
-| Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | missing | — |
-| Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | missing | Note for bunvex: Subs are shared across sockets by path+args, so once `ctx.auth` exists the key must include identity, or per-user queries will leak between users. |
-| Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | missing | — |
+| `setAuth(fetchToken, onChange, onRefreshChange?)` with `fetchToken({forceRefreshToken})` → JWT \| null | `browser/sync/client.ts`, `browser/sync/authentication_manager.ts` | done (STUDY-27) | `BaseBunvexClient.setAuth`; `BunvexClient.setAuth(fetchToken, onChange?)` and `getAuth()`. Tested differentially: each scenario runs with the official client and with `BunvexClient` (`sync-e2e/test/client-auth.test.ts`). |
+| Pause the socket while fetching the first token, then resume (queries don't run unauthenticated first) | `browser/sync/authentication_manager.ts` (`setConfig`), `browser/sync/local_state.ts` (`pause`/`resume`) | done (STUDY-27) | |
+| Auth state machine: cached token → server confirmation → fresh token refetch → scheduled refetch before `exp` (leeway 10 s, max delay 20 days) | `browser/sync/authentication_manager.ts` | done (STUDY-27) | Including Convex's second `onChange(true)` after each confirmed fresh token (STUDY-27 §1.6). |
+| Server confirms auth by a Transition whose `identity` version advanced | `browser/sync/authentication_manager.ts` (`onTransition`) | done (STUDY-27) | |
+| On `AuthError`: stop socket, force-refresh token, reconnect; after 2 failed confirmations clear auth and report unauthenticated | `browser/sync/authentication_manager.ts` (`tryToReauthenticate`) | done (STUDY-27) | Logs `Failed to authenticate: "<error>", check your server auth config`, as Convex. |
+| Ignore stale AuthErrors for older identity versions, and function-level token-expired errors while confirming | `browser/sync/authentication_manager.ts` | done (STUDY-27) | |
+| Guard against races between concurrent `setAuth` calls (config version) | `browser/sync/authentication_manager.ts` | done (STUDY-27) | |
+| Options `expectAuth` (hold all requests until the first token), `initialAuthTokenReuse`, `authRefreshTokenLeewaySeconds` | `browser/sync/client.ts` | done (STUDY-27) | |
+| `clearAuth()` sends `Authenticate{None}`; `getCurrentAuthClaims()` decodes the JWT locally; `hasAuth()` | `browser/sync/client.ts` | done (STUDY-27) | |
+| Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
+| Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
+| Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | partial (STUDY-27) | User tokens: checked before every transition, mutation and action. Admin revalidation comes with admin keys. |
 | Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | missing | Used by the dashboard and tests. |
 
 ### 8. Optimistic updates
@@ -193,7 +188,7 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but `setAuth` (with `@bunvex/auth`) and the paginated client (with `usePaginatedQuery`); `baseClient` injection included. |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but the paginated client (with `usePaginatedQuery`); `setAuth` since STUDY-27; `baseClient` injection included. |
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
@@ -210,10 +205,10 @@ idempotency or reconnect logic.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexProviderWithAuth({client, useAuth})` where `useAuth()` → `{isLoading, isAuthenticated, fetchAccessToken}` | `react/ConvexAuthState.tsx` | missing | — |
-| Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | missing | — |
-| `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | missing | — |
-| `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | missing | — |
+| `ConvexProviderWithAuth({client, useAuth})` where `useAuth()` → `{isLoading, isAuthenticated, fetchAccessToken}` | `react/ConvexAuthState.tsx` | done (STUDY-27) | `BunvexProviderWithAuth`. Tested differentially against `convex/react` (`sync-e2e/react/auth.test.tsx`). |
+| Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | done (STUDY-27) | Tested: a query never runs signed out, on mount or on sign-out. |
+| `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | done (STUDY-27) | `useBunvexAuth()`. |
+| `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | done (STUDY-27) | |
 | `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | missing | ARCHITECTURE: D. |
 | `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | missing | ARCHITECTURE: D. |
 
@@ -268,6 +263,6 @@ idempotency or reconnect logic.
 |---|---|---|---|
 | Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
 | Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | missing | Choose `BUNVEX_URL`-style names. |
-| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but the auth options (with `@bunvex/auth`) and `reportDebugInfoToConvex` (C4). |
+| Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but `reportDebugInfoToConvex` (C4); the auth options since STUDY-27. |
 | `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | partial (STUDY-26) | `disabled` done; `baseClient` comes with the React client. |
 | Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex` re-exports `server` and `values` only; `browser`/`react`/`nextjs` re-exports are planned but empty. |
