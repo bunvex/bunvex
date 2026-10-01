@@ -1668,3 +1668,10 @@ the layout only. Supersedes §13.1's layout, its multi-select filters and its to
   Functions tab's column, the phone sheet; e2e at 1440: the filter header, Bar 1 and the panel header on one
   line, the grid down to the bottom, no page scroll; dragging across the histogram filters and goes into the
   URL; the Functions tab with its own column and a screen-high list.
+
+### 22.6 Schema: spacing inside a group box (1 Oct 2026)
+
+A group box (a cluster of linked tables, §15) lays its tables out with the root's spacing — 96 px between
+layers, 56 between tables. ELK reads its spacing options per parent, so the boxes had used its defaults: the
+tables sat 20 px apart and the reference lines ran along the cards' borders, between `tasks`, `messages` and
+`users`. Test: inside a box, consecutive layers are at least 90 px apart.
