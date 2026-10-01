@@ -53,6 +53,7 @@ import {
 } from "@bunvex/core/persistence";
 import type postgresDriver from "postgres";
 import { loadPeer } from "./peer.ts";
+import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 
 type DocRow = [number, string, number, string | null, boolean];
 // index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
@@ -126,6 +127,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
    * stopped process, a GC pause) before aborting it and releasing its locks, so another process can take
    * the store over (PERSIST-01 C7). It must stay well under the lease TTL.
    *
+   * TLS (STUDY-25 L8, as Convex): required and verified by default; `requireSsl: false` connects as the
+   * URL's `sslmode` says (TLS when the server offers it, by default). `caFile` adds a trusted CA. Every
+   * connection asks for a read-write session (`target_session_attrs=read-write`): never a standby.
+   *
    * `timeoutMs` (default 30 000, Convex's `POSTGRES_TIMEOUT_SECONDS`): how long one round trip to the
    * database (a statement, BEGIN, COMMIT, a new connection) may take before the call fails with
    * `DatabaseTimeoutError` and its connection is dropped (STUDY-25 L3). 0 disables it.
@@ -133,16 +138,21 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   static async open(
     url: string,
     pool = 16,
-    opts: { idleInTransactionMs?: number; timeoutMs?: number } & OpenOptions = {},
+    opts: { idleInTransactionMs?: number; timeoutMs?: number } & OpenOptions & TlsOptions = {},
   ) {
     const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
     const timeoutMs = opts.timeoutMs ?? 30_000;
+    // The driver's own parse of the URL (hosts, ports, socket path, PG* environment); it connects nothing.
+    const target = postgres(url, { max: 1 }).options as unknown as Parameters<typeof postgresTls>[1];
+    const { ssl, target_session_attrs } = await postgresTls(url, target, opts);
     const newPool = () =>
       postgres(url, {
         max: pool,
         onnotice: () => {},
         prepare: true,
+        ssl: ssl as postgresDriver.Options<{}>["ssl"],
+        target_session_attrs,
         // A connection that cannot be opened within the timeout fails too (postgres.js counts whole seconds).
         ...(timeoutMs > 0 && timeoutMs < Infinity ? { connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)) } : {}),
         connection: {
@@ -155,7 +165,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       await store.bootstrap(opts);
     } catch (e) {
       await store.close().catch(() => {});
-      throw e;
+      throw explainTlsError(e, "Postgres", "PG_CA_FILE");
     }
     return store;
   }

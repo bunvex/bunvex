@@ -3,6 +3,9 @@ import type { OpenOptions } from "@bunvex/core";
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 import postgres from "postgres";
 
+/** TLS as the server applies it (STUDY-25 L8): required unless DO_NOT_REQUIRE_SSL is set (CI's stores have none). */
+const tls = () => ({ requireSsl: !process.env.DO_NOT_REQUIRE_SSL, caFile: process.env.PG_CA_FILE || undefined });
+
 const raw = async <T>(f: (sql: postgres.Sql) => Promise<T>) => {
   const sql = postgres(process.env.PG_URL!, { max: 1, onnotice: () => {} });
   try {
@@ -16,7 +19,7 @@ const drop = (sql: postgres.Sql) =>
 
 export async function open(fresh: boolean, opts: OpenOptions = {}) {
   if (fresh) await raw(drop);
-  return PostgresPersistence.open(process.env.PG_URL!, 16, opts);
+  return PostgresPersistence.open(process.env.PG_URL!, 16, { ...tls(), ...opts });
 }
 
 /** K14: a session other than ours holds the lease row's write lock, i.e. a writer is inside a flush. */
@@ -69,5 +72,5 @@ export async function openThrough(via: { host: string; port: number }, opts: { t
   const u = new URL(process.env.PG_URL!);
   u.hostname = via.host;
   u.port = String(via.port);
-  return PostgresPersistence.open(u.toString(), 16, { timeoutMs: opts.timeoutMs });
+  return PostgresPersistence.open(u.toString(), 16, { ...tls(), timeoutMs: opts.timeoutMs });
 }
