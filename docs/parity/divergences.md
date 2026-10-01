@@ -198,6 +198,14 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences).
 
+| ID | bunvex | Convex | Observable | Note | Source |
+|---|---|---|---|---|---|
+| DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | Recommended: yes | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | Recommended: yes | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-145 | Request bodies capped by Bun's `maxRequestBodySize` (128 MiB, configurable) | no limit in code (docs: 20 MB) | yes (very large bodies) | Recommended: yes | [STUDY-31 H3](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-146 | No hard stop of an HTTP action at 1800 s (the 408 at 300 s stays) | the isolate is terminated | yes (runaway actions) | Recommended: yes | [STUDY-31 H4](../study/STUDY-31-http-actions.md#4-divergences) |
+| DV-147 | Site port `/version` answers `bunvex` | `unknown` | yes (meta route) | Recommended: yes | [STUDY-31 H5](../study/STUDY-31-http-actions.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not
