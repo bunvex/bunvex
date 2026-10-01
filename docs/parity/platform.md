@@ -31,9 +31,9 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Provider matching by `iss` / `aud` | `crates/common/auth.rs` `matches_token` | done (STUDY-27) |  |
 | Clock skew and required `exp` (custom JWT) | `crates/authentication/lib.rs` | done (STUDY-27) | 5 s leeway, `exp` required. |
 | `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | done (STUDY-27) |  |
-| Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | missing | |
+| Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | done (STUDY-27) | `Token identity expired`, `authUpdateAttempted: false`. |
 | Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
-| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | partial (STUDY-23) | The messages and identity versions exist; only `None` is accepted until `@bunvex/auth` verifies tokens (DV-11). |
+| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | done (STUDY-27) | `User` tokens; `Admin` waits for admin keys. |
 | HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is refused until admin keys exist. |
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | missing | Belongs to the client, listed here because it drives the auth protocol. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |

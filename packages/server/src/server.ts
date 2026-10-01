@@ -128,7 +128,14 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
-  const sync = new SyncHub({ engine, functions, redact, formatError, fromWire });
+  const sync = new SyncHub({
+    engine,
+    functions,
+    redact,
+    formatError,
+    fromWire,
+    verifyToken: (token) => verifier.verify(token),
+  });
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
