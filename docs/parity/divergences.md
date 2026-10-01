@@ -112,6 +112,10 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-148 | `_storage` a real system table projected to the public shape | virtual table over `_file_storage` | no | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F1](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-149 | Public origins as `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` | yes (env names) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F2](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-150 | A deleted file's bytes removed after commit; orphan blobs swept | bytes never removed | no (disk use only) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F3](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-151 | Uploads unlimited, exempt from `maxRequestBodySize` | no upload limit | no (matches) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F4](../study/STUDY-32-file-storage.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -144,6 +148,7 @@ Kept so the history is in one place.
 | DV-49 | Function errors: HTTP 500, bare message, no `errorData`, no redaction, no `logLines` | As Convex's backend: 200 `{status: "error"}`, `[Request ID: …] Server Error`, `errorData`, redaction, `logLines` (the hosted 560 is DV-58) | yes | #32 | [STUDY-11 D1–D3, D7](../study/STUDY-11-function-results-and-errors.md#4-divergences), [STUDY-08 D11](../study/STUDY-08-cache-and-subscriptions.md#4-divergences), [STUDY-20](../study/STUDY-20-function-errors-and-logs.md) |
 | DV-50 | Dashboard: values typed in a syntax of bunvex's own | JavaScript literals in a Monaco editor, as Convex | no (dashboard) | owner, 2026-09-30 | [STUDY-12 D9](../study/STUDY-12-dashboard.md#4-divergences) |
 | DV-51 | Dashboard: proposed text-file previews, a client-side log filter, and a function runner were weighed | Images only; filters on the client; a Run panel — all as Convex | no (dashboard) | owner, 2026-09-29/30 | [STUDY-12 F1](../study/STUDY-12-dashboard.md#93-divergences), [L2, L3](../study/STUDY-12-dashboard.md#73-divergences) |
+| DV-57 | The read-set of a scan that stops early (`take(n)`, `first()`, `unique()`, a `for await` that breaks) was the whole range: more OCC conflicts (a queue pop conflicted with every append) and extra subscription re-runs | As Convex's `IndexRange`: the range from its start, in scan order, up to the last key read, inclusive (desc: from the last key to the end); the whole range once the scan runs out; nothing for `take(0)`; rows a filter dropped are inside the prefix | yes (fewer OCC conflicts and re-runs) | owner, 2026-10-01 (#134) | [STUDY-06 D3, §9](../study/STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read), [STUDY-08 D10](../study/STUDY-08-cache-and-subscriptions.md#4-divergences) |
 | DV-82 | A WebSocket mutation that exhausted its OCC budget got an error result | As Convex on protocol v1: the connection closes with 1013 and the code, and the client re-sends (it runs once, `_session_requests`). v0 is gone | yes | owner, 2026-09-30 (#50) | [STUDY-21 D2](../study/STUDY-21-occ-error-and-retries.md#4-divergences) |
 | DV-58 | HTTP function errors answer 200 | Already as Convex's open-source backend: 200 `{status: "error"}`; only the hosted service answers 560 | yes | owner, 2026-09-30 | [STUDY-20 D1](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
 | DV-70 | Non-Convex return values are coerced or throw an untyped error | As Convex since #21: a value that is not one fails the call with the value model's message (e.g. `… is not a supported value type.`) | yes | owner, 2026-09-30 (#21) | [STUDY-11 D5](../study/STUDY-11-function-results-and-errors.md#4-divergences) |
@@ -178,7 +183,6 @@ classed as bugs by their study; they are listed here because they change what op
 | ID | Gap | Convex | Source |
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-57 | The read-set of `take(n)`/`first()` is the whole range, not the scanned prefix (more OCC conflicts, extra subscription re-runs) | ends at the last key read | [STUDY-06 D3](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-08 D10](../study/STUDY-08-cache-and-subscriptions.md#4-divergences) |
 | DV-59 | No `db.vars.commitTs` / `v.commitTs()` | has them | [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-13 D2](../study/STUDY-13-validators.md#4-divergences) |
 | DV-62 | Commit group size per flush is unbounded | ≤64 docs / 64 KiB per batch, up to 16 in flight | [STUDY-06 D12](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-09 D9](../study/STUDY-09-persistence-layout.md#4-divergences) |
 | DV-63 | Query cache: FIFO at 1 000 entries, no coalescing for HTTP calls, subscriptions bypass it | LRU bounded by bytes, coalesced | [STUDY-08 D8](../study/STUDY-08-cache-and-subscriptions.md#4-divergences) |
@@ -200,6 +204,8 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences).
+
+
 
 ## Gaps recorded in studies
 
