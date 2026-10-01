@@ -1,6 +1,6 @@
 # STUDY-33 — Retention: garbage collection of old versions
 
-- **Status:** draft
+- **Status:** accepted: R1–R4 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. The public repository dropped its
   tests in `ba16e0638`; the retention tests below are read from `ba16e0638^`.
 - **Related:**
@@ -281,10 +281,10 @@ Conformance:
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| R1 | Index retention reads the index log (rows by ts) and deletes, per key, what a newer row in the window supersedes. Convex derives the same entries from the document log's revision pairs, recomputing each index key | Same rows deleted, so not observable. The ts index on `indexes` already exists on every driver (C11), and no document is decoded and no index definition needed. Convex's way would need `prev_ts` (DV-66), a per-document write, before index retention could start | pending |
-| R2 | Document retention reads `documents` by ts and, per id, deletes what a newer version in the window supersedes, without a `prev_ts` column. It needs a new ts index (layout 2) | Same rows deleted. `prev_ts` (DV-66) stays for export and log streaming, which need it, and it would need every write to know its previous version's ts | pending |
-| R3 | The memory driver prunes old versions in RAM, but its durable log file is not compacted. On reopen the old versions come back until retention runs again | The log is an append-only replay file for development and tests. Compaction would mean rewriting it under the lock. Convex has no such driver | pending |
-| R4 | `DOCUMENT_RETENTION_DELAY` defaults to Convex's knob, **14 days**. Convex's self-hosted docker-compose sets 2 days | follow Convex's binary default; settable by the env variable | pending |
+| R1 | Index retention reads the index log (rows by ts) and deletes, per key, what a newer row in the window supersedes. Convex derives the same entries from the document log's revision pairs, recomputing each index key | Same rows deleted, so not observable. The ts index on `indexes` already exists on every driver (C11), and no document is decoded and no index definition needed. Convex's way would need `prev_ts` (DV-66), a per-document write, before index retention could start | **accepted** (owner, 2026-10-01) |
+| R2 | Document retention reads `documents` by ts and, per id, deletes what a newer version in the window supersedes, without a `prev_ts` column. It needs a new ts index (layout 2) | Same rows deleted. `prev_ts` (DV-66) stays for export and log streaming, which need it, and it would need every write to know its previous version's ts | **accepted** (owner, 2026-10-01) |
+| R3 | The memory driver prunes old versions in RAM, but its durable log file is not compacted. On reopen the old versions come back until retention runs again | The log is an append-only replay file for development and tests. Compaction would mean rewriting it under the lock. Convex has no such driver | **accepted** (owner, 2026-10-01) |
+| R4 | `DOCUMENT_RETENTION_DELAY` defaults to Convex's knob, **14 days**. Convex's self-hosted docker-compose sets 2 days | follow Convex's binary default; settable by the env variable | **accepted** (owner, 2026-10-01) |
 
 ## 5. Tests
 
