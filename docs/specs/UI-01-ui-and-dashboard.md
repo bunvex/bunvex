@@ -1447,6 +1447,23 @@ pull requests.
 - **UX-12, UX-13** A function's Arguments and Returns validators wrap long lines with a hanging indent, grow
   to 12 lines, and past that scroll with a note ("N lines: scroll for the rest.").
 
+### 20.5 Shared components
+
+- **UX-7** The schema panel's Saved / Generated are underlined tabs (`TabsList variant="line"`), as every
+  switch between sibling views is; Settings' vertical nav already had the sidebar's active treatment.
+- **UX-8** A copy next to a value is an icon (`CopyButton iconOnly`) named by its label ("Copy client URL"),
+  with the label, then "Copied", as its tooltip; page-level copies keep their text.
+- **UX-10** Destructive actions read the same: a row's delete is `destructive-ghost` (quiet, red); a
+  reversible but disruptive action (Pause deployment) is `destructive-outline`; confirmations keep the strong
+  one.
+- **UX-11** One `StatusBadge` (`@bunvex/ui`): an icon and a sentence-case word in the status colours, with
+  optional detail (a duration), for a log line's outcome, a scheduled run's state and a cron's last run.
+- **UX-15** `DayInput` (`@bunvex/ui`): the design system's input, typed as `YYYY-MM-DD` (it applies once
+  complete and valid; a wrong day says so) or picked from a month's calendar in a popover — not the
+  browser's date field.
+- **UX-19** The "bright bar" on a phone was the open function's row, cut by the short tree; the tree now
+  scrolls the open function into view.
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens

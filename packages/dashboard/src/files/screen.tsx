@@ -274,7 +274,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
             <dt className="text-muted-foreground">Storage ID</dt>
             <dd className="flex min-w-0 items-center gap-2">
               <code className="truncate font-mono text-xs">{file.id}</code>
-              <CopyButton text={file.id} label="Copy ID" size="xs" />
+              <CopyButton text={file.id} label="Copy storage ID" iconOnly />
             </dd>
             <dt className="text-muted-foreground">Size</dt>
             <dd>

@@ -202,9 +202,14 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
     <Panel title={`Schema of ${info.name}`} onClose={onClose}>
       {canGenerate ? (
         <Tabs value={shown} onValueChange={(v) => setTab(v as "saved" | "generated")}>
-          <TabsList>
-            <TabsTrigger value="saved">Saved</TabsTrigger>
-            <TabsTrigger value="generated">Generated</TabsTrigger>
+          {/* underlined, as every switch between sibling views (Schedules' tabs) is (UX-7) */}
+          <TabsList variant="line">
+            <TabsTrigger value="saved" className="text-sm">
+              Saved
+            </TabsTrigger>
+            <TabsTrigger value="generated" className="text-sm">
+              Generated
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="saved" className="pt-3">
             {savedView}

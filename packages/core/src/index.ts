@@ -1,20 +1,41 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
-export { CRON_JOB_LOGS_TABLE, CRON_JOBS_TABLE, CRON_NEXT_RUN_TABLE, SCHEDULED_FUNCTIONS_TABLE } from "./catalog.ts";
+export {
+  CRON_JOB_LOGS_TABLE,
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  IndexBackfillingError,
+  IndexStagedError,
+  type IndexState,
+  SCHEDULED_FUNCTIONS_TABLE,
+} from "./catalog.ts";
 export {
   Committer,
   CommitterStoppedError,
   type Conflict,
   ConflictError,
+  type FlushRetryOptions,
   firstOverlap,
   type Interval,
   type LogEntry,
+  logEntryBytes,
+  MAX_TRANSACTION_WINDOW_US,
+  OutOfRetentionError,
   overlaps,
+  WRITE_LOG_HARD_MAX_BYTES,
+  WRITE_LOG_MAX_RETENTION_US,
+  WRITE_LOG_MIN_RETENTION_US,
+  WRITE_LOG_SOFT_MAX_SIZE_BYTES,
+  WRITE_RETRY_INITIAL_BACKOFF_MS,
+  WRITE_RETRY_MAX_BACKOFF_MS,
+  type WriteLogRetention,
 } from "./committer.ts";
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,
   Engine,
+  INDEX_BACKFILL_DEFAULTS,
+  type IndexBackfillOptions,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,
   OCC_MAX_RETRIES,
@@ -28,16 +49,25 @@ export {
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DatabaseTimeoutError,
   type DocWrite,
   hasLease,
   type IndexWrite,
+  LAYOUT_VERSION,
+  LayoutError,
   type Lease,
   type LeaseAcquire,
   LeaseHeldError,
   LeaseLostError,
+  type LogCommit,
+  type OpenOptions,
   type Persistence,
+  ReadOnlyError,
+  type ReadOnlyFlag,
   type ScanDocs,
+  UnsureCommitError,
 } from "./persistence/index.ts";
+export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export {
   cancelJob,
   completeJob,

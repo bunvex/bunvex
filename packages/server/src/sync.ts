@@ -18,13 +18,13 @@ import {
   type Interval,
   type LogEntry,
   OccError,
-  overlaps,
   type QueryJournal,
+  ReadSetIndex,
   stringifyValue,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
-import { isSystemError, withRequestId } from "./errors.ts";
+import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
@@ -116,6 +116,8 @@ export class SyncHub {
   /** Executions running, by `ts` + key: the single flight. */
   private inflight = new Map<string, { p: Promise<{ exec: Execution; idPart: string }>; owner: string }>();
   private watchers = new Map<string, Set<SyncSession>>();
+  /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
+  readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
   stats = { executions: 0, reused: 0, transitions: 0 };
 
@@ -136,10 +138,9 @@ export class SyncHub {
   }
 
   private onCommit(entries: LogEntry[]) {
-    for (const [key, sessions] of this.watchers) {
-      const e = this.latest.get(key);
-      if (!e || !entries.some((c) => overlaps(c.writes, e.reads))) continue;
-      for (const s of sessions) s.schedule();
+    for (const key of this.reads.matchingEntries(entries)) {
+      const sessions = this.watchers.get(key);
+      if (sessions) for (const s of sessions) s.schedule();
     }
   }
 
@@ -150,7 +151,10 @@ export class SyncHub {
    */
   adopt(key: string, e: Execution) {
     const cur = this.latest.get(key);
-    if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) this.latest.set(key, e);
+    if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) {
+      this.latest.set(key, e);
+      this.reads.set(key, e.reads);
+    }
   }
 
   watch(key: string, s: SyncSession) {
@@ -164,6 +168,7 @@ export class SyncHub {
     if (!set?.delete(s) || set.size > 0) return;
     this.watchers.delete(key);
     this.latest.delete(key);
+    this.reads.delete(key);
   }
 
   /**
@@ -334,7 +339,11 @@ export class SyncSession {
 
   private internalError(e: unknown) {
     console.error("bunvex sync:", e);
-    this.fail({ code: CLOSE_INTERNAL_ERROR, reason: "InternalServerError" });
+    // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
+    this.fail({
+      code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,
+      reason: "InternalServerError",
+    });
   }
 
   message(frame: string) {

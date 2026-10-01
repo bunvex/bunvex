@@ -277,6 +277,9 @@ export class Functions {
 
   /** A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Never cached. */
   async runQueryAtJson(name: string, args: unknown, ts: number, caller?: Caller): Promise<string> {
+    // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
+    // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
+    this.engine.committer.checkBeginTs(ts);
     const r = await this.engine.queryTracked(this.queryBody(name, args, true), {}, ts, caller);
     if (!r.ok) throw r.error;
     return stringifyValue(r.value);

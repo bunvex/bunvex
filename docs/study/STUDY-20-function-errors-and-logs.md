@@ -1,6 +1,6 @@
 # STUDY-20 — Function errors, redaction and log lines
 
-- **Status:** implemented (this PR); divergences D1–D6 await the owner
+- **Status:** implemented; divergences D1–D8 decided by the owner (2026-09-30); D3 and D6 resolved with protocol v1 (#50, v0 deleted in #94)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-11](STUDY-11-function-results-and-errors.md): the retroactive study of results and errors. This
