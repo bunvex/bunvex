@@ -50,7 +50,8 @@ function CommitPulse({ history }: { history: DeploymentStats[] }) {
       : `Commits per second over the last ${span} seconds: now ${formatRate(now)}, peak ${formatRate(peak!)}.`;
   return (
     <section aria-labelledby="commit-clock" className="mt-6 border p-4 md:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4">
+      {/* one row: the clock, its rates, and their trend as a compact line (UX-18: no near-empty card) */}
+      <div className="flex flex-wrap items-end gap-x-10 gap-y-4">
         <div>
           <h2 id="commit-clock" className="text-sm text-muted-foreground">
             Commit timestamp
@@ -69,14 +70,17 @@ function CommitPulse({ history }: { history: DeploymentStats[] }) {
             <dd className="mt-1 text-2xl font-semibold tabular-nums">{peak === undefined ? "…" : formatRate(peak)}</dd>
           </div>
         </dl>
+        <div className="min-w-48 flex-1">
+          <p className="text-xs text-muted-foreground">Commits per second{span > 0 ? `, last ${span} s` : ""}</p>
+          <Sparkline
+            className="mt-1 h-12"
+            values={rates}
+            summary={summary}
+            formatValue={(v) => `${formatRate(v)} commits/s`}
+            pointLabel={(i) => `${Math.round((latest.at - history[i + 1]!.at) / 1000)} s ago`}
+          />
+        </div>
       </div>
-      <Sparkline
-        className="mt-6"
-        values={rates}
-        summary={summary}
-        formatValue={(v) => `${formatRate(v)} commits/s`}
-        pointLabel={(i) => `${Math.round((latest.at - history[i + 1]!.at) / 1000)} s ago`}
-      />
     </section>
   );
 }

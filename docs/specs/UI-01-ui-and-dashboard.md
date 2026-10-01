@@ -1300,4 +1300,7 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   **Cache hit rate** (top 5 and "Other functions") and **Scheduler lag**, the last hour in minutes,
   refreshed every minute. A function keeps its colour whatever its rank (STUDY-12 M3). Without metrics it
   says why: the deployment does not report them, or the credential may not view them.
+- The commit clock's card is one row now — the timestamp, its rates and a compact sparkline labelled with
+  the span it covers — instead of a full-width sparkline that stayed nearly flat and empty for the first
+  seconds (UX-18).
 
