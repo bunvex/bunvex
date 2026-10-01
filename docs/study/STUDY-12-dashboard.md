@@ -349,7 +349,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **decided** (29 Sep 2026): build without metrics |
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed on the mock** (30 Sep 2026): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2) |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
@@ -598,8 +598,45 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 | # | bunvex | why | status |
 |---|---|---|---|
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
+| M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
 | M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
+
+## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
+
+### 13.1 Authentication (A1)
+
+Convex: **Settings → Authentication** (`dashboard-common/src/features/settings/components/AuthenticationView.tsx`,
+`AuthConfig.tsx`) lists the providers from `_system/frontend/listAuthProviders.ts` (the `_auth` system table,
+which `auth.config.ts` fills on push; types in `npm-packages/convex/src/server/authentication.ts`): an OIDC
+provider shows its domain and application ID, a custom JWT provider its issuer, JWKS URL, algorithm and optional
+application ID, each value copyable, with a link to the docs of that kind; with none, "This deployment has no
+authentication providers yet." and a docs link. The page needs both `ViewData` and `ViewEnvironmentVariables`.
+
+bunvex: an optional `listAuthProviders` in the contract (`data-source-auth.ts`) with Convex's two shapes; the
+page under Settings, after Environment variables; the same permission rule; the mock declares one provider of
+each kind (`authProviders` overrides). One difference, from the repository's rule against Convex's names in
+shipped code: with no providers the page says they are declared in `auth.config.ts` instead of linking Convex's
+docs (bunvex has no docs site yet). **Status: built** (UI-01 §19.1).
+
+### 13.2 Snapshots: export and import (B1, a bunvex addition)
+
+Convex: the **self-hosted** dashboard has neither. Its cloud has **Snapshot Export** (`/api/export/request/zip`,
+`latestExport`; states `requested` → `in_progress` → `completed` with an expiration, or `failed`; downloaded by
+id) and, besides cloud backups, imports run from the CLI: `npx convex import` (`npm-packages/convex/src/cli/lib/
+convexImport.ts`) — formats `zip` (a snapshot), `jsonLines`, `jsonArray`, `csv` (one table, `--table` required);
+modes `requireEmpty` (default), `append`, `replace`, `replaceAll`; the server parses the upload, waits for
+confirmation with a summary of what changes (`waiting_for_confirmation`), then runs with progress and
+checkpoint messages, ending `completed` (rows written) or `failed`. The audit log records `request_export` and
+`snapshot_import`. Operations: `ViewBackups`, `CreateBackups`, `DownloadBackups`, `ImportBackups`
+(`crates/keybroker/src/operations.rs`). The zip's layout: `README.md`, `_tables/documents.jsonl`,
+`<table>/documents.jsonl`, `_storage/documents.jsonl` with the blobs.
+
+bunvex: **Settings → Snapshots**, both halves in the dashboard — the owner's decision (30 Sep 2026): bunvex
+offers more than Convex where it helps, and a self-hosted deployment needs a way to back up and restore without
+the CLI. Optional contract methods (`data-source-snapshot.ts`) in Convex's states, modes and formats; the same
+operation names; the same audit actions. **A deliberate addition, not a divergence to decide.**
+**Status: built** on the mock (UI-01 §19.2); the server has neither yet (parity §18).
 
 ## 14. The Schema screen (added 30 Sep 2026)
 
