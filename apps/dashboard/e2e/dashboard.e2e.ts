@@ -596,13 +596,17 @@ describe("the dashboard in a browser", () => {
   });
 
   test("History, Schedules, Files: full-bleed grids, Bar 1 on the panel header's line, details follow the row", async () => {
-    for (const [path, grid, column] of [
-      ["/history", "Audit log", "History filters"],
-      ["/schedules/functions", "Scheduled functions", "Schedule filters"],
-      ["/schedules/crons", "Cron jobs", undefined],
-      ["/files", "Files", undefined],
+    // 1280: the bars beside the filters and a docked panel are narrow, and must still fold onto one line
+    for (const [path, grid, column, width] of [
+      ["/history", "Audit log", "History filters", 1440],
+      ["/schedules/functions", "Scheduled functions", "Schedule filters", 1440],
+      ["/schedules/crons", "Cron jobs", undefined, 1440],
+      ["/files", "Files", undefined, 1440],
+      ["/history", "Audit log", "History filters", 1280],
+      ["/schedules/functions", "Scheduled functions", "Schedule filters", 1280],
+      ["/files", "Files", undefined, 1280],
     ] as const) {
-      const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
+      const { page, errors, close } = await open(path, { viewport: { width, height: 900 } });
       const g = page.getByRole("grid", { name: grid });
       await g.getByRole("row").nth(2).waitFor();
       // a cell that is not a link or a checkbox
@@ -620,7 +624,7 @@ describe("the dashboard in a browser", () => {
           pageScrolls: document.documentElement.scrollHeight > innerHeight,
         };
       }, column);
-      expect(Math.abs(m.bar1! - m.panelHeader!)).toBeLessThanOrEqual(1);
+      expect([path, width, Math.round(Math.abs(m.bar1! - m.panelHeader!))]).toEqual([path, width, 0]);
       if (column) expect(Math.abs(m.filters! - m.panelHeader!)).toBeLessThanOrEqual(1);
       expect(Math.abs(m.gridBottom! - m.viewport)).toBeLessThanOrEqual(1);
       expect(m.pageScrolls).toBe(false);

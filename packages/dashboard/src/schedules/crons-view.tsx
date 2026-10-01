@@ -81,7 +81,7 @@ export function CronsView({ heading }: { heading: ReactNode }) {
   return (
     // no filter column: a deployment has a handful of jobs, all in view (UI-01 §22.5)
     <>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="@container/schedules flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
           {heading}
           {/* the count next to the title, as on the other list screens (UX-14) */}

@@ -158,13 +158,13 @@ export function ScheduledView({ heading }: { heading: ReactNode }) {
       <FacetColumn label="Schedule filters" widthKey="bunvex-dashboard:schedules-filters-width" onReset={reset}>
         {sections}
       </FacetColumn>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="@container/schedules flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
           {heading}
           {sheet.button}
           {/* the count next to the title, as on the other list screens (UX-14) */}
           {!list.isPending && !list.error && (
-            <span className="text-sm text-muted-foreground tabular-nums">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
+            <span className="sr-only text-sm text-muted-foreground tabular-nums @xl/schedules:not-sr-only">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
           )}
           <span className="ml-auto flex items-center gap-1">
             {typeof source.cancelAllScheduledFunctions === "function" && (
