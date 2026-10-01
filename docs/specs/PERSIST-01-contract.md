@@ -7,8 +7,9 @@
 > L4/L5; K20's last check now expects a timed-out flush to be retried. **v2.3, 1 Oct 2026:** owner decisions on
 > C9: a lost connection is transient on Postgres too (DV-123); a retried group that already landed is
 > acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed.
-> **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7. Every
-> persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> **v2.4, 1 Oct 2026:** C10 (layout version and read-only flag) and K22–K23, from STUDY-25 L6/L7.
+> **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
+> STUDY-29). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -226,6 +227,41 @@ are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_V
   `layoutVersion`, `setLayoutVersion`, `makeForeign` and `foreignIntact` hooks, and an `open` that takes
   `allowReadOnly`.
 
+## C11 — the log by timestamp
+
+The store's commits, read in ts order: what a follower, a catch-up after a dropped stream, retention and
+export read (STUDY-24 §4.3, decided as H11 by the owner on 2026-10-01; STUDY-09 D6). The log is the
+**`indexes`** collection by ts, not `documents`: every commit the engine makes writes index entries (each
+document version rewrites its `by_id` entry), and a backfill commit writes index entries only.
+
+`readLog(afterTs, upToTs, limit)` returns `LogCommit[]`, `{ ts, prevTs, writes }`:
+
+- **The window.** Exactly the commits with `afterTs < ts ≤ min(upToTs, M)`, where `M` is the durable
+  prefix (C4/C7: `maxTs()`), in increasing ts order. A commit applied but not yet made durable by its
+  `flush()`, or a group in flight, is never returned, whatever `upToTs` says. Neither is a row above `M`
+  (the remains of an interrupted flush, before recovery deletes them).
+- **Whole commits.** At most `limit` commits, never part of one: a commit's entries all come back, or the
+  commit is left for the next call. `limit ≤ 0` returns nothing.
+- **`writes`** is the commit's index write set, `(index, key, id | null)` as `apply` received it (`null`:
+  the entry was removed), which is the committer's `LogEntry.writes`. The order inside a commit is
+  unspecified. Keys come back whole, however the store splits them (C3).
+- **`prevTs`** is the ts of the commit just before this one in the log, or 0 if there is none: for the
+  first commit returned, the newest commit with `ts ≤ afterTs`. Timestamps are sparse (C1), so a reader
+  cannot tell a gap from `ts` alone: it checks `prevTs` against the last ts it holds, and catches up with
+  `readLog(last, …)` when they differ. Paging is `readLog(lastTsOfThePreviousPage, upTo, n)`.
+- **Cost.** Every driver keeps an index on `indexes.ts` (memory: the commits in an array, appended in ts
+  order). A call reads the index and the rows it returns, never a scan of the store (STUDY-24 §4.3.1
+  has the numbers). It needs no lease and writes nothing. On a remote store it is a read (C8, C9): bounded
+  by the call timeout and run once more after a timeout or a lost connection.
+- **The ts index on an existing store.** It is created with the tables. A store written before C11 gets it
+  as an upgrade would: Postgres, MySQL and SQLite build it when the lease is acquired (a plain index build
+  blocks writers, so only the holder does it, before it writes, in one timed call that is not retried);
+  MongoDB at open, like its other indexes
+  (STUDY-25 L1), since its index builds do not block writers.
+
+Optional in the interface (a third-party driver without it behaves as before); required of the first-party
+drivers, which all implement it: memory, sqlite, postgres, mysql and mongodb. Conformance K25.
+
 ## Conformance (`@bunvex/persistence-conformance`)
 
 | # | property | how |
@@ -252,6 +288,7 @@ are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_V
 | K21 | transient errors are retried (C9, remote stores) | the proxy of K20 resets the connection of a request carrying a marker, or lets a COMMIT through and drops every answer after it: a read whose connection is lost answers through one retry, and fails when the retry loses its connection too; a connection lost in the middle of a flush is retried: the commit is acknowledged once and stored once (all three stores; DV-123); a COMMIT that lands while its answer is lost is retried, found landed through the lease record and acknowledged exactly once, the committer still running, and after a reopen the store holds the group exactly once (`auditRowsAt`), with `maxTs` at its ts (DV-124) |
 | K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
 | K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
+| K25 | the log by timestamp (C11) | 300 random commits on a fresh store (sparse timestamps, removed entries, index-only commits, keys longer than 2500 bytes) flushed in groups. `readLog` over the whole log, over 300 random windows (bounds on commits, inside gaps and outside the log; empty windows; limits from 0 up) and paged by 7 equals the reference model: whole commits in ts order, exact write sets, an unbroken `prevTs` chain. A group applied but not flushed is not returned; the log is the same after a reopen. Through the engine, the log between two snapshots is exactly the committer's commits and their write sets; a background index backfill's chunks (index-only commits, STUDY-29) are in the log, unbroken in the `prevTs` chain, and their entries cover every document |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

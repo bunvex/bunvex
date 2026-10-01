@@ -37,11 +37,14 @@ import {
   checkUnversionedTables,
   DatabaseTimeoutError,
   type DocWrite,
+  groupLog,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type LogCommit,
+  type LogRow,
   type OpenOptions,
   type Persistence,
   ReadOnlyError,
@@ -134,6 +137,10 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     private app: string,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
     private timeoutMs: number,
+    /** `indexes` and `meta` read at majority (PERSIST-01 C11): a log reader never sees a group that a
+     *  failover could still roll back. */
+    private idxMajority: Collection<IdxRow>,
+    private metaMajority: Collection<any>,
   ) {}
 
   /**
@@ -177,6 +184,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             [docs, { t: 1, i: 1, ts: -1 }],
             [idx, { x: 1, k: 1, ts: -1 }],
             [idx, { x: 1, k: -1, ts: -1 }], // descending scans keep "newest version first" per key
+            [idx, { ts: 1 }], // the log by ts (PERSIST-01 C11)
           ];
           for (const [c, key] of want) {
             const have = await c
@@ -187,7 +195,17 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             if (!have.some((i) => JSON.stringify(i.key) === JSON.stringify(key))) await c.createIndex(key);
             progress();
           }
-          return new MongoPersistence(client, docs, idx, meta, app, timeoutMs);
+          const majority = { readConcern: { level: "majority" as const } };
+          return new MongoPersistence(
+            client,
+            docs,
+            idx,
+            meta,
+            app,
+            timeoutMs,
+            db.collection<IdxRow>("indexes", majority),
+            db.collection<any>("meta", majority),
+          );
         });
       return await retryOnce(init, (e) => e instanceof DatabaseTimeoutError);
     } catch (e) {
@@ -543,6 +561,54 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       if (j) out.push(j);
     }
     return out;
+  }
+
+  /**
+   * PERSIST-01 C11. The bound is the lease document's maxTs (the durable prefix, written in the same
+   * transaction as each group; for a store never leased, the old commit marker). Rows come from the ts
+   * index in order and are cut into commits; the read stops at the first row of commit `limit + 1`.
+   */
+  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+    if (limit <= 0) return [];
+    // A read (STUDY-25 L3/L5): every round trip bounded by the call timeout, the whole read run once more
+    // after a timeout.
+    return this.read(async (progress) => {
+      const lease = await this.metaMajority.findOne({ _id: "lease" });
+      progress();
+      const durable = (lease?.maxTs as number | undefined) ?? (await this.metaMajority.findOne({ _id: "commit" }))?.ts;
+      progress();
+      const hi = Math.min(upToTs, durable ?? upToTs);
+      if (hi <= afterTs) return [];
+      const rows: LogRow[] = [];
+      let commits = 0;
+      let lastTs = -1;
+      const cursor = this.idxMajority
+        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, x: 1, k: 1, ts: 1, d: 1 } })
+        .sort({ ts: 1 })
+        // Batches sized to the request: the driver's default getMore takes up to 16 MB, i.e. the whole rest
+        // of the log, for the one row that tells us commit `limit` is complete.
+        .batchSize(Math.min(Math.max(limit * 4 + 1, 101), 10_000));
+      try {
+        for await (const r of cursor) {
+          progress(); // a row came: its batch's round trip is over
+          if (r.ts !== lastTs) {
+            if (commits === limit) break;
+            commits++;
+            lastTs = r.ts;
+          }
+          rows.push({ ts: r.ts, index: r.x, key: Buffer.from(r.k, "hex"), id: r.d });
+        }
+      } finally {
+        await cursor.close();
+      }
+      if (!rows.length) return [];
+      const [prev] = await this.idxMajority
+        .find({ ts: { $lte: afterTs } }, { projection: { _id: 0, ts: 1 } })
+        .sort({ ts: -1 })
+        .limit(1)
+        .toArray();
+      return groupLog(rows, prev?.ts ?? 0);
+    });
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease document's maxTs, which every fenced flush sets; for a

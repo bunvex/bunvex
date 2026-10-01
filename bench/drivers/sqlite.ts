@@ -60,3 +60,16 @@ export async function foreignIntact() {
     return tables === "documents" && mode === "delete" && n === 1;
   });
 }
+
+/** K25: a store written before PERSIST-01 C11 has no ts index. */
+export async function dropLogIndex() {
+  const db = new Database(`${dir}/sqlite.db`);
+  db.exec(`drop index if exists indexes_by_ts`);
+  db.close();
+}
+export async function hasLogIndex() {
+  const db = new Database(`${dir}/sqlite.db`, { readonly: true });
+  const r = db.query(`select 1 from sqlite_master where type = 'index' and name = 'indexes_by_ts'`).get();
+  db.close();
+  return !!r;
+}

@@ -28,11 +28,13 @@ import {
   DatabaseTimeoutError,
   type DocWrite,
   decodeLayoutVersion,
+  groupLog,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
+  type LogCommit,
   type OpenOptions,
   type Persistence,
   ReadOnlyError,
@@ -124,6 +126,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   /** Our lease's epoch, 0 when we hold none. */
   private epoch = 0;
   private ttlMs = 0;
+  /** The store predates PERSIST-01 C11: its ts index is built once we hold the lease. */
+  private needsLogIndex = false;
   private constructor(
     private pool: mysqlDriver.Pool,
     /** This instance's connections' `bunvex_conn` connect attribute, recorded in the lease row: a successor
@@ -236,6 +240,17 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     )) as any;
     const have = new Set<string>(rows.map((r: any) => r.t as string));
     await this.checkStore(have, opts);
+    // A store written before C11 (its indexes table lacks the ts index): building it waits for the lease, as
+    // an upgrade would. A new `indexes` table is created with it.
+    if (have.has("indexes")) {
+      const [byTs] = (await this.read((c) =>
+        c.query(
+          `select count(*) as n from information_schema.statistics
+           where table_schema = database() and table_name = 'indexes' and index_name = 'indexes_by_ts'`,
+        ),
+      )) as any;
+      this.needsLogIndex = Number(byTs[0].n) === 0;
+    }
     // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
     // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
     if (have.size >= TABLES.length) return;
@@ -249,7 +264,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         progress();
         await c.query(`create table if not exists indexes (index_id int not null, key_prefix varbinary(2500) not null,
           key_suffix longblob, key_suffix_hash varbinary(32) not null, ts bigint not null, deleted boolean not null,
-          document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc))`);
+          document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc),
+          key indexes_by_ts (ts))`); // the ts index: the log by ts (PERSIST-01 C11)
         progress();
         await c.query(`create table if not exists bunvex_lease (id int primary key, epoch bigint not null,
           holder varchar(255), holder_conn varchar(64), expires_at datetime(6) not null, max_ts bigint not null)`);
@@ -301,6 +317,18 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   }
 
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
+    const r = await this.acquireOnce(opts);
+    if ("epoch" in r && this.needsLogIndex) {
+      // One timed call (STUDY-25 L3), not retried: a build that timed out is not run twice.
+      await this.call((c) => c.query(`alter table indexes add index indexes_by_ts (ts)`)).catch((e) => {
+        if ((e as { errno?: number }).errno !== 1061) throw e; // 1061: it exists already
+      });
+      this.needsLogIndex = false;
+    }
+    return r;
+  }
+
+  private async acquireOnce(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.tryAcquire(opts);
@@ -587,6 +615,40 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       if (r && !r.deleted) out.push(r.json_value);
     }
     return out;
+  }
+
+  /**
+   * PERSIST-01 C11, one statement (one consistent read): the bound is the lease row's max_ts (the durable
+   * prefix, written in the same transaction as each group); the derived table walks the ts index to the
+   * last of the first `limit` commits, and the rows up to it come back in ts order, with the newest ts at
+   * or before `afterTs`.
+   */
+  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+    if (limit <= 0) return [];
+    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on another
+    // connection after an operational error.
+    const [rows] = (await this.read((c) =>
+      c.query(
+        `select i.ts, i.index_id, i.key_prefix, i.key_suffix, i.document_id,
+              (select max(ts) from indexes where ts <= ?) as prev
+       from indexes i
+       where i.ts > ? and i.ts <= (select max(c.ts) from (select distinct ts from indexes
+         where ts > ? and ts <= least(?, coalesce((select max_ts from bunvex_lease where id = 1), ?))
+         order by ts limit ${Math.floor(limit)}) c)
+       order by i.ts`,
+        [afterTs, afterTs, afterTs, upToTs, upToTs],
+      ),
+    )) as any;
+    if (!rows.length) return [];
+    return groupLog(
+      (rows as any[]).map((r) => ({
+        ts: Number(r.ts),
+        index: r.index_id as number,
+        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
+        id: r.document_id as string | null,
+      })),
+      Number(rows[0].prev ?? 0),
+    );
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store

@@ -295,7 +295,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural. |
+| `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | missing | bunvex's versioned log makes deltas natural; the by-ts log read exists on `indexes` (PERSIST-01 C11), the documents side does not yet. |
 | `json_schemas`, `get_table_column_names`, `test_streaming_export_connection` | same | missing | |
 | Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | missing | |
 | Fivetran source/destination connectors | `crates/fivetran_source`, `fivetran_destination` | missing | Separate programs; low priority. |
@@ -350,13 +350,14 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | In-place database migrations between versions (`migrations_model`) | `crates/migrations_model` | missing | **Not for now (owner, 2026-10-01, DV-56):** pre-alpha. The version story comes first, and is built (#114): next row. An older layout is refused until an upgrade exists. |
 | Persistence layout version: chosen by configuration (V5/V6) and checked against the database (MySQL v5 refuses a non-V5 configuration; v6 refuses to initialize over a v5 or unversioned database, and checks its shared tables' columns) | `crates/common/src/types/mod.rs:175-197`; `crates/mysql/src/v5/persistence.rs:151-153`; `crates/mysql/src/v6/persistence.rs:207-271` | done | As Convex (STUDY-25 L6, PERSIST-01 C10, conformance K22; #114, DV-107 resolved). bunvex has one layout, so every store records it instead (`persistence_globals.layout_version`, MongoDB `meta`, the memory log's header) and every open checks it. A newer, unknown or older (no upgrade yet) version is refused with `LayoutError`, and so is a store that is not bunvex's (e.g. Convex's own tables), without being written to. A store written before this check opens as version 1 and gets its record under the lease. |
 | `read_only` flag: a writer's open fails with "persistence is read-only, data migration in progress" unless `allow_read_only` (readers pass it); `set_read_only` needs no lease; Postgres and MySQL only | `crates/postgres/src/lib.rs:220-224, 330-334, 357-389`, `sql.rs:198-215, 681-715`; `crates/mysql/src/v6/persistence.rs:168-180`; `crates/db_connection/src/lib.rs:181-196, 238-262` | done | As Convex (STUDY-25 L7, PERSIST-01 C10, conformance K23; #114, DV-108 resolved): `ReadOnlyError` unless `allowReadOnly`; `setReadOnly(on)` on every driver. No CLI yet; import/export will use it. **Divergence (owner, 2026-10-01, DV-125):** also on SQLite and memory+log, where Convex has none. |
+| Reading the commit log by timestamp (`load_documents` over a `TimestampRange`, bounded by the repeatable ts; Postgres pages `documents` by `(ts, table_id, id)`) | `crates/common/src/persistence/mod.rs:562`, `:774`; `crates/postgres/src/sql.rs:269` | partial | PERSIST-01 C11 (STUDY-24 H11, owner 2026-10-01): `readLog(afterTs, upToTs, limit)` on every driver reads **`indexes`** by ts (each commit's index write set, whole commits, a per-commit `prevTs` for gap detection, never above the durable prefix), with a ts index everywhere. Documents by ts and `prev_ts` (retention, export) are not built (DV-66). |
 | OpenAPI specs (`/api/public_openapi.json`, `/api/dashboard_openapi.json`, `/api/v1/openapi.json`) | `crates/local_backend/router.rs` | missing | |
 
 ### 23. Public HTTP function API (non-sync)
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500. Still no `format`, no auth header. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; the others missing. |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
@@ -378,6 +379,8 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
 | Page size / query operators / index key prefix | 1024 / 256 / 2500 bytes | missing | |
 | OCC retries (UDF executor) | 4, backoff 100 ms to 2 s (`UDF_EXECUTOR_OCC_MAX_RETRIES`) | done (STUDY-21) | Same budget and full-jitter backoff, plus the wait for the conflicting write. The knobs are `Engine` options. |
+| Write-log retention (how old a mutation's snapshot may be at commit) | 30 s floor, 300 s, 50 MiB soft (`WRITE_LOG_MIN_RETENTION_SECS`, `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`) | done (STUDY-06 D10) | Past it: `OutOfRetention`, HTTP 503 / close 1013, not retried as OCC. Knobs are the `Engine` option `writeLogRetention`. Divergence: a hard byte cap, 256 MiB by default (`hardMaxBytes`; `null`/`0` turns it off), DV-128 (owner, 2026-10-01). |
+| Transaction begin window | 10 s (`MAX_TRANSACTION_WINDOW`) | done (STUDY-06 D10) | Only `/api/query_at_ts` begins in the past; further back answers 503. |
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
@@ -393,10 +396,10 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Status | Count |
 |---|---|
 | done | 4 |
-| partial | 11 |
+| partial | 12 |
 | missing | 224 |
 
 - The four done rows are system indexes, database selection, the client-side timeouts on database calls and
   the retries of transient database errors.
-- The eleven partial rows are: the persistence lease (PERSIST-01 C7: every driver), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
+- The twelve partial rows are: the persistence lease (PERSIST-01 C7: every driver), the log by timestamp (PERSIST-01 C11: on `indexes`), declared indexes, internal-function admin access, `process.env`, `/metrics` (via `/stats`), `/version` health, backend flags, the public HTTP function API, OCC retries (done since STUDY-21), the self-hosted dashboard app and the data browser.
 - Everything else, including the system-table catalogue, is missing.

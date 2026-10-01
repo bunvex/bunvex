@@ -6,7 +6,7 @@
 // Convex's SQLite store names its globals table) and `read_only` (Convex's name; its SQLite store has none).
 // They are checked before the file is changed in any way (even the WAL pragma rewrites its header).
 import { Database } from "bun:sqlite";
-import type { DocWrite, IndexWrite, Lease, LeaseAcquire, Persistence } from "./index.ts";
+import type { DocWrite, IndexWrite, Lease, LeaseAcquire, LogCommit, Persistence } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
   checkLayoutVersion,
@@ -19,6 +19,7 @@ import {
   type ReadOnlyFlag,
 } from "./layout.ts";
 import { ProcessLock } from "./lock.ts";
+import { groupLog } from "./log.ts";
 import { scanLatestSync } from "./scan.ts";
 
 /** bunvex's columns, as `pragma table_info` declares them: how an unversioned store is recognised. */
@@ -38,7 +39,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
   private scanAsc;
   private scanDesc;
   private getDoc;
+  private logRows;
+  private logPrev;
   private inTx = false;
+  /** The highest ts applied since the last flush. */
+  private top = 0;
+  /** The highest durable ts, once this handle writes: readLog's bound while a group sits uncommitted in
+   *  this connection's open transaction (PERSIST-01 C11). Only the lock holder writes, so it stays exact. */
+  private durableTs: number | null = null;
 
   constructor(
     private path: string,
@@ -62,6 +70,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
         deleted integer not null, document_id text, primary key (index_id, key, ts)) without rowid;
       create table if not exists persistence_globals (key text primary key, json_value text not null);
       create table if not exists read_only (id integer primary key);`);
+    // The log by ts (PERSIST-01 C11). Building it writes the file, so only the lock holder does it: here when
+    // the lock is ours, else when acquireLease takes it.
+    if (this.inMemory || this.lock) this.ensureLogIndex();
     this.insDoc = this.db.prepare(`insert into documents values (?, ?, ?, ?, ?)`);
     this.insIdx = this.db.prepare(`insert into indexes values (?, ?, ?, ?, ?)`);
     // Newest version per key at or before ts: order by key, ts desc and keep the first row of each key.
@@ -72,6 +83,19 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
     this.scanDesc = scan("desc");
     this.getDoc = this.db.prepare(`select json_value, deleted from documents
         where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`);
+    // The rows of the first ?3 commits in (?1, ?2], in ts order: the inner query walks the ts index to find
+    // the last of those commits, the outer one reads every row up to it.
+    this.logRows = this.db.prepare(`select ts, index_id, key, document_id from indexes
+        where ts > ?1 and ts <= (select max(ts) from (select distinct ts from indexes
+                                 where ts > ?1 and ts <= ?2 order by ts limit ?3))
+        order by ts`);
+    this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`);
+  }
+
+  /** The ts index, only when missing (STUDY-25 L1): a store written before PERSIST-01 C11 gets it here. */
+  private ensureLogIndex() {
+    if (!this.db.query(`select 1 from sqlite_master where type = 'index' and name = 'indexes_by_ts'`).get())
+      this.db.exec(`create index if not exists indexes_by_ts on indexes (ts)`);
   }
 
   private get inMemory() {
@@ -145,6 +169,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
       throw e;
     }
     this.lock.recordHolder(opts.holder);
+    this.ensureLogIndex();
     return { epoch: this.lock.epoch };
   }
 
@@ -163,9 +188,11 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
   apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
     if (!this.inTx) {
+      this.durableTs ??= Number((this.logPrev.get(Number.MAX_SAFE_INTEGER) as { m: number | null }).m ?? 0);
       this.db.exec("begin");
       this.inTx = true;
     }
+    this.top = ts;
     for (const d of docs) this.insDoc.run(d.table, d.id, ts, d.json, d.json === null ? 1 : 0);
     for (const e of idx) this.insIdx.run(e.index, e.key, ts, e.id === null ? 1 : 0, e.id);
   }
@@ -174,7 +201,27 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
     if (this.inTx) {
       this.db.exec("commit");
       this.inTx = false;
+      this.durableTs = this.top;
     }
+  }
+
+  /** PERSIST-01 C11. Committed rows are durable (a flush is one transaction); rows of a group applied but
+   *  not yet flushed are visible to this connection only, and the bound leaves them out. */
+  readLog(afterTs: number, upToTs: number, limit: number): LogCommit[] {
+    if (limit <= 0) return [];
+    const hi = this.inTx ? Math.min(upToTs, this.durableTs ?? 0) : upToTs;
+    const rows = this.logRows.all(afterTs, hi, limit) as {
+      ts: number;
+      index_id: number;
+      key: Uint8Array;
+      document_id: string | null;
+    }[];
+    if (!rows.length) return [];
+    const prev = this.logPrev.get(afterTs) as { m: number | null };
+    return groupLog(
+      rows.map((r) => ({ ts: r.ts, index: r.index_id, key: r.key, id: r.document_id })),
+      Number(prev.m ?? 0),
+    );
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {

@@ -7,7 +7,7 @@
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
 // (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
-// driver.
+// driver; for drivers with the log by timestamp (C11, `readLog`), K25.
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -38,6 +38,7 @@ import {
   type ScanDocs,
 } from "@bunvex/core";
 import { fromJsonValue } from "@bunvex/values";
+import { logChecks } from "./log.ts";
 import { freezableProxy } from "./proxy.ts";
 import {
   allOfTenant,
@@ -72,10 +73,30 @@ export type DriverModule = {
   /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
    *  address, with the given client-side call timeout (STUDY-25 L3). */
   openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
+  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
+  dropLogIndex?(): Promise<void>;
+  /** Whether the store has its ts index (K25: it is built once the lease is held). */
+  hasLogIndex?(): Promise<boolean>;
+  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
+  strayLogRow?(ts: number): Promise<void>;
 };
 
 // K3 also runs K4–K5; K10 runs K10–K19
-export type Check = "K1" | "K2" | "K3" | "K6" | "K7" | "K8" | "K9" | "K10" | "K20" | "K21" | "K22" | "K23" | "K24";
+export type Check =
+  | "K1"
+  | "K2"
+  | "K3"
+  | "K6"
+  | "K7"
+  | "K8"
+  | "K9"
+  | "K10"
+  | "K20"
+  | "K21"
+  | "K22"
+  | "K23"
+  | "K24"
+  | "K25";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -91,6 +112,8 @@ export type ConformanceOptions = {
   requireLayout?: boolean;
   /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
   requireTimeouts?: boolean;
+  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
+  requireReadLog?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -1272,6 +1295,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
   if (want("K24")) await k24();
+  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K7")) await k7();
