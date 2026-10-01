@@ -58,7 +58,7 @@ describe("arguments", () => {
 
 describe("the function runner", () => {
   test("Run on a function opens the runner on it; a query is subscribed: its value and log lines show, it is logged, and it updates", async () => {
-    const source = mount("/functions?function=tasks:list");
+    const source = mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Run" }));

@@ -107,7 +107,11 @@ function LineChart(props: LineChartProps) {
         })
         .filter((e): e is { s: ChartSeries; y: number } => e.y !== null)
         .sort((a, b) => a.y - b.y)
-        .map((e, i, all) => ({ ...e, y: i === 0 ? e.y : Math.max(e.y, all[i - 1]!.y + 12) }))
+        // each at least a line below the one above it, as already moved
+        .reduce<{ s: ChartSeries; y: number }[]>(
+          (placed, e) => [...placed, { ...e, y: Math.max(e.y, (placed.at(-1)?.y ?? -Infinity) + 12) }],
+          [],
+        )
     : [];
 
   const move = (e: PointerEvent<HTMLElement>) => {

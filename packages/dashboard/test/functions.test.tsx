@@ -72,6 +72,10 @@ describe("the Functions screen", () => {
     await screen.findByRole("heading", { level: 1, name: "syncFromAuth" });
     expect(history.location.search).toContain("function=users%3AsyncFromAuth");
     expect(screen.getByText(/Internal action in/)).toBeDefined();
+    // Statistics first, as Convex; the logs are the other tab
+    expect(screen.getByRole("tab", { name: "Statistics" }).getAttribute("aria-selected")).toBe("true");
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Logs" }));
+    expect(history.location.search).toContain("tab=logs");
     const grid = screen.getByRole("grid", { name: "Log lines of users:syncFromAuth" });
     await waitFor(() => expect(within(grid).getAllByRole("row").length).toBeGreaterThan(1));
     const fns = within(grid)
@@ -98,7 +102,7 @@ describe("the Functions screen", () => {
   });
 
   test("a function shows its declared validators as code, or says it declares none", async () => {
-    mount("/functions?function=tasks:byOwner");
+    mount("/functions?function=tasks:byOwner&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "byOwner" });
     const args = screen.getByRole("region", { name: "Arguments validator" });
     expect(args.querySelector("pre")?.textContent).toBe('v.object({ owner: v.id("users") })');
@@ -106,13 +110,13 @@ describe("the Functions screen", () => {
     expect(returns).toStartWith("v.array(v.object({\n");
     await expectAccessible();
     cleanup();
-    mount("/functions?function=tasks:summarize");
+    mount("/functions?function=tasks:summarize&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "summarize" });
     expect(screen.getByText("None declared: any arguments are accepted.")).toBeDefined();
   });
 
   test("a function's log filters are its own", async () => {
-    mount("/functions?function=tasks:list");
+    mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     await userEvent.setup().type(screen.getByRole("searchbox", { name: "Filter logs" }), "ran");
     await waitFor(() => expect(localStorage.getItem("bunvex:function-logs:default:tasks:list")).toContain("ran"));
@@ -126,7 +130,7 @@ describe("the Functions screen", () => {
     expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
     expect((screen.getByRole("searchbox", { name: "Filter logs" }) as HTMLInputElement).value).toBe("ran");
     // another function opens with its own (none), then tasks:list comes back with the kept view in the URL
-    act(() => history.push("/functions?function=tasks:create"));
+    act(() => history.push("/functions?function=tasks:create&tab=logs"));
     await screen.findByRole("heading", { level: 1, name: "create" });
     expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
     cleanup();
@@ -137,28 +141,29 @@ describe("the Functions screen", () => {
         function: "tasks:list",
         type: "failure",
         q: "ran",
+        tab: "statistics", // the kept filters come back without leaving the tab it opened on
       }),
     );
   });
 
   test("an unknown type in the URL is dropped", async () => {
-    const { history } = mount("/functions?function=tasks:list&type=loud");
+    const { history } = mount("/functions?function=tasks:list&type=loud&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
-    expect(history.location.search).toBe("?function=tasks%3Alist");
+    expect(history.location.search).toBe("?function=tasks%3Alist&tab=logs");
   });
 
   test("picking a type keeps the open function in the URL; Back undoes it", async () => {
-    const { history } = mount("/functions?function=tasks:list");
+    const { history } = mount("/functions?function=tasks:list&tab=logs");
     await screen.findByRole("heading", { level: 1, name: "list" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Types: All types" }));
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
     await user.keyboard("{Escape}");
     const params = () => Object.fromEntries(new URLSearchParams(history.location.search));
-    await waitFor(() => expect(params()).toEqual({ function: "tasks:list", type: "none" }));
+    await waitFor(() => expect(params()).toEqual({ function: "tasks:list", type: "none", tab: "logs" }));
     act(() => history.back());
-    await waitFor(() => expect(params()).toEqual({ function: "tasks:list" }));
+    await waitFor(() => expect(params()).toEqual({ function: "tasks:list", tab: "logs" }));
     await screen.findByRole("button", { name: "Types: All types" });
   });
 
