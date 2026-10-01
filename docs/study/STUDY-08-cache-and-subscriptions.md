@@ -1,6 +1,6 @@
 # STUDY-08 — Query cache and subscriptions
 
-- **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D10 resolved to match Convex in #PR (DV-57, STUDY-06 §9); D8 to match Convex, gap tracked in docs/parity (DV-63). Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D10 resolved to match Convex in #134 (DV-57, STUDY-06 §9); D8 to match Convex, gap tracked in docs/parity (DV-63). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`; §1.4 and §3.4 (D9) at `9c9bd14`; §1.5 and §3.5 (splaying) at
   `3ed8c33`
@@ -363,7 +363,7 @@ the last session sees the write about 50 s later.
 | D7 | The cache/subscription key depends on argument field order (`JSON.stringify(args)`) | INTERNAL | Duplicate entries and executions; no wrong results | resolved to match Convex in #21 (DV-45) |
 | D8 | No request coalescing; FIFO at 1 000 entries instead of an LRU bounded by bytes; subscriptions bypass the cache | INTERNAL | Performance: thundering herd on a hot key, and memory is unbounded in bytes | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-63) |
 | D9 | ~~Invalidation is a linear scan over subscriptions × writes × intervals~~, with no splaying | INTERNAL | Performance at many subscriptions (ENGINE-00 fan-out) | **Decided (owner, 2026-10-01): match Convex.** Built: the matching (§3.4), an interval index per index used by the query cache and the sync hub; and splaying (§3.5), as Convex's knobs and defaults. Resolved (DV-64). Splaying: owner, 2026-10-01: approved as Convex; may revisit (a cap would be a divergence) |
-| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | **as Convex, fixed in #PR** (owner, 2026-10-01: match Convex; DV-57): the read-set ends at the last key read ([STUDY-06 §9](STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read)); a cached or subscribed `first()` re-runs 0 times per append past its head (was 1) |
+| D10 | Wider read-sets (`take(n)` records the whole range, STUDY-06 D3) cause extra re-runs | INTERNAL | JSON dedupe hides it from clients; costs CPU | **as Convex, fixed in #134** (owner, 2026-10-01: match Convex; DV-57): the read-set ends at the last key read ([STUDY-06 §9](STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read)); a cached or subscribed `first()` re-runs 0 times per append past its head (was 1) |
 | D11 | `err` has no `errorData` | OBSERVABLE | `ConvexError` data is lost (STUDY-11) | resolved to match Convex in #32 (DV-49) |
 
 ## 5. Tests

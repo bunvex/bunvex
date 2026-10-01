@@ -1,6 +1,6 @@
 # STUDY-07 — Query semantics: withIndex, order, take/first/unique/collect, filter, paginate
 
-- **Status:** implemented / decided — D1–D4 fixed (#8, #10, #12; Phase 0 B1, B5, B12); D5–D8 resolved to match Convex (DV-40–DV-43); the read-set of a scan that stops early ends at its last key, as Convex (STUDY-06 D3, #PR, DV-57). `.limit()` is still a gap. Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** implemented / decided — D1–D4 fixed (#8, #10, #12; Phase 0 B1, B5, B12); D5–D8 resolved to match Convex (DV-40–DV-43); the read-set of a scan that stops early ends at its last key, as Convex (STUDY-06 D3, #134, DV-57). `.limit()` is still a gap. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
