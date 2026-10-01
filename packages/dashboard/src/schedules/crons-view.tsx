@@ -79,6 +79,10 @@ export function CronsView() {
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col gap-3">
+        {/* the count before the list, as on the other list screens (UX-14) */}
+        {!jobs.isPending && !jobs.error && (
+          <p className="text-sm text-muted-foreground tabular-nums">{`${list.length} cron ${list.length === 1 ? "job" : "jobs"}`}</p>
+        )}
         {liveError && <ErrorState error={liveError} />}
         {jobs.error ? (
           <ErrorState error={toDataSourceError(jobs.error)} />
@@ -96,7 +100,6 @@ export function CronsView() {
                 ? "Loading…"
                 : "No cron jobs. Jobs defined with cronJobs() appear here once they are deployed."
             }
-            footer={<span>{`${list.length} cron ${list.length === 1 ? "job" : "jobs"}`}</span>}
           />
         )}
       </div>

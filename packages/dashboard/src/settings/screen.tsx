@@ -250,7 +250,8 @@ function ViewRow(props: {
   const { row } = props;
   const changed = row.original && (row.name !== row.original.name || row.value !== row.original.value);
   return (
-    <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+    // the actions sit at the right edge, at the same place in every row, on the name's line (UX-9)
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
       <span className={cn("min-w-48 font-mono text-sm font-medium break-all", row.deleted && "line-through")}>
         {row.name}
       </span>
@@ -266,7 +267,7 @@ function ViewRow(props: {
       </span>
       {row.deleted && <span className="text-xs text-destructive">Deleted when you save</span>}
       {changed && !row.deleted && <span className="text-xs text-info">Changed</span>}
-      <span className="flex gap-1">
+      <span className="ml-auto flex shrink-0 gap-1">
         <Button
           size="icon-sm"
           variant="ghost"
@@ -276,7 +277,14 @@ function ViewRow(props: {
         >
           {props.shown ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
         </Button>
-        <CopyButton text={`${row.name}=${row.value}`} label={`Copy ${row.name}`} size="sm" variant="ghost" />
+        {/* the same short label in every row (its name for assistive tech), so the buttons line up */}
+        <CopyButton
+          text={`${row.name}=${row.value}`}
+          label="Copy"
+          aria-label={`Copy ${row.name}`}
+          size="sm"
+          variant="ghost"
+        />
         {props.canWrite && !row.deleted && (
           <Button size="sm" variant="ghost" aria-label={`Edit ${row.name}`} onClick={props.onEdit}>
             Edit

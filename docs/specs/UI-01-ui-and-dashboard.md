@@ -1425,6 +1425,19 @@ pull requests.
 - **UX-24** A line's details say who started the request once (the explanation is its tooltip), show the
   function's kind as the list's Q/M/A badge, and keep the copy button in the body font.
 
+### 20.3 Shell layout and lists
+
+- **UX-4** On a phone the header shows the deployment as one muted line (`local · memory · 0.0.0-mock`,
+  labelled for assistive tech) and Run functions as an icon (its name kept for assistive tech); the
+  labelled list returns from `md` up.
+- **UX-9** An environment variable's actions sit at the row's right edge, on the name's line; each Copy
+  button says "Copy" (named for its variable), so they line up.
+- **UX-14** One place for counts: next to the title (Database, Files, History) or above the list (each
+  Schedules tab); a footer only says "N loaded" while more are still to load. History's counts (its title's
+  and an event's, "Added 1,452 documents") use the shared count format, with thousands separators.
+- **UX-16** Files' Open button is as tall as the storage-ID box.
+- **UX-17** No reserved status line between a toolbar and its table (Files, Scheduled functions).
+
 ## 21. Amendment — the Schema screen (30 Sep 2026)
 
 STUDY-12 §14. A **Schema** entry in the navigation, between Database and Functions, at `/schema` (`?table=` opens
