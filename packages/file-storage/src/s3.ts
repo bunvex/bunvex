@@ -9,7 +9,7 @@ export type S3Options = {
   bucket: string;
   region?: string;
   endpoint?: string;
-  /** Path-style URLs (`endpoint/bucket/key`), which MinIO and most S3-compatible stores need. */
+  /** Path-style URLs (`endpoint/bucket/key`), which most self-hosted S3-compatible stores need. */
   forcePathStyle?: boolean;
   accessKeyId?: string;
   secretAccessKey?: string;

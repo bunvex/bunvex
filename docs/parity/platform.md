@@ -75,7 +75,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `ctx.db.system.get/query` for virtual system tables | `npm/convex/server/database.ts` (system reader) | missing | Also needed for `_scheduled_functions`. |
 | Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | missing | A doc id from another table is rejected. Decided (owner, 2026-10-01): accept both, as Convex (DV-84). |
 | Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | missing | |
-| Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | partial (STUDY-32) | `@bunvex/file-storage`: local (`<dir>/files/<key>.blob`, synced; `STORAGE_DIR`, else `<DATA>/storage`), S3 through Bun's S3Client with Convex's variable names (files bucket), memory for tests; a conformance suite (S3 in CI on SeaweedFS). Other use cases' buckets come with their features. |
+| Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | partial (STUDY-32) | `@bunvex/file-storage`: local (`<dir>/files/<key>.blob`, synced; `STORAGE_DIR`, else `<DATA>/storage`), S3 through Bun's S3Client with Convex's variable names (files bucket), memory for tests; a conformance suite (S3 in CI on RustFS). Other use cases' buckets come with their features. |
 | Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | missing | Switching local↔S3 after init is an error. |
 | Total file-storage size gauge | `FileStorageSizeTracker` | missing | Used for usage reporting. |
 

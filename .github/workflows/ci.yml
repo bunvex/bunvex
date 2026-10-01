@@ -185,24 +185,24 @@ jobs:
         run: bun run conformance
 
   file-storage-s3:
-    name: file storage · S3 (SeaweedFS)
+    name: file storage · S3 (RustFS)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     env:
-      AWS_ACCESS_KEY_ID: bunvex
-      AWS_SECRET_ACCESS_KEY: bunvex-secret
+      AWS_ACCESS_KEY_ID: s3testkey
+      AWS_SECRET_ACCESS_KEY: s3testsecret
       AWS_REGION: us-east-1
     steps:
-      # The blob store conformance suite against an S3-compatible store (STUDY-32). SeaweedFS (MinIO no longer
-      # publishes public images), all in one, its S3 API on :8333 with no identities configured (any key is
-      # accepted); the bucket is made with the runner's aws CLI.
-      - name: SeaweedFS with an S3 bucket
+      # The blob store conformance suite against an S3-compatible store (STUDY-32): RustFS, as minivex's CI
+      # (MinIO's images are gone from Docker Hub and quay.io). The bucket is made with the aws CLI; a server
+      # that never came up fails here, not later as opaque S3 errors.
+      - name: RustFS with an S3 bucket
         run: |
-          docker run -d --name seaweed -p 8333:8333 chrislusf/seaweedfs:4.48 server -s3
-          for i in $(seq 1 90); do curl -s -o /dev/null http://127.0.0.1:8333/ && break; sleep 1; done
-          for i in $(seq 1 30); do aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://bunvex-test && break; sleep 2; done
-          aws --endpoint-url http://127.0.0.1:8333 s3 ls
+          docker run -d --name s3 -p 9000:9000 -e RUSTFS_ACCESS_KEY=s3testkey -e RUSTFS_SECRET_KEY=s3testsecret rustfs/rustfs:1.0.0
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/health/live && break; sleep 1; done
+          curl -sf http://127.0.0.1:9000/health/live >/dev/null || { echo "rustfs never became healthy"; exit 1; }
+          docker run --rm --network host -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION amazon/aws-cli:2.37.1 --endpoint-url http://127.0.0.1:9000 s3 mb s3://bunvex-test
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -211,7 +211,7 @@ jobs:
       - name: blob store conformance on S3
         env:
           S3_TEST_BUCKET: bunvex-test
-          S3_ENDPOINT_URL: http://127.0.0.1:8333
+          S3_ENDPOINT_URL: http://127.0.0.1:9000
           AWS_S3_FORCE_PATH_STYLE: "true"
         run: bun test packages/file-storage
 

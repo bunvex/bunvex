@@ -14,4 +14,4 @@ blobs under keys it makes up, hashing (SHA-256) and counting them as they stream
   Convex's self-hosted image.
 
 `@bunvex/file-storage/conformance` exports `describeBlobStoreConformance(name, make)`, the suite every
-backend passes. CI runs it on S3 against SeaweedFS.
+backend passes. CI runs it on S3 against RustFS.
