@@ -127,7 +127,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | partial | Only `db`. |
 | MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | `db`, `auth`, `scheduler`. |
-| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `auth`, `scheduler`. |
+| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`. |
 | `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | missing | |
 | `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | missing | |
 | `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Strings instead of references, and internal functions are allowed. |
@@ -297,13 +297,13 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | missing | "M" (custom routes). |
-| `httpRouter()` + `http.route({ path, method, handler })` in `http.ts` | server/router.ts | missing | |
-| `http.route({ pathPrefix: "/x/", … })` prefix routes, longest prefix wins | server/router.ts | missing | |
-| Methods GET / POST / PUT / DELETE / OPTIONS / PATCH; HEAD maps to GET | server/router.ts (`normalizeMethod`) | missing | |
-| Route validation: leading `/`, prefix ends with `/`, `/.files` reserved, duplicate detection | server/router.ts | missing | |
-| `getRoutes()` / `lookup(path, method)` | server/router.ts | missing | |
-| Served on the separate HTTP-actions origin/port (`/.site`-style), with `defineApp({ httpPrefix })` | components/index.ts; crates/local_backend | missing | |
+| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | done (STUDY-31) | Served on `/http/*` and the site port. |
+| `httpRouter()` + `http.route({ path, method, handler })` in `http.ts` | server/router.ts | done (STUDY-31) | Passed as `createServer({ http })` (H1, DV-143) once served. |
+| `http.route({ pathPrefix: "/x/", … })` prefix routes, longest prefix wins | server/router.ts | done (STUDY-31) | |
+| Methods GET / POST / PUT / DELETE / OPTIONS / PATCH; HEAD maps to GET | server/router.ts (`normalizeMethod`) | done (STUDY-31) | |
+| Route validation: leading `/`, prefix ends with `/`, `/.files` reserved, duplicate detection | server/router.ts | done (STUDY-31) | Convex's messages, in its order; the start checks of `http.js` too. |
+| `getRoutes()` / `lookup(path, method)` | server/router.ts | done (STUDY-31) | |
+| Served on the separate HTTP-actions origin/port (`/.site`-style), with `defineApp({ httpPrefix })` | components/index.ts; crates/local_backend | partial (STUDY-31) | `/http/*` and the site port; `httpPrefix` waits for components. |
 
 ### 17. Components
 

@@ -67,7 +67,7 @@ bunvex/
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
 │   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
 │   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
-│   │   │                            read-your-writes N · HTTP actions (custom routes) M
+│   │   │                            read-your-writes N · HTTP actions (STUDY-31) ✅
 │   │   ├── scheduler                runAfter/runAt/cancel, db.system, crons (STUDY-30)        ✅
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
 │   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·

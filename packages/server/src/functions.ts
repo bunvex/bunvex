@@ -11,6 +11,7 @@ import {
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
+import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   checkValue,
   displayValue,
@@ -22,6 +23,7 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
+import { ActionPermits } from "./action-permits.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
@@ -41,10 +43,13 @@ const registryKey = (name: string) => {
 export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
 export type QueryCtx = { db: Tx; auth: Auth };
 export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler };
+/** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
+export type FunctionRef = AnyFunctionReference | string;
 export type ActionCtx = {
   auth: Auth;
-  runQuery: (name: string, args?: unknown) => Promise<unknown>;
-  runMutation: (name: string, args?: unknown) => Promise<unknown>;
+  runQuery: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runMutation: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
+  runAction: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
   scheduler: Scheduler;
 };
 
@@ -131,7 +136,15 @@ export const internalAction = builder<ActionCtx>("action", "internal");
 export class Functions {
   private fns = new Map<string, FunctionDef>();
 
-  constructor(private engine: Engine) {}
+  /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
+  readonly actionPermits: ActionPermits;
+
+  constructor(
+    private engine: Engine,
+    opts: { actionPermits?: ActionPermits } = {},
+  ) {
+    this.actionPermits = opts.actionPermits ?? ActionPermits.fromEnv();
+  }
 
   register(module: string, fns: Record<string, FunctionDef>) {
     for (const [n, f] of Object.entries(fns)) this.fns.set(`${module}:${n}`, f);
@@ -333,14 +346,39 @@ export class Functions {
     opts: { job?: string; internal?: boolean } = {},
   ): Promise<unknown> {
     const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal);
-    const identity = (caller?.identity ?? null) as UserIdentity | null;
-    const ctx: ActionCtx = {
-      auth: { getUserIdentity: async () => copy(identity) },
-      runQuery: (n, a) => this.runQuery(n, a, false, caller),
-      runMutation: (n, a) => this.runMutation(n, a, false, caller),
-      scheduler: makeScheduler(this, { engine: this.engine, job: opts.job }),
-    };
+    const ctx = this.actionCtx(caller, null, opts.job);
     const a = this.checkArgs(f, args);
-    return Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r));
+    return this.actionPermits.run(() => Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
+  }
+
+  /**
+   * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
+   * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
+   */
+  private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string): ActionCtx {
+    const identity = (caller?.identity ?? null) as UserIdentity | null;
+    return {
+      auth: {
+        getUserIdentity: async () => {
+          if (authError) throw authError;
+          return copy(identity);
+        },
+      },
+      runQuery: (n, a) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
+      runMutation: (n, a) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
+      runAction: (n, a) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      scheduler: makeScheduler(this, { engine: this.engine, job }),
+    };
+  }
+
+  /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */
+  runHttpAction(
+    handler: (ctx: ActionCtx, request: Request) => Promise<Response> | Response,
+    request: Request,
+    caller: Caller,
+    authError: Error | null,
+  ): Promise<unknown> {
+    const ctx = this.actionCtx(caller, authError);
+    return this.actionPermits.run(async () => handler(ctx, request));
   }
 }

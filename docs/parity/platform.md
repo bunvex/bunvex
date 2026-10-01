@@ -139,12 +139,16 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | missing | ARCHITECTURE marks it M. Methods: GET, POST, PUT, DELETE, OPTIONS, PATCH. HEAD is served as GET. `/.files/` is reserved. |
-| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | missing | Uses the action ctx: runQuery, runMutation, runAction, scheduler, storage, auth, vectorSearch. |
-| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | missing | Decided (owner, 2026-10-01): as Convex, `/http/*` and a separate site origin on port 3211 (DV-86). |
-| Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | missing | |
-| CORS is left to the app (no backend CORS on `/http`) | `router.rs` | missing | |
+| `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | done (STUDY-31) | Passed as `createServer({ http })`, checked at start (H1, DV-143). |
+| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | partial (STUDY-31) | ctx: runQuery, runMutation, runAction, scheduler, auth; storage and vectorSearch come with their features. |
+| Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | done (STUDY-31) | `/http/*` on the API port and the site port (`sitePort`, default the API port + 1; DV-86). The URL a handler sees is rebuilt from Host / X-Forwarded-Proto / Forwarded. |
+| Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | done (STUDY-31) | Responses cut past 20 MiB (logged), as Convex; requests capped by `maxRequestBodySize` (H3, DV-145). No body on GET, HEAD, OPTIONS. |
+| CORS is left to the app (no backend CORS on `/http`) | `router.rs` | done (STUDY-31) | |
 | Component HTTP mounts (`httpPrefix`) | `application_function_runner/http_routing.rs` | missing | |
+| Errors: 404 `No matching routes found` / not enabled, 405, 500 JSON `{code, trace?, data?}` with a fresh request id, 408 at 300 s, 429 past 64 concurrent actions | `action/mod.rs`, `redaction.rs`, `http_routing.rs`, `application_function_runner` | done (STUDY-31) | "not enabled" says "bunvex deployment"; the 429 message ends with how to raise the limit (DV-03). |
+| Auth from `Authorization` never rejects up front; `getUserIdentity()` throws the verification error | `http_actions.rs`, `task_executor.rs` | done (STUDY-31) | |
+| Request id header added to the request when missing | `common/src/http/mod.rs` `ExtractRequestId` | done (STUDY-31) | `bunvex-request-id` (H2, DV-144). |
+| Concurrent actions limited (64), a 10 s wait, then 429 `TooManyConcurrentRequests` | knob `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` | done (STUDY-31) | Every action (HTTP API, sync, scheduled, nested, HTTP actions), with Convex's knob names. |
 
 ### 9. Node.js actions ("use node")
 
