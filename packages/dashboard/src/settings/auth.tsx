@@ -22,7 +22,7 @@ export function AuthenticationSettingsScreen() {
   const { source } = useQueryScope();
   if (typeof source.listAuthProviders !== "function") return <NotOffered title="Settings" what="authentication" />;
   return (
-    <SettingsLayout>
+    <SettingsLayout title="Authentication" description="The identity providers this deployment trusts">
       <Authentication />
     </SettingsLayout>
   );

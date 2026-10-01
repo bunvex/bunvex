@@ -1704,3 +1704,46 @@ Logs layout, and the Functions, Schema and Topology screens' top bars match it. 
   presets, the details following ↓; Scheduled's function and state facets with counts and the URL; e2e at
   1440: History, Scheduled, Crons and Files — Bar 1, the filter header and the panel header on one line, the
   grid to the bottom, no page scroll, ↓ moves the open details; Functions' 44 px Bar 1 with its tabs.
+
+## 23. Design language: the section column (the owner's call, 1 Oct 2026)
+
+The owner showed Supabase-like screens as **layout references only**; bunvex keeps its own context and design
+system. Every screen is: the main sidebar · the screen's **section column** · the main area (Bar 1, then the
+content full-bleed) · the docked details panel, only while something is selected.
+
+### 23.1 The section column (`shell/section-column.tsx`)
+
+- **One component** for every screen's column (it replaces §22.4's filter column and the Database tables
+  list's own frame): fixed, resizable from its right edge (the window-splitter handle; 176–440 px, default
+  224), its width kept in this browser per screen.
+- **Top**, 44 px — on Bar 1's line and the panel header's: the screen's name (a level-2 heading) and its
+  primary action when it has one ("+ New …", "Upload").
+- **Nav groups** (`SectionNav`): the screen's pages under small uppercase labels (a group may have none), the
+  current page marked (the router's `aria-current`).
+- **Filters** (`SectionFilters`), below the nav: the current page's facets — checkbox and radio groups, each
+  choice with how many loaded rows it holds, in text — with Reset. Only on pages that have filters.
+- **Below its breakpoint** (md; lg on Database, whose table picker sits above the grid there) the column is
+  hidden; a button in Bar 1 (`useSectionSheet`: "Filters", "Pages", "Schedules") opens the same content as a
+  sheet (the shared panel), which a picked page closes.
+- **Bar 1** names the current page (the `h1`), says in a few words what it is for, and holds its actions.
+
+### 23.2 The main sidebar's groups
+
+(no label) Health, Topology · **Data**: Database, Schema, Files · **Functions**: Functions, Schedules ·
+**Observe**: Logs, History · (no label) Settings, last. Each group is a list named by its label. Schema sits
+with Database (it describes the data) and Files is stored data; Schedules run functions; Logs and History are
+what happened. **Manage** (Authentication) joins with §25.
+
+### 23.3 The screens on the column
+
+- **Database**: "Database"; search, Create table (it turns into its name box in place, so it stays at the top
+  of the list rather than in the header), then the TABLES group.
+- **Settings**: "Settings"; **Configuration** (General, Environment variables, Authentication) and **Data**
+  (Snapshots) — instead of the page tabs. Bar 1: the page's name and purpose; the page scrolls inside.
+- **Schedules**: "Schedules"; Scheduled functions and Cron jobs as the nav (no tabs in Bar 1); the state and
+  function filters below it on Scheduled functions only. Bar 1's `h1` is the page's name.
+- **Logs**, **History**: "Logs" / "History", then their filters (§22.4, §22.5).
+- Tests: the grouped sidebar; Settings' groups and current page; Schedules' filters on one page only; the
+  column on Database, Logs and History; the phone sheet (a pick closes it). e2e at 1440: the column header and
+  Bar 1 on one line, no page scroll, on Database, Settings, Schedules, Logs, History; at 390 the column hidden
+  and the Pages sheet navigating.

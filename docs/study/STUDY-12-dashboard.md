@@ -389,6 +389,13 @@ out as Database and Logs (owner's call, 1 Oct 2026):
 | L16 | A run's, a job's, an event's and a file's details follow the current row while open | owner's call (as Database's, §14.6) |
 | L17 | The Functions screen's validators move into its Statistics tab (bunvex shows validators at all only by the owner's call, V1) | owner's call |
 
+### 7.6 The section column and the grouped sidebar (added 1 Oct 2026, UI-01 §23)
+
+Convex's dashboard has a flat sidebar and, per screen, its own frame (Data's table list, Settings' page
+sidebar in `DeploymentSettingsLayout.tsx`, the Schedules tabs). bunvex gives every screen one section column
+(name and primary action, nav groups, the current page's filters) and labels the sidebar's groups — the
+owner's call (L18), with Supabase-like screens as layout references only.
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
