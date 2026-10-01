@@ -112,6 +112,10 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-148 | `_storage` a real system table projected to the public shape | virtual table over `_file_storage` | no | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F1](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-149 | Public origins as `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` | yes (env names) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F2](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-150 | A deleted file's bytes removed after commit; orphan blobs swept | bytes never removed | no (disk use only) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F3](../study/STUDY-32-file-storage.md#4-divergences) |
+| DV-151 | Uploads unlimited, exempt from `maxRequestBodySize` | no upload limit | no (matches) | See STUDY-32 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-32 F4](../study/STUDY-32-file-storage.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -201,12 +205,6 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences).
 
-| ID | bunvex | Convex | Observable | Note | Source |
-|---|---|---|---|---|---|
-| DV-148 | `_storage` a real system table projected to the public shape | virtual table over `_file_storage` | no | Recommended: yes | [STUDY-32 F1](../study/STUDY-32-file-storage.md#4-divergences) |
-| DV-149 | Public origins as `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` | yes (env names) | Recommended: yes | [STUDY-32 F2](../study/STUDY-32-file-storage.md#4-divergences) |
-| DV-150 | A deleted file's bytes removed after commit; orphan blobs swept | bytes never removed | no (disk use only) | Recommended: yes | [STUDY-32 F3](../study/STUDY-32-file-storage.md#4-divergences) |
-| DV-151 | Uploads unlimited, exempt from `maxRequestBodySize` | no upload limit | no (matches) | Recommended: yes | [STUDY-32 F4](../study/STUDY-32-file-storage.md#4-divergences) |
 
 
 ## Gaps recorded in studies
