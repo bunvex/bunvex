@@ -21,14 +21,31 @@ import {
   valueSize,
 } from "@bunvex/values";
 import BTree from "sorted-btree";
-import { Catalog, INDEX_TABLE, type IndexMeta, planCatalog, TABLES_TABLE, type TableMeta } from "./catalog.ts";
+import {
+  Catalog,
+  INDEX_TABLE,
+  IndexBackfillingError,
+  type IndexMeta,
+  IndexStagedError,
+  planCatalog,
+  TABLES_TABLE,
+  type TableMeta,
+} from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
-import { checkIdentifier, type Doc, type IndexDef, indexKey, type TableDef } from "./schema.ts";
+import {
+  checkIdentifier,
+  type Doc,
+  type IndexDef,
+  indexKey,
+  maintainedIndexes,
+  SYSTEM_INDEXES,
+  type TableDef,
+} from "./schema.ts";
 
 const ANY = v.any();
 
@@ -311,6 +328,39 @@ export class Tx {
     } finally {
       this.systemDepth--;
     }
+  }
+
+  /**
+   * Called with the commit's ts once it is visible, before any commit listener runs: the engine installs a
+   * catalog change there (STUDY-29), so nothing sees the commit with the old catalog.
+   */
+  onCommitVisible: ((ts: number) => void) | null = null;
+
+  /**
+   * @internal (QueryImpl) The index `withIndex(name)` reads, as Convex's `require_enabled`: an enabled
+   * index, or Convex's error for one still being built. The read depends on the index's `_index` document,
+   * as in Convex, so a cached result or a subscription re-runs when the index is replaced or enabled.
+   */
+  resolveIndex(t: TableDef, name: string): IndexDef {
+    const ix = t.indexes.get(name);
+    // An index enabled after this snapshot was still being built at it.
+    if (ix && (ix.readyTs ?? 0) <= this.snapshot) {
+      if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
+      return ix;
+    }
+    const pending = ix ?? t.pending.find((p) => p.name === name);
+    if (!pending) throw new Error(`unknown index ${t.name}.${name}`);
+    if (pending.metaId !== undefined) this.recordIndexMeta(pending);
+    throw pending.staged ? new IndexStagedError(`${t.name}.${name}`) : new IndexBackfillingError(`${t.name}.${name}`);
+  }
+
+  private recordIndexMeta(ix: IndexDef) {
+    // Built once per index: this is on the path of every indexed query.
+    if (!ix.metaRead) {
+      const k = encodeKey([ix.metaId!]);
+      ix.metaRead = { index: this.catalog.table(INDEX_TABLE).byId.id, lo: k, hi: prefixEnd(k) };
+    }
+    this.recordInterval(ix.metaRead);
   }
 
   private recordInterval(i: Interval) {
@@ -688,7 +738,7 @@ export class Tx {
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
-    for (const ix of t.indexes.values()) {
+    for (const ix of maintainedIndexes(t)) {
       const curKey = current ? indexKey(ix, current) : null;
       const newKey = next ? indexKey(ix, next) : null;
       let tree = this.pending.get(ix.id);
@@ -793,7 +843,7 @@ export class Tx {
     const idx: IndexWrite[] = [];
     for (const [id, w] of this.writes) {
       docs.push({ table: w.table.id, id, json: w.next ? encodeDoc(w.next) : null });
-      for (const ix of w.table.indexes.values()) {
+      for (const ix of maintainedIndexes(w.table)) {
         const oldK = w.old ? indexKey(ix, w.old) : null;
         const newK = w.next ? indexKey(ix, w.next) : null;
         if (oldK && newK && compareKeys(oldK, newK) === 0) {
@@ -898,8 +948,7 @@ class QueryImpl implements TxQuery {
     const t = this.st.t;
     return this.chain((n) => {
       if (!t) return;
-      const found = t.indexes.get(name);
-      if (!found) throw new Error(`unknown index ${this.table}.${name}`);
+      const found = this.tx.resolveIndex(t, name);
       n.ix = found;
       n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
     });
