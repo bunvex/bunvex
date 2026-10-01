@@ -254,7 +254,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
   const scope = useQueryScope();
   const { data: file, error, isPending } = useQuery(fileQuery(scope, props.id));
   return (
-    <Panel title="File" onClose={props.onClose}>
+    <Panel kind="files-details" title="File" onClose={props.onClose}>
       {error ? (
         <ErrorState error={toDataSourceError(error)} />
       ) : isPending ? (

@@ -60,6 +60,19 @@ async function open(
   return { page, external, errors, close: () => context.close() };
 }
 
+/** Retries an assertion for a moment (a hover's effect lands a frame later). */
+async function expect_(check: () => Promise<void>, ms = 2000) {
+  const until = Date.now() + ms;
+  for (;;) {
+    try {
+      return await check();
+    } catch (e) {
+      if (Date.now() > until) throw e;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+}
+
 const heading = (page: Page, name: string) => page.getByRole("heading", { level: 1, name }).waitFor();
 const cellOf = (page: Page, text: RegExp) => page.getByRole("gridcell").filter({ hasText: text }).first();
 const inMonaco = (page: Page) => page.evaluate(() => !!document.activeElement?.closest(".monaco-editor"));
@@ -294,6 +307,162 @@ describe("the dashboard in a browser", () => {
     expect(["react-flow__", "elk.algorithm"].filter((t) => code.includes(t))).toEqual([]);
   });
 
+  test("Topology: the diagram in both themes — nodes, edges, particles, cache strips, the Cache tab", async () => {
+    const one = await open("/topology");
+    await heading(one.page, "Topology");
+    await one.page.getByRole("region", { name: "Topology diagram" }).locator(".react-flow__edge").nth(1).waitFor();
+    expect(await one.page.locator(".react-flow__node").count()).toBe(3);
+    await one.close();
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/topology?nodes=4", { colorScheme });
+      await heading(page, "Topology");
+      const canvas = page.getByRole("region", { name: "Topology diagram" });
+      await canvas.locator(".react-flow__edge").nth(6).waitFor();
+      expect(await canvas.locator(".react-flow__node").count()).toBe(8);
+      expect(await canvas.locator(".react-flow__edge").count()).toBe(7);
+      expect(await page.locator("[data-cache-strip]").count()).toBe(4);
+      expect(await page.locator("[data-cache-strip]").first().textContent()).toMatch(/^Cache\d+%[\d.]+k?\/5k\d+\/s$/);
+      expect(await page.locator("[data-edge-label]").allTextContents()).toContainEqual(
+        expect.stringMatching(/commits\/s$/),
+      );
+      expect(await page.locator("[data-particle]").count()).toBeGreaterThan(0);
+      // hovering a follower lights its edges and dims the others
+      await canvas.locator('.react-flow__node[data-id="node:node-b"]').hover();
+      await expect_(async () =>
+        expect(await page.locator('.react-flow__node[data-id="node:node-c"] > div').getAttribute("class")).toContain(
+          "opacity-30",
+        ),
+      );
+      await canvas.locator('.react-flow__node[data-id="node:node-b"]').click();
+      const panel = page.getByRole("complementary", { name: "node-b" });
+      await panel.getByRole("tab", { name: "Cache" }).click();
+      await panel.getByText("Most cached queries").waitFor();
+      expect(errors).toEqual([]);
+      await close();
+    }
+    // reduced motion: the same edges, no particles
+    const still = await open("/topology?nodes=4", { reducedMotion: "reduce" });
+    await still.page
+      .getByRole("region", { name: "Topology diagram" })
+      .locator(".react-flow__edge")
+      .nth(6)
+      .waitFor({ state: "attached" });
+    expect(await still.page.locator("[data-reduced-motion]").count()).toBe(1);
+    expect(await still.page.locator("[data-particle]").count()).toBe(0);
+    await still.close();
+  });
+
+  test("Topology on a phone: one column framed to the width, readable, panned vertically; a tap opens a node", async () => {
+    const { page, errors, close } = await open("/topology?nodes=4", { viewport: { width: 390, height: 844 } });
+    await heading(page, "Topology");
+    const canvas = page.getByRole("region", { name: "Topology diagram" });
+    expect(await canvas.getAttribute("data-layout")).toBe("narrow");
+    const first = canvas.locator('.react-flow__node[data-id="node:node-b"]');
+    await first.waitFor();
+    await page.waitForTimeout(300);
+    const box = (await first.boundingBox())!;
+    // the cards are drawn near their real size (readable), inside the screen's width
+    expect(box.width).toBeGreaterThan(220);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    await first.click();
+    await page.getByRole("complementary", { name: "node-b" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("side panels are docked beside the content (it shrinks), resizable; a full-screen sheet on a phone", async () => {
+    for (const [path, name, content] of [
+      ["/database/users?panel=indexes", "Indexes of users", '[data-slot="data-table"]'],
+      ["/topology?nodes=4&node=node-b", "node-b", '[aria-label="Topology diagram"]'],
+    ] as const) {
+      const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
+      const panel = page.getByRole("complementary", { name });
+      await panel.waitFor();
+      await page.locator(content).first().waitFor();
+      const p = (await panel.boundingBox())!;
+      const c = (await page.locator(content).first().boundingBox())!;
+      // side by side: the content ends where the panel starts, nothing under the panel
+      expect(c.x + c.width).toBeLessThanOrEqual(p.x + 1);
+      expect(p.x + p.width).toBeGreaterThanOrEqual(1439);
+      // drag its edge 100 px right: the panel narrows, the content widens to match (it never passes 45 % of its row)
+      const handle = panel.getByRole("separator", { name: "Resize the panel" });
+      const h = (await handle.boundingBox())!;
+      await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(h.x + h.width / 2 + 100, h.y + h.height / 2, { steps: 5 });
+      await page.mouse.up();
+      await expect_(async () => expect((await panel.boundingBox())!.width).toBeCloseTo(p.width - 100, -1));
+      const c2 = (await page.locator(content).first().boundingBox())!;
+      expect(c2.width).toBeGreaterThan(c.width + 50);
+      expect(c2.x + c2.width).toBeLessThanOrEqual((await panel.boundingBox())!.x + 1);
+      expect(errors).toEqual([]);
+      await close();
+    }
+    const phone = await open("/database/users?panel=indexes", { viewport: { width: 390, height: 844 } });
+    const sheet = phone.page.getByRole("complementary", { name: "Indexes of users" });
+    await sheet.waitFor();
+    const s = (await sheet.boundingBox())!;
+    expect([Math.round(s.x), Math.round(s.width)]).toEqual([0, 390]);
+    expect(await sheet.getByRole("separator").isVisible()).toBe(false);
+    await phone.close();
+  });
+
+  test('Schema: an Id<"users"> type pans to users, lights it and focuses it', async () => {
+    const { page, errors, close } = await open("/schema");
+    await heading(page, "Schema");
+    const users = page.locator('.react-flow__node-table[data-id="users"]');
+    await users.waitFor();
+    await page.getByRole("button", { name: 'owner: Id<"users">, go to table users' }).click();
+    await expect_(async () => expect(await users.locator(":scope > div").getAttribute("class")).toContain("ring-info"));
+    await expect_(async () => expect(await users.evaluate((n) => n === document.activeElement)).toBe(true));
+    const box = (await users.boundingBox())!;
+    const canvas = (await page.locator(".react-flow").first().boundingBox())!;
+    // in view after the pan
+    expect(box.x).toBeGreaterThanOrEqual(canvas.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Database: the grid fills to the bottom, the bars line up with the panel's header, the panel follows the row", async () => {
+    for (const [table, width] of [
+      ["tasks", 1440],
+      ["imports", 1440],
+      ["tasks", 1024],
+    ] as const) {
+      const { page, errors, close } = await open(`/database/${table}`, { viewport: { width, height: 900 } });
+      await heading(page, table);
+      const grid = page.getByRole("grid", { name: `Documents in ${table}` });
+      await grid.getByRole("row").nth(3).waitFor();
+      await grid.getByRole("link").first().click();
+      const panel = page.getByRole("complementary");
+      await panel.waitFor();
+      const m = await page.evaluate(() => {
+        const region = document.querySelector('[data-slot="data-table"]')!.getBoundingClientRect();
+        const bar1 = document.querySelector("h1")!.parentElement!.getBoundingClientRect();
+        const header = document.querySelector('[data-slot="side-panel"] header')!.getBoundingClientRect();
+        return {
+          gridBottom: region.bottom,
+          bar1Bottom: bar1.bottom,
+          panelHeaderBottom: header.bottom,
+          viewport: innerHeight,
+          pageScrolls: document.documentElement.scrollHeight > innerHeight,
+        };
+      });
+      expect(Math.abs(m.gridBottom - m.viewport)).toBeLessThanOrEqual(1);
+      expect(Math.abs(m.bar1Bottom - m.panelHeaderBottom)).toBeLessThanOrEqual(1);
+      expect(m.pageScrolls).toBe(false);
+      // a click on any cell of another row: the panel shows that row's document
+      const third = grid.getByRole("row").nth(3);
+      const id = await third.getByRole("link").textContent();
+      await third.getByRole("gridcell").nth(2).click();
+      await page.getByRole("complementary", { name: id! }).waitFor();
+      expect(new URL(page.url()).searchParams.get("doc")).toBe(id);
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
     await heading(page, "Schedules");
@@ -473,6 +642,8 @@ describe("the dashboard in a browser", () => {
         ["/settings/general", "Settings"],
         ["/settings/authentication", "Settings"],
         ["/settings/snapshots", "Settings"],
+        ["/topology?nodes=4", "Topology"],
+        ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

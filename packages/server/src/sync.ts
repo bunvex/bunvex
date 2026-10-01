@@ -10,6 +10,10 @@
 //   identity) at the same ts awaits one execution, and a result stays valid at a later ts while no commit
 //   wrote into its reads (Convex's `extend_validity`). Per connection, only the frame is assembled.
 // - The connection's mutations run one at a time, in order; its actions run concurrently.
+// - A commit that invalidates more than `threshold` subscriptions at once is splayed (STUDY-08 §3.5): each
+//   invalidated session query is notified after a uniform random delay in [0, count × multiplier] ms, as
+//   Convex's `advance_log` does. Anything else that triggers a transition (the session's own mutation, a
+//   query set change) still runs at once and covers the invalidated queries too.
 
 import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
@@ -18,8 +22,8 @@ import {
   type Interval,
   type LogEntry,
   OccError,
-  overlaps,
   type QueryJournal,
+  ReadSetIndex,
   stringifyValue,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
@@ -40,6 +44,75 @@ const CLOSE_INTERNAL_ERROR = 1011;
 const CLOSE_TRY_AGAIN_LATER = 1013;
 
 /**
+ * Splaying (Convex's `SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, crates/common/src/knobs.rs): a commit that
+ * invalidates MORE subscriptions than this delays their notifications.
+ */
+export const SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD = 200;
+/** Convex's `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`: the splay window is count × this many ms. */
+export const SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER_MS = 5;
+
+/** Timers the splay runs on; tests inject a fake clock. */
+export type SplayTimers = {
+  now(): number;
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+};
+export type SplayOptions = {
+  /** Splay when more subscriptions than this are invalidated by one commit. */
+  threshold: number;
+  /** The delay window is `count × multiplierMs` (0 turns splaying off). */
+  multiplierMs: number;
+  /** Uniform in [0, 1). Not `Math.random`, which is seeded inside executions (STUDY-03). */
+  random: () => number;
+  timers: SplayTimers;
+};
+
+const realTimers: SplayTimers = {
+  now: () => performance.now(),
+  set: (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return t;
+  },
+  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+};
+/** A uniform [0, 1) from the system's CSPRNG, drawn 1 024 at a time. */
+function cryptoRandom(): () => number {
+  const buf = new Uint32Array(1024);
+  let i = buf.length;
+  return () => {
+    if (i === buf.length) {
+      crypto.getRandomValues(buf);
+      i = 0;
+    }
+    return buf[i++] / 2 ** 32;
+  };
+}
+
+/** A knob from the environment, under Convex's name: a non-negative integer, or the default. */
+function knob(env: Record<string, string | undefined>, name: string, def: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name}: not a non-negative integer: ${raw}`);
+  return n;
+}
+
+/** The splay settings: `opts` over the environment (Convex's knob names) over Convex's defaults. */
+export function splayOptions(opts: Partial<SplayOptions> = {}, env = process.env): SplayOptions {
+  return {
+    threshold:
+      opts.threshold ??
+      knob(env, "SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD", SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD),
+    multiplierMs:
+      opts.multiplierMs ??
+      knob(env, "SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER", SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER_MS),
+    random: opts.random ?? cryptoRandom(),
+    timers: opts.timers ?? realTimers,
+  };
+}
+
+/**
  * An execution key ends with whose result it is: `*` for a run that read no identity (shared by every
  * caller), `u:<identity>` for one that did (STUDY-27 §1.4, as the HTTP query cache; refines DV-12).
  */
@@ -54,6 +127,8 @@ export type SyncDeps = {
   formatError: (e: unknown) => { error: string; data?: string };
   /** Arguments in JSON form → values. */
   fromWire: (args: unknown) => unknown;
+  /** Splaying of wide invalidations; defaults to `splayOptions()`. */
+  splay?: SplayOptions;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
   verifyToken: (token: string) => Promise<VerifiedIdentity>;
 };
@@ -116,13 +191,17 @@ export class SyncHub {
   /** Executions running, by `ts` + key: the single flight. */
   private inflight = new Map<string, { p: Promise<{ exec: Execution; idPart: string }>; owner: string }>();
   private watchers = new Map<string, Set<SyncSession>>();
+  /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
+  readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
-  stats = { executions: 0, reused: 0, transitions: 0 };
+  stats = { executions: 0, reused: 0, transitions: 0, splayed: 0 };
+  readonly splay: SplayOptions;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
 
   constructor(readonly deps: SyncDeps) {
+    this.splay = deps.splay ?? splayOptions();
     deps.engine.committer.onCommit((entries) => this.onCommit(entries));
     this.heartbeat = setInterval(() => {
       const now = performance.now();
@@ -133,13 +212,49 @@ export class SyncHub {
 
   stop() {
     clearInterval(this.heartbeat);
+    for (const s of this.sessions) s.cancelSplay();
   }
 
+  /**
+   * Notify the sessions whose queries a commit wrote into. As Convex's `advance_log`
+   * (crates/database/src/subscription.rs): a subscription is one session query, and when one pass
+   * invalidates more than `threshold` of them, each is notified after a uniform random delay in
+   * `[0, count × multiplierMs]` ms. A session wakes at the earliest delay among its queries, and its
+   * transition then reruns every query that is stale, as Convex's sync worker does on any wake.
+   */
   private onCommit(entries: LogEntry[]) {
-    for (const [key, sessions] of this.watchers) {
-      const e = this.latest.get(key);
-      if (!e || !entries.some((c) => overlaps(c.writes, e.reads))) continue;
-      for (const s of sessions) s.schedule();
+    const hit = this.reads.matchingEntries(entries);
+    if (hit.size === 0) return;
+    // Session → how many of its queries this commit invalidates. A query whose splayed notification is
+    // still pending is not counted again: in Convex it left the subscription map when it was invalidated.
+    const touched = new Map<SyncSession, { n: number; keys: string[] }>();
+    let count = 0;
+    for (const key of hit) {
+      const sessions = this.watchers.get(key);
+      if (!sessions) continue;
+      for (const s of sessions) {
+        const n = s.newlyInvalidated(key);
+        if (n === 0) continue;
+        count += n;
+        const t = touched.get(s);
+        if (t) {
+          t.n += n;
+          t.keys.push(key);
+        } else touched.set(s, { n, keys: [key] });
+      }
+    }
+    const { threshold, multiplierMs, random } = this.splay;
+    if (count <= threshold || multiplierMs === 0) {
+      for (const s of touched.keys()) s.schedule();
+      return;
+    }
+    this.stats.splayed += count;
+    // Uniform over the integers 0..=window, as `rand::random_range(0..=splay_amt_millis)`.
+    const window = count * multiplierMs;
+    for (const [s, { n, keys }] of touched) {
+      let delay = window;
+      for (let i = 0; i < n; i++) delay = Math.min(delay, Math.floor(random() * (window + 1)));
+      s.scheduleAfter(delay, keys);
     }
   }
 
@@ -150,7 +265,10 @@ export class SyncHub {
    */
   adopt(key: string, e: Execution) {
     const cur = this.latest.get(key);
-    if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) this.latest.set(key, e);
+    if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) {
+      this.latest.set(key, e);
+      this.reads.set(key, e.reads);
+    }
   }
 
   watch(key: string, s: SyncSession) {
@@ -164,6 +282,7 @@ export class SyncHub {
     if (!set?.delete(s) || set.size > 0) return;
     this.watchers.delete(key);
     this.latest.delete(key);
+    this.reads.delete(key);
   }
 
   /**
@@ -294,6 +413,12 @@ export class SyncSession {
   /** The execution keys this session watches (those of its queries), and whether they may have changed. */
   private watching = new Set<string>();
   private keysChanged = false;
+  /** How many of this session's queries have each key (Convex counts one subscription per query). */
+  private keyCounts = new Map<string, number>();
+  /** A splayed notification: its timer, when it fires, and the keys it is for (STUDY-08 §3.5). */
+  private splayTimer: unknown = null;
+  private splayDue = Number.POSITIVE_INFINITY;
+  private splayedKeys = new Set<string>();
   /** `version` as JSON: the next transition's `startVersion`. */
   private versionText = versionJson(this.version);
 
@@ -306,6 +431,7 @@ export class SyncSession {
 
   close() {
     this.closed = true;
+    this.cancelSplay();
     for (const k of this.watching) this.hub.unwatch(k, this);
     this.watching.clear();
     this.queries.clear();
@@ -433,6 +559,42 @@ export class SyncSession {
     }
   }
 
+  /**
+   * How many of this session's queries on `key` a commit newly invalidates: none while a splayed
+   * notification for the key is pending (Convex removed those subscriptions when it invalidated them).
+   */
+  newlyInvalidated(key: string): number {
+    if (this.closed || this.splayedKeys.has(key)) return 0;
+    return this.keyCounts.get(key) ?? 1;
+  }
+
+  /**
+   * Ask for a transition in `ms`, unless one is already due sooner (Convex's delayed invalidation). `keys`
+   * were invalidated; they stay pending until a transition starts.
+   */
+  scheduleAfter(ms: number, keys: Iterable<string>) {
+    if (this.closed) return;
+    for (const k of keys) this.splayedKeys.add(k);
+    const { timers } = this.hub.splay;
+    const due = timers.now() + ms;
+    if (due >= this.splayDue) return;
+    if (this.splayTimer !== null) timers.clear(this.splayTimer);
+    this.splayDue = due;
+    this.splayTimer = timers.set(() => {
+      this.splayTimer = null;
+      this.splayDue = Number.POSITIVE_INFINITY;
+      this.schedule();
+    }, ms);
+  }
+
+  /** Drop a pending splayed notification: a transition is starting, or the session is closing. */
+  cancelSplay() {
+    if (this.splayTimer !== null) this.hub.splay.timers.clear(this.splayTimer);
+    this.splayTimer = null;
+    this.splayDue = Number.POSITIVE_INFINITY;
+    this.splayedKeys.clear();
+  }
+
   /** Ask for a transition; it starts now, or after the one being computed. */
   schedule() {
     this.scheduled = true;
@@ -491,6 +653,9 @@ export class SyncSession {
     if (this.keysChanged) this.watchKeys();
 
     const ts = engine.committer.visibleTs;
+    // This transition runs every query stale at `ts`, so it covers any pending splayed notification
+    // (Convex drops the invalidation futures of the queries it reruns). Same tick as reading `ts`.
+    this.cancelSplay();
     const stale = [...this.queries].filter(
       ([, q]) => !q.exec || engine.committer.changedBetween(q.exec.reads, q.validAt, ts),
     );
@@ -530,10 +695,18 @@ export class SyncSession {
     this.version = end;
     this.versionText = endText;
     this.hub.stats.transitions++;
-    // A commit that landed while this transition ran, into what it sent: send the next one.
+    // A commit that landed while this transition ran, into what it sent: send the next one. A query this
+    // transition did not rerun is still subscribed, so a splayed commit's timer covers it; one it reran is
+    // subscribed anew, and Convex finds a new subscription already invalid at once (`subscribe` refreshes it
+    // through the write log), so that one does not wait.
     const visible = engine.committer.visibleTs;
+    const rerun = new Set(stale.map(([, q]) => q));
     for (const q of this.queries.values())
-      if (q.exec && engine.committer.changedBetween(q.exec.reads, ts, visible)) {
+      if (
+        q.exec &&
+        (this.splayTimer === null || rerun.has(q)) &&
+        engine.committer.changedBetween(q.exec.reads, ts, visible)
+      ) {
         this.scheduled = true;
         break;
       }
@@ -542,7 +715,11 @@ export class SyncSession {
   /** Watch exactly the keys of the current queries. */
   private watchKeys() {
     const now = new Set<string>();
-    for (const q of this.queries.values()) now.add(q.key);
+    this.keyCounts.clear();
+    for (const q of this.queries.values()) {
+      now.add(q.key);
+      this.keyCounts.set(q.key, (this.keyCounts.get(q.key) ?? 0) + 1);
+    }
     for (const k of this.watching) if (!now.has(k)) this.hub.unwatch(k, this);
     for (const k of now) if (!this.watching.has(k)) this.hub.watch(k, this);
     this.watching = now;

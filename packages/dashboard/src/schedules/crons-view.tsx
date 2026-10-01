@@ -112,7 +112,7 @@ function CronDetails(props: { job: CronJob | null; name: string; onClose: () => 
   const runs = useQuery({ ...cronRunsQuery(scope, props.name), enabled: props.job !== null });
   const { job } = props;
   return (
-    <Panel title={props.name} onClose={props.onClose}>
+    <Panel kind="schedules-cron" title={props.name} onClose={props.onClose}>
       {job === null ? (
         <p className="text-sm text-muted-foreground">There is no cron job named “{props.name}”.</p>
       ) : (

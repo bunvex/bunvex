@@ -156,7 +156,7 @@ function History() {
         )}
       </div>
       {open !== undefined && (
-        <Panel title="Event" onClose={() => setSearch({ event: undefined })}>
+        <Panel kind="history-details" title="Event" onClose={() => setSearch({ event: undefined })}>
           {open === null ? (
             <p className="text-sm text-muted-foreground">This event is not in the loaded list.</p>
           ) : (

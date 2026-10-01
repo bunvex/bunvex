@@ -87,11 +87,13 @@ describe("room for the table", () => {
     expect(again.style.width).toBe("224px");
   });
 
-  test("below 1 536 px the side panel is a drawer over the table, beside it above", async () => {
+  test("the side panel is docked beside the table (the table shrinks), a full-screen sheet below md", async () => {
     mount("/database/tasks?panel=indexes");
     const panel = await screen.findByRole("complementary", { name: "Indexes of tasks" });
-    // layout is the browser's; here the classes say it: fixed and on top by default, in the flow at 2xl
-    expect(panel.className).toMatch(/\bfixed\b.*\bz-30\b/);
-    expect(panel.className).toContain("2xl:static");
+    // layout is the browser's (the e2e measures it); here the classes say it: a sheet by default, in the flow from md
+    expect(panel.className).toMatch(/\bfixed\b.*\binset-0\b/);
+    expect(panel.className).toContain("md:relative");
+    expect(panel.className).toContain("md:shrink-0");
+    expect(panel.className).not.toContain("shadow-xl");
   });
 });
