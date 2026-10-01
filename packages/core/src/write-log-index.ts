@@ -115,15 +115,18 @@ export class WritesByIndex {
   }
 
   /**
-   * The first write with a ts in `(from, to]` whose key is in `reads`, as Convex's `writes_overlap_by_index`:
-   * the indexes read in ascending order, and within an index the oldest such write. `sourceOf` gives the
-   * write source of the commit at a ts. Null when there is none.
+   * A write with a ts in `(from, to]` whose key is in `reads`, or null. The indexes read are looked at in
+   * ascending order, and within the first index that has one, the write named is the oldest, as Convex's
+   * `writes_overlap_by_index` names it for published commits; with `lowestKey`, the one with the lowest key
+   * (the oldest among equal keys), as Convex's `PendingKeysInIndex::overlaps` names it for pending ones.
+   * `sourceOf` gives the write source of the commit at a ts.
    */
   conflict(
     reads: readonly [number, IntervalSet][],
     from: number,
     to: number,
     sourceOf: (ts: number) => string | undefined,
+    lowestKey = false,
   ): Conflict | null {
     for (const [index, set] of reads) {
       const c = this.columns.get(index);
@@ -136,10 +139,17 @@ export class WritesByIndex {
         if (c.ts[mid] <= from) lo = mid + 1;
         else hi = mid;
       }
+      let hit = -1;
       for (let i = lo; i < c.ts.length && c.ts[i] <= to; i++) {
         const w = c.writes[i];
-        if (intervalSetContains(set, w.key)) return { writeTs: c.ts[i], index, id: w.id, source: sourceOf(c.ts[i]) };
+        if (!intervalSetContains(set, w.key)) continue;
+        if (!lowestKey) {
+          hit = i;
+          break;
+        }
+        if (hit < 0 || compareKeys(w.key, c.writes[hit].key) < 0) hit = i;
       }
+      if (hit >= 0) return { writeTs: c.ts[hit], index, id: c.writes[hit].id, source: sourceOf(c.ts[hit]) };
     }
     return null;
   }

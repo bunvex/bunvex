@@ -316,7 +316,7 @@ export class Committer {
     const reads = intervalSetsByIndex(p.reads);
     return (
       this.byIndex.conflict(reads, p.snapshot, this.visibleTs, this.sourceAt) ??
-      this.byIndex.conflict(reads, Math.max(p.snapshot, this.visibleTs), this.appliedTs, this.sourceAt)
+      this.byIndex.conflict(reads, Math.max(p.snapshot, this.visibleTs), this.appliedTs, this.sourceAt, true)
     );
   }
 

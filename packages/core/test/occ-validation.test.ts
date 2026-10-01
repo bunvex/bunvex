@@ -38,21 +38,27 @@ function inside(k: Uint8Array, r: Interval) {
 
 /** The linear validator this replaced: every write of every commit in (from, to] against every interval. */
 function linearConflicts(log: Entry[], reads: Interval[], from: number, to: number) {
-  const out: Conflict[] = [];
+  const out: (Conflict & { key: Uint8Array })[] = [];
   for (const e of log)
     if (e.ts > from && e.ts <= to)
       for (const w of e.writes)
         if (reads.some((r) => r.index === w.index && inside(w.key, r)))
-          out.push({ writeTs: e.ts, index: w.index, id: w.id, source: e.source });
+          out.push({ writeTs: e.ts, index: w.index, id: w.id, source: e.source, key: w.key });
   return out;
 }
 
 /**
  * The indexed answer is right when it finds a conflict exactly when the linear scan does, and names one of
  * the conflicting writes as Convex would: a published one (ts ≤ `published`) before a pending one, then the
- * first index read (ascending), then the oldest write into it.
+ * first index read (ascending), then the oldest published write into it (`writes_overlap_by_index`), or
+ * the pending write with the lowest key, the oldest among equal keys (`PendingKeysInIndex::overlaps`).
  */
-function expectSame(got: Conflict | null, want: Conflict[], what: string, published = Number.POSITIVE_INFINITY) {
+function expectSame(
+  got: Conflict | null,
+  want: (Conflict & { key?: Uint8Array })[],
+  what: string,
+  published = Number.POSITIVE_INFINITY,
+) {
   if (want.length === 0) {
     expect(got, what).toBeNull();
     return;
@@ -60,12 +66,26 @@ function expectSame(got: Conflict | null, want: Conflict[], what: string, publis
   expect(got, what).not.toBeNull();
   const g = got as Conflict;
   // A real conflicting write (its commit's ts, index, document and source)…
-  expect(want, what).toContainEqual({ writeTs: g.writeTs, index: g.index, id: g.id, source: g.source });
+  expect(
+    want.map(({ key: _, ...c }) => c),
+    what,
+  ).toContainEqual({
+    writeTs: g.writeTs,
+    index: g.index,
+    id: g.id,
+    source: g.source,
+  });
   // …and Convex's choice.
-  const side = want.some((c) => c.writeTs <= published) ? want.filter((c) => c.writeTs <= published) : want;
+  const pending = !want.some((c) => c.writeTs <= published);
+  const side = pending ? want : want.filter((c) => c.writeTs <= published);
   const index = Math.min(...side.map((c) => c.index as number));
   expect(g.index, what).toBe(index);
-  expect(g.writeTs, what).toBe(Math.min(...side.filter((c) => c.index === index).map((c) => c.writeTs)));
+  const inIndex = side.filter((c) => c.index === index);
+  if (pending) {
+    const lowest = inIndex.map((c) => c.key as Uint8Array).sort(Buffer.compare)[0];
+    const atLowest = inIndex.filter((c) => Buffer.compare(c.key as Uint8Array, lowest) === 0);
+    expect(g.writeTs, `${what} (pending)`).toBe(Math.min(...atLowest.map((c) => c.writeTs)));
+  } else expect(g.writeTs, what).toBe(Math.min(...inIndex.map((c) => c.writeTs)));
 }
 
 function randomReads(r: () => number): Interval[] {

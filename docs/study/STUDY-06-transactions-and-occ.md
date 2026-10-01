@@ -399,11 +399,12 @@ Notes:
   first hit is reported with its ts, index, document id and write source.
 - **Published, then pending, as `commit_has_conflict`.** `validate` checks `(snapshot, visibleTs]` first,
   then `(max(snapshot, visibleTs), appliedTs]`, the commits of the current group applied but not yet
-  flushed. bunvex keeps one structure for both. The only difference is which write is *named* when several
-  pending ones conflict: bunvex names the oldest (as for published commits), Convex's key-ordered
-  `PendingKeysInIndex` the lowest key. Whether there is a conflict is the same; the name only reaches the
-  OCC error's write source and the retry's wait for the conflicting ts. Before D11 bunvex named the newest
-  conflicting commit.
+  flushed (Convex's `pending_writes`). bunvex keeps one structure for both, and names the conflicting write
+  as each Convex structure does: among published commits the oldest, among pending ones the lowest key (the
+  oldest among equal keys, a case Convex rules out by panicking), in the first index read that has one. The
+  name reaches the OCC error's write source and the retry's wait for the conflicting ts. Before D11 bunvex
+  named the newest conflicting commit. Scanning the pending window for its lowest key costs the group's
+  writes into the index, which is small; Convex's key-ordered map would be `O(min(p, i) log)`.
 - **`changedBetween`** (subscriptions, the sync worker; Convex's `refresh_token`) runs the same check over
   `(from, to]`.
 - **Size estimate.** `logEntryBytes` counts each write's two column slots: 104 bytes per write instead of 80
@@ -426,8 +427,8 @@ be a real conflicting write chosen as Convex chooses it, `changedBetween` must a
 exactly the writes and indexes of the retained log (~600 000 assertions, ~0.5 s). Sabotage, each turns it
 red: an interval's end inclusive, its start exclusive, the window's lower bound inclusive, its upper bound
 exclusive, trimmed writes not removed, empty columns kept, the committer not appending or not trimming,
-pending commits ignored, published-first order dropped, a wrong write source, a merge that shrinks an
-interval.
+pending commits ignored, published-first order dropped, pending conflicts named by age instead of key, a
+wrong write source, a merge that shrinks an interval.
 
 **Measured** (a laptop with 8 cores and 16 GiB, Bun 1.4.2; "before" is #118's committer, run through
 `COMMITTER=`):
