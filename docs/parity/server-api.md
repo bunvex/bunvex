@@ -158,7 +158,7 @@ Key bunvex facts behind the statuses:
 | `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | missing | New Convex feature. |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | missing | bunvex runs everything on Bun, which is arguably not needed. |
-| Query result caching keyed by args and identity, invalidated by read-set | crates/application cache | partial | Keyed by name and args only, with no identity yet. FIFO eviction. |
+| Query result caching keyed by args and identity, invalidated by read-set | crates/application cache | done (STUDY-08 §3.6) | As Convex (DV-63): keyed by name, canonical args and (when read) identity; an LRU bounded by bytes (`UDF_CACHE_MAX_SIZE`, 100 MiB); identical concurrent calls coalesced, HTTP included; validated against the write log when looked up, at any later ts (`query_at_ts` too); clock readers expire after 17 s. Sync subscriptions keep their own shared executions (DV-09). Pending, internal: a hit writes its token back (DV-153). |
 
 ### 8. Validators (`v`) and value types
 

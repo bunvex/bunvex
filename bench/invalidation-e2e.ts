@@ -1,6 +1,8 @@
 // DV-64 end to end, in process (memory driver): commits/s while N cached queries are live. Each cached query
 // reads one owner's items (an index prefix range); each commit patches one item of one random owner, so it
-// invalidates about one cache entry. (The sync hub registers its subscriptions in the same kind of index.)
+// invalidates about one cache entry. Since DV-63 the query cache checks an entry against the write log when
+// it is looked up, so a commit no longer touches it; the sync hub still matches its subscriptions in a
+// read-set index on every commit.
 //   bun bench/invalidation-e2e.ts            Env: N (default 10000), C (concurrent writers, default 1), SECS (default 5)
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -15,7 +17,6 @@ const SECS = Number(process.env.SECS ?? 5);
 const engine = await new Engine(
   defineSchema({ items: defineTable(v.any()).index("by_owner", ["owner"]) }),
   await MemoryPersistence.open(null, { durable: false }),
-  { cacheMax: N * 2 },
 ).init();
 const ids: string[] = [];
 for (let o = 0; o < M; o += 500)

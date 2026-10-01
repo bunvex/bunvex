@@ -22,6 +22,14 @@ type Execution = {
   perfStart: number;
   /** The real monotonic clock at the start, to count a mutation's elapsed time from. */
   monotonicStart: number;
+  /** What the body observed, for the caller (the query cache expires a result that read the clock). */
+  observed: Observed;
+};
+
+/** What an execution read that makes its result depend on more than its reads. */
+export type Observed = {
+  /** `Date.now()`, `new Date()`, `Date()` or `performance.now()` (Convex's `observed_time`). */
+  time: boolean;
 };
 
 const executions = new AsyncLocalStorage<Execution>();
@@ -80,7 +88,9 @@ export function installDeterminism() {
   installed = true;
   RealDate.now = () => {
     const e = executions.getStore();
-    return e ? e.now : realNow();
+    if (!e) return realNow();
+    e.observed.time = true;
+    return e.now;
   };
   Math.random = () => {
     const e = executions.getStore();
@@ -91,11 +101,14 @@ export function installDeterminism() {
   globalThis.Date = new Proxy(RealDate, {
     construct(target, args, newTarget) {
       const e = args.length === 0 ? executions.getStore() : undefined;
+      if (e) e.observed.time = true;
       return Reflect.construct(target, e ? [e.now] : args, newTarget);
     },
     apply(target) {
       const e = executions.getStore();
-      return e ? new target(e.now).toString() : target();
+      if (!e) return target();
+      e.observed.time = true;
+      return new target(e.now).toString();
     },
   });
   globalThis.fetch = Object.assign(
@@ -123,6 +136,7 @@ export function installDeterminism() {
   performance.now = () => {
     const e = executions.getStore();
     if (!e) return realPerformanceNow();
+    e.observed.time = true;
     const elapsed = e.kind === "mutation" ? realPerformanceNow() - e.monotonicStart : 0;
     return toTenthMs(e.perfStart + elapsed);
   };
@@ -133,8 +147,16 @@ export function installDeterminism() {
   }) as typeof crypto.getRandomValues;
 }
 
-/** Run `fn` as a deterministic execution frozen at `now` (ms), with a fresh random seed. */
-export function runDeterministic<T>(kind: ExecutionKind, now: number, fn: () => T): T {
+/**
+ * Run `fn` as a deterministic execution frozen at `now` (ms), with a fresh random seed. `observed` is
+ * filled in with what the body read (the clock).
+ */
+export function runDeterministic<T>(
+  kind: ExecutionKind,
+  now: number,
+  fn: () => T,
+  observed: Observed = { time: false },
+): T {
   let rng: (() => number) | undefined;
   // The seed is drawn on first use: most executions never call Math.random.
   const random = () => {
@@ -147,6 +169,7 @@ export function runDeterministic<T>(kind: ExecutionKind, now: number, fn: () => 
     random,
     perfStart: now - origin,
     monotonicStart: realPerformanceNow(),
+    observed,
   };
   return executions.run(execution, fn);
 }
