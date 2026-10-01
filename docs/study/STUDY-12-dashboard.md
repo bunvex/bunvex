@@ -349,7 +349,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **decided** (29 Sep 2026): build without metrics |
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed on the mock** (30 Sep 2026): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2) |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
