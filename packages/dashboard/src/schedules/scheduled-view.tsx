@@ -1,12 +1,13 @@
-// Scheduled functions (UI-01 §14.2, STUDY-12 §9): the runs waiting in the scheduler, nearest first, for
-// every function or one; a run's details beside the list, where it can be canceled; Cancel all.
+// Scheduled functions (UI-01 §14.2, §22.5, STUDY-12 §9): the runs waiting in the scheduler, nearest first; a
+// filter column with their state (filtered here, over the loaded runs) and their function (filtered by the
+// source), each with how many loaded runs it has; a run's details docked beside the list, following the
+// current row, where it can be canceled; Cancel all.
 
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
 import { type FunctionKind, type ScheduledFunction, toDataSourceError } from "../data-source.ts";
@@ -14,8 +15,10 @@ import { formatLiteral } from "../database/literal.ts";
 import { formatTime } from "../database/values.ts";
 import { KIND_LETTER } from "../logs/log-list.tsx";
 import { type ScheduledSearch, scheduledRoute } from "../router.tsx";
+import { BAR1 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
+import { FacetColumn, FacetGroup, FacetRadios, useFiltersSheet } from "../shell/facet-column.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { formatRelative } from "./format.ts";
 import { scheduledQuery, scheduleKeys, useSchedulesLive } from "./queries.ts";
@@ -39,7 +42,11 @@ function FunctionName({ path, kind }: { path: string; kind?: FunctionKind }) {
   );
 }
 
-export function ScheduledView() {
+const STATES = ["pending", "inProgress"] as const;
+type RunState = (typeof STATES)[number];
+const STATE_LABEL: Record<RunState, string> = { pending: "Pending", inProgress: "Running" };
+
+export function ScheduledView({ heading }: { heading: ReactNode }) {
   const scope = useQueryScope();
   const { source } = scope;
   const queryClient = useQueryClient();
@@ -55,14 +62,26 @@ export function ScheduledView() {
     caps.operations.includes("writeData") &&
     typeof source.cancelScheduledFunction === "function";
   const list = useInfiniteQuery(scheduledQuery(scope, search.function));
+  // the column's counts: the loaded runs of every function (the same query when none is picked)
+  const every = useInfiniteQuery(scheduledQuery(scope, undefined));
   const liveError = useSchedulesLive();
   const [outcome, setOutcome] = useState<string>();
-  const runs = list.data?.pages.flatMap((p) => p.page) ?? [];
+  const loaded = list.data?.pages.flatMap((p) => p.page) ?? [];
+  const states = search.state?.split(",") as RunState[] | undefined;
+  // the state is filtered here, over the loaded runs; the function by the source
+  const runs = states ? loaded.filter((r) => states.includes(r.state)) : loaded;
+  const counts = useMemo(() => {
+    const byFunction = new Map<string, number>();
+    for (const p of every.data?.pages ?? [])
+      for (const r of p.page) byFunction.set(r.function, (byFunction.get(r.function) ?? 0) + 1);
+    const byState = new Map<RunState, number>();
+    for (const r of loaded) byState.set(r.state, (byState.get(r.state) ?? 0) + 1);
+    return { byFunction, byState, all: [...byFunction.values()].reduce((a, b) => a + b, 0) };
+  }, [every.data, loaded]);
   const kindOf = (path: string) => functions.find((f) => f.path === path)?.kind;
   const now = Date.now();
   const open = search.run === undefined ? undefined : (runs.find((r) => r.id === search.run) ?? null);
   const refresh = () => queryClient.invalidateQueries({ queryKey: scheduleKeys.all(scope.scope) });
-  const pickerId = useId();
 
   const columns: DataTableColumn<ScheduledFunction>[] = [
     col.accessor((r) => r.scheduledTime, {
@@ -102,52 +121,69 @@ export function ScheduledView() {
     await refresh();
   };
 
+  const filtered = search.function !== undefined || search.state !== undefined;
+  const reset = filtered ? () => setSearch({ function: undefined, state: undefined, run: undefined }) : undefined;
+  const sections = (
+    <>
+      <FacetGroup<RunState>
+        title="State"
+        options={STATES}
+        value={states ?? "all"}
+        counts={counts.byState}
+        label={(s) => STATE_LABEL[s]}
+        onChange={(v) =>
+          setSearch({ state: v === "all" ? undefined : v.length ? v.join(",") : "none", run: undefined })
+        }
+      />
+      <FacetRadios
+        title="Function"
+        value={search.function ?? ALL}
+        onChange={(v) => setSearch({ function: v === ALL ? undefined : v, run: undefined })}
+        options={[
+          { value: ALL, label: "All functions", count: counts.all },
+          ...functions.map((f) => ({
+            value: f.path,
+            label: f.path,
+            count: counts.byFunction.get(f.path) ?? 0,
+            mono: true,
+          })),
+        ]}
+      />
+    </>
+  );
+  const sheet = useFiltersSheet({ kind: "schedules-filters", onReset: reset, children: sections });
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span id={pickerId} className="text-sm text-muted-foreground">
-            Function
-          </span>
-          <Select
-            items={[
-              { value: ALL, label: "All functions" },
-              ...functions.map((f) => ({ value: f.path, label: f.path })),
-            ]}
-            value={search.function ?? ALL}
-            onValueChange={(v) => setSearch({ function: v === ALL ? undefined : (v as string), run: undefined })}
-          >
-            <SelectTrigger aria-labelledby={pickerId} className="min-w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>All functions</SelectItem>
-              {functions.map((f) => (
-                <SelectItem key={f.path} value={f.path}>
-                  {f.path}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="ml-auto" />
-          {typeof source.cancelAllScheduledFunctions === "function" && (
-            <ConfirmButton
-              label={search.function ? `Cancel all runs of ${search.function}` : "Cancel all"}
-              disabled={!canCancel || !runs.some((r) => r.state === "pending")}
-              title={search.function ? `Cancel every pending run of ${search.function}?` : "Cancel every pending run?"}
-              description="Runs that have started finish. This cannot be undone."
-              confirm="Cancel the runs"
-              busy="Canceling…"
-              keep="Keep them"
-              action={cancelAll}
-            />
+    <>
+      <FacetColumn label="Schedule filters" widthKey="bunvex-dashboard:schedules-filters-width" onReset={reset}>
+        {sections}
+      </FacetColumn>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className={BAR1}>
+          {heading}
+          {sheet.button}
+          {/* the count next to the title, as on the other list screens (UX-14) */}
+          {!list.isPending && !list.error && (
+            <span className="text-sm text-muted-foreground tabular-nums">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
           )}
+          <span className="ml-auto flex items-center gap-1">
+            {typeof source.cancelAllScheduledFunctions === "function" && (
+              <ConfirmButton
+                label={search.function ? `Cancel all runs of ${search.function}` : "Cancel all"}
+                disabled={!canCancel || !loaded.some((r) => r.state === "pending")}
+                title={
+                  search.function ? `Cancel every pending run of ${search.function}?` : "Cancel every pending run?"
+                }
+                description="Runs that have started finish. This cannot be undone."
+                confirm="Cancel the runs"
+                busy="Canceling…"
+                keep="Keep them"
+                action={cancelAll}
+              />
+            )}
+          </span>
         </div>
-        {/* the count before the list, as on the other list screens (UX-14) */}
-        {!list.isPending && !list.error && (
-          <p className="text-sm text-muted-foreground tabular-nums">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</p>
-        )}
-        <p role="status" className="text-sm text-muted-foreground empty:-mt-3">
+        <p role="status" className="px-4 text-sm text-muted-foreground empty:hidden md:px-6">
           {outcome}
         </p>
         {liveError && <ErrorState error={liveError} />}
@@ -156,24 +192,32 @@ export function ScheduledView() {
         ) : (
           <DataTable
             label="Scheduled functions"
-            className="max-h-[calc(100svh-16rem)]"
+            fill
             columns={columns}
             data={runs}
             getRowId={(r) => r.id}
             defaultColumnWidth={(id) => ({ scheduled: 250, state: 100, function: 240, id: 110 })[id] ?? 160}
             onEndReached={() => list.hasNextPage && !list.isFetchingNextPage && void list.fetchNextPage()}
-            grid={{ activateOnClick: true, onCellActivate: (r) => setSearch({ run: r.id }) }}
+            grid={{
+              activateOnClick: true,
+              onCellActivate: (r) => setSearch({ run: r.id }),
+              // open details follow the current row, as on Database and Logs
+              onCellFocus: (r) => search.run !== undefined && r.id !== search.run && setSearch({ run: r.id }, true),
+            }}
             empty={
               list.isPending
                 ? "Loading…"
                 : search.function
                   ? `No run of ${search.function} is scheduled.`
-                  : "Nothing is scheduled. Functions scheduled with ctx.scheduler.runAfter or runAt wait here until they run."
+                  : filtered
+                    ? "No loaded run matches these filters."
+                    : "Nothing is scheduled. Functions scheduled with ctx.scheduler.runAfter or runAt wait here until they run."
             }
-            footer={list.hasNextPage ? <span>{`${runs.length} loaded`}</span> : undefined}
+            footer={list.hasNextPage ? <span>{`${loaded.length} loaded`}</span> : undefined}
           />
         )}
       </div>
+      {sheet.sheet}
       {open !== undefined && (
         <RunDetails
           run={open}
@@ -187,7 +231,7 @@ export function ScheduledView() {
           onClose={() => setSearch({ run: undefined })}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -201,7 +245,7 @@ function RunDetails(props: {
   const { source } = useQueryScope();
   const { run } = props;
   return (
-    <Panel kind="schedules-run" title="Scheduled run" onClose={props.onClose}>
+    <Panel kind="schedules-run" title="Scheduled run" focusOnOpen={false} onClose={props.onClose}>
       {run === null ? (
         <p className="text-sm text-muted-foreground">This run is no longer scheduled: it ran, or it was canceled.</p>
       ) : (

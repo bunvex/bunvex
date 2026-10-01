@@ -1668,3 +1668,39 @@ the layout only. Supersedes §13.1's layout, its multi-select filters and its to
   Functions tab's column, the phone sheet; e2e at 1440: the filter header, Bar 1 and the panel header on one
   line, the grid down to the bottom, no page scroll; dragging across the histogram filters and goes into the
   URL; the Functions tab with its own column and a screen-high list.
+
+### 22.5 The other grid screens in the same language (the owner's call, 1 Oct 2026)
+
+Follows §22.3 and §22.4: History, Schedules (scheduled functions and cron jobs) and Files take the Database /
+Logs layout, and the Functions, Schema and Topology screens' top bars match it. Supersedes the layouts of
+§14.2, §14.3 and §14.5 (their content, filters and actions still hold).
+
+- **The frame** (`shell/bars.ts`): full-bleed, a screen's height; **Bar 1** — the heading (`text-base`), the
+  count, the actions — 44 px, so its bottom line continues the docked panel header's and the filter column's
+  header; **Bar 2** — search and filters — where a screen has them outside a column; then the grid (`fill`),
+  edge to edge, down to the bottom. Details are the shared docked panel; while open they **follow the
+  current row** (click, ↑/↓; the grid keeps the focus), as on Database and Logs.
+- **The filter column** (`shell/facet-column.tsx`, shared with Logs): resizable, width kept per screen, a
+  44 px "Filters" header with Reset, labelled sections of checkboxes or radios with each choice's count in
+  text; below `md`, a Filters button in Bar 1 opens the same sections in a sheet.
+  - **History**: *Days* (radios: Any day, Today, Last 7 days, Last 30 days — they set `from`), *Day range*
+    (From / Until), *Action* (checkboxes, `?action=a,b`, filtered by the source as before). An action's count
+    is of the loaded events of those days **for every action** (a second query, the same one when no action
+    is picked), so a narrowed list still shows what the other actions would add; a note says the counts are
+    of the loaded events.
+  - **Scheduled functions**: *State* (Pending, Running; filtered here, over the loaded runs: `?state=`) and
+    *Function* (radios, filtered by the source, as before: `?function=`), each with its loaded runs' count.
+    Bar 1: Schedules, the two pages as tabs, the count, Cancel all.
+  - **Cron jobs**: no column — a deployment has a handful of jobs, all in view.
+  - **Files**: no column — its filters are the source's (order, upload days, a storage id), in Bar 2; a
+    content-type facet over one loaded page would mislead. Bar 1: Files, "N files stored", Delete N and
+    Upload (its icon only when the bar is narrow, beside a docked panel).
+- **Functions**: Bar 1 holds the function's name, kind and module, the **Statistics / Logs tabs**, its path
+  (copy) and Run; the tree's search sits on the same 44 px line. The declared validators move into the
+  Statistics tab, so the Logs tab (§22.4) has the whole height below the bar; from `lg` the screen is a
+  screen's height and the tree and the statistics scroll inside.
+- **Schema and Topology**: their top bars become Bar 1 (44 px), on the docked panel header's line.
+- Tests: History's action counts (every action's, while the list is narrowed), the URL, Reset, the day
+  presets, the details following ↓; Scheduled's function and state facets with counts and the URL; e2e at
+  1440: History, Scheduled, Crons and Files — Bar 1, the filter header and the panel header on one line, the
+  grid to the bottom, no page scroll, ↓ moves the open details; Functions' 44 px Bar 1 with its tabs.

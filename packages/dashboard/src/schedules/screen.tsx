@@ -2,48 +2,64 @@
 // functions (`/schedules/functions`) and cron jobs (`/schedules/crons`).
 import { useQueryScope } from "../context.tsx";
 import { DashLink } from "../router.tsx";
+import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { CronsView } from "./crons-view.tsx";
 import { ScheduledView } from "./scheduled-view.tsx";
 
+// in Bar 1: the current page underlined
 const TAB =
-  "border-b-2 border-transparent px-1 pb-1 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-foreground";
+  "inline-block border-b-2 border-transparent px-1 py-0.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-foreground";
+
+/** Bar 1's start on both pages: the heading and the two pages as tabs. */
+function Heading() {
+  return (
+    <>
+      <h1 className={BAR_TITLE}>Schedules</h1>
+      <nav aria-label="Schedules" className="mr-2">
+        <ul className="flex gap-4">
+          <li>
+            <DashLink link={{ to: "/schedules/functions" }} className={TAB}>
+              Scheduled functions
+            </DashLink>
+          </li>
+          <li>
+            <DashLink link={{ to: "/schedules/crons" }} className={TAB}>
+              Cron jobs
+            </DashLink>
+          </li>
+        </ul>
+      </nav>
+    </>
+  );
+}
 
 function Schedules({ view }: { view: "functions" | "crons" }) {
   const { source } = useQueryScope();
   if (typeof source.listScheduledFunctions !== "function" && typeof source.listCronJobs !== "function")
     return <NotOffered title="Schedules" what="scheduled functions or cron jobs" />;
-  return (
-    // full-bleed inside <main>: the details panel runs to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] md:-m-6">
-      <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 md:p-6">
-        <h1 className="text-xl font-semibold tracking-tight">Schedules</h1>
-        <nav aria-label="Schedules">
-          <ul className="flex gap-4 border-b">
-            <li>
-              <DashLink link={{ to: "/schedules/functions" }} className={TAB}>
-                Scheduled functions
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/schedules/crons" }} className={TAB}>
-                Cron jobs
-              </DashLink>
-            </li>
-          </ul>
-        </nav>
-        {view === "functions" ? (
-          typeof source.listScheduledFunctions === "function" ? (
-            <ScheduledView />
-          ) : (
-            <p className="text-sm text-muted-foreground">This deployment does not offer scheduled functions yet.</p>
-          )
-        ) : typeof source.listCronJobs === "function" ? (
-          <CronsView />
-        ) : (
-          <p className="text-sm text-muted-foreground">This deployment does not offer cron jobs yet.</p>
-        )}
+  const missing = (what: string) => (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <div className={BAR1}>
+        <Heading />
       </div>
+      <p className="p-4 text-sm text-muted-foreground md:p-6">This deployment does not offer {what} yet.</p>
+    </div>
+  );
+  return (
+    // full-bleed (UI-01 §22.5): Bar 1 with the two pages, the grid to the bottom, the details docked
+    <div className={SCREEN}>
+      {view === "functions" ? (
+        typeof source.listScheduledFunctions === "function" ? (
+          <ScheduledView heading={<Heading />} />
+        ) : (
+          missing("scheduled functions")
+        )
+      ) : typeof source.listCronJobs === "function" ? (
+        <CronsView heading={<Heading />} />
+      ) : (
+        missing("cron jobs")
+      )}
     </div>
   );
 }

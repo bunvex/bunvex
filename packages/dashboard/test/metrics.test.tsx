@@ -98,8 +98,9 @@ describe("Functions: a function's Statistics tab", () => {
   test("a query: calls, errors, execution time percentiles labelled at their ends, cache hit rate", async () => {
     open("/functions?function=tasks:list");
     const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
-    const charts = await within(panel).findAllByRole("region");
-    expect(charts.map((c) => c.getAttribute("aria-labelledby") && c.querySelector("h3")?.textContent)).toEqual([
+    // the charts (the validators share the tab, UI-01 §22.5)
+    const charts = (await within(panel).findAllByRole("region")).filter((c) => c.getAttribute("aria-labelledby"));
+    expect(charts.map((c) => c.querySelector("h3")?.textContent)).toEqual([
       "Function calls",
       "Errors",
       "Execution time",
