@@ -69,7 +69,7 @@ bunvex/
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
-│   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            M
+│   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            🟡
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
@@ -80,7 +80,7 @@ bunvex/
 │   │   └── s3                       S3 / R2 / MinIO / compatible
 │   │
 │   ├── auth/                        @bunvex/auth
-│   │   ├── jwt                      verify JWT / OIDC (JWKS)                                  M
+│   │   ├── jwt                      verify JWT / OIDC (JWKS), STUDY-27                        ✅
 │   │   ├── clerk                                                                               D
 │   │   └── auth0                                                                               D
 │   │
@@ -100,6 +100,7 @@ bunvex/
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
+│   │   ├── schema                   the schema as a diagram: tables, references (STUDY-12 §14)     ✅
 │   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
 │   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
 │   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅

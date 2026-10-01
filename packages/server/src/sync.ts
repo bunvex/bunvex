@@ -10,7 +10,15 @@
 //   identity) at the same ts awaits one execution, and a result stays valid at a later ts while no commit
 //   wrote into its reads (Convex's `extend_validity`). Per connection, only the frame is assembled.
 // - The connection's mutations run one at a time, in order; its actions run concurrently.
-import { type Engine, type Interval, type LogEntry, OccError, overlaps, stringifyValue } from "@bunvex/core";
+import {
+  type Engine,
+  type Interval,
+  type LogEntry,
+  OccError,
+  overlaps,
+  type QueryJournal,
+  stringifyValue,
+} from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
 import { isSystemError, withRequestId } from "./errors.ts";
@@ -174,7 +182,9 @@ export class SyncHub {
       return engine.queryTracked(body, parseJournal(q.journal), ts);
     });
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
-    const run = r.ok ? r.value : { ok: false as const, error: r.error, reads: [], ts, journal: {} };
+    const run = r.ok
+      ? r.value
+      : { ok: false as const, error: r.error, reads: [], ts, journal: {} as QueryJournal, identityObserved: false };
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
     const lines = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
     const tail = `,"logLines":${lines},"journal":${JSON.stringify(journal)}`;

@@ -12,6 +12,7 @@ export {
 export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
+  type Caller,
   Engine,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,
