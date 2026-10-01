@@ -7,9 +7,9 @@ import type { BlobStore } from "./store.ts";
 const sha256 = (b: Uint8Array) => new Uint8Array(new Bun.CryptoHasher("sha256").update(b).digest());
 const read = async (s: ReadableStream<Uint8Array> | null) =>
   s ? new Uint8Array(await new Response(s).arrayBuffer()) : null;
-const all = async (it: AsyncIterable<string>) => {
+const all = async (it: AsyncIterable<{ key: string; lastModified: number }>) => {
   const out: string[] = [];
-  for await (const k of it) out.push(k);
+  for await (const k of it) out.push(k.key);
   return out;
 };
 
@@ -56,24 +56,29 @@ export function describeBlobStoreConformance(
       expect(new TextDecoder().decode((await read(await store.get(w.key, { start: 9, end: 9 })))!)).toBe("9");
     });
 
-    test("a missing key reads as null; delete is idempotent; keys lists what is stored", async () => {
+    test("a missing key reads as null; delete is idempotent; list() shows what is stored and when", async () => {
       const store = await make();
       expect(await store.get(crypto.randomUUID())).toBeNull();
       const a = await store.put(new Uint8Array([1]));
       const b = await store.put(new Uint8Array([2]));
-      const keys = await all(store.keys());
+      const listed: { key: string; lastModified: number }[] = [];
+      for await (const l of store.list()) listed.push(l);
+      const mine = listed.find((l) => l.key === a.key);
+      expect(mine).toBeDefined();
+      expect(Math.abs(mine!.lastModified - Date.now())).toBeLessThan(120_000);
+      const keys = listed.map((l) => l.key);
       expect(keys).toContain(a.key);
       expect(keys).toContain(b.key);
       await store.delete(a.key);
       await store.delete(a.key);
       expect(await store.get(a.key)).toBeNull();
-      expect(await all(store.keys())).not.toContain(a.key);
+      expect(await all(store.list())).not.toContain(a.key);
       await store.delete(crypto.randomUUID());
     });
 
     test("a write whose body fails leaves no blob", async () => {
       const store = await make();
-      const before = new Set(await all(store.keys()));
+      const before = new Set(await all(store.list()));
       const failing = new ReadableStream<Uint8Array>({
         start(c) {
           c.enqueue(new Uint8Array(1024));
@@ -81,7 +86,7 @@ export function describeBlobStoreConformance(
         },
       });
       expect(await store.put(failing).catch((e: Error) => e.message)).toBe("client went away");
-      expect((await all(store.keys())).filter((k) => !before.has(k))).toEqual([]);
+      expect((await all(store.list())).filter((k) => !before.has(k))).toEqual([]);
     });
 
     if (opts.large)

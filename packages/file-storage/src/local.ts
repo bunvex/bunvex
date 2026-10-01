@@ -1,9 +1,9 @@
 // Blobs in a directory, as Convex's local storage: `<dir>/files/<key>.blob`, written in place and synced
 // before the write returns (Convex's `complete()` calls `sync_all`). A failed write removes what it wrote.
 import { mkdirSync } from "node:fs";
-import { open, readdir, rm } from "node:fs/promises";
+import { open, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { type BlobStore, type ByteRange, pumpHashing, type Written } from "./store.ts";
+import { type BlobStore, type ByteRange, type Listed, pumpHashing, type Written } from "./store.ts";
 
 const KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -48,10 +48,12 @@ export class LocalBlobStore implements BlobStore {
     await rm(this.path(key), { force: true });
   }
 
-  async *keys(): AsyncIterable<string> {
+  async *list(): AsyncIterable<Listed> {
     for (const name of await readdir(this.files)) {
       const key = name.endsWith(".blob") ? name.slice(0, -5) : "";
-      if (KEY.test(key)) yield key;
+      if (!KEY.test(key)) continue;
+      const s = await stat(join(this.files, name)).catch(() => null);
+      if (s) yield { key, lastModified: s.mtimeMs };
     }
   }
 }

@@ -3,7 +3,7 @@
 // AWS_REGION, S3_ENDPOINT_URL, AWS_S3_FORCE_PATH_STYLE, and the AWS credentials. Keys are
 // `<prefix><uuid>`: the deployment keeps its prefix (Convex's `<instance>-<uuid>/`) and passes it in.
 import { S3Client } from "bun";
-import { type BlobStore, type ByteRange, pumpHashing, type Written } from "./store.ts";
+import { type BlobStore, type ByteRange, type Listed, pumpHashing, type Written } from "./store.ts";
 
 export type S3Options = {
   bucket: string;
@@ -79,11 +79,16 @@ export class S3BlobStore implements BlobStore {
     await this.client.file(this.prefix + key).delete();
   }
 
-  async *keys(): AsyncIterable<string> {
+  async *list(): AsyncIterable<Listed> {
     let token: string | undefined;
     for (;;) {
       const page = await this.client.list({ prefix: this.prefix, continuationToken: token });
-      for (const o of page.contents ?? []) if (o.key) yield o.key.slice(this.prefix.length);
+      for (const o of page.contents ?? [])
+        if (o.key)
+          yield {
+            key: o.key.slice(this.prefix.length),
+            lastModified: o.lastModified ? Date.parse(String(o.lastModified)) : 0,
+          };
       if (!page.isTruncated || !page.nextContinuationToken) return;
       token = page.nextContinuationToken;
     }

@@ -3,6 +3,9 @@
 /** What a write stored: its new key, its size and its SHA-256 (raw bytes). */
 export type Written = { key: string; size: number; sha256: Uint8Array };
 
+/** A stored blob, as `list()` yields it. */
+export type Listed = { key: string; lastModified: number };
+
 /** A byte range, both ends inclusive (as HTTP's `bytes=start-end`). */
 export type ByteRange = { start: number; end: number };
 
@@ -13,8 +16,8 @@ export interface BlobStore {
   get(key: string, range?: ByteRange): Promise<ReadableStream<Uint8Array> | null>;
   /** Remove a blob; a missing key is not an error. */
   delete(key: string): Promise<void>;
-  /** Every key, for sweeping blobs no metadata points to. */
-  keys(): AsyncIterable<string>;
+  /** Every blob with when it was last written (ms), for sweeping the ones no metadata points to. */
+  list(): AsyncIterable<Listed>;
 }
 
 /** The body as a stream of bytes. */

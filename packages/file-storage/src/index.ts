@@ -9,4 +9,4 @@ export { blobStoreFromEnv } from "./env.ts";
 export { LocalBlobStore } from "./local.ts";
 export { MemoryBlobStore } from "./memory.ts";
 export { S3BlobStore, type S3Options, s3OptionsFromEnv } from "./s3.ts";
-export type { BlobStore, ByteRange, Written } from "./store.ts";
+export type { BlobStore, ByteRange, Listed, Written } from "./store.ts";
