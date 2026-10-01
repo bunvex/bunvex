@@ -563,6 +563,80 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Logs at 1440: filters on the left, the bars line up with the panel's header, the grid fills to the bottom", async () => {
+    const { page, errors, close } = await open("/logs", { viewport: { width: 1440, height: 900 } });
+    await heading(page, "Logs");
+    const grid = page.getByRole("grid", { name: "Log lines" });
+    await grid.getByRole("row").nth(3).waitFor();
+    // no details until a line is picked
+    expect(await page.getByRole("complementary").count()).toBe(0);
+    await grid.getByRole("gridcell").nth(5).click();
+    await page.getByRole("complementary").waitFor();
+    const m = await page.evaluate(() => {
+      const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      return {
+        bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().bottom,
+        filtersBar: document.querySelector('nav[aria-label="Log filters"] h2')!.parentElement!.getBoundingClientRect()
+          .bottom,
+        panelHeader: box('[data-slot="side-panel"] header').bottom,
+        gridBottom: box('[data-slot="data-table"]').bottom,
+        filtersRight: box('nav[aria-label="Log filters"]').right,
+        gridLeft: box('[data-slot="data-table"]').left,
+        viewport: innerHeight,
+        pageScrolls: document.documentElement.scrollHeight > innerHeight,
+      };
+    });
+    expect(Math.abs(m.bar1 - m.panelHeader)).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.filtersBar - m.panelHeader)).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.gridBottom - m.viewport)).toBeLessThanOrEqual(1);
+    expect(Math.abs(m.gridLeft - m.filtersRight)).toBeLessThanOrEqual(1);
+    expect(m.pageScrolls).toBe(false);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Logs: the histogram draws stacked buckets; dragging across it filters the list and goes into the URL", async () => {
+    const { page, errors, close } = await open("/logs", { viewport: { width: 1440, height: 900 } });
+    await heading(page, "Logs");
+    const plot = page.getByRole("application", { name: "Log lines per time bucket" });
+    await plot.waitFor();
+    await expect_(async () => expect(await page.locator('[data-outcome="ok"]').count()).toBeGreaterThan(5));
+    const count = page.getByText(/^[\d,]+ (of [\d,]+ )?lines$/);
+    const r = (await plot.boundingBox())!;
+    await plot.hover({ position: { x: r.width * 0.9, y: r.height / 2 } });
+    await page.getByRole("tooltip").waitFor();
+    await page.mouse.move(r.x + r.width * 0.5, r.y + r.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(r.x + r.width * 0.75, r.y + r.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("from")).not.toBeNull());
+    await page.locator('[data-slot="log-histogram-window"]').waitFor();
+    await expect_(async () => expect(await count.textContent()).toMatch(/ of /));
+    await page.getByRole("button", { name: "Clear selection" }).click();
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("from")).toBeNull());
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Functions: a function's Logs tab is the same view, with its own filter column", async () => {
+    const { page, errors, close } = await open("/functions?function=tasks:list&tab=logs", {
+      viewport: { width: 1440, height: 900 },
+    });
+    await heading(page, "list");
+    const filters = page.getByRole("navigation", { name: "Log filters" });
+    await filters.getByRole("radio", { name: "Last hour" }).click();
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("range")).toBe("1h"));
+    expect(await filters.getByRole("checkbox", { name: "failure" }).count()).toBe(1);
+    expect(await filters.getByRole("region", { name: "Function kind" }).count()).toBe(0);
+    await page.getByRole("application", { name: "Log lines per time bucket" }).waitFor();
+    await page.getByRole("grid", { name: "Log lines of tasks:list" }).getByRole("row").nth(1).waitFor();
+    // a screen's height of its own: the list scrolls inside, the page does not grow with the lines
+    const height = await page.evaluate(() => document.querySelector('[data-slot="data-table"]')!.clientHeight);
+    expect(height).toBeLessThan(900);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Settings: pause the deployment, see it said on every screen, resume", async () => {
     const { page, errors, close } = await open("/settings/general");
     await heading(page, "Settings");

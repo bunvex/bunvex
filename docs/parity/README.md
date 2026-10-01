@@ -44,7 +44,7 @@ wrong.
 | B1 | **Fixed in #8.** Four of the five drivers over-fetch a fixed `limit × 2–4` rows without paging, so old versions and deleted entries can make `take`/`first` return short or `null` | STUDY-09 D1/D2 |
 | B2 | **Fixed in #9** (fail-stop, as Convex). A failed `flush()` rejects the mutation, but its writes become visible (and durable, on SQLite) anyway | STUDY-06 D1 |
 | B3 | **Fixed in #9.** An exception thrown by `persistence.apply` wedges the committer forever | STUDY-06 D2 |
-| B4 | Long index keys fail the flush: MySQL `varbinary(512)`, Postgres btree ~2.7 KB. Convex splits keys into prefix + sha256 | STUDY-09 D3 |
+| B4 | **Fixed in #17** (keys split into `key_prefix` + `key_suffix` + sha256, as Convex; conformance K9). Long index keys fail the flush: MySQL `varbinary(512)`, Postgres btree ~2.7 KB. Convex splits keys into prefix + sha256 | STUDY-09 D3 |
 | B5 | **Fixed in #10** (with the implicit `_creationTime` and sub-ms creation times). `withIndex` ignores field names: wrong or out-of-order fields silently return every row | STUDY-05 D2/D5, STUDY-07 D3 |
 | B6 | **Fixed in #21.** Missing fields are indexed as `null`, where Convex indexes them as `undefined`; `eq(f, undefined)` throws | STUDY-05 D4 |
 | B7 | **Fixed in #21.** NaN, ±Infinity, −0, `undefined` in arrays and `Date` are changed by `JSON.stringify`, so the stored document and its index keys disagree | STUDY-10 D1 |
@@ -55,7 +55,7 @@ wrong.
 | B12 | **Fixed in #12** (with Convex's transaction read limits). `collect()` is silently capped at 8192 rows; `take(0)` or a negative `take` misbehaves on the memory driver | STUDY-07 D1/D2 |
 | B13 | **Fixed (STUDY-27).** Once `ctx.auth` exists, cache and subscription keys would serve one user's results to another. The query cache and sync's shared executions key a result by identity only when the run read it | STUDY-08 D6 |
 | B14 | **Fixed in #11.** One socket subscribing twice to the same key leaks a reference count | client-sync.md |
-| B15 | No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
+| B15 | **Fixed in #107 and #112** (call timeouts; transient flush and read retries, as Convex; conformance K20/K21). No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
 | B16 | **Fixed in #114.** No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
 
 ### Phase 1 — the core behaves like Convex
@@ -67,7 +67,8 @@ wrong.
 3. **Documents:** field-name rules, system fields refused in writes, `replace`, `NonexistentDocument`, and
    the size, nesting, array and field-count limits.
 4. **Queries:** `filter` and its builder, `unique`, `paginate` (cursors, `endCursor`, `maximumRowsRead`),
-   async iteration, the transaction read/write limits, and a read-set narrowed to what `take` read.
+   async iteration, the transaction read/write limits, and a read-set narrowed to what `take` read (done
+   in #134, DV-57).
 5. **Transactions:** Convex's OCC retry budget and error (done in STUDY-21), the 1 s execution limit, and
    `db.vars.commitTs`.
 6. **Function results:** `ConvexError` data, error redaction, status codes, `logLines` (done in STUDY-20,
@@ -93,9 +94,10 @@ Then `@bunvex/client` (base client, reconnect, backoff, optimistic updates, reac
 In this order:
 
 1. auth (OIDC and custom JWT, `ctx.auth`);
-2. scheduler and crons;
-3. file storage;
-4. HTTP actions;
+2. scheduler and crons (STUDY-30);
+3. HTTP actions;
+4. file storage (it uses HTTP actions for uploads and downloads; built-in auth, STUDY-28, needs them too —
+   swapped with HTTP actions by the owner, 2026-10-01);
 5. retention and garbage collection of old versions;
 6. admin keys;
 7. the CLI and codegen;
