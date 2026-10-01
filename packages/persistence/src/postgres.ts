@@ -14,11 +14,13 @@
 // may finish; its connections are destroyed after one more timeout) and a fresh one takes the next calls.
 //
 // Retries (STUDY-25 L4/L5), as Convex's Postgres driver: a read, or the bootstrap, that fails because its
-// connection was lost or timed out runs once more on a fresh pool. A flush that times out is transient
-// (`isTransient`): the committer retries it, and this driver keeps the group for that retry; a flush that
-// loses its connection before its transaction began is retried once here, on a fresh pool. A connection lost
-// inside the transaction is not transient (Convex's `is_transient_db_error` counts only timeouts on
-// Postgres). A retry of a group whose earlier attempt did commit hits the primary key: `UnsureCommitError`.
+// connection was lost or timed out runs once more on a fresh pool. A flush that times out or loses its
+// connection is transient (`isTransient`; a lost connection only since DV-123 — Convex counts only timeouts
+// on Postgres): the committer retries it, and this driver keeps the group for that retry; a flush that loses
+// its connection before its transaction began is also retried once here, on a fresh pool (Convex's
+// `transact`). Before re-running a group, the driver reads the lease record: a group an earlier attempt did
+// commit is acknowledged without writing (DV-124). One that lands after that read hits the primary key:
+// `UnsureCommitError`.
 import {
   DatabaseTimeoutError,
   type DocWrite,
@@ -29,6 +31,7 @@ import {
   MAX_KEY_PREFIX_LEN,
   type Persistence,
   renewTimeoutMs,
+  retriedGroupLanded,
   retryOnce,
   type ScanDocs,
   type SplitRow,
@@ -156,9 +159,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
     );
   }
 
-  /** As Convex's `is_transient_db_error` on Postgres: a timeout (STUDY-25 L4). */
+  /** A timeout (as Convex's `is_transient_db_error` on Postgres) or a lost connection (DV-123; STUDY-25 L4). */
   isTransient(e: unknown) {
-    return e instanceof DatabaseTimeoutError;
+    return e instanceof DatabaseTimeoutError || connectionLost(e);
   }
 
   private retire(sql: postgresDriver.Sql) {
@@ -309,7 +312,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
     this.idx = [];
     const retry = this.retrying;
     try {
-      await this.flushGroup(docs, idx, top);
+      // A retry: the group may have landed although its attempt failed here (its answer was lost). Then it
+      // is there exactly once, and acknowledged without writing (DV-124).
+      if (!(retry && (await this.landed(top)))) await this.flushGroup(docs, idx, top);
       this.retrying = false;
     } catch (e) {
       // Keep the group: the committer retries a transient failure with the same rows at the same timestamps.
@@ -328,6 +333,12 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease {
 
   /** Set once a flush failed and kept its group: the next flush is a retry of it. */
   private retrying = false;
+
+  /** Whether the group up to `top` committed, from the lease record (`retriedGroupLanded`, PERSIST-01 C9). */
+  private async landed(top: number) {
+    const [l] = await this.call((sql) => sql`select epoch, max_ts from bunvex_lease where id = 1`);
+    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: Number(l.max_ts) }, this.epoch, top);
+  }
 
   private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
     // One jsonb parameter per table, expanded server-side: one statement per table whatever the group

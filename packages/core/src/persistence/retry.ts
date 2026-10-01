@@ -3,11 +3,13 @@
 // those (a read once on a fresh connection, a commit with backoff), and stops for anything else.
 
 /**
- * A retried flush found that an earlier attempt of the SAME group did commit, although that attempt failed
- * on the client side (its answer was lost with the connection, or came after the timeout). Convex reaches the
- * same point through a duplicate key and stops: "Unsure if transaction committed to disk". It is never
- * transient: the committer stops (fail-stop) and the process recovers from what the store holds, where the
- * group is present exactly once.
+ * A retried flush found, while writing, that an earlier attempt of the SAME group did commit, although that
+ * attempt failed on the client side (its answer was lost with the connection, or came after the timeout). A
+ * driver first reads the lease record (`retriedGroupLanded`) and acknowledges a group it finds there (DV-124);
+ * this is what is left: an earlier attempt's COMMIT that landed after that read. Convex reaches the same point
+ * through a duplicate key and stops: "Unsure if transaction committed to disk". It is never transient: the
+ * committer stops (fail-stop) and the process recovers from what the store holds, where the group is present
+ * exactly once.
  */
 export class UnsureCommitError extends Error {
   constructor(detail: string, options?: { cause?: unknown }) {

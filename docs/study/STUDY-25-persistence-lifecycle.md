@@ -1,8 +1,8 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
 - **Status:** draft. Divergences L1–L12 (§4) await the owner, except L9 and L10 (decided 2026-09-30), L3
-  (as Convex; built in #107, §3.4), and L4 and L5 (as Convex; built in the PR "fix(persistence): retry
-  transient database errors", §3.5, with open questions in §6).
+  (as Convex; built in #107, §3.4), and L4 and L5 (as Convex, built in #112, §3.5; its open questions decided
+  by the owner on 2026-10-01: DV-123, DV-124, §6).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -288,19 +288,41 @@ optional `Persistence.isTransient(e)`). Reasons:
 
 | Driver | Transient in a flush | Reads and init: one more run, on a fresh connection, after | Ambiguous commit (the first attempt landed) |
 |---|---|---|---|
-| Postgres | A timeout (as Convex: only timeouts). A connection lost **before** the transaction began is retried once inside the flush, on a fresh pool (Convex's `transact`); lost **inside** it, the error is fatal | A lost connection or a timeout (Convex's `with_retry`); the pool is retired first, so the retry gets a fresh connection | Duplicate key (23505) → `UnsureCommitError` |
-| MySQL | A timeout or an operational error (Convex's `classify_mysql_error`, same codes); an operational error destroys its connection | An operational error, once (`MYSQL_MAX_QUERY_RETRIES` = 1); not after a timeout | Duplicate key (1062) → `UnsureCommitError` |
-| MongoDB (no Convex counterpart) | A timeout or an operational error, after the MySQL list: network errors (codes 6, 7, 89, 9001 too), server selection, a cleared pool or a pool checkout that timed out, a server shutting down or not primary (codes 91, 189, 10107, 11600, 11602, 13435, 13436) | A timeout (as Postgres); a network error is retried once by the driver's own `retryReads` | The fence finds the lease's `maxTs` ≥ the group's top under our epoch → `UnsureCommitError` |
+| Postgres | A timeout or a lost connection (**DV-123**, owner 2026-10-01; Convex: only timeouts, so a connection lost inside a write is fatal there). A connection lost **before** the transaction began is also retried once inside the flush, on a fresh pool (Convex's `transact`) | A lost connection or a timeout (Convex's `with_retry`); the pool is retired first, so the retry gets a fresh connection (DV-122 covers it, owner 2026-10-01) | Before the retry, the lease record (DV-124) → acknowledged. A duplicate key (23505) that still happens → `UnsureCommitError` |
+| MySQL | A timeout or an operational error (Convex's `classify_mysql_error`, same codes); an operational error destroys its connection | An operational error, once (`MYSQL_MAX_QUERY_RETRIES` = 1); not after a timeout | Before the retry, the lease record (DV-124) → acknowledged. A duplicate key (1062) that still happens → `UnsureCommitError` |
+| MongoDB (no Convex counterpart; **owner-approved**, 2026-10-01) | A timeout or an operational error, after the MySQL list: network errors (codes 6, 7, 89, 9001 too), server selection, a cleared pool or a pool checkout that timed out, a server shutting down or not primary (codes 91, 189, 10107, 11600, 11602, 13435, 13436) | A timeout (as Postgres); a network error is retried once by the driver's own `retryReads` | After ending the failed attempt's session, the lease record (DV-124) → acknowledged. The fence still finding `maxTs` ≥ the group's top under our epoch → `UnsureCommitError` |
 | memory, SQLite | Nothing | — | — |
 
-- **Ambiguous commits on MongoDB.** MongoDB has no unique key on bunvex's rows, so a retry of a group that
-  did land would insert it twice, silently (measured: the sabotaged driver acknowledges the commit and
-  stores 2 documents and 6 index entries for 1 and 3). The fence detects it instead, at no cost on the happy
-  path: its filter also requires `maxTs < top`; when it matches nothing, the driver reads the lease in the same
-  transaction, and a `maxTs` that already reaches the group's top under our epoch means an earlier attempt
-  committed it: `UnsureCommitError`, fail-stop, as Convex's duplicate key. (The kept rows also carry the
-  `_id` the driver gave them on the first attempt, so a retry would hit `_id` duplicates too, but that is a
-  property of the MongoDB driver, not a rule.)
+- **A group that already landed is acknowledged (DV-124, owner 2026-10-01; Convex stops).** When the first
+  attempt's COMMIT lands but its answer is lost (a timeout, a connection lost after COMMIT), the retry would
+  find the group there. Before re-running a group it failed to flush, every remote driver reads the lease
+  record, with one rule on Postgres, MySQL and MongoDB: if its epoch is ours and its `max_ts` ≥ the group's
+  top, the group committed (the fence writes `max_ts` in the same transaction as the rows, and only our own
+  flushes write it under our epoch, in increasing order), so `flush()` returns without writing and the
+  commits are acknowledged, exactly once. An epoch that is not ours: `LeaseLostError`. A lease read that fails
+  is classified like any flush error (a timeout or a lost connection: the committer retries, still holding
+  the group). Only a retry pays this read; the happy path is unchanged.
+- **Still unsure.** If the group lands *after* that read (an earlier attempt's COMMIT already on its way), the
+  re-run finds it: a duplicate key on Postgres and MySQL; on MongoDB, which has no unique key on bunvex's rows,
+  the fence, whose filter also requires `maxTs < top` (a mismatch under our epoch with `maxTs` ≥ the top). That
+  stays `UnsureCommitError`, fail-stop, as Convex. Without these checks a MongoDB retry of a landed group would
+  insert it twice, silently (measured with the sabotage: 2 documents and 6 index entries for 1 and 3).
+- **A failed attempt stays failed.** Found through a flaky K20 on MongoDB (one full run failed with "the
+  committer stopped … unsure if the group committed" while 13 isolated runs passed; reproduced in 1 of 25
+  isolated K20 runs, and in 3 of 3 with the retry delayed 200 ms after its `killSessions`). A flush that timed
+  out did not stop: MongoDB's `withTransaction` retries its callback after a network error (a
+  `TransientTransactionError`), so the abandoned attempt kept running in the background, on the same session
+  with a new transaction number (the retry's `killSessions` ends the transaction it finds, not later ones).
+  Once the store answered again it raced the committer's retry for the lease document; when it won, it
+  committed the group and the retry found it there. Instrumented, every K20 run showed the abandoned callback
+  running a second time right after the thaw. Postgres had the same flaw, latent: postgres.js lets a
+  retired pool's calls finish, so the timed-out transaction sent its next statement and its COMMIT once the
+  store answered (the new K20 check sees it in every sabotaged run); the retry would then have stopped on a
+  duplicate key. The fix is general: once a call has timed out, `withTimeout`'s `progress()` throws
+  `DatabaseTimeoutError`, and every driver calls `progress()` before each statement of a flush, so a timed-out
+  attempt issues nothing more (Postgres and MySQL roll back; MongoDB's callback throws an error without the
+  transient label, so `withTransaction` gives up). Only a COMMIT already sent can still land, and the lease
+  read or the duplicate check above catches it.
 - **An abandoned MongoDB transaction.** A MongoDB transaction belongs to its session, not to its connection:
   after a client-side timeout it stays open on the server, holding its write on the lease document, for up to
   `transactionLifetimeLimitSeconds` (60 s), and every retry meets it as a write conflict. Before a retry, the
@@ -316,11 +338,18 @@ bootstrap (its statements are idempotent, and a failed run leaves nothing behind
 inside a transaction or a flush, nor for the lease calls (a renewal has its own cadence, and a retried
 acquisition could find itself as the holder).
 
+**Backoff settings** stay `Engine` options (`flushRetry`) for now (owner, 2026-10-01); environment variables
+(`INITIAL_PERSISTENCE_WRITES_BACKOFF_MS`, `MAX_PERSISTENCE_WRITES_BACKOFF_MS`) come with Convex's env names
+(DV-88).
+
 **Measured** (§5): conformance K20 and K21 on Postgres 17, MySQL 8.4 and MongoDB 8.3 (single-node replica
 set). Commits/s through the engine on Postgres 17 (local, one insert per mutation, 4 s per run, 5 interleaved
 runs against the base branch): 64 writers, median 22 480 vs 22 352 (+0.6%; runs 22 288–23 504 vs
 16 336–24 960); 1 writer, median 2 135 vs 1 984 (runs 1 216–2 377 vs 1 501–2 265). No measurable cost: the
-happy path adds one `try` per group and one per read.
+happy path adds one `try` per group and one per read. Again after the owner's decisions (the landed check
+reads the lease only on a retry; `progress()` checks one flag), 5 interleaved runs against the previous head:
+64 writers, median 26 336 vs 26 208 (runs 25 664–26 480 vs 24 857–26 464); 1 writer, median 2 524 vs 2 511
+(runs 2 138–2 543 vs 2 316–2 549). No measurable change.
 
 ## 4. Divergences
 
@@ -329,7 +358,7 @@ happy path adds one `try` per group and one per read.
 | L1 | DDL on every open | Guarded (`to_regclass`, table count, sentinel) | Guarded on Postgres (#62). **MySQL: unguarded `IF NOT EXISTS` on every open**; MongoDB: `createIndex` ×3 | A paused peer can wedge startup; MDL contention (MySQL bug 63144) | **Bug.** Guard MySQL (table count, as Convex v5) and MongoDB (index list) | owner |
 | L2 | First-start serialization | None | Advisory lock on Postgres | An improvement: concurrent first opens crashed without it (STUDY-24) | Keep; add the equivalent to MySQL (`GET_LOCK` around bootstrap DDL only) | owner |
 | L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-122), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex, fixed in #107.** Owner, 2026-10-01: Postgres retires its pool on a timeout (DV-122); MongoDB uses 30 s (`MONGODB_TIMEOUT_SECONDS`); Convex's `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` are read as is; lease renewals are bounded by TTL/4 (DV-14) |
-| L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff, no limit; an ambiguous commit is fatal ("Unsure if transaction committed to disk") | Was fail-stop on any error; now as Convex (§3.5): retried in the committer with Convex's backoff, same group behind the same fence; ambiguous commits fail-stop (`UnsureCommitError`; MongoDB detects them through the lease's `maxTs`) | A network blip or database restart killed the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | **As Convex, fixed in this PR.** Open questions for the owner in §6 (Postgres lost connections, MongoDB's classification, a detected landed group) |
+| L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff, no limit; an ambiguous commit is fatal ("Unsure if transaction committed to disk") | Was fail-stop on any error; now as Convex (§3.5): retried in the committer with Convex's backoff, same group behind the same fence; ambiguous commits fail-stop (`UnsureCommitError`; MongoDB detects them through the lease's `maxTs`) | A network blip or database restart killed the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | **As Convex, fixed in #112, with two decided divergences (owner, 2026-10-01):** a lost connection is transient on Postgres too (DV-123); a retried group found already landed through the lease record is acknowledged, not fail-stop (DV-124). MongoDB's classification: owner-approved. Pool retirement before a retry: DV-122. Backoff knobs: `Engine` options until Convex's env names (DV-88) |
 | L5 | Retries of reads and init | Once, on a fresh connection (Postgres: after a lost connection or a timeout; MySQL: after an operational error, not a timeout) | Was none; now as Convex, per driver (§3.5) | Spurious query errors after a database restart | Bug (minor). One retry | **As Convex, fixed in this PR** |
 | L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | owner |
 | L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | owner |
@@ -355,14 +384,21 @@ happy path adds one `try` per group and one per read.
     fails.
   - L4: a commit whose flush times out (the store frozen for 2 s, timeout 1.5 s) is held, retried, and
     acknowledged once the store answers, its rows stored once (K20: frozen for 4 s with a 1.5 s timeout).
-  - L4: a connection lost in the middle of a flush: retried and acknowledged once (MySQL; MongoDB through its
-    driver's transaction retry), or fail-stop (Postgres, as Convex); nothing lost or stored twice.
-  - L4: the first attempt commits but its answer is lost: the retry stops the committer with
-    `UnsureCommitError`, and the store holds the group exactly once with `maxTs` at its ts (all three).
+  - L4: a failed attempt stays failed (K20): the store frozen until the first flush attempt times out, then
+    thawed while the committer's retry is held for 1 s; the proxy counts the requests that carry the group's
+    rows or commit in that second: 0 on all three. Sabotaged (`progress()` not throwing after a timeout):
+    2 on Postgres and MongoDB in every run (the abandoned attempt sends its rows and its COMMIT); MySQL
+    destroys a timed-out connection and stays at 0.
+  - L4: a connection lost in the middle of a flush: retried and acknowledged once, stored once (all three;
+    Postgres since DV-123; MongoDB through its driver's transaction retry).
+  - L4: the first attempt commits but its answer is lost: the retry reads the lease record, finds the group
+    landed and acknowledges it, exactly once; the committer keeps running, and after a reopen the store holds
+    the group exactly once with `maxTs` at its ts (all three; DV-124).
   - Sabotaged, each goes red: no flush retry (the K20 check and the "unsure" check fail on all three drivers);
     no read retry (both L5 checks; MongoDB with `retryReads: false`); a driver that does not keep its failed
     group (Postgres: the commit is acknowledged and its rows are lost); MongoDB without the `maxTs` check (and
-    fresh `_id`s): the commit is acknowledged and stored twice.
+    fresh `_id`s): the commit is acknowledged and stored twice; the landed check made to never find the group
+    (DV-124): the committer stops as "unsure" on all three (see §3.5 for the numbers).
   - Unit tests: `packages/core/test/flush-retry.test.ts` (backoff, fail-stop cases, a stop during the
     backoff), `packages/persistence/test/transient.test.ts` (each driver's classification).
 - **L6:** open a store written by a future layout version; refuse with a clear error.
@@ -374,24 +410,24 @@ These become conformance checks where they apply to every driver.
 
 - ~~L4: how many retries before fail-stop?~~ Answered: Convex retries without limit (`write_batcher.rs`
   has no counter), and bunvex does too; bunvex's lease TTL bounds it in practice (§3.5).
-- **L4, Postgres, for the owner:** as Convex, only a timeout is transient on Postgres; a connection lost inside
-  a flush (a database restart, a proxy reset) stops the process, where MySQL retries it. Proposal: call a lost
-  connection transient on Postgres too (the retry is safe: the fence and the primary key catch a group that
-  landed). Not built.
-- **L4, MongoDB, for the owner:** Convex has no MongoDB driver. bunvex classifies as the MySQL list (network,
-  shutdown, not primary) and retries reads after a timeout as the Postgres driver; the driver's own
-  `retryReads` covers network errors. Confirm, or choose another rule.
-- **L4, for the owner:** a retry that finds its group already committed is fail-stop, as Convex. bunvex can
-  tell for certain that the group is there (the lease's `maxTs`, under our epoch, in the same transaction),
-  so it could acknowledge the group instead of stopping: an improvement over Convex. Not built.
-- **L5, Postgres, for the owner:** before the retry of a read (or of a flush whose transaction had not begun)
-  after a lost connection, the driver retires its whole pool, as DV-122 does after a timeout; Convex opens one
-  fresh connection for the retry. Same reason (postgres.js exposes no single connection); confirm that DV-122
-  covers it.
-- **L4, for the owner:** Convex's knobs `INITIAL_PERSISTENCE_WRITES_BACKOFF_MS` / `MAX_PERSISTENCE_WRITES_BACKOFF_MS`
-  are `Engine` options (`flushRetry`), not environment variables yet (the server does not build the engine).
+- ~~L4, Postgres: is a connection lost inside a flush transient?~~ **Decided (owner, 2026-10-01): yes, as on
+  MySQL** — a divergence from Convex (only timeouts), DV-123, justified by the lease fence and the exact
+  landed-group check (DV-124).
+- ~~L4, MongoDB's classification (no Convex counterpart)?~~ **Decided (owner, 2026-10-01): as built** — the
+  MySQL list for flushes, Postgres's rule (a retry after a timeout) for reads, the driver's `retryReads`, and
+  `killSessions` before a flush retry. Owner-approved.
+- ~~L4: a retry that finds its group already committed: fail-stop or success?~~ **Decided (owner,
+  2026-10-01): acknowledged** — DV-124, an improvement over Convex; one rule on all three stores (the lease
+  record read before the re-run). A duplicate key that still happens stays fail-stop "unsure".
+- ~~L5, Postgres: does DV-122 cover retiring the pool before a retry after a lost connection?~~ **Decided
+  (owner, 2026-10-01): yes**; the DV-122 row says so.
+- ~~L4: Convex's backoff knobs as env vars?~~ **Decided (owner, 2026-10-01): `Engine` options (`flushRetry`)
+  for now**; `INITIAL_PERSISTENCE_WRITES_BACKOFF_MS` / `MAX_PERSISTENCE_WRITES_BACKOFF_MS` come with Convex's
+  env names (DV-88).
 - **Found while testing (not this PR):** postgres.js 3.4.9 throws an uncaught `TypeError` (`socket.write` on
-  `null`, `connection.js:255`) when a connection closes while a transaction is rolling back. Bun logs it and
-  goes on; under Node it would end the process.
+  `null`, `connection.js:255`) when a connection closes while a `sql.begin()` transaction has a query in flight
+  (its own ROLLBACK is written to the closed socket from a `setImmediate`). Reproduced standalone on Bun 1.4.2
+  and Node 24.21.0 (where it ends the process). Already reported upstream: porsager/postgres#1208 (its
+  second comment describes this `begin()` path), also #1133, #1154, #1066; fixes open as #1209 and #1168.
 - L8: adopt Convex's `POSTGRES_URL` / `MYSQL_URL` / `INSTANCE_NAME` names as the primary configuration, or
   only as aliases?

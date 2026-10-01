@@ -16,8 +16,9 @@
 // `classify_mysql_error`) destroys its connection; a read, or the bootstrap, then runs once more on another
 // connection (MYSQL_MAX_QUERY_RETRIES = 1; never after a timeout, which Convex leaves to the caller as
 // backpressure). A flush that fails with an operational error or a timeout is transient (`isTransient`): the
-// committer retries it, and this driver keeps the group for that retry. A retry of a group whose earlier
-// attempt did commit hits the primary key: `UnsureCommitError`.
+// committer retries it, and this driver keeps the group for that retry. Before re-running a group, the driver
+// reads the lease record: a group an earlier attempt did commit is acknowledged without writing (DV-124). One
+// that lands after that read hits the primary key: `UnsureCommitError`.
 import {
   DatabaseTimeoutError,
   type DocWrite,
@@ -27,6 +28,7 @@ import {
   LeaseLostError,
   type Persistence,
   renewTimeoutMs,
+  retriedGroupLanded,
   retryOnce,
   type ScanDocs,
   type SplitRow,
@@ -340,7 +342,9 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
     this.idx = [];
     const retry = this.retrying;
     try {
-      await this.flushGroup(docs, idx, top);
+      // A retry: the group may have landed although its attempt failed here (its answer was lost). Then it
+      // is there exactly once, and acknowledged without writing (DV-124).
+      if (!(retry && (await this.landed(top)))) await this.flushGroup(docs, idx, top);
       this.retrying = false;
     } catch (e) {
       // Keep the group: the committer retries a transient failure with the same rows at the same timestamps.
@@ -360,6 +364,13 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease {
 
   /** Set once a flush failed and kept its group: the next flush is a retry of it. */
   private retrying = false;
+
+  /** Whether the group up to `top` committed, from the lease record (`retriedGroupLanded`, PERSIST-01 C9). */
+  private async landed(top: number) {
+    const [rows] = (await this.call((c) => c.query(`select epoch, max_ts from bunvex_lease where id = 1`))) as any;
+    const l = rows[0];
+    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: Number(l.max_ts) }, this.epoch, top);
+  }
 
   private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
     await this.call(async (c, progress) => {

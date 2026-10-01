@@ -749,7 +749,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
   // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
   // connections the timed-out calls waited on must be dropped by the client, the store must work again once
-  // it answers, and a flush that times out must stop the committer (fail-stop: the commit is in doubt).
+  // it answers; through the engine, a commit whose flush times out is retried (C9), and the timed-out attempt
+  // sends nothing more once the store answers.
   async function k20() {
     const T = 1500; // the call timeout under test
     const TTL = 2000; // a renewal is bounded by TTL / 4 = 500 ms, under T
@@ -853,19 +854,68 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         `K20 a commit whose flush times out is held and retried while the store does not answer, then acknowledged once, its rows stored once (${m.what}${e.committer.stopped ? `: ${e.committer.stopped.message}` : ""}; ${e.committer.flushFailures} failed attempt(s); rows ${JSON.stringify(rows)} vs ${JSON.stringify(base)})`,
       );
       await e.close().catch(() => {});
+
+      // A failed attempt stays failed (C9): once its flush timed out, an attempt sends nothing more when the
+      // store answers again, while the committer's retry waits. Otherwise it races the retry for the group (it
+      // did on MongoDB: withTransaction ran the timed-out callback again and committed the group under the
+      // retry, which then stopped as "unsure" — a flaky K20). The retries are held until 1 s after the thaw;
+      // in that second, the proxy counts the requests that carry the group's marker or commit.
+      let failedOnce = false;
+      let releaseRetries = () => {};
+      const retriesReleased = new Promise<void>((r) => {
+        releaseRetries = r;
+      });
+      const st3 = await mod.openThrough!(proxy, { timeoutMs: T });
+      const holdRetries = new Proxy(st3, {
+        get(target, key) {
+          if (key === "flush")
+            return async () => {
+              if (failedOnce) await retriesReleased;
+              try {
+                return await target.flush();
+              } catch (err) {
+                failedOnce = true;
+                throw err;
+              }
+            };
+          const v = (target as any)[key];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const e3 = await newEngine(holdRetries, { lease: { ttlMs: 60_000 }, flushRetry: { onRetry: () => {} } });
+      await e3.mutation(insertItem("k20"));
+      const base3 = await rowsOf(e3, e3.committer.visibleTs);
+      proxy.freeze();
+      const abandoned = timed(e3.mutation(insertItem("k20-abandoned")));
+      const deadline = Date.now() + 3 * T;
+      while (!failedOnce && Date.now() < deadline) await sleep(5);
+      proxy.watch(/k20-abandoned/);
+      proxy.thaw();
+      await sleep(1000);
+      const sentAfter = proxy.fired.watched;
+      proxy.watch(null);
+      releaseRetries();
+      const m3 = await abandoned;
+      const rows3 = m3.answered ? await rowsOf(e3, e3.committer.visibleTs) : null;
+      check(
+        failedOnce && sentAfter === 0 && m3.answered && e3.committer.stopped === null && sameRows(rows3, base3),
+        `K20 a flush attempt that timed out sends nothing more once the store answers (${sentAfter} request(s) with the group or a COMMIT in the second after the thaw); its retry is acknowledged once (${m3.what}${e3.committer.stopped ? `: ${e3.committer.stopped.message}` : ""}; rows ${JSON.stringify(rows3)} vs ${JSON.stringify(base3)})`,
+      );
+      await e3.close().catch(() => {});
     } finally {
       await proxy.close();
     }
   }
 
-  // K21 — transient errors are retried (STUDY-25 L4/L5, PERSIST-01 C8). The proxy of K20 acts on the requests
+  // K21 — transient errors are retried (STUDY-25 L4/L5, PERSIST-01 C9). The proxy of K20 acts on the requests
   // that carry a marker: it resets their connection (lost to a restart or the network), freezes before them,
   // or lets a COMMIT through and drops every answer after it (the commit lands; the client never hears so).
   //   - L5: a read whose connection is lost runs once more on a fresh one; a read that fails twice surfaces.
-  //   - L4: a connection lost in the middle of a flush is retried (or, where the driver does not call it
-  //     transient, stops the committer); either way nothing is lost or stored twice.
-  //   - L4: a retry of a group whose first attempt did commit stops the committer as "unsure", and the store
-  //     holds the group exactly once (MongoDB has no unique key on its rows: the driver must detect it).
+  //   - L4: a connection lost in the middle of a flush is retried (on Postgres too: DV-123), and the commit is
+  //     acknowledged once, its rows stored once.
+  //   - L4: a retry of a group whose first attempt did commit finds it through the lease record and
+  //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
+  //     key on its rows: the lease record is what tells).
   async function k21() {
     const T = 1000;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -924,11 +974,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       await e.close().catch(() => {});
       const lostRows = await rowsOfStore(lostTs);
       check(
-        proxy.fired.resets === 4 &&
-          (lost.ok
-            ? lostStopped === null && sameRows(lostRows, base)
-            : lostStopped !== null && (lostRows === null || lostRows.docs === 0 || sameRows(lostRows, base))),
-        `K21 a connection lost during a flush: ${lost.ok ? "retried and acknowledged once" : `the committer stops (${lostStopped?.message})`}, nothing lost or stored twice (L4; ${lost.what}; ${lostFailures} failed attempt(s); rows ${JSON.stringify(lostRows)})`,
+        proxy.fired.resets === 4 && lost.ok && lostStopped === null && sameRows(lostRows, base),
+        `K21 a connection lost during a flush is retried and acknowledged once, its rows stored once (L4; DV-123 on Postgres; ${lost.what}${lostStopped ? `: ${lostStopped.message}` : ""}; ${lostFailures} failed attempt(s); rows ${JSON.stringify(lostRows)} vs ${JSON.stringify(base)})`,
       );
 
       // L4: the first attempt committed, but its answer was lost.
@@ -947,17 +994,19 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       await restore;
       const unsureTs = e2.committer.appliedTs;
       const stopped = e2.committer.stopped;
+      if (stopped && hasLease(e2.persistence)) await e2.persistence.releaseLease().catch(() => {});
       await e2.close().catch(() => {});
       const after = await rowsOfStore(unsureTs);
       const durable = await maxTsOfStore();
+      const unsureFailures = e2.committer.flushFailures;
       check(
-        !unsure.ok &&
-          stopped !== null &&
-          (stopped.cause as Error)?.name === "UnsureCommitError" &&
-          e2.committer.flushFailures >= 2 &&
+        proxy.fired.loseAnswers &&
+          unsure.ok &&
+          stopped === null &&
+          unsureFailures >= 1 &&
           sameRows(after, base) &&
           durable === unsureTs,
-        `K21 a retry of a group that did commit stops the committer as "unsure"; the store holds the group exactly once (L4; ${unsure.what}: ${stopped?.message ?? "not stopped"}; rows ${JSON.stringify(after)} vs ${JSON.stringify(base)}; maxTs ${durable === unsureTs ? "= the group's ts" : `${durable} ≠ ${unsureTs}`})`,
+        `K21 a COMMIT whose answer is lost: the retry finds the group landed and acknowledges it once; after a reopen the store holds it exactly once (L4, DV-124; ${unsure.what}${stopped ? `: ${stopped.message}` : ""}; ${unsureFailures} failed attempt(s); rows ${JSON.stringify(after)} vs ${JSON.stringify(base)}; maxTs ${durable === unsureTs ? "= the group's ts" : `${durable} ≠ ${unsureTs}`})`,
       );
     } finally {
       proxy.keepAnswers();

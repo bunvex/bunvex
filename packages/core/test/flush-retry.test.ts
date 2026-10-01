@@ -66,7 +66,7 @@ describe("flush retries (STUDY-25 L4)", () => {
     expect(fatal).toHaveLength(1);
   });
 
-  test("an UnsureCommitError on a retry (the first attempt did commit) is fail-stop", async () => {
+  test("an UnsureCommitError on a retry (the group landed while it was re-run) is fail-stop", async () => {
     const { e, delays, fatal } = await scripted([new Transient("answer lost"), new UnsureCommitError("found it")]);
     const err = await e.mutation((db) => db.insert("items", { n: 1 })).catch((x) => x);
     expect(err).toBeInstanceOf(CommitterStoppedError);

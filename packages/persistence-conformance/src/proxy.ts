@@ -7,7 +7,8 @@
 // K21 (retries, STUDY-25 L4/L5) arms it to act on the requests a client sends: `resetOn` resets the
 // connection that sends a matching request (a connection the server or the network closed), and
 // `loseAnswersAfterCommit` lets the first COMMIT after a matching request through and then drops every
-// answer, so the commit takes effect and the client never learns it did.
+// answer, so the commit takes effect and the client never learns it did. `watch` counts the requests that
+// carry a marker or commit (K20: what an abandoned flush attempt still sends).
 import { createServer, type Server, type Socket, connect as tcpConnect } from "node:net";
 
 export type ProxiedConnection = {
@@ -31,8 +32,10 @@ export type FreezableProxy = {
    */
   loseAnswersAfterCommit(marker: RegExp): void;
   keepAnswers(): void;
+  /** From now on, count (in `fired.watched`) the requests that match `pattern` or commit; null stops. */
+  watch(pattern: RegExp | null): void;
   /** What the armed triggers did. */
-  fired: { resets: number; loseAnswers: boolean };
+  fired: { resets: number; loseAnswers: boolean; watched: number };
   close(): Promise<void>;
 };
 
@@ -56,7 +59,8 @@ export async function freezableProxy(target: { host: string; port: number }): Pr
   let resetsLeft = 0;
   let loseMarker: RegExp | null = null;
   let markerSeen = false;
-  const fired = { resets: 0, loseAnswers: false };
+  let watchPattern: RegExp | null = null;
+  const fired = { resets: 0, loseAnswers: false, watched: 0 };
   const connections: ProxiedConnection[] = [];
   const live = new Set<{ client: Socket; server: Socket; up: Buffer[]; down: Buffer[]; serverGone: boolean }>();
   const server: Server = createServer((client) => {
@@ -76,6 +80,7 @@ export async function freezableProxy(target: { host: string; port: number }): Pr
     client.on("data", (d: Buffer) => {
       const text = d.toString("latin1");
       const commit = isCommit(text, commitNames);
+      if (watchPattern && (commit || watchPattern.test(text))) fired.watched++;
       if (resetPattern && resetsLeft > 0 && resetPattern.test(text)) {
         resetsLeft--;
         fired.resets++;
@@ -146,6 +151,10 @@ export async function freezableProxy(target: { host: string; port: number }): Pr
     keepAnswers() {
       losing = false;
       loseMarker = null;
+    },
+    watch(pattern) {
+      watchPattern = pattern;
+      fired.watched = 0;
     },
     fired,
     async close() {

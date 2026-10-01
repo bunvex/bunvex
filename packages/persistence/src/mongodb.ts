@@ -24,10 +24,11 @@
 // after a timeout (the driver's own retryReads already retries a read once on a network error, on another
 // connection). A flush that fails with a timeout or an operational error (`operational` below: a network
 // error, a server shutting down or stepping down) is transient: the committer retries it, and this driver
-// keeps the group for that retry. Unlike the SQL stores, MongoDB has no unique key on the rows, so a retry of a
-// group whose earlier attempt did commit would insert it twice, silently. The fence detects it instead: the
-// lease's maxTs already reaching the group's top under our epoch means the group is there, and the flush fails
-// with `UnsureCommitError` (fail-stop, as Convex's duplicate key).
+// keeps the group for that retry. Before re-running a group, the driver ends the failed attempt's session and
+// reads the lease record: a group an earlier attempt did commit is acknowledged without writing (DV-124).
+// Unlike the SQL stores, MongoDB has no unique key on the rows, so a group that landed after that read would be
+// inserted twice, silently; the fence catches it instead (it also requires maxTs below the group's top) and the
+// flush fails with `UnsureCommitError` (fail-stop, as Convex's duplicate key).
 import {
   DatabaseTimeoutError,
   type DocWrite,
@@ -37,6 +38,7 @@ import {
   LeaseLostError,
   type Persistence,
   renewTimeoutMs,
+  retriedGroupLanded,
   retryOnce,
   type ScanDocs,
   scanLatest,
@@ -318,30 +320,43 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
     const idx = this.idxBuf;
     this.docsBuf = [];
     this.idxBuf = [];
+    const retry = this.retrying;
     try {
-      await this.flushGroup(docs, idx);
+      await this.flushGroup(docs, idx, retry);
+      this.retrying = false;
     } catch (e) {
       // Keep the group: the committer retries a transient failure with the same rows at the same timestamps.
       this.docsBuf = docs.concat(this.docsBuf);
       this.idxBuf = idx.concat(this.idxBuf);
+      this.retrying = true;
       throw e;
     }
   }
 
+  /** Set once a flush failed and kept its group: the next flush is a retry of it. */
+  private retrying = false;
+
   /** The session of the last failed flush: its transaction may still be open on the server. */
   private abandoned: unknown = null;
 
-  private async flushGroup(docs: DocRow[], idx: IdxRow[]) {
+  private async flushGroup(docs: DocRow[], idx: IdxRow[], retry: boolean) {
     const top = Math.max(docs.at(-1)?.ts ?? 0, idx.at(-1)?.ts ?? 0);
     // A retry: end the failed attempt's transaction first. A transaction belongs to its session, not to a
     // connection, so the server keeps it (and its write on the lease document) open after the client dropped
     // the connection, for up to transactionLifetimeLimitSeconds (60 s); every retry would meet it as a write
-    // conflict until then. Killing it is safe: if it committed already, nothing changes, and the fence below
-    // finds the group; if not, it aborts.
+    // conflict until then. Killing it is safe: if it committed already, nothing changes, and the lease read
+    // below finds the group; if not, it aborts. (The attempt itself sends nothing more once it timed out:
+    // `withTimeout`'s progress() throws, so `withTransaction` does not run its callback again.)
     if (this.abandoned) {
       const lsid = this.abandoned;
       await this.call(() => this.client.db("admin").command({ killSessions: [lsid] }));
       this.abandoned = null;
+    }
+    // Then the group may have landed although its attempt failed here (its answer was lost): it is there exactly
+    // once, and acknowledged without writing (DV-124).
+    if (retry) {
+      const lease = await this.call(() => this.meta.findOne({ _id: "lease" }));
+      if (retriedGroupLanded(lease && { epoch: lease.epoch, maxTs: lease.maxTs }, this.epoch, top)) return;
     }
     const session = this.client.startSession();
     try {
@@ -352,7 +367,8 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease {
             // The fence first: nothing of the group commits unless the lease still carries our epoch. A
             // concurrent takeover makes this a write conflict (retried by withTransaction, then refused here).
             // It also refuses a group that is there already (maxTs reached its top under our epoch): an earlier
-            // attempt of this flush committed, although it failed on our side (STUDY-25 L4).
+            // attempt's COMMIT that landed after the lease read above (STUDY-25 L4; MongoDB has no unique key
+            // on the rows to refuse it).
             const f = await this.meta.updateOne(
               { _id: "lease", epoch: this.epoch, maxTs: { $lt: top } },
               { $set: { maxTs: top } },
