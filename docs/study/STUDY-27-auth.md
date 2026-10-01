@@ -1,6 +1,6 @@
 # STUDY-27 — Authentication (`ctx.auth`, JWT / OIDC, the sync and client auth flow)
 
-- **Status:** draft
+- **Status:** accepted: A1–A3 and A5 as recommended (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap Phase 3 item 1;
@@ -194,13 +194,16 @@ dependency rule (ARCHITECTURE) is that only `@bunvex/server` uses it.
 
 ## 4. Divergences
 
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): A1 as DV-100, A3 as DV-101, A4 under DV-03/DV-04, A5
+under Gaps; A2 is an implementation choice, not a divergence.
+
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| A1 | The config is passed to `createServer({ auth })` and validated at server start, from `bunvex/auth.config.ts`; Convex evaluates `convex/auth.config.ts` at push time, in a sandbox that only exposes environment variables | bunvex has no push step yet (the CLI, Phase 3 item 7), and it runs app code in its own process (DV-02) | **recommend** (revisit with the CLI) |
-| A2 | Verification uses the `jose` library (MIT, the standard JOSE implementation for JS, on WebCrypto) instead of writing JWS/JWK handling from scratch | Security-critical code; `jose` covers RS256, ES256 and EdDSA, JWK import and JWKS selection | **recommend `jose`** (alternative: our own on WebCrypto, about 300 lines plus tests) |
-| A3 | Discovery and JWKS are cached by `Cache-Control` (as Convex), plus a rate-limited refetch on an unknown `kid` | Convex's HTTP cache serves a stale JWKS until it expires; the refetch makes key rotation work at once | **recommend** |
+| A1 | The config is passed to `createServer({ auth })` and validated at server start, from `bunvex/auth.config.ts`; Convex evaluates `convex/auth.config.ts` at push time, in a sandbox that only exposes environment variables | bunvex has no push step yet (the CLI, Phase 3 item 7), and it runs app code in its own process (DV-02) | **accepted** (revisit with the CLI) |
+| A2 | Verification uses the `jose` library (MIT, the standard JOSE implementation for JS, on WebCrypto) instead of writing JWS/JWK handling from scratch | Security-critical code; `jose` covers RS256, ES256 and EdDSA, JWK import and JWKS selection | **accepted: `jose`** |
+| A3 | Discovery and JWKS are cached by `Cache-Control` (as Convex), plus a rate-limited refetch on an unknown `kid` | Convex's HTTP cache serves a stale JWKS until it expires; the refetch makes key rotation work at once | **accepted** |
 | A4 | Messages name bunvex (`bunvex/auth.config.ts`, the `Bunvex` admin scheme) and drop docs links | Owner's naming rule (DV-03/DV-04) | follows the rule |
-| A5 | Clerk and Auth0 providers (`BunvexProviderWithClerk` / `…WithAuth0`) come after `BunvexProviderWithAuth` | They wrap third-party libraries; the generic provider covers them meanwhile | **recommend** later |
+| A5 | Clerk and Auth0 providers (`BunvexProviderWithClerk` / `…WithAuth0`) come after `BunvexProviderWithAuth` | They wrap third-party libraries; the generic provider covers them meanwhile | **accepted** later |
 
 Everything else follows Convex: the provider matching, both verification paths, the identity's fields and
 quirks (the dropped claims, the custom-JWT flattening), 5 s of leeway, the 401s, `AuthError` and
