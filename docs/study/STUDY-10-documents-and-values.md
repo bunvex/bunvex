@@ -1,6 +1,6 @@
 # STUDY-10 — Documents and values: types, field names, limits, insert/patch/replace/delete
 
-- **Status:** draft (retroactive). The code in §3 was written before the study-first rule.
+- **Status:** implemented / decided — D1, D3 fixed (#13, #21; Phase 0 B7, B9); D2, D4–D11 resolved to match Convex (DV-46–DV-48); D12's read-only system tables and `db.system` are a gap to match Convex (DV-69). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -135,17 +135,17 @@ An **object field set to `undefined` is omitted** (`if (v !== undefined)`).
 
 | # | Divergence | Class | Why / impact | Decision |
 |---|---|---|---|---|
-| D1 | NaN, ±Infinity, `-0`, `undefined` in arrays and `Date` are silently changed by `JSON.stringify` (to `null`, `0`, an ISO string) | BUG | Silent data corruption. The index entry is computed before serialization, so the index and the document disagree (NaN in the key, `null` in the document) | owner |
-| D2 | No Int64 (`bigint`) or Bytes (`ArrayBuffer`): bigint throws at commit, bytes become `{}` | OBSERVABLE | Two of Convex's value types are missing, and the bytes case silently loses data | owner |
-| D3 | Written values are not copied or serialized at the call: later caller mutations, and mutations of a `db.get` result for a document written in the same transaction, reach the commit (`tx.ts` `insert`/`get`/`stage`) | BUG | A write without `patch`; and the pending read-own-writes index (built at `stage`) no longer matches the keys `toWrites` computes at commit | owner |
-| D4 | No field-name validation: `$`-prefixed, non-ASCII, over 1 024 chars, and top-level `_` fields all accepted | OBSERVABLE | Data Convex rejects is stored, and cannot be exported or imported into Convex | owner |
-| D5 | `_id`/`_creationTime` in `insert`/`patch` are silently overwritten or ignored; Convex rejects a mismatch | OBSERVABLE | An error in Convex, silence in bunvex | owner |
-| D6 | No document limits (1 MiB, nesting 16, array 8 192, 1 024 fields) | OBSERVABLE | Code that works on bunvex fails on Convex. Unbounded documents also stress the stores (MySQL `mediumtext` 16 MiB) | owner |
-| D7 | `delete` of a missing document is a silent no-op; Convex throws "Delete on nonexistent document ID" | OBSERVABLE | Different control flow | owner |
-| D8 | `patch` error message differs ("patch: T/ID not found" vs "Update on nonexistent document ID {id}") | OBSERVABLE | Message and code differ | owner |
-| D9 | No `replace` | OBSERVABLE | Missing API | owner |
-| D10 | `patch({f: undefined})`: inside the same mutation the field is still present with the value `undefined` | OBSERVABLE | `"f" in doc` / `Object.keys` differ within the mutation (after commit it matches) | owner |
-| D11 | Field order: insertion order with `_id`/`_creationTime` last, vs Convex's sorted order | OBSERVABLE | Visible in `Object.keys`, `JSON.stringify` and snapshot tests | owner |
+| D1 | NaN, ±Infinity, `-0`, `undefined` in arrays and `Date` are silently changed by `JSON.stringify` (to `null`, `0`, an ISO string) | BUG | Silent data corruption. The index entry is computed before serialization, so the index and the document disagree (NaN in the key, `null` in the document) | **fixed in #21** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B7) |
+| D2 | No Int64 (`bigint`) or Bytes (`ArrayBuffer`): bigint throws at commit, bytes become `{}` | OBSERVABLE | Two of Convex's value types are missing, and the bytes case silently loses data | resolved to match Convex in #21 (DV-46) |
+| D3 | Written values are not copied or serialized at the call: later caller mutations, and mutations of a `db.get` result for a document written in the same transaction, reach the commit (`tx.ts` `insert`/`get`/`stage`) | BUG | A write without `patch`; and the pending read-own-writes index (built at `stage`) no longer matches the keys `toWrites` computes at commit | **fixed in #13** ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B9) |
+| D4 | No field-name validation: `$`-prefixed, non-ASCII, over 1 024 chars, and top-level `_` fields all accepted | OBSERVABLE | Data Convex rejects is stored, and cannot be exported or imported into Convex | resolved to match Convex in #21 (DV-47) |
+| D5 | `_id`/`_creationTime` in `insert`/`patch` are silently overwritten or ignored; Convex rejects a mismatch | OBSERVABLE | An error in Convex, silence in bunvex | resolved to match Convex in #21 (DV-47) |
+| D6 | No document limits (1 MiB, nesting 16, array 8 192, 1 024 fields) | OBSERVABLE | Code that works on bunvex fails on Convex. Unbounded documents also stress the stores (MySQL `mediumtext` 16 MiB) | resolved to match Convex in #35 (DV-48) |
+| D7 | `delete` of a missing document is a silent no-op; Convex throws "Delete on nonexistent document ID" | OBSERVABLE | Different control flow | resolved to match Convex in #35 (DV-48) |
+| D8 | `patch` error message differs ("patch: T/ID not found" vs "Update on nonexistent document ID {id}") | OBSERVABLE | Message and code differ | resolved to match Convex in #35 (DV-48) |
+| D9 | No `replace` | OBSERVABLE | Missing API | resolved to match Convex in #35 (DV-48) |
+| D10 | `patch({f: undefined})`: inside the same mutation the field is still present with the value `undefined` | OBSERVABLE | `"f" in doc` / `Object.keys` differ within the mutation (after commit it matches) | resolved to match Convex in #21 (DV-46) |
+| D11 | Field order: insertion order with `_id`/`_creationTime` last, vs Convex's sorted order | OBSERVABLE | Visible in `Object.keys`, `JSON.stringify` and snapshot tests | resolved to match Convex in #21 (DV-47) |
 | D12 | No table-name rules and no read-only system tables | OBSERVABLE | Relevant once system tables (`_storage`, `_scheduled_functions`) exist | table-name rules done (#6); read-only system tables and `db.system`: Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-69) |
 
 ## 5. Tests

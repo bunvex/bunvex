@@ -41,13 +41,13 @@ to a spec.
 | [STUDY-02](STUDY-02-read-own-writes.md) | Read-your-own-writes inside a transaction | implemented (#3), retroactive |
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
 | [STUDY-04](STUDY-04-table-and-index-metadata.md) | Table and index metadata (`_tables`, `_index`) | implemented (#6) |
-| [STUDY-05](STUDY-05-index-keys-and-ordering.md) | Value order, index keys and system indexes | draft (retroactive): divergences await the owner |
-| [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | draft (retroactive): divergences await the owner |
-| [STUDY-07](STUDY-07-query-semantics.md) | Query semantics (`withIndex`, `take`, `collect`, limits) | draft (retroactive): divergences await the owner |
-| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | draft (retroactive): divergences await the owner |
-| [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | draft (retroactive): divergences await the owner |
-| [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | draft (retroactive): divergences await the owner |
-| [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | draft (retroactive): divergences await the owner |
+| [STUDY-05](STUDY-05-index-keys-and-ordering.md) | Value order, index keys and system indexes | implemented / decided: all fixed (B5, B6, B11) or resolved (DV-33–DV-37) |
+| [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | decided; D3, D8, D10–D12 are gaps to build (DV-57, DV-59–DV-62) |
+| [STUDY-07](STUDY-07-query-semantics.md) | Query semantics (`withIndex`, `take`, `collect`, limits) | implemented / decided: all fixed or resolved (DV-40–DV-43) |
+| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | decided; D6 (sync path, B13) and D8–D10 (DV-57, DV-63, DV-64) to build |
+| [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | decided; D3 open bug (B4), D5, D6, D9 gaps (DV-62, DV-65, DV-66); D4 not tracked |
+| [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | implemented / decided; D12 (`db.system`) a gap (DV-69) |
+| [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | implemented / decided: all resolved (DV-31, DV-44, DV-46, DV-49, DV-70, DV-71) |
 | [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | accepted: D9 now matches Convex; the others kept (#16) |
 | [STUDY-13](STUDY-13-validators.md) | Validators (`v.*`) and args / returns validation | implemented (#24, #25) |
 | [STUDY-14](STUDY-14-schemas.md) | Schemas: `defineSchema`, `defineTable`, document validation, implicit tables | implemented (#29, #33) |
@@ -56,7 +56,7 @@ to a spec.
 | [STUDY-17](STUDY-17-paginate.md) | `.paginate()`, cursors, reactive page boundaries, the instance secret | implemented (#42) |
 | [STUDY-18](STUDY-18-value-model.md) | The value model: types, order, index keys, JSON | implemented (#15, #21) |
 | [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 decided (owner, 2026-09-30 and 2026-10-01) |
-| [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1–D3 await the owner |
+| [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1, D2 decided (DV-81, DV-82); D3 a gap |
 | [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 decided (owner, 2026-10-01) |
 | [STUDY-23](STUDY-23-sync-protocol-v1.md) | Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | accepted: P1–P12 as recommended (owner, 2026-09-30); implementation in steps |
 | [STUDY-24](STUDY-24-horizontal-scaling.md) | Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H1–H12 decided (owner, 2026-09-30 and 2026-10-01); S1–S4 fixed, S5 open (DV-54) |

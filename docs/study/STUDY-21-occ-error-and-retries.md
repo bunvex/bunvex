@@ -1,6 +1,6 @@
 # STUDY-21 — The OCC error and mutation retries
 
-- **Status:** implemented (this PR); D1–D3 await the owner
+- **Status:** implemented (#38); D1 decided (DV-81), D2 resolved to match Convex (DV-82, #50), D3 a gap tracked in docs/parity
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-06](STUDY-06-transactions-and-occ.md), whose D4 (retry budget) and D5 (error) this study
@@ -98,8 +98,8 @@ forever. `drain` now re-checks the queue when it finishes. A test covers it.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | The message has no `See https://docs.convex.dev/error#1` suffix | bunvex never links to Convex's docs (project rule) | accepted (owner, 2026-09-30; DV-81) |
-| D2 | A WebSocket mutation that exhausts its budget gets an error result; Convex ends the connection, and the client re-sends the mutation after reconnecting | Ending the connection only makes sense with protocol v1's idempotent re-send (session + request ids); without it, a re-send could run twice | owner (with protocol v1) |
-| D3 | `TooManyWrites` is not retried within the budget | bunvex has no write-throughput limit yet | revisit with the limits |
+| D2 | A WebSocket mutation that exhausts its budget gets an error result; Convex ends the connection, and the client re-sends the mutation after reconnecting | Ending the connection only makes sense with protocol v1's idempotent re-send (session + request ids); without it, a re-send could run twice | resolved to match Convex (owner, 2026-09-30) with protocol v1 in #50 (DV-82) |
+| D3 | `TooManyWrites` is not retried within the budget | bunvex has no write-throughput limit yet | revisit with the limits (a gap in the [ledger](../parity/divergences.md#gaps-recorded-in-studies)) |
 
 ## 5. Tests
 
