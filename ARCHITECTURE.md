@@ -58,7 +58,7 @@ bunvex/
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the K1–K7 suite, published ✅
 │   │
-│   ├── protocol/                    @bunvex/protocol                  versioned wire messages N
+│   ├── protocol/                    @bunvex/protocol                  sync v1 + HTTP messages ✅
 │   │
 │   ├── server/                      @bunvex/server
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·
@@ -69,7 +69,8 @@ bunvex/
 │   │   │                            read-your-writes N · HTTP actions (custom routes) M
 │   │   ├── scheduler                runAfter/runAt · crons                                    M
 │   │   ├── storage                  ctx.storage: file metadata (a system table)               M
-│   │   ├── auth                     ctx.auth.getUserIdentity() (uses @bunvex/auth)            🟡
+│   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·
+│   │   │                            admin keys M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
@@ -91,7 +92,8 @@ bunvex/
 │   │   ├── pagination               paginated queries (usePaginatedQuery, STUDY-26 §8)        ✅
 │   │   └── http                     plain HTTP client (BunvexHttpClient, STUDY-26 §9)         ✅
 │   │
-│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery  ✅
+│   ├── react/                       @bunvex/react   useQuery, useMutation, usePaginatedQuery,
+│   │                                BunvexProviderWithAuth, useBunvexAuth (STUDY-27)          ✅
 │   ├── nextjs/                      @bunvex/nextjs  SSR / hydration                           D
 │   │
 │   ├── ui/                          @bunvex/ui       design system (UI-01): Tailwind v4 tokens,

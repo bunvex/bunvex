@@ -4,7 +4,8 @@
   passes (Convex claims, lease and fencing, commit stream, follower reads and remote mutations, multi-core
   on one machine, singletons and failover, prior art), four of them with throwaway experiments on the real
   engine and drivers (Postgres 17, MySQL 8.4; MongoDB and PgBouncer not available). Decisions H1–H12 (§6)
-  await the owner, except H5, H7 and H8 (decided 2026-09-30).
+  are decided by the owner: H5, H7 and H8 on 2026-09-30, the rest on 2026-10-01 ("approve all
+  recommendations").
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend, plus
   [How we horizontally scaled function execution](https://stack.convex.dev/horizontally-scaling-functions)
   and [Self-hosted: develop and deploy](https://stack.convex.dev/self-hosted-develop-and-deploy)
@@ -198,7 +199,8 @@ yet (ARCH-01 §6.3).
 **Status (30 Sep 2026):** S1 fixed on every driver by PERSIST-01 C7 (Postgres #62; MySQL #67; SQLite
 and memory #70, an OS lock; MongoDB #84, a transaction per flush on a replica set). S2 fixed with it (the
 durable prefix is recorded by each fenced flush). S3 fixed on Postgres (#62), MySQL (#67) and MongoDB
-(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 open.
+(#84). S4 fixed in #64 (the write log's window is tracked explicitly). S5 open: decided as Convex,
+background backfill (owner, 2026-10-01; DV-54).
 
 S1 in detail:
 
@@ -587,18 +589,18 @@ mutations, half actions.
 
 | # | Divergence or decision | Why | Decision |
 |---|---|---|---|
-| H1 | Leader + followers for one deployment (Convex self-hosted: one process) | The scaling goal; precedents: Convex Cloud (Usher + funrun), Zero, Firestore | owner |
-| H2 | Followers hold WebSockets and serve queries and subscriptions | Same as Convex Cloud's Usher, but followers run queries themselves | owner |
-| H3 | Mutations: A1 now; A2 later with Convex's begin-ts protocol | +55 % writes measured with A1; A2 scales execution CPU | owner |
-| H4 | Commit stream: leader push + by-ts catch-up on `indexes`; no NOTIFY, logical replication or external bus | Measured (§4.3); self-hosting stays bunvex + DB | owner |
+| H1 | Leader + followers for one deployment (Convex self-hosted: one process) | The scaling goal; precedents: Convex Cloud (Usher + funrun), Zero, Firestore | **Decided (owner, 2026-10-01): yes** (DV-113) |
+| H2 | Followers hold WebSockets and serve queries and subscriptions | Same as Convex Cloud's Usher, but followers run queries themselves | **Decided (owner, 2026-10-01): yes** (DV-114) |
+| H3 | Mutations: A1 now; A2 later with Convex's begin-ts protocol | +55 % writes measured with A1; A2 scales execution CPU | **Decided (owner, 2026-10-01): yes** — A1 first, then A2 with Convex's begin-ts protocol (DV-115) |
+| H4 | Commit stream: leader push + by-ts catch-up on `indexes`; no NOTIFY, logical replication or external bus | Measured (§4.3); self-hosting stays bunvex + DB | **Decided (owner, 2026-10-01): yes** (DV-116) |
 | H5 | The lease expires (TTL on the DB clock) and has a graceful release; no stealing (Convex: newest wins at once, no expiry) | Replicas must not preempt each other; release keeps deploys instant | **Decided (owner, 2026-09-30): as proposed.** A second process fails with `LeaseHeldError` (or waits, `lease.waitMs`); default TTL 5 s. PERSIST-01 C7, #62 |
-| H6 | Scheduler loop on the leader; action execution anywhere after an owner-tagged claim | No herding; at-most-once kept | owner |
+| H6 | Scheduler loop on the leader; action execution anywhere after an owner-tagged claim | No herding; at-most-once kept | **Decided (owner, 2026-10-01): yes** (DV-117) |
 | H7 | Memory and SQLite stay single-node, protected by a file lock | Their data is in one process or file | **Decided (owner, 2026-09-30): yes** — an exclusive OS lock (#70) |
 | H8 | Fix S1–S3 now, before any scaling work | Silent corruption today on every driver | **Decided (owner, 2026-09-30): yes, Postgres first** (#62); MySQL, MongoDB, SQLite and memory follow |
-| H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | owner |
-| H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | owner |
-| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | owner |
-| H12 | `_creationTime` and `Date.now()` derive from the leader (begin ts / leader clock), not each node's clock | Skew would reorder `by_creation_time` and break `_creationTime ≥ Date.now()` | owner |
+| H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | **Decided (owner, 2026-10-01): yes** — wait ≤ 1 s, then refuse `Connect` (DV-118) |
+| H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | **Decided (owner, 2026-10-01): yes** — read index for follower HTTP reads, actions, scheduled functions and `query_at_ts` (DV-119) |
+| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | **Decided (owner, 2026-10-01): yes** (DV-120) |
+| H12 | `_creationTime` and `Date.now()` derive from the leader (begin ts / leader clock), not each node's clock | Skew would reorder `by_creation_time` and break `_creationTime ≥ Date.now()` | **Decided (owner, 2026-10-01): yes** (DV-121) |
 
 ## 7. Tests
 

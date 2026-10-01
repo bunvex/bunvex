@@ -117,6 +117,9 @@
     confirmation are ignored.
 - **Races.** A config version guards them: a `setAuth` or `clearAuth` during a fetch discards that
   fetch's result. `clearAuth()` sends `Authenticate None`.
+- **A quirk apps observe.** When a fresh token is confirmed, `onTransition` schedules the next refetch
+  (which replaces the auth state) before it reads `hadAuth`, so `onChange(true)` runs again on every
+  confirmed fresh token, refreshes included. `@bunvex/client` does the same; the differential test pins it.
 
 ### 1.7 React (`react/ConvexAuthState.tsx`, `react/auth_helpers.tsx`, `react-clerk/`, `react-auth0/`)
 

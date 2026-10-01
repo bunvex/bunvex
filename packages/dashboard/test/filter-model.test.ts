@@ -57,8 +57,12 @@ describe("filter model", () => {
     d = updateClause(d, id, { enabled: false });
     expect(fromDraft(d).errors).toEqual({});
     expect(fromDraft(d).expr.clauses[0]).toMatchObject({ enabled: false });
+    // a clause just added is silent (UX-2); once something is typed, the missing field is said
     const noField = addClause(emptyDraft());
-    expect(Object.values(fromDraft(noField).errors)).toEqual(["Pick a field"]);
+    expect(fromDraft(noField).errors).toEqual({});
+    expect(fromDraft(noField).expr.clauses[0]).toMatchObject({ enabled: false });
+    const typed = updateClause(noField, noField.clauses[0]!.id, { text: '"x"' });
+    expect(Object.values(fromDraft(typed).errors)).toEqual(["Pick a field"]);
     const badEq = addEq(setIndex(emptyDraft(), IX.name), IX);
     expect(Object.keys(fromDraft(badEq).errors)).toEqual(["eq.0"]);
   });

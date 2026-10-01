@@ -149,6 +149,7 @@ export function CellMenuItems(props: {
         Edit document
         <DropdownMenuShortcut aria-hidden="true">⇧Enter</DropdownMenuShortcut>
       </DropdownMenuItem>
+      <DropdownMenuSeparator />
       <DropdownMenuItem variant="destructive" disabled={!actions.deleteDocument} onClick={actions.deleteDocument}>
         Delete document
       </DropdownMenuItem>
