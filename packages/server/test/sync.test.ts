@@ -22,6 +22,7 @@ async function setup() {
   ).init();
   const functions = new Functions(engine).register("m", {
     count: query(async ({ db }, { table }: { table: "a" | "b" }) => (await db.query(table).collect()).length),
+    head: query(async ({ db }) => ((await db.query("a").first())?.k as string | undefined) ?? null),
     both: mutation(async ({ db }) => {
       await db.insert("a", {});
       await db.insert("b", {});
@@ -423,5 +424,24 @@ describe("sync invalidation through the read-set index (STUDY-08 D9)", () => {
     await c2.closed;
     await c1.until(() => sync.reads.size === 0 || undefined);
     expect([sync.reads.size, sync.reads.intervalCount]).toEqual([0, 0]);
+  });
+});
+
+describe("read-sets that end at the last key read (STUDY-08 D10, DV-57)", () => {
+  test("a write past a first() does not re-run it; a write to its head does", async () => {
+    const { url, sync, engine } = await setup();
+    const head = await engine.mutation((db) => db.insert("a", { k: "head" }));
+    const c = await client(url);
+    c.modify([add(1, "m:head"), add(2, "m:count", { table: "b" })]);
+    await c.transition(0);
+    const before = sync.stats.executions;
+    // Appends after the head, then a write to b: once b's update is out, the appends were processed.
+    for (let i = 0; i < 5; i++) await engine.mutation((db) => db.insert("a", { k: `tail ${i}` }));
+    await engine.mutation((db) => db.insert("b", {}));
+    await c.until(() => c.transitions().some((t) => updated(t)[2] === 1));
+    expect(sync.stats.executions - before).toBe(1); // count(b) only: the 5 appends re-ran nothing
+    await engine.mutation((db) => db.delete("a", head));
+    await c.until(() => c.transitions().some((t) => updated(t)[1] === "tail 0"));
+    expect(sync.stats.executions - before).toBe(2);
   });
 });

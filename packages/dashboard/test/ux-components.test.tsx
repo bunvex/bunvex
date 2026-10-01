@@ -29,7 +29,9 @@ describe("shared components after the UX review", () => {
   test("UX-11: a log line's outcome is the shared status badge", async () => {
     mount("/logs");
     await screen.findByRole("heading", { level: 1, name: "Logs" });
-    const badge = (await screen.findAllByText(/^(Success|Failure)$/))[0]!.closest("[data-slot=status-badge]");
+    // in the list (the histogram's legend names the outcomes too)
+    const grid = await screen.findByRole("grid", { name: "Log lines" });
+    const badge = (await within(grid).findAllByText(/^(Success|Failure)$/))[0]!.closest("[data-slot=status-badge]");
     expect(badge?.textContent).toMatch(/^(Success|Failure) \d+ ms$/);
   });
 
