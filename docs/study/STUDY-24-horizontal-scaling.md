@@ -267,6 +267,10 @@ S1 in detail:
     within budget at every lag.
   - A2 needs a **time-based OCC window**: at lag 500 ms under load, 60 % of attempts conflicted with the
     count-based one. It also needs S4 fixed.
+  - *Done (STUDY-06 D10, as Convex):* the write log is now kept by time and size (30 s floor, 300 s, 50 MiB
+    soft), and a snapshot past it is `OutOfRetention`, not a conflict. With the real committer at full load
+    (~120k commits/s), lagged commits at 500 ms went from 100 % failed to 0 %; at 2 000 commits/s and a 15 s
+    lag, also from 100 % to 0 % (`bench/write-log.ts lag`). S4 was fixed in #64.
 
 **Recommendation.**
 

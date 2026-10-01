@@ -29,6 +29,7 @@ import {
   type FlushRetryOptions,
   type Interval,
   overlaps,
+  type WriteLogRetention,
 } from "./committer.ts";
 import {
   type ExecutionKind,
@@ -144,6 +145,8 @@ export class Engine {
        * another process holds before failing with `LeaseHeldError`.
        */
       lease?: { ttlMs?: number; waitMs?: number };
+      /** The committer's write-log retention (default: Convex's 30 s / 300 s / 50 MiB; STUDY-06 D10). */
+      writeLogRetention?: Partial<WriteLogRetention>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -160,7 +163,7 @@ export class Engine {
         const dv = documentValidator(t.name, t.document);
         if (dv) this.docValidators.set(t.name, dv);
       }
-    this.committer = new Committer(persistence, undefined, undefined, opts.flushRetry);
+    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry);
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
@@ -606,6 +609,8 @@ export class Engine {
             );
         return withTs ? { value, ts } : value;
       } catch (e) {
+        // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
+        // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
         if (failures >= maxRetries) throw this.occError(e.conflict, source);
         const sleep = occBackoffMs(failures, initialMs, maxMs);

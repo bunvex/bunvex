@@ -24,7 +24,7 @@ import {
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
-import { isSystemError, withRequestId } from "./errors.ts";
+import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
@@ -334,7 +334,11 @@ export class SyncSession {
 
   private internalError(e: unknown) {
     console.error("bunvex sync:", e);
-    this.fail({ code: CLOSE_INTERNAL_ERROR, reason: "InternalServerError" });
+    // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
+    this.fail({
+      code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,
+      reason: "InternalServerError",
+    });
   }
 
   message(frame: string) {
