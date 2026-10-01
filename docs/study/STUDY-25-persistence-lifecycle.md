@@ -1,7 +1,8 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
 
 - **Status:** accepted. L1–L12 (§4) decided by the owner: L9 and L10 on 2026-09-30, the rest on 2026-10-01
-  ("approve all recommendations"). L1, L3 (#107, §3.4), L4 and L5 (#112, §3.5; DV-123, DV-124) are done; L6–L8 are to be built.
+  ("approve all recommendations"). L1, L3 (#107, §3.4), L4 and L5 (#112, §3.5; DV-123, DV-124), L6 and L7
+  (#114, §3.6) are done; L8 is to be built.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. **Convex run:** the self-hosted
   binary `precompiled-2026-09-26-27ef234` (native arm64) against a throwaway Postgres 17 and SQLite, on
   30 Sep 2026.
@@ -57,10 +58,35 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
 
 **Versioning.** No version row is stored.
 
-- The layout version (V5/V6) comes from configuration (`common/src/types/mod.rs:175-197`).
+- The layout version (V5/V6) comes from configuration (`common/src/types/mod.rs:175-197`; the driver tags
+  in `clusters/src/db_driver_tag.rs:17-47`).
+- **A mismatch is refused, by the shape of the database:**
+  - MySQL v5 refuses a non-V5 configuration outright: "V5 persistence cannot open a non-V5 database"
+    (`mysql/src/v5/persistence.rs:151-153`).
+  - MySQL v6 checks a sentinel table, `indexes_latest`, created before any table whose name v5 also uses.
+    `documents` without the sentinel is "a V5 or unversioned persistence database", and v6 refuses to
+    initialize over it (`v6/persistence.rs:207-225`). It then checks that every shared table has v6's
+    columns (`deployment_id`), and refuses otherwise (`:243-271`).
+  - Postgres (V5 only) and SQLite run their guarded DDL over whatever is there and check nothing.
 - The layout evolves in place through guarded, idempotent DDL, e.g. adding a primary key if
   `documents_pkey` is missing (`sql.rs:87-99, 153-164`).
-- `persistence_globals` holds `max_repeatable_ts`, bootstrap ids and table summaries.
+- `persistence_globals` (`key`, `json_value`) holds `max_repeatable_ts`, bootstrap ids and table summaries
+  (`common/src/persistence/mod.rs:210-243`); SQLite has it too (`sqlite/src/lib.rs:641-647`).
+
+**The `read_only` flag** (Postgres and MySQL; SQLite has none):
+
+- A one-row table, `read_only (id BIGINT PRIMARY KEY)`, created by the guarded DDL (`postgres/src/sql.rs:198-215`).
+  A row means read-only (`sql.rs:681-715`: check, set, unset).
+- A writer's open checks it after the DDL and **before the lease**, and fails with
+  `ConnectError::ReadOnly`, "persistence is read-only, data migration in progress"
+  (`postgres/src/lib.rs:220-224, 330-334`; `mysql/src/v5/persistence.rs:186-191`;
+  `v6/persistence.rs:168-180`), unless `allow_read_only` is set.
+- `allow_read_only`: the self-hosted backend passes `false` (`local_backend/src/main.rs:149-155`); readers
+  pass `true` and open regardless (`db_connection/src/lib.rs:181-196`).
+- `set_read_only(true|false)` inserts or deletes the row, with no lease (`postgres/src/lib.rs:357-389`;
+  `db_connection/src/lib.rs:238-262`). For SQLite it fails: "unsupported persistence type" (`:261`). No
+  caller exists in the open-source tree; it is a hook for Convex's migration tooling.
+- The flag is read only at start: setting it does not stop a running backend.
 
 **Startup order** (`postgres/src/lib.rs:299-345`, `database/src/database.rs:1043-1090`):
 
@@ -194,7 +220,7 @@ Throwaway runs, 30 Sep 2026:
 - **All drivers:**
   - The URL is used as given; there is no database-name derivation and no SSL default.
   - Pools are 16.
-  - No layout version is stored and none is checked.
+  - No layout version was stored or checked before L6 was built (§3.6).
 
 ### 3.2 Timeouts, retries, shutdown
 
@@ -350,6 +376,55 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
 64 writers, median 26 336 vs 26 208 (runs 25 664–26 480 vs 24 857–26 464); 1 writer, median 2 524 vs 2 511
 (runs 2 138–2 543 vs 2 316–2 549). No measurable change.
 
+### 3.6 Layout version and read-only flag (L6, L7; built as Convex, #114)
+
+**What every store records** (`packages/core/src/persistence/layout.ts`, PERSIST-01 C10):
+
+| Driver | Layout version | Read-only flag |
+|---|---|---|
+| Postgres, MySQL | row `layout_version` of `persistence_globals (key, json_value)`, JSON text | a row in `read_only (id)` |
+| SQLite | the same tables, in the file | the same |
+| MongoDB | `meta` `{_id: "layout", version}` | `meta` `{_id: "read_only"}` |
+| memory+log | the log's first record, `{"layout":1}` | a file next to the log, `<log>.read-only` |
+
+The names are Convex's (`persistence_globals`, `read_only`). bunvex has one layout, version 1.
+
+**What an open does**, in order:
+
+1. **Read, never write.** No lock and no lease is needed, because refusing is safe:
+   - The recorded version must be bunvex's. A newer one, or an unknown one, is refused with `LayoutError`,
+     naming what was found. An older one would be upgraded in place if bunvex had an upgrade for it. It has
+     none yet (DV-56: no migrations for now), so it is refused too.
+   - With no record, `documents` and `indexes` must have bunvex's columns (MongoDB: fields of a sample
+     document), or not exist. Anything else, Convex's own tables included, is refused with `LayoutError`,
+     and nothing is written. SQLite checks before even the WAL pragma, which would rewrite the file's
+     header. A memory log whose first line is neither a header nor a commit record is refused; before L6 it
+     was "torn" and **truncated to nothing**.
+   - A store marked read-only is refused with `ReadOnlyError` ("… is read-only, data migration in
+     progress"), unless the open passes `allowReadOnly` (Convex's `allow_read_only`).
+2. **The guarded DDL** (unchanged): only missing tables, so a store written before L6 gets the two new
+   tables here.
+3. **The lease** (`Engine.init`). The version record is written **under it, in the acquiring
+   transaction** (Postgres, MySQL), or right after winning it (MongoDB, SQLite under its lock, the memory
+   log under its lock while it replays). The record is written only if there is none; a record found there
+   is checked again, so a store changed between the open and the lease is still refused. On a mismatch the
+   lease is given back (Postgres and MySQL roll the acquisition back). PERSIST-01 C7 holds: a mere open
+   writes nothing but missing tables.
+4. `maxTs`, the catalog: unchanged.
+
+**Stores written before L6** have bunvex's tables and no record. They are the same layout, so they open as
+version 1 and get the record at their first lease. This was checked on real stores: written by `main`
+(05d8e49) on all five drivers, then reopened twice by this branch (data intact, one record, the memory log
+with one header appended). The reverse does not work: an older bunvex cannot read a memory log that starts
+with a header, and fails on it.
+
+**Setting the flag**: `setReadOnly(true|false)` on every driver (`ReadOnlyFlag`), with no lease, as
+Convex's `set_read_only`. To clear it, open with `allowReadOnly`. It is read only at open: a running
+writer is not stopped. There is no CLI yet; import/export will use it.
+
+**Measured** (open + `Engine.init` + close on a 100k-document store, see the PR): the checks add one round
+trip to the open of a remote store (two on a store without a record), and one statement to the lease.
+
 ## 4. Divergences
 
 | # | Divergence | Convex | bunvex | Risk / why | Recommendation | Decision |
@@ -359,8 +434,8 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
 | L3 | Timeouts on database calls | 30 s (Postgres) / 19 s (MySQL) per call; timed-out connections are dropped | Was none; now as Convex (§3.4): 30 s / 19 s per round trip (MongoDB 30 s), timed-out connections dropped (Postgres: the whole pool, DV-122), renewals bounded by TTL/4 | A hung connection hung startup or a commit forever | **Bug.** Per-call timeouts with Convex's values; drop timed-out connections | **As Convex, fixed in #107.** Owner, 2026-10-01: Postgres retires its pool on a timeout (DV-122); MongoDB uses 30 s (`MONGODB_TIMEOUT_SECONDS`); Convex's `POSTGRES_TIMEOUT_SECONDS` / `MYSQL_TIMEOUT_SECONDS` are read as is; lease renewals are bounded by TTL/4 (DV-14) (DV-104) |
 | L4 | Transient errors in a flush | Retried, 100 ms → 10 s backoff, no limit; an ambiguous commit is fatal ("Unsure if transaction committed to disk") | Was fail-stop on any error; now as Convex (§3.5): retried in the committer with Convex's backoff, same group behind the same fence; ambiguous commits fail-stop (`UnsureCommitError`; MongoDB detects them through the lease's `maxTs`) | A network blip or database restart killed the process | **Bug (parity).** Classify transient errors, retry the flush, keep fail-stop for "unsure if committed" (the lease makes a retried flush safe) | **As Convex, fixed in #112, with two decided divergences (owner, 2026-10-01):** a lost connection is transient on Postgres too (DV-123); a retried group found already landed through the lease record is acknowledged, not fail-stop (DV-124). MongoDB's classification: owner-approved. Pool retirement before a retry: DV-122. Backoff knobs: `Engine` options until Convex's env names (DV-88) |
 | L5 | Retries of reads and init | Once, on a fresh connection (Postgres: after a lost connection or a timeout; MySQL: after an operational error, not a timeout) | Was none; now as Convex, per driver (§3.5) | Spurious query errors after a database restart | Bug (minor). One retry | **As Convex, fixed in #112** (DV-106) |
-| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | None stored, none checked | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | **Decided (owner, 2026-10-01): match Convex** (bug; to be built): a stored layout version; unknown or foreign layouts refused (DV-107) |
-| L7 | `read_only` flag | Checked at start: "data migration in progress" | None | No safe hook for migrations or import/export | Add with L6 | **Decided (owner, 2026-10-01): match Convex**, built with L6 (DV-108) |
+| L6 | Layout version | Configured (V5/V6), checked against the store (v6 refuses v5) | Recorded in every store, checked on open; a future, unknown, older (no upgrade yet) or foreign store is refused with `LayoutError` (§3.6) | No upgrade path for layout changes (e.g. `prev_ts`, STUDY-09); a foreign or future store fails obscurely | **Bug.** A layout-version record, checked on open; refuse unknown or foreign layouts | **As Convex, fixed in #114** (owner, 2026-10-01: match Convex; DV-107, resolved). Mechanism: a stored record instead of configuration (bunvex has one layout); same refusals |
+| L7 | `read_only` flag | Checked at start: "data migration in progress" | Checked at open on every driver: `ReadOnlyError` unless `allowReadOnly`; `setReadOnly` with no lease (§3.6) | No safe hook for migrations or import/export | Add with L6 | **As Convex, fixed in #114** (owner, 2026-10-01: match Convex; DV-108, resolved). Also on SQLite and memory+log, where Convex has none: **divergence decided** (owner, 2026-10-01: "yes, it must be on every driver"; DV-125) |
 | L8 | Database name and TLS | Name from the instance name; `sslmode=require` and `target_session_attrs=read-write` by default | URL as given | Unencrypted traffic by default; can land on a read replica | Convex's defaults, with Convex's env names as aliases (see platform.md "Database selection") | **Decided (owner, 2026-10-01):** TLS required by default (`sslmode=require`, can be turned off) and `target_session_attrs=read-write`, as Convex (to be built, DV-109); the database name is **not** derived from the instance name, the URL decides (divergence, DV-110). Convex's env names are accepted as aliases (DV-88) |
 | L9 | Two processes on SQLite and memory+log | **Unprotected: data loss, measured (§1.5)** | Unprotected | Silent corruption | **Diverge on purpose:** an exclusive OS lock (C7 for embedded stores). Convex has the bug | **Decided (owner, 2026-09-30): lock** (#70; DV-99) |
 | L10 | Lease semantics | Newest wins at once, no TTL; an idle deposed process serves stale data for minutes to hours; a paused holder can leave **no leader** | TTL + release, never taken while live; deposed within ~1.7 s; bounded waits | Decided as STUDY-24 H5 (#62) | Keep. Also apply to MySQL | **Decided (owner, 2026-09-30)** (#62; DV-14) |
@@ -400,7 +475,11 @@ reads the lease only on a retry; `progress()` checks one flag), 5 interleaved ru
     (DV-124): the committer stops as "unsure" on all three (see §3.5 for the numbers).
   - Unit tests: `packages/core/test/flush-retry.test.ts` (backoff, fail-stop cases, a stop during the
     backoff), `packages/persistence/test/transient.test.ts` (each driver's classification).
-- **L6:** open a store written by a future layout version; refuse with a clear error.
+- **L6:** open a store written by a future layout version; refuse with a clear error. Conformance K22: a
+  new store records its version and reopens; a store without a record opens and gets one; a future or
+  unknown version, and a store bunvex did not write, are refused and left as they were.
+- **L7:** conformance K23: a read-only store refuses to open for writing, opens with `allowReadOnly`, and
+  opens for writing once cleared.
 - **L9:** two processes on one SQLite file or one memory log; the second refuses (the same shape as K10).
 
 These become conformance checks where they apply to every driver.
