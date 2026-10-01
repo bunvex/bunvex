@@ -2,7 +2,11 @@
 
 > v1, 29 Sep 2026 (written as STORAGE-01; renamed by ARCH-01 D2 — "storage" is the FILE API, as in
 > Convex). **v2, 30 Sep 2026:** C7 (single writer: lease and fencing) and K10–K18, from STUDY-24 H8/H5.
-> **v2.1, 30 Sep 2026:** C8 (liveness: client-side call timeouts) and K20, from STUDY-25 L3. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> **v2.1, 30 Sep 2026:** C8 (liveness: client-side call timeouts) and K20, from STUDY-25 L3.
+> **v2.2, 1 Oct 2026:** C9 (transient errors and retries; ambiguous commits per driver) and K21, from STUDY-25
+> L4/L5; K20's last check now expects a timed-out flush to be retried. **v2.3, 1 Oct 2026:** owner decisions on
+> C9: a lost connection is transient on Postgres too (DV-123); a retried group that already landed is
+> acknowledged, detected by one rule on every store (DV-124); a failed attempt issues nothing after it failed. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -141,9 +145,56 @@ as Convex):
   a renewal stuck on a dead connection fails before the next one is due, and that one runs on a fresh
   connection.
 
-A `flush()` that times out is a failed flush: whether its group committed is unknown, and the committer
-stops (fail-stop, C4/C5). The engine also stops when a lease renewal is still pending once the TTL has run
-out, whatever the driver does. Embedded stores (memory, SQLite) make no network calls and have no timeout.
+A `flush()` that times out is a failed flush, and whether its group committed is unknown: the committer
+retries it (C9) and, if the retry finds the group already there, acknowledges it (DV-124). The engine also stops when a lease
+renewal is still pending once the TTL has run out, whatever the driver does. Embedded stores (memory, SQLite)
+make no network calls and have no timeout.
+
+## C9 — transient errors and retries (remote stores)
+
+As Convex (STUDY-25 L4/L5), a remote store's passing failures — a timeout, a connection the server or the
+network closed, a server shutting down or not serving — are retried instead of stopping the process:
+
+- **Classification.** A driver implements `isTransient(e)`: whether an error of `flush()` is transient. The
+  first-party rules are Convex's per driver, with one decided divergence: Postgres, a timeout or a lost
+  connection (Convex: a timeout only; DV-123, owner 2026-10-01); MySQL, a timeout or an operational error
+  (Convex's `classify_mysql_error`: lost connection, IO, 1290, 2013, 1053, 1040); MongoDB (no Convex
+  counterpart; owner-approved), a timeout, a network or server-selection error, or a server shutting down or
+  not primary. A
+  `LeaseLostError`, a duplicate key, a deadlock or a serialization failure is never transient. A driver
+  without `isTransient` (memory, SQLite) has no transient errors.
+- **Flush retries (the committer).** A `flush()` that fails transiently is retried with full-jitter
+  exponential backoff from 100 ms to 10 s, with no limit on attempts (Convex's write batcher); the lease's TTL
+  bounds it in practice (C7). Anything else stops the committer: "write failed, unsure if the group committed
+  to disk".
+- **The same group.** A driver whose `flush()` failed MUST keep the group: the next `flush()` writes the same
+  rows at the same timestamps, behind the fence (C7). Re-applying them under new timestamps, or dropping them,
+  is a violation (K20 catches the second: a commit acknowledged with no rows).
+- **A failed attempt stays failed.** Once a `flush()` has failed, nothing of that attempt may commit after the
+  next `flush()` began, except a COMMIT that had already been sent: a call that timed out issues no further
+  statement (`withTimeout`'s `progress()` throws once the call has timed out), and a store whose transactions
+  outlive their connection (MongoDB) ends the failed attempt's transaction before the retry. Otherwise the
+  abandoned attempt races the retry (MongoDB's `withTransaction` retried its callback in the background and
+  sometimes committed the group under the retry: found as a flaky K20).
+- **A group that already landed (DV-124, owner 2026-10-01).** A retry of a group whose earlier attempt did
+  commit MUST NOT write the group again. Before re-running a group it failed to flush, the driver reads the
+  lease record: if its epoch is ours and its `max_ts` ≥ the group's top, the group committed (C7's fence writes
+  `max_ts` in the same transaction as the rows), and `flush()` succeeds without writing: the commits are
+  acknowledged, exactly once. The same rule on every store. If the epoch is not ours: `LeaseLostError`. If
+  the read fails, the error is classified as any other (transient: the committer retries, still holding the
+  group). Convex stops instead ("Unsure if transaction committed to disk").
+- **Still unsure.** If the group turns out to be there anyway while it is re-run (an earlier attempt's COMMIT
+  that was already sent landed after the lease read), the flush fails with `UnsureCommitError`
+  (`@bunvex/core/persistence`), which is never transient: the committer stops, and after a restart the store
+  holds the group exactly once. Per store: Postgres and MySQL see a duplicate key on the primary keys of
+  `documents` and `indexes`; MongoDB, which has no unique key on the rows, sees its fence fail (it matches
+  only while the lease's `maxTs` is below the group's top) under our own epoch with `maxTs` ≥ the top. Before
+  the lease read, the MongoDB driver ends the failed attempt's session, whose transaction outlives its
+  connection on the server; a third-party driver must make the same check (C7's `max_ts` always allows it).
+- **Reads (the driver).** A read, or an idempotent init step, that fails because its connection was lost runs
+  once more on a fresh connection (`retryOnce`; Convex's `with_retry`, `MYSQL_MAX_QUERY_RETRIES` = 1). Postgres
+  also retries after a timeout (so a read waits up to two timeouts); MySQL does not. Never a statement inside
+  a transaction or a flush, and never a lease call.
 
 ## Conformance (`@bunvex/persistence-conformance`)
 
@@ -167,13 +218,28 @@ out, whatever the driver does. Embedded stores (memory, SQLite) make no network 
 | K17 | concurrent first boot | two engines opened at once on an empty store: exactly one succeeds; one catalog, one instance secret |
 | K18 | release | after `releaseLease()` (or `Engine.close()`), another holder acquires at once |
 | K19 | another process | a child process holds the store: an engine in this process fails `init()` with `LeaseHeldError`; once the child is SIGKILLed, an engine takes the store over (within the TTL, or at once for a process-scoped lease) |
-| K20 | a store that stops answering (C8, remote stores) | a TCP proxy between the driver and the store stops forwarding both ways without closing anything: a read and a flush fail within the timeout (1.5 s in the suite), a renewal within TTL/4; the client closes every connection those calls waited on; once the proxy forwards again the same store answers without a reopen; through the engine, a commit whose flush times out stops the committer. The driver module exports `target()` and `openThrough(via, { timeoutMs })` |
+| K20 | a store that stops answering (C8, remote stores) | a TCP proxy between the driver and the store stops forwarding both ways without closing anything: a read fails within the timeout (1.5 s in the suite; two with a retry, C9) and a flush within one, a renewal within TTL/4; the client closes every connection those calls waited on; once the proxy forwards again the same store answers without a reopen; through the engine, a commit whose flush times out is held and retried while the store does not answer, then acknowledged once, its rows stored once (C9); and, with the retries held for 1 s after the thaw, the timed-out attempt sends nothing more (no request with the group's rows, no COMMIT: "a failed attempt stays failed", C9). The driver module exports `target()` and `openThrough(via, { timeoutMs })` |
+| K21 | transient errors are retried (C9, remote stores) | the proxy of K20 resets the connection of a request carrying a marker, or lets a COMMIT through and drops every answer after it: a read whose connection is lost answers through one retry, and fails when the retry loses its connection too; a connection lost in the middle of a flush is retried: the commit is acknowledged once and stored once (all three stores; DV-123); a COMMIT that lands while its answer is lost is retried, found landed through the lease record and acknowledged exactly once, the committer still running, and after a reopen the store holds the group exactly once (`auditRowsAt`), with `maxTs` at its ts (DV-124) |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
   that loses all its index entries leaves the index counts equal to each other.
 - K11–K14 test expiry and paused holders: they do not apply to a process-scoped lease (an OS lock has
   neither), which K10, K16–K19 cover.
+- K21's landed-group check (v2.3) was sabotaged by making the lease read never find the group: Postgres and
+  MySQL stop with `UnsureCommitError` (duplicate key), MongoDB too (its fence); with MongoDB's fence `maxTs`
+  check removed as well (and fresh `_id`s), the group is stored twice (2 documents, 6 index entries for 1 and
+  3). K21's lost-connection check, with Postgres's `isTransient` back to timeouts only: the committer stops.
+  K20's "sends nothing more" check, with `progress()` no longer throwing after a timeout: Postgres and MongoDB
+  send 2 requests (the group's rows, a COMMIT) after the thaw, every run; MySQL destroys the connection on a
+  timeout and stays green. Each went red.
+- K21 and K20's retry check were sabotaged four ways: no flush retry (red on all three remote drivers); no read
+  retry (red; MongoDB with `retryReads: false`); a Postgres driver that drops its failed group (the commit is
+  acknowledged with no rows); a MongoDB fence without the `maxTs` check and with fresh `_id`s (the group is
+  acknowledged and stored twice).
+- The proxy recognises a COMMIT as a `COMMIT` statement, MongoDB's `commitTransaction` (not `autocommit`,
+  which every command of a transaction carries), or a Postgres Bind of a statement the connection prepared as
+  `commit` (postgres.js prepares it once per connection and then sends only its name).
 - K20 was sabotaged by disabling `withTimeout`: every call hung past the suite's guard (8 × the timeout).
   MongoDB's server monitor is not a call; its streaming check waits up to the heartbeat plus the connect
   timeout, so the MongoDB module opens with a 1 s heartbeat for K20.
