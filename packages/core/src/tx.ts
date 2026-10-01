@@ -47,6 +47,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
+import { SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
 
@@ -255,7 +256,7 @@ export class Tx {
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
     /** System transactions (the engine's own) may touch `_`-prefixed system tables; app code may not. */
-    private readonly system = false,
+    private readonly systemTx = false,
   ) {
     this.day = Math.floor(nextCreationTime / 86_400_000);
   }
@@ -291,7 +292,7 @@ export class Tx {
     return this.identity;
   }
   private get systemAccess() {
-    return this.system || this.systemDepth > 0;
+    return this.systemTx || this.systemDepth > 0;
   }
 
   /**
@@ -305,6 +306,21 @@ export class Tx {
     } finally {
       this.systemDepth--;
     }
+  }
+
+  /** `asSystem`, for a synchronous call. */
+  asSystemSync<T>(fn: () => T): T {
+    this.systemDepth++;
+    try {
+      return fn();
+    } finally {
+      this.systemDepth--;
+    }
+  }
+
+  /** Convex's `db.system`: read access to the system tables apps may see (`_scheduled_functions`). */
+  get system(): SystemReader {
+    return new SystemReader(this);
   }
 
   /**
@@ -377,7 +393,7 @@ export class Tx {
   /** @internal (ScanReads) */
   recordInterval(i: Interval) {
     this.readList.push(i);
-    if (!this.system && this.readList.length > TRANSACTION_MAX_READ_SET_INTERVALS)
+    if (!this.systemTx && this.readList.length > TRANSACTION_MAX_READ_SET_INTERVALS)
       throw new Error(
         `Too many reads in a single function execution (limit: ${TRANSACTION_MAX_READ_SET_INTERVALS}). ${OVER_LIMIT_HELP}`,
       );
@@ -387,7 +403,7 @@ export class Tx {
   private recordDoc(json: string) {
     this.docsRead++;
     this.bytesRead += json.length;
-    if (this.system) return;
+    if (this.systemTx) return;
     if (this.docsRead > TRANSACTION_MAX_READ_SIZE_ROWS)
       throw new Error(
         `Too many documents read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_ROWS}). ${OVER_LIMIT_HELP}`,
@@ -670,7 +686,7 @@ export class Tx {
 
   /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
   collectLimit() {
-    return this.system ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
+    return this.systemTx ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
   }
 
   /** @internal (QueryImpl) */

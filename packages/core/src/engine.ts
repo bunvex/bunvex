@@ -18,6 +18,7 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   planCatalog,
+  SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
   TABLES_TABLE,
   type TableMeta,
@@ -40,6 +41,7 @@ import {
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { hasLease, type Lease, LeaseHeldError, LeaseLostError, type Persistence } from "./persistence/index.ts";
 import { ReadSetIndex } from "./read-set-index.ts";
+import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
   deleteSessionRequestsBefore,
@@ -309,6 +311,7 @@ export class Engine {
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }
