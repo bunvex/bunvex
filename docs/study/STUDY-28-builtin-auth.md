@@ -1,6 +1,6 @@
 # STUDY-28 — Built-in authentication (users, sessions, a Users dashboard) on better-auth
 
-- **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); the spike (§3.8 step 0) is next
+- **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); spike done (§7), the design holds
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (dashboard, docs); get-convex/convex-auth
   `7eab860` (v0.0.96); get-convex/better-auth `2f9fcf6` (v0.12.5); better-auth 1.7.6 (installed dist)
 - **Related:** STUDY-27 (`ctx.auth`, JWT / OIDC, sync and client auth), STUDY-12 (dashboard), the owner's
@@ -494,3 +494,41 @@ They are in [docs/parity/divergences.md](../parity/divergences.md) as DV-102–D
 - The email sender: a function in the app (`sendEmail: internal.emails.send`) is the most flexible.
   Should the dashboard also have a built-in SMTP configuration, as the others do?
 - Multi-tenant: one deployment is one auth realm. Organizations cover tenancy inside an app.
+
+## 7. Spike results (2026-10-01, branch `spike/better-auth`, not merged)
+
+- **Setup:** better-auth 1.7.6 `/minimal` with `emailAndPassword`, `admin` and `jwt` (ES256), hosted as in
+  §3.3. A Tx adapter, one endpoint per execution, in-memory persistence.
+- **Code:** `packages/server/spike/better-auth/` on that branch (`README.md` has the table).
+
+| What | Result |
+|---|---|
+| Sign-up / sign-in in one mutation | 55 / 54 ms, of which scrypt is 53 ms; all adapter work ~2 ms |
+| `getSession` as a query | p50 0.28 ms, p99 1.7 ms (the Convex component: 100–360 ms, #284 / #73) |
+| Failure injected between user and account | nothing committed (endpoint-in-mutation, and endpoint-in-action through `transaction()`) |
+| 20 concurrent sign-ups / 10 of one email | 20 ok with 0 retries / exactly 1 user, 9 OCC retries |
+| admin `listUsers` (`contains` search) / `banUser` | 2–4 ms in a query / the banned session reads null at once, sign-in refused |
+
+**What it changed in the design:**
+
+1. **B5 is required and sufficient.** Without it, sign-up fails on `crypto.getRandomValues()`. With it,
+   nothing else broke.
+2. **Signing keys are created at startup, in a mutation, and rotated only by a mutation.** The jwt
+   plugin otherwise creates the first key pair inside the `/get-session` hook: a write, and randomness,
+   from a read (better-auth #6215).
+3. **The session query returns the session body only.** Tokens are issued only by the token mutation.
+   The jwt hook on `/get-session` signs a fresh `set-auth-jwt` on every call (ECDSA nonce, `iat`), which
+   would make the query's result nondeterministic.
+4. **Emails use an outbox written in the same transaction.** `sendVerificationEmail` inserts an outbox
+   row, and a scheduled action delivers it after commit. `advanced.backgroundTasks.handler` is not usable
+   for this: the promise it receives has already started inside the transaction.
+5. **`deferSessionRefresh: true` is enough to keep `getSession` read-only.** The adapter's "no writes
+   from a query" guard never fired.
+
+**Next:**
+- the prerequisites (§3.8 step 1);
+- OAuth with a fake provider (needs HTTP actions);
+- latency on real persistence;
+- the session-liveness revocation (B3);
+- the `customFetchImpl` client transport;
+- the first plugin manifests.
