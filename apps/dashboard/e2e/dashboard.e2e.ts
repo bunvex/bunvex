@@ -276,6 +276,35 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Analytics: the live map drawn offline (no request leaves the app), the breakdowns, axe in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, external, close } = await open("/analytics/realtime", { colorScheme });
+      await heading(page, "Realtime");
+      // MapLibre draws on a canvas; the bundled countries and the visitors' bubbles are on it
+      await page.locator(".maplibregl-canvas").waitFor();
+      await page.locator(".maplibregl-marker").first().waitFor();
+      expect(await page.getByRole("region", { name: "Countries" }).locator("tbody tr").count()).toBeGreaterThan(2);
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        // MapLibre's own canvas and markers are drawn content; the page's text alternatives are the breakdowns
+        const r = await axe.run({ exclude: [".maplibregl-map"] }, { resultTypes: ["violations"] });
+        return r.violations.map(
+          (v: { id: string; nodes: { html: string }[] }) =>
+            `${v.id}: ${v.nodes.map((n) => n.html.slice(0, 90)).join(" | ")}`,
+        );
+      });
+      expect([colorScheme, violations]).toEqual([colorScheme, []]);
+      // offline basemap and bundled worker: nothing fetched from tile servers or CDNs
+      expect([errors, external]).toEqual([[], []]);
+      await close();
+    }
+    // MapLibre loads with the Analytics screen only, never with the shell
+    const entry = readdirSync(`${import.meta.dir}/../dist/assets`).find((f) => /^index-.*\.js$/.test(f))!;
+    expect(readFileSync(`${import.meta.dir}/../dist/assets/${entry}`, "utf8")).not.toContain("maplibregl");
+  });
+
   test("Workflows: a run's steps drawn as a diagram, its timeline and journal; axe in both themes", async () => {
     for (const colorScheme of ["light", "dark"] as const) {
       const { page, errors, external, close } = await open("/workflows/runs?status=failed", { colorScheme });

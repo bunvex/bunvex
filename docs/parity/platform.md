@@ -338,10 +338,11 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 bunvex additions to the dashboard, with no Convex counterpart (STUDY-12 §13.2, §15, §7.7, §7.8): snapshot
 export and import in Settings, the **Topology** screen (UI-01 §22), the Files "Buckets" placeholder
-(§24) and the **Authentication** screen (users, sessions, organizations and auth configuration, after
-better-auth's concepts; §25) and **Workflows** (durable workflow runs as a diagram, timeline and journal,
-with cancel / rerun / restart from a step, and work pools — an extension, UI-01 §26.3, STUDY-12 §17). All on
-the mock.
+(§24), the **Authentication** screen (users, sessions, organizations and auth configuration, after
+better-auth's concepts; §25), **Analytics** (live visitors on a map, events, sessions and profiles — an
+extension, UI-01 §26.2, STUDY-12 §16) and **Workflows** (durable workflow runs as a diagram, timeline and
+journal, with cancel / rerun / restart from a step, and work pools — an extension, UI-01 §26.3, STUDY-12
+§17). All on the mock.
 
 ### 22. Deployment state, health, self-hosted configuration
 
