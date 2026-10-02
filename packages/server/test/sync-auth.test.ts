@@ -167,10 +167,12 @@ describe("authentication over the sync protocol", () => {
   test("an identity whose token has expired: AuthError TokenExpired (no update attempted), then close", async () => {
     const { issuer, url } = await setup();
     const c = await client(url);
-    c.authenticate(await issuer.sign({ sub: "ada", exp: Math.floor(Date.now() / 1000) + 1 }));
+    // `exp` is in whole seconds: round up so the token lives 1–2 s whatever the current millisecond.
+    const exp = Math.ceil(Date.now() / 1000) + 1;
+    c.authenticate(await issuer.sign({ sub: "ada", exp }));
     c.subscribe(1, "m:whoami");
     await c.until(() => c.values()[1] === "ada");
-    await Bun.sleep(1100);
+    await Bun.sleep(exp * 1000 - Date.now() + 10);
     c.mutate(0, "m:add");
     await c.closed;
     expect(c.got.find((m) => m.type === "AuthError")).toMatchObject({

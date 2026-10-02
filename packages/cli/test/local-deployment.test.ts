@@ -42,11 +42,24 @@ function shim(dir: string, version = "test-1") {
   chmodSync(p, 0o755);
   return p;
 }
+const bindable = (port: number) => {
+  try {
+    Bun.listen({ hostname: "0.0.0.0", port, socket: { data() {} } }).stop(true);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/**
+ * A free port whose next one (the site port) is free too, below the OS's ephemeral range: a port from
+ * `port: 0` comes from that range, where outgoing connections from any process can take it, or the next one,
+ * before the backend binds.
+ */
 const freePort = () => {
-  const s = Bun.listen({ hostname: "0.0.0.0", port: 0, socket: { data() {} } });
-  const p = s.port;
-  s.stop(true);
-  return p;
+  for (;;) {
+    const p = 20_000 + Math.floor(Math.random() * 12_000);
+    if (bindable(p) && bindable(p + 1)) return p;
+  }
 };
 const portBusy = async (port: number) => {
   try {

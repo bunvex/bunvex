@@ -12,6 +12,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
+import { decodeId } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import {
@@ -40,6 +41,8 @@ import {
 import { ExportError, ExportService } from "./exports.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
+import type { ImportFormat } from "./import-parse.ts";
+import { ImportError, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -138,6 +141,12 @@ export type ServerOptions = {
    * store (`storage/exports`, or S3_STORAGE_EXPORTS_BUCKET); null turns exports off.
    */
   exportStorage?: BlobStore | null;
+  /**
+   * Where snapshot import uploads are kept (STUDY-42): default the `snapshot_imports` use case of the
+   * environment's blob store (`storage/snapshot_imports`, or S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET); null turns
+   * imports off.
+   */
+  importStorage?: BlobStore | null;
   fileStorage?: BlobStore | null;
   /**
    * The public origins (F2): the API's, which file URLs start with (Convex's `CONVEX_CLOUD_ORIGIN`), and the
@@ -392,6 +401,8 @@ export function createServer(opts: ServerOptions) {
   /** The push routes (set below, once the code store exists). */
   let exportRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  let importRoute: (url: URL, req: Request) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
   /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
@@ -481,6 +492,17 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname.startsWith("/api/storage/") && files) {
         srv.timeout(req, 0);
         return serveStorage(files, req, url);
+      }
+      // Snapshot imports (STUDY-42): an upload streams to the blob store, and a one-shot import runs long.
+      if (
+        req.method === "POST" &&
+        (url.pathname === "/api/import" ||
+          url.pathname.startsWith("/api/import/") ||
+          url.pathname === "/api/perform_import" ||
+          url.pathname === "/api/cancel_import")
+      ) {
+        srv.timeout(req, 0);
+        return importRoute(url, req);
       }
       // Every other route keeps the request body cap (H3) that Bun no longer applies on this server.
       const tooLarge = bodyCap(req);
@@ -709,6 +731,119 @@ export function createServer(opts: ServerOptions) {
       throw e;
     }
   };
+  /** Snapshot imports (STUDY-42). */
+  const importStore =
+    opts.importStorage === undefined
+      ? blobStoreFromEnv(process.env, {
+          useCase: "snapshot_imports",
+          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+        })
+      : opts.importStorage;
+  const importService = importStore ? new ImportService(engine, importStore, blobs ?? null) : null;
+  importService?.startWorker();
+  /** Convex's `parse_format_arg`. */
+  const importFormat = (format: string | null, table: string | null): ImportFormat => {
+    if (table !== null && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(table))
+      throw new ImportRequestError(400, "ImportInvalidName", `invalid table name ${table}: not a valid table name`);
+    const needs = (what: string) => {
+      if (table === null) throw new ImportRequestError(400, "InvalidName", `${what} import requires table name`);
+      return table;
+    };
+    switch (format) {
+      case "zip":
+        if (table !== null) throw new ImportRequestError(400, "InvalidName", "ZIP import cannot have table name");
+        return { format: "zip" };
+      case "csv":
+        return { format: "csv", table: needs("CSV") };
+      case "jsonArray":
+        return { format: "json_array", table: needs("JSON") };
+      case "jsonLines":
+        return { format: "jsonl", table: needs("JSONL") };
+      default:
+        throw new ImportRequestError(
+          400,
+          "BadQueryArgs",
+          `unknown variant \`${format}\`, expected one of \`csv\`, \`jsonLines\`, \`jsonArray\`, \`zip\``,
+        );
+    }
+  };
+  const importArgs = (a: { format?: unknown; tableName?: unknown; mode?: unknown; componentPath?: unknown }) => {
+    if (a.componentPath !== undefined && a.componentPath !== null && a.componentPath !== "")
+      throw new ImportRequestError(
+        400,
+        "ComponentsNotSupported",
+        "bunvex does not have components yet: import into the app's own tables.",
+      );
+    const mode = MODE_ARGS[(a.mode as string | undefined) ?? "requireEmpty"];
+    if (!mode)
+      throw new ImportRequestError(
+        400,
+        "BadQueryArgs",
+        `unknown variant \`${String(a.mode)}\`, expected one of \`append\`, \`replace\`, \`replaceAll\`, \`requireEmpty\``,
+      );
+    const table = typeof a.tableName === "string" ? a.tableName : null;
+    return { format: importFormat(typeof a.format === "string" ? a.format : null, table), mode };
+  };
+  importRoute = async (url: URL, req: Request): Promise<Response> => {
+    if (!importService) return requestError(404, "NotFound", "Snapshot imports are not configured on this server.");
+    try {
+      const caller = await callerOfRequest(req);
+      if (caller instanceof Response) return caller;
+      functions.requireOperation(caller, "ImportBackups");
+      const q = url.searchParams;
+      const body = async () => JSON.parse((await req.text()) || "{}") as Record<string, unknown>;
+      switch (url.pathname) {
+        case "/api/import": {
+          const { format, mode } = importArgs({
+            format: q.get("format"),
+            tableName: q.get("tableName") ?? undefined,
+            mode: q.get("mode") ?? undefined,
+            componentPath: q.get("componentPath") ?? undefined,
+          });
+          const upload = await importService.upload(req.body ?? new Uint8Array());
+          return json({ numWritten: await importService.importNow(format, mode, upload) });
+        }
+        case "/api/import/start_upload":
+          return json({ uploadToken: importService.startUpload() });
+        case "/api/import/upload_part": {
+          const token = q.get("uploadToken");
+          if (!token || !q.get("partNumber"))
+            throw new ImportRequestError(400, "BadQueryArgs", "missing field `uploadToken` or `partNumber`");
+          return json(await importService.uploadPart(token, new Uint8Array(await req.arrayBuffer())));
+        }
+        case "/api/import/finish_upload": {
+          const b = await body();
+          const { format, mode } = importArgs((b.import ?? {}) as Record<string, unknown>);
+          if (typeof b.uploadToken !== "string" || !Array.isArray(b.partTokens))
+            throw new ImportRequestError(400, "BadJsonBody", "missing field `uploadToken` or `partTokens`");
+          const upload = await importService.finishUpload(b.uploadToken, b.partTokens as string[]);
+          return json({ importId: await importService.start(format, mode, upload) });
+        }
+        case "/api/perform_import":
+        case "/api/cancel_import": {
+          const { importId } = await body();
+          let valid = typeof importId === "string";
+          try {
+            if (valid) decodeId(importId as string);
+          } catch {
+            valid = false;
+          }
+          if (!valid) throw new ImportRequestError(400, "InvalidImport", `invalid import id ${String(importId)}`);
+          if (url.pathname === "/api/perform_import") await importService.perform(importId as string);
+          else await importService.cancel(importId as string);
+          return new Response(null, { status: 200 });
+        }
+      }
+      return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    } catch (e) {
+      if (e instanceof ImportRequestError) return requestError(e.status, e.code, e.message);
+      if (e instanceof ImportError) return requestError(400, e.code, e.message);
+      if (e instanceof SyntaxError) return requestError(400, "BadJsonBody", e.message);
+      const denied = accessError(e);
+      if (denied) return denied;
+      throw e;
+    }
+  };
   /**
    * Deploy a push's modules (STUDY-35): load and analyze them (nothing changes if that fails), store the
    * package, commit the module rows, then make the version live. Unused packages are deleted after.
@@ -888,6 +1023,7 @@ export function createServer(opts: ServerOptions) {
     cronsReady,
     stop: () => {
       void exportService?.stop();
+      void importService?.stop();
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();
@@ -900,6 +1036,7 @@ export function createServer(opts: ServerOptions) {
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
       await exportService?.stop();
+      await importService?.stop();
       await scheduler.stop();
       await cronExecutor.stop();
       sync.stop();
