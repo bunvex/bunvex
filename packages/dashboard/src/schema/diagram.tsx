@@ -34,7 +34,7 @@ import {
 import { useQueryScope } from "../context.tsx";
 import { type SchemaSearch, schemaRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
-import { FlowBackground, FlowControls } from "../shell/flow-controls.tsx";
+import { FlowBackground, FlowControls, fitOptions } from "../shell/flow-controls.tsx";
 import { type Cluster, computeClusters } from "./clusters.ts";
 import type { SchemaGraph, SchemaNode } from "./graph.ts";
 import { CLUSTER_TOP, computeLayout, type Layout, MAX_INDEXES, MAX_ROWS, userIndexes } from "./layout.ts";
@@ -412,7 +412,7 @@ function Diagram({ graph, heading, status }: { graph: SchemaGraph; heading: Reac
     if (!layout || fitted.current || nodes.length === 0) return;
     fitted.current = true;
     // never past 100 %: a small schema would otherwise fill the canvas with oversized cards
-    requestAnimationFrame(() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration: 0 }));
+    requestAnimationFrame(() => void flow.fitView({ ...fitOptions(nodes.length, 0.15), duration: 0 }));
   }, [layout, nodes.length, flow]);
 
   // go to a referenced table: pan to it, light it a moment, give it the focus (instant under reduced motion)
@@ -555,7 +555,7 @@ function Diagram({ graph, heading, status }: { graph: SchemaGraph; heading: Reac
               <FlowControls
                 onZoomIn={() => void flow.zoomIn({ duration })}
                 onZoomOut={() => void flow.zoomOut({ duration })}
-                onFit={() => void flow.fitView({ padding: 0.15, maxZoom: 1, duration })}
+                onFit={() => void flow.fitView({ ...fitOptions(nodes.length, 0.15), duration })}
               >
                 <Button
                   variant="ghost"

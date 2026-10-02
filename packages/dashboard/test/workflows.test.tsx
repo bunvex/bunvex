@@ -6,8 +6,10 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { WorkflowStep } from "../src/extensions/workflows/data-source.ts";
 import { layoutSteps } from "../src/extensions/workflows/diagram.tsx";
+import { timelineScale } from "../src/extensions/workflows/run-view.tsx";
 import { duration } from "../src/extensions/workflows/words.ts";
 import { retryWords } from "../src/extensions/workflows/workpools.tsx";
+import { fitOptions } from "../src/shell/flow-controls.tsx";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 9, 1, 12);
@@ -29,6 +31,37 @@ describe("workflows in words and places", () => {
     expect(placed.map((p) => p.y)).toEqual([0, 128, 128, 256]);
     expect(placed[1]!.x).toBeLessThan(placed[2]!.x);
     expect(placed[0]!.x).toBe(-110); // a lone step is centred
+  });
+
+  test("a workflow without parallel steps runs left to right, to use the width (UX2-14)", () => {
+    const step = (index: number, group: number) => ({ index, group }) as WorkflowStep;
+    const placed = layoutSteps([step(0, 0), step(1, 1), step(2, 2)]);
+    expect(placed.map((p) => p.y)).toEqual([0, 0, 0]);
+    expect(placed[0]!.x).toBeLessThan(placed[1]!.x);
+    // and a small graph is shown readable: at least 85 %, up to 125 %; a big one never past 100 %
+    expect(fitOptions(3, 0.15)).toEqual({ padding: 0.15, minZoom: 0.85, maxZoom: 1.25 });
+    expect(fitOptions(12, 0.15)).toEqual({ padding: 0.15, maxZoom: 1 });
+  });
+
+  test("the timeline draws a long wait short, so the other steps keep their width (UX2-15)", () => {
+    const h = 3_600_000;
+    const run = { startedAt: 0 };
+    // a step, a 7-hour wait for an event, then two more steps
+    const steps = [
+      { startedAt: 0, finishedAt: 60_000 },
+      { startedAt: 7 * h, finishedAt: 7 * h + 120_000 },
+      { startedAt: 7 * h + 120_000, finishedAt: 7 * h + 180_000 },
+    ];
+    const end = 7 * h + 180_000;
+    const linear = timelineScale(run, steps, end, false);
+    const cut = timelineScale(run, steps, end, true);
+    expect(linear.breaks).toEqual([]);
+    expect(cut.breaks).toHaveLength(1);
+    expect(cut.breaks[0]!.ms).toBe(7 * h - 60_000);
+    const width = (s: typeof linear, i: number) => s.at(steps[i]!.finishedAt) - s.at(steps[i]!.startedAt);
+    expect(width(linear, 1)).toBeLessThan(0.01); // a tick, linearly
+    expect(width(cut, 1)).toBeGreaterThan(0.2); // a real bar, with the wait cut
+    expect(cut.at(end)).toBe(1);
   });
 
   test("durations and retry policies read as words", () => {

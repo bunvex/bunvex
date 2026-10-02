@@ -7,7 +7,7 @@ import "@xyflow/react/dist/style.css";
 import { cn } from "@bunvex/ui/lib/utils";
 import { type Edge, Handle, type Node, type NodeProps, Position, ReactFlow, ReactFlowProvider } from "@xyflow/react";
 import { useMemo } from "react";
-import { FlowBackground } from "../../shell/flow-controls.tsx";
+import { FlowBackground, fitOptions } from "../../shell/flow-controls.tsx";
 import type { WorkflowStep } from "./data-source.ts";
 import { duration, elapsed, KIND, STATUS } from "./words.ts";
 
@@ -16,11 +16,18 @@ const H = 72;
 const GAP_X = 32;
 const GAP_Y = 56;
 
-type StepData = { step: WorkflowStep; now: number; selected: boolean };
+type StepData = { step: WorkflowStep; now: number; selected: boolean; across: boolean };
 
-/** Positions by group (row) and place in the group (column), centred on x = 0. */
+/** A workflow with no parallel steps: one step per group, laid out left to right to use the width (UX2-14). */
+export const isLinear = (journal: WorkflowStep[]) => new Set(journal.map((s) => s.group)).size === journal.length;
+
+/**
+ * Positions by group (row) and place in the group (column), centred on x = 0; a linear workflow runs left to
+ * right instead, one step after another.
+ */
 export function layoutSteps(journal: WorkflowStep[]): { step: WorkflowStep; x: number; y: number }[] {
   const groups = [...new Set(journal.map((s) => s.group))];
+  if (isLinear(journal)) return journal.map((step) => ({ step, x: groups.indexOf(step.group) * (W + GAP_X), y: 0 }));
   return journal.map((step) => {
     const row = groups.indexOf(step.group);
     const peers = journal.filter((s) => s.group === step.group);
@@ -31,7 +38,7 @@ export function layoutSteps(journal: WorkflowStep[]): { step: WorkflowStep; x: n
 }
 
 function StepNode({ data }: NodeProps<Node<StepData>>) {
-  const { step, now, selected } = data;
+  const { step, now, selected, across } = data;
   const s = STATUS[step.status];
   const took = elapsed(step.startedAt, step.finishedAt, now);
   const live = step.status === "running" || step.status === "retrying";
@@ -44,7 +51,7 @@ function StepNode({ data }: NodeProps<Node<StepData>>) {
         step.status === "failed" && "border-destructive",
       )}
     >
-      <Handle type="target" position={Position.Top} className="!invisible" />
+      <Handle type="target" position={across ? Position.Left : Position.Top} className="!invisible" />
       <span className="text-[11px] text-muted-foreground">
         {step.index + 1}. {KIND[step.kind]}
       </span>
@@ -60,7 +67,7 @@ function StepNode({ data }: NodeProps<Node<StepData>>) {
           {took !== null ? ` · ${duration(took)}` : ""}
         </span>
       </span>
-      <Handle type="source" position={Position.Bottom} className="!invisible" />
+      <Handle type="source" position={across ? Position.Right : Position.Bottom} className="!invisible" />
     </div>
   );
 }
@@ -82,11 +89,12 @@ export default function RunDiagram(props: {
 }) {
   const { nodes, edges } = useMemo(() => {
     const placed = layoutSteps(props.journal);
+    const across = isLinear(props.journal);
     const nodes: Node<StepData>[] = placed.map(({ step, x, y }) => ({
       id: String(step.index),
       type: "step",
       position: { x, y },
-      data: { step, now: props.now, selected: props.selected === step.index },
+      data: { step, now: props.now, selected: props.selected === step.index, across },
       ariaLabel: stepLabel(step, props.now),
       draggable: false,
       connectable: false,
@@ -115,7 +123,7 @@ export default function RunDiagram(props: {
         edges={edges}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+        fitViewOptions={fitOptions(nodes.length, 0.15)}
         minZoom={0.3}
         maxZoom={1.5}
         nodesDraggable={false}

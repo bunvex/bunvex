@@ -31,3 +31,11 @@ export function FlowControls(props: {
 export function FlowBackground() {
   return <Background gap={24} size={1} color="var(--color-border)" />;
 }
+
+/**
+ * How a canvas fits its graph (UX2-14): never past 100 % for a big one, but a small graph (up to six nodes) is
+ * shown at least at 85 % and up to 125 %, centred, so its text stays readable instead of a corner of tiny cards.
+ */
+export function fitOptions(nodeCount: number, padding: number) {
+  return nodeCount <= 6 ? { padding, minZoom: 0.85, maxZoom: 1.25 } : { padding, maxZoom: 1 };
+}

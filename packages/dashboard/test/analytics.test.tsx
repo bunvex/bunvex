@@ -60,6 +60,17 @@ describe("the Analytics extension", () => {
     expect(within(screen.getByRole("region", { name: "Live events" })).getAllByRole("listitem").length).toBeGreaterThan(
       0,
     );
+    // on a phone the feed comes after the map and the breakdowns, five items until "Show more" (UX2-27)
+    const feed = screen.getByRole("region", { name: "Live events" });
+    const items = within(feed).getAllByRole("listitem");
+    expect(items.length).toBeGreaterThan(5);
+    expect(items.slice(5).every((li) => li.className.includes("max-md:hidden"))).toBe(true);
+    await userEvent.setup().click(within(feed).getByRole("button", { name: /^Show \d+ more$/ }));
+    expect(
+      within(feed)
+        .getAllByRole("listitem")
+        .some((li) => li.className.includes("max-md:hidden")),
+    ).toBe(false);
     await expectAccessible();
   });
 
