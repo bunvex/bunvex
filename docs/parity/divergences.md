@@ -181,6 +181,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-208 | The 1 s limit is cooperative (checked at database calls and the end); a synchronous infinite loop is not interrupted | V8 terminates the isolate | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N5](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-209 | Store errors in a nested call propagate as they are | upgraded to a non-catchable internal error | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-211 | Dashboard: a failed schema validation says how many stored documents do not match and lists a few, each opening in Database | the push fails with the first document that does not match | no (dashboard) | Seeing the scale and the documents helps fix the data | owner, 2026-10-02 (follow-up SC3) | [STUDY-12 SC4](../study/STUDY-12-dashboard.md#144-divergences) |
+| DV-215 | Export has only the root; a ZIP with `_components/…` is refused on import | creates the components | yes (components only) | accept until components | owner, 2026-10-02 (as recommended) | [STUDY-42 X1](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-216 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-217 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | owner, 2026-10-02 (as recommended) | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -278,16 +283,20 @@ DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-
 DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
+DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
 
-STUDY-42 (snapshot export and import), awaiting the owner:
+## Waiting on a dependency
 
-| ID | bunvex | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-210 | Export has only the root; a ZIP with `_components/…` is refused on import | creates the components | yes (components only) | accept until components | [STUDY-42 X1](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-211 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-212 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-213 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-214 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one | both | old Convex exports only | later if needed | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
+Accepted differences that close once something else is built: when one of these lands, take its group
+here and close each row (moving it to [Resolved to match Convex](#resolved-to-match-convex) with the PR).
+
+| Waiting on | Rows | What to do then |
+|---|---|---|
+| **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
+| **Log streaming** (item 12) | DV-77, DV-141, DV-184 | stop printing captured log lines to stdout; scheduled and cron runs' lines in the log stream; `dev --tail-logs` on by default (`pause-on-deploy`) |
+| **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import |
+| **An audit log** | DV-218 | audit-log entries for exports and imports (and Convex's other events) |
+| **Nothing (can be built any time)** | DV-205, DV-206, DV-209 (STUDY-41), DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-10 (transition chunks) | see each row |
 
 ## Gaps recorded in studies
 

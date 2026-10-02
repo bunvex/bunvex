@@ -1,6 +1,6 @@
 # STUDY-42 — Snapshot export and import (`bunvex export`, `bunvex import`)
 
-- **Status:** draft (X1–X5 await the owner)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 14 ([parity README](../parity/README.md));
@@ -138,11 +138,13 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| X1 | Components: export has only the root (as Convex for an app without components); a ZIP with `_components/…` is refused on import with a clear message, where Convex creates the components | bunvex has no components yet (Phase 4) | pending |
-| X2 | The README in the ZIP and the messages are bunvex's words, without Convex's links | rule 5 | pending |
-| X3 | The CLI does not print dashboard links ("check its progress at …/settings/snapshots") | the dashboard is not on a real deployment yet (item 12); added then | pending |
-| X4 | No audit-log entries for exports and imports | bunvex has no audit log yet | pending |
-| X5 | Import reads ZIPs in the current `"uniform"` encoding only. Convex also reads the legacy inferred-schema encoding of older Convex exports | the legacy one needs Convex's shape inference; it only matters for ZIPs exported by old Convex versions | pending |
+| X1 | Components: export has only the root (as Convex for an app without components); a ZIP with `_components/…` is refused on import with a clear message, where Convex creates the components | bunvex has no components yet (Phase 4) | accepted (owner, 2026-10-02) |
+| X2 | The README in the ZIP and the messages are bunvex's words, without Convex's links | rule 5 | accepted (owner, 2026-10-02) |
+| X3 | The CLI does not print dashboard links ("check its progress at …/settings/snapshots") | the dashboard is not on a real deployment yet (item 12); added then | accepted (owner, 2026-10-02) |
+| X4 | No audit-log entries for exports and imports | bunvex has no audit log yet | accepted (owner, 2026-10-02) |
+| X5 | Import reads ZIPs in the current `"uniform"` encoding only. Convex also reads the legacy inferred-schema encoding of older Convex exports | the legacy one needs Convex's shape inference; it only matters for ZIPs exported by old Convex versions | accepted (owner, 2026-10-02) |
+
+**Follow-up:** X1, X3 and X4 are in the ledger's "Waiting on a dependency" (components, item 12, an audit log); X5 can be built any time.
 
 ## 5. Tests
 
