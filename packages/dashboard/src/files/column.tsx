@@ -146,6 +146,7 @@ export function FilesSections(props: {
     <>
       <Usage />
       <SectionNav
+        withFilters
         label="File views"
         groups={[
           {
@@ -190,6 +191,7 @@ export function FilesSections(props: {
         />
       </SectionFilters>
       <SectionNav
+        withFilters
         label="Buckets"
         groups={[
           {

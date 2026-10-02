@@ -23,6 +23,7 @@ import { describeEvent } from "../history/describe.ts";
 import { formatCalls, formatMs, formatPercent as formatPct, useMetric, useMetricsAccess } from "../metrics/metrics.ts";
 import { DashLink } from "../router.tsx";
 import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
+import { RelativeTime } from "../shell/time.tsx";
 import {
   type Attention,
   attention,
@@ -33,7 +34,7 @@ import {
   sumSeries,
   values,
 } from "./overview-data.ts";
-import { formatBytes, formatCount, timeAgo } from "./stats.ts";
+import { formatBytes, formatCount } from "./stats.ts";
 
 const SECTION_TITLE = "text-sm font-medium";
 
@@ -127,12 +128,7 @@ function Summary() {
             <Muted>Not reported</Muted>
           ) : lastDeploy ? (
             <>
-              <time
-                dateTime={new Date(lastDeploy.time).toISOString()}
-                title={new Date(lastDeploy.time).toLocaleString()}
-              >
-                {timeAgo(lastDeploy.time, Date.now())}
-              </time>
+              <RelativeTime ms={lastDeploy.time} />
               {lastDeploy.author && <span className="text-muted-foreground"> by {lastDeploy.author}</span>}
             </>
           ) : (
@@ -443,15 +439,7 @@ function RecentActivity() {
 }
 
 function When({ time }: { time: number }) {
-  return (
-    <time
-      dateTime={new Date(time).toISOString()}
-      title={new Date(time).toLocaleString()}
-      className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums"
-    >
-      {timeAgo(time, Date.now())}
-    </time>
-  );
+  return <RelativeTime ms={time} className="w-28 shrink-0 text-xs text-muted-foreground tabular-nums" />;
 }
 
 // ------------------------------------------------------------------ getting started and the engine

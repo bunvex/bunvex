@@ -281,7 +281,7 @@ function ViewRow(props: {
         {props.canWrite && (
           <Button
             size="sm"
-            variant={row.deleted ? "ghost" : "destructive-ghost"}
+            variant={row.deleted ? "ghost" : "destructive-outline"}
             aria-label={`${row.deleted ? "Keep" : "Delete"} ${row.name}`}
             onClick={props.onDelete}
           >

@@ -78,7 +78,7 @@ export function BarActions({ children }: { children: ReactNode }) {
 
 export function SettingsLayout(props: { title: string; description?: string; children: ReactNode }) {
   const [slot, setSlot] = useState<HTMLElement | null>(null);
-  const sheet = useSectionSheet({ kind: "settings-pages", label: "Pages", children: <SettingsNav /> });
+  const sheet = useSectionSheet({ kind: "settings-pages", label: "Settings", children: <SettingsNav /> });
   return (
     <div className={SCREEN}>
       <SectionColumn title="Settings" widthKey="bunvex-dashboard:settings-column-width">

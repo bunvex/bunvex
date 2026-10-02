@@ -6,7 +6,7 @@ import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
 import { cn } from "@bunvex/ui/lib/utils";
-import { ListFilter } from "lucide-react";
+import { ChevronDown, ListFilter } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { formatCount } from "../screens/stats.ts";
 import { Panel } from "./panel.tsx";
@@ -86,13 +86,20 @@ export function SectionColumn(props: {
 }
 
 /** The screen's pages, in labelled groups (a group may have no label). */
-export function SectionNav(props: { label: string; groups: { label?: string; items: ReactNode }[] }) {
+export function SectionNav(props: {
+  label: string;
+  groups: { label?: string; items: ReactNode }[];
+  /** The column also holds filters: the nav keeps its heading so the two read apart. */
+  withFilters?: boolean;
+}) {
+  // one rule (UX2-22): headings only when there is more than one group, or filters below; otherwise none
+  const headed = props.groups.length > 1 || props.withFilters;
   return (
     <nav aria-label={props.label}>
       {props.groups.map((g, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: groups are fixed per screen
         <div key={i}>
-          {g.label ? <h3 className={GROUP_LABEL}>{g.label}</h3> : <div className="pt-2" />}
+          {headed ? <h3 className={GROUP_LABEL}>{g.label ?? "Views"}</h3> : <div className="pt-2" />}
           <ul>{g.items}</ul>
         </div>
       ))}
@@ -129,7 +136,10 @@ export function SectionFilters(props: {
 /** Below the column's breakpoint: a button for Bar 1, and the sheet it opens with the column's content. */
 export function useSectionSheet(props: {
   kind: string;
-  /** The button's and the sheet's name; "Filters" by default. */
+  /**
+   * The button's and the sheet's name (UX2-13): the screen's name when the column holds its navigation (the
+   * button then shows a chevron), "Filters" (the default) when it holds filters only.
+   */
   label?: string;
   from?: "md" | "lg";
   onReset?: () => void;
@@ -145,8 +155,9 @@ export function useSectionSheet(props: {
       aria-pressed={open}
       onClick={() => setOpen(!open)}
     >
-      <ListFilter aria-hidden="true" />
+      {label === "Filters" && <ListFilter aria-hidden="true" />}
       {label}
+      {label !== "Filters" && <ChevronDown aria-hidden="true" />}
     </Button>
   );
   const sheet = open && (
