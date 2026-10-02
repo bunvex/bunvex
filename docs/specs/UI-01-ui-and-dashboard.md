@@ -1711,3 +1711,116 @@ A group box (a cluster of linked tables, §15) lays its tables out with the root
 layers, 56 between tables. ELK reads its spacing options per parent, so the boxes had used its defaults: the
 tables sat 20 px apart and the reference lines ran along the cards' borders, between `tasks`, `messages` and
 `users`. Test: inside a box, consecutive layers are at least 90 px apart.
+
+## 23. Design language: the section column (the owner's call, 1 Oct 2026)
+
+The owner showed Supabase-like screens as **layout references only**; bunvex keeps its own context and design
+system. Every screen is: the main sidebar · the screen's **section column** · the main area (Bar 1, then the
+content full-bleed) · the docked details panel, only while something is selected.
+
+### 23.1 The section column (`shell/section-column.tsx`)
+
+- **One component** for every screen's column (it replaces §22.4's filter column and the Database tables
+  list's own frame): fixed, resizable from its right edge (the window-splitter handle; 176–440 px, default
+  224), its width kept in this browser per screen.
+- **Top**, 44 px — on Bar 1's line and the panel header's: the screen's name (a level-2 heading) and its
+  primary action when it has one ("+ New …", "Upload").
+- **Nav groups** (`SectionNav`): the screen's pages under small uppercase labels (a group may have none), the
+  current page marked (the router's `aria-current`).
+- **Filters** (`SectionFilters`), below the nav: the current page's facets — checkbox and radio groups, each
+  choice with how many loaded rows it holds, in text — with Reset. Only on pages that have filters.
+- **Below its breakpoint** (md; lg on Database, whose table picker sits above the grid there) the column is
+  hidden; a button in Bar 1 (`useSectionSheet`: "Filters", "Pages", "Schedules") opens the same content as a
+  sheet (the shared panel), which a picked page closes.
+- **Bar 1** names the current page (the `h1`), says in a few words what it is for, and holds its actions.
+
+### 23.2 The main sidebar's groups
+
+(no label) Health, Topology · **Data**: Database, Schema, Files · **Functions**: Functions, Schedules ·
+**Observe**: Logs, History · (no label) Settings, last. Each group is a list named by its label. Schema sits
+with Database (it describes the data) and Files is stored data; Schedules run functions; Logs and History are
+what happened. **Manage** (Authentication) joins with §25.
+
+### 23.3 The screens on the column
+
+- **Database**: "Database"; search, Create table (it turns into its name box in place, so it stays at the top
+  of the list rather than in the header), then the TABLES group.
+- **Settings**: "Settings"; **Configuration** (General, Environment variables, Authentication) and **Data**
+  (Snapshots) — instead of the page tabs. Bar 1: the page's name and purpose; the page scrolls inside.
+- **Schedules**: "Schedules"; Scheduled functions and Cron jobs as the nav (no tabs in Bar 1); the state and
+  function filters below it on Scheduled functions only. Bar 1's `h1` is the page's name.
+- **Logs**, **History**: "Logs" / "History", then their filters (§22.4, §22.5).
+- Tests: the grouped sidebar; Settings' groups and current page; Schedules' filters on one page only; the
+  column on Database, Logs and History; the phone sheet (a pick closes it). e2e at 1440: the column header and
+  Bar 1 on one line, no page scroll, on Database, Settings, Schedules, Logs, History; at 390 the column hidden
+  and the Pages sheet navigating.
+
+## 24. Files on the section column (the owner's call, 1 Oct 2026)
+
+- **Column** (`files/column.tsx`): "Files" with **Upload** on top (it left Bar 1); then the **storage used** —
+  bytes in N files, a bar of the bytes by kind (2 px gaps; the chart tokens, with a legend in words and bytes,
+  so colour is never alone); the **views** — All files, Images, Documents, Other, each with its count
+  (`?view=images|documents|other`); the **filters** — *Uploaded* (Any time, Today, Last 7 days, Last 30 days:
+  they set `from`, as History's) and *Size* (Under 1 KB, 1 KB – 1 MB, Over 1 MB: `?size=small|medium|large`),
+  each choice counted under the other sections' choices; and **Buckets**, only "Default" (see STUDY-12 §7.7).
+  The custom day range and the order stay in Bar 2 with the storage-id lookup. Phones: a Views sheet.
+- **Kinds** (`fileKind`, in the contract): `image/*` is an image; text, PDF, JSON, XML, RTF and office
+  formats are documents; the rest (and no content type) is other.
+- **Contract**: an optional `fileStats(filter?)` — count and bytes in all and per kind for the files matching
+  a filter (time, kind, size) — and, from a source that offers it, `listFiles` honours `kind`, `minSize`,
+  `maxSize`. Without `fileStats` the screen keeps §14.3's filters only (no views, sizes or counts). The mock
+  implements both; the contract suite checks the counts, the bytes and the filtered lists.
+- Tests: usage, views with counts and the URL, the current view marked, size counts under the view, Reset, the
+  bucket; contract: stats and filters (sabotaged: a source ignoring `kind` fails it). e2e: the column header
+  on Bar 1's line.
+
+## 25. Authentication (the owner's call, 1 Oct 2026; a bunvex addition)
+
+A screen to administer the app's own users, mock-first: there is no core implementation yet — the point is
+to see everything the screen can offer. Concepts and names follow **better-auth** (users, accounts per
+provider, sessions, verification, two-factor, passkeys, organizations / members / invitations, the admin
+plugin's ban, impersonation and session revocation); STUDY-12 §7.8 cites what was read. In the sidebar under
+**Manage**; `/auth` opens Users; every page is `/auth/<page>`.
+
+### 25.1 The column and Users
+
+- **Column**: "Authentication"; **Manage** — Users, Sessions, Organizations; **Configuration** — Sign in /
+  Providers, Multi-factor, Passkeys, Sessions (lifetime), Rate limits, URL configuration, Emails, Audit. On
+  Users, the filters below the nav: *Provider* and *Status* (verified, unverified, banned) as radios with the
+  loaded users' counts (`?provider=`, `?status=`; the source filters).
+- **Users**: Bar 1 — the page, its count and **Add user**, a split button (Add user creates; its menu: Create
+  user, Invite by email), each a form in the docked panel; a created user opens. Bar 2 — search by name or
+  email (`?q=`, 200 ms). The grid, full-bleed: avatar (initials) and name, email, providers, created, last
+  sign-in, status.
+- **The user's panel** (`?user=`, following the current row; `?tab=logs|json`): **Overview** — who they are
+  (id with copy, email verified, role, created, last sign-in, two-factor, passkeys, the ban), their providers,
+  *Send an email* (password reset, magic link, verify email when unverified), their sessions each with Revoke,
+  and a **Danger zone**: Revoke all sessions, Remove MFA factors, Ban (1 hour, 1 day, 7 days, 30 days, for
+  good; a reason) or Unban, Impersonate (a one-hour session, audited), Delete user — each asking first.
+  **Logs** — the user's auth events. **Raw JSON** — the user record.
+
+### 25.2 Sessions and Organizations
+
+Full-bleed tables: every session (user, signed in, expires, device in words, IP, impersonated by, Revoke after
+a confirmation); every organization (name, slug, members, pending invitations, created).
+
+### 25.3 Configuration
+
+A form per page over its part of the configuration, saved alone (`updateAuthConfig({ <part> })`), with
+Discard; read-only credentials see it disabled. **Sign in / Providers**: the sign-in methods (email and
+password, magic link, Google, GitHub, Apple, Microsoft, passkey) with their client IDs, and **the token
+providers** that were Settings → Authentication (§19.1; that page is gone, its address redirects here, and
+Settings' column loses the item). **Multi-factor**: TOTP, email codes, backup codes, who must use one.
+**Passkeys**: on/off, relying party name and ID. **Sessions**: lifetime, refresh age, fresh age. **Rate
+limits**: on/off, max per window. **URL configuration**: site URL, redirect allow-list. **Emails**: subject and
+body per template. **Audit**: the auth events, newest first.
+
+### 25.4 Contract
+
+`data-source-auth-admin.ts`: every method optional, detected with `typeof`; `listAuthUsers` offers the screen.
+Users (paged, searched, filtered by provider and status), one user, create, invite, send an email, sessions
+(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations, the
+configuration (read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
+random stream; reads need `viewData`, writes `writeData` and not read-only. The contract suite
+(`contract-auth-admin.ts`) checks the listing and its filters, create / ban (signing out) / unban / remove, and
+the configuration's merge.

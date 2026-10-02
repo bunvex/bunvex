@@ -82,8 +82,38 @@ export type StoredFile = {
   url: string;
 };
 
-/** Newest first by default; `from` / `to` bound the creation time (ms, inclusive). */
-export type FileQuery = PageRequest & { order?: "asc" | "desc"; from?: number; to?: number };
+/** What a file is, by its content type (`fileKind`): the Files screen's views (UI-01 §24). */
+export type FileKind = "image" | "document" | "other";
+
+/** Images are `image/*`; documents are text, PDF, JSON, XML, CSV and office files; the rest is other. */
+export function fileKind(contentType: string | null): FileKind {
+  const t = (contentType ?? "").toLowerCase();
+  if (t.startsWith("image/")) return "image";
+  if (
+    t.startsWith("text/") ||
+    /^application\/(pdf|json|xml|rtf|msword|vnd\.(openxmlformats-officedocument|oasis\.opendocument|ms-excel|ms-powerpoint)[\w.+-]*)$/.test(
+      t,
+    )
+  )
+    return "document";
+  return "other";
+}
+
+/** Which files a query or a count takes: by creation time (ms, inclusive), kind and size (bytes, inclusive). */
+export type FileFilter = { from?: number; to?: number; kind?: FileKind; minSize?: number; maxSize?: number };
+
+/**
+ * Newest first by default; `from` / `to` bound the creation time. `kind`, `minSize` and `maxSize` are honoured
+ * by a source that offers `fileStats` (the two come together).
+ */
+export type FileQuery = PageRequest & { order?: "asc" | "desc" } & FileFilter;
+
+/** How many files, and how many bytes, match a filter — in all, and per kind. */
+export type FileStats = {
+  count: number;
+  totalBytes: number;
+  byKind: Record<FileKind, { count: number; bytes: number }>;
+};
 
 // ------------------------------------------------------------------ environment variables
 
@@ -133,6 +163,8 @@ export interface DeploymentFeatures {
   listFiles?(query: FileQuery, opts?: CallOptions): Promise<Page<StoredFile>>;
   /** Every stored file. */
   countFiles?(opts?: CallOptions): Promise<number>;
+  /** The files matching `filter` (every file without one), counted in all and per kind; see `FileQuery`. */
+  fileStats?(filter?: FileFilter, opts?: CallOptions): Promise<FileStats>;
   /**
    * `null` when there is no such file; an id that is not a storage id at all is `invalid_request` (Convex's
    * `getFile` reads `db.system.get`, which refuses an id it cannot decode).

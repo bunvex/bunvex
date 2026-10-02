@@ -16,7 +16,8 @@ function mount(source = mockSource()) {
   );
   return source;
 }
-const section = () => screen.findByRole("region", { name: "Authentication" });
+// Settings → Authentication now opens Authentication → Sign in / Providers (UI-01 §25): the token providers there
+const section = () => screen.findByRole("region", { name: "Token providers" });
 const values = (item: HTMLElement) =>
   Object.fromEntries(
     [...item.querySelectorAll("dt")].map((dt) => [
@@ -35,7 +36,7 @@ describe("the auth providers' shape (the contract's check)", () => {
   });
 });
 
-describe("Settings: Authentication", () => {
+describe("the token providers (was Settings → Authentication)", () => {
   test("each provider with its values, each copyable", async () => {
     mount();
     const s = await section();
@@ -73,10 +74,12 @@ describe("Settings: Authentication", () => {
     expect(asked).toBe(false);
   });
 
-  test("a source without auth providers says the page is not offered", async () => {
+  test("the old address opens Sign in / Providers; without auth providers that page has no token section", async () => {
     const src = mockSource();
     (src as { listAuthProviders?: unknown }).listAuthProviders = undefined;
     mount(src);
-    await screen.findByText("This deployment does not offer authentication yet.");
+    await screen.findByRole("heading", { level: 1, name: "Sign in / Providers" });
+    await screen.findByRole("checkbox", { name: "Google" });
+    expect(screen.queryByRole("region", { name: "Token providers" })).toBeNull();
   });
 });

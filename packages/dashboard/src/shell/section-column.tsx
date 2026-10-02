@@ -1,7 +1,7 @@
-// A screen's filter column (UI-01 §22.4, §22.5): to the left of its grid, as the tables list is on the Database
-// screen — fixed, resizable from its right edge, its width kept in this browser — with a 44 px header on the
-// first bar's line, then sections: groups of checkboxes or radios, each choice with how many loaded rows it
-// holds, in text. Below `md` it is hidden: the screen offers the same sections in a sheet (`FiltersSheet`).
+// The section column (UI-01 §23, the dashboard's design language): one per screen, to the left of its
+// content — the screen's name and primary action, its pages in labelled groups, the current page's filters
+// (groups of checkboxes or radios, each choice with how many loaded rows it holds, in text). Below its
+// breakpoint it is a sheet behind a button in Bar 1.
 import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
@@ -37,38 +37,41 @@ function useWidth(key: string): [number, (w: number | undefined) => void] {
   return [width, set];
 }
 
-/** The column beside the grid, from `md`. */
-export function FacetColumn(props: {
-  /** The navigation landmark's name, e.g. "Log filters". */
-  label: string;
+/** A link in the column's nav (the current one is marked by the router's aria-current). */
+export const SECTION_ITEM =
+  "flex h-8 items-center gap-2 border-l-2 border-transparent px-3 text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset aria-[current=page]:border-foreground aria-[current=page]:bg-muted aria-[current=page]:font-medium";
+const GROUP_LABEL = "px-3 pt-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase";
+
+/**
+ * A screen's section column (UI-01 §23): to the left of its content — fixed, resizable from its right edge,
+ * its width kept in this browser. On top, 44 px (Bar 1's line): the screen's name and its primary action;
+ * then the screen's nav groups (`SectionNav`), then the current page's filters (`SectionFilters`). Hidden
+ * below `from` (md by default): the screen offers the same content in a sheet (`useSectionSheet`).
+ */
+export function SectionColumn(props: {
+  /** The screen's name, e.g. "Logs". */
+  title: ReactNode;
+  /** The primary action ("+ New …", "Upload"). */
+  action?: ReactNode;
   widthKey: string;
-  /** Shown when some filter applies. */
-  onReset?: () => void;
+  from?: "md" | "lg";
   children: ReactNode;
 }) {
   const [width, setWidth] = useWidth(props.widthKey);
   const [dragging, setDragging] = useState<number>();
   return (
-    <nav
-      aria-label={props.label}
-      className="relative hidden shrink-0 flex-col border-r md:flex"
+    <div
+      data-slot="section-column"
+      className={cn("relative hidden shrink-0 flex-col border-r", props.from === "lg" ? "lg:flex" : "md:flex")}
       style={{ width: dragging ?? width }}
     >
-      <div className="flex min-h-11 items-center justify-between gap-2 border-b px-3">
-        <h2 className="text-sm font-medium">Filters</h2>
-        {props.onReset && (
-          <button
-            type="button"
-            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-            onClick={props.onReset}
-          >
-            Reset
-          </button>
-        )}
+      <div data-slot="section-column-header" className="flex min-h-11 items-center gap-2 border-b px-3">
+        <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{props.title}</h2>
+        {props.action}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto pb-3">{props.children}</div>
       <ResizeHandle
-        label="Resize the filters"
+        label="Resize the column"
         value={dragging ?? width}
         min={MIN}
         max={MAX}
@@ -78,22 +81,82 @@ export function FacetColumn(props: {
           setWidth(w);
         }}
       />
+    </div>
+  );
+}
+
+/** The screen's pages, in labelled groups (a group may have no label). */
+export function SectionNav(props: { label: string; groups: { label?: string; items: ReactNode }[] }) {
+  return (
+    <nav aria-label={props.label}>
+      {props.groups.map((g, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: groups are fixed per screen
+        <div key={i}>
+          {g.label ? <h3 className={GROUP_LABEL}>{g.label}</h3> : <div className="pt-2" />}
+          <ul>{g.items}</ul>
+        </div>
+      ))}
     </nav>
   );
 }
 
-/** Below `md`: a Filters button for the first bar, and the sheet it opens with the same sections. */
-export function useFiltersSheet(props: { kind: string; onReset?: () => void; children: ReactNode }) {
+/** The current page's filters, under the nav: a "Filters" group with Reset, then the facets. */
+export function SectionFilters(props: {
+  /** The landmark's name, e.g. "Log filters". */
+  label: string;
+  onReset?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <nav aria-label={props.label}>
+      <div className="flex items-center justify-between pr-3">
+        <h3 className={GROUP_LABEL}>Filters</h3>
+        {props.onReset && (
+          <button
+            type="button"
+            className="pt-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
+            onClick={props.onReset}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      {props.children}
+    </nav>
+  );
+}
+
+/** Below the column's breakpoint: a button for Bar 1, and the sheet it opens with the column's content. */
+export function useSectionSheet(props: {
+  kind: string;
+  /** The button's and the sheet's name; "Filters" by default. */
+  label?: string;
+  from?: "md" | "lg";
+  onReset?: () => void;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
+  const label = props.label ?? "Filters";
   const button = (
-    <Button variant="outline" size="sm" className="md:hidden" aria-pressed={open} onClick={() => setOpen(!open)}>
+    <Button
+      variant="outline"
+      size="sm"
+      className={props.from === "lg" ? "lg:hidden" : "md:hidden"}
+      aria-pressed={open}
+      onClick={() => setOpen(!open)}
+    >
       <ListFilter aria-hidden="true" />
-      Filters
+      {label}
     </Button>
   );
   const sheet = open && (
-    <Panel kind={props.kind} title="Filters" onClose={() => setOpen(false)}>
-      <div className="-mx-4 -mt-4">{props.children}</div>
+    <Panel kind={props.kind} title={label} onClose={() => setOpen(false)}>
+      {/* a picked page closes the sheet, as the main menu does */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: the click is the link's; this only listens */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: Enter on a link is a click */}
+      <div className="-mx-4 -mt-4" onClick={(e) => (e.target as Element).closest("a") && setOpen(false)}>
+        {props.children}
+      </div>
       {props.onReset && (
         <Button variant="outline" size="sm" className="mt-4" onClick={props.onReset}>
           Reset filters
@@ -101,7 +164,7 @@ export function useFiltersSheet(props: { kind: string; onReset?: () => void; chi
       )}
     </Panel>
   );
-  return { button, sheet };
+  return { button, sheet, close: () => setOpen(false) };
 }
 
 /** A section's frame: a heading, and "All" when the section narrows the list. */
