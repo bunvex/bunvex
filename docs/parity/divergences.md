@@ -157,6 +157,12 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-184 | `dev --tail-logs` defaults to `disable` until log streaming (item 12) | `pause-on-deploy` | yes, until item 12 | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
 | DV-185 | `run`'s JSON5 args parsed by bunvex's own reader | the `json5` package | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E8](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
 | DV-186 | Not built: `env default`, declared/required variables (components), `run --component` / `--inline-query`, dev's cloud and `--local-*` flags | all of them | yes | later | owner, 2026-10-02 (as recommended) | [STUDY-37 E9](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-187 | The image runs `bunvex start` from TypeScript sources on `oven/bun` | compiled binaries on Ubuntu, Node for Node actions | no (operational) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K1](../study/STUDY-38-docker.md#4-divergences) |
+| DV-188 | `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN`, volume at `/bunvex/data` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, `/convex/data` | yes (compose files) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-38 K2](../study/STUDY-38-docker.md#4-divergences) |
+| DV-189 | No `dashboard` service until item 12 | the dashboard on 6791 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K3](../study/STUDY-38-docker.md#4-divergences) |
+| DV-190 | S3 per use case (its bucket set), not all-or-nothing on five buckets | all five or local | yes (config) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K4](../study/STUDY-38-docker.md#4-divergences) |
+| DV-191 | Image published to `ghcr.io/bunvex/bunvex-backend` from `main` | `ghcr.io/get-convex/convex-backend` | — | owner turns it on | owner, 2026-10-02 (as recommended) | [STUDY-38 K5](../study/STUDY-38-docker.md#4-divergences) |
+| DV-192 | Convex knobs with no bunvex counterpart left out of the compose file | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K6](../study/STUDY-38-docker.md#4-divergences) |
 | DV-197 | `bunvex-local-backend` flags: `--cloud-origin`/`--site-origin`, `--db sqlite\|postgres\|mysql\|mongodb`, default name `bunvex-self-hosted` | `--convex-origin`/`--convex-site`, `postgres-v5`/`mysql-v5`, `carnitas` | yes | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-40 L1](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-198 | `bunvex start` removed; the image runs `bunvex-local-backend` through Convex's scripts | the same scripts | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L2](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-199 | Local deployments `local-<basename(cwd)>`, no account or prompt | anonymous mode, `anonymous-<basename>` | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L3](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
@@ -254,6 +260,7 @@ DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and a
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
 DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
+DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
 ## Gaps recorded in studies
