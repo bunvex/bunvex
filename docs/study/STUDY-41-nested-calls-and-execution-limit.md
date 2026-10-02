@@ -122,13 +122,13 @@
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | N1 | The nested call runs in the parent's `Tx` in the same JS context, as Convex's `SUBFUNCTIONS_IN_SAME_ISOLATE` mode, but **with its own 1 s budget, the parent's clock paused** during it, as Convex's default mode | there is one process and no isolates; the budgets follow Convex's default | accepted (owner, 2026-10-02) |
-| N2 | A nested error reaches the parent with its message and `BunvexError` data, without Convex's appended stack-frame text | the stack is a JS stack here; the message and data are what apps match on | accepted (owner, 2026-10-02); built later (#PRNUM): resolved |
-| N3 | `transactionLimits` applies to documents and bytes read and written. `databaseQueries`, `functionsScheduled`, `scheduledFunctionArgsBytes` and the file limits are accepted and ignored | bunvex did not count those yet | accepted (owner, 2026-10-02); built later (#PRNUM): resolved (the file limits stay inert, as Convex never counts them) |
+| N2 | A nested error reaches the parent with its message and `BunvexError` data, without Convex's appended stack-frame text | the stack is a JS stack here; the message and data are what apps match on | accepted (owner, 2026-10-02); built later (#213): resolved |
+| N3 | `transactionLimits` applies to documents and bytes read and written. `databaseQueries`, `functionsScheduled`, `scheduledFunctionArgsBytes` and the file limits are accepted and ignored | bunvex did not count those yet | accepted (owner, 2026-10-02); built later (#213): resolved (the file limits stay inert, as Convex never counts them) |
 | N4 | Concurrent nested calls (`Promise.all([ctx.runQuery(a), ctx.runQuery(b)])`) are serialized by a queue on the transaction, as Convex serializes `runUdf` | the same order and results as Convex | accepted (owner, 2026-10-02) |
 | N5 | The 1 s limit is cooperative: checked at database calls and at the end. A synchronous infinite loop is not interrupted and blocks the process | one Bun process cannot interrupt running JS; a worker per call would cost far more than the limit protects | accepted (owner, 2026-10-02) |
-| N6 | Store errors (persistence failures, OCC) inside a nested call propagate as they are, rather than being turned into a non-catchable internal error | they already end the transaction on the next store call | accepted (owner, 2026-10-02); built later (#PRNUM): resolved |
+| N6 | Store errors (persistence failures, OCC) inside a nested call propagate as they are, rather than being turned into a non-catchable internal error | they already end the transaction on the next store call | accepted (owner, 2026-10-02); built later (#213): resolved |
 
-### Built later (#PRNUM)
+### Built later (#213)
 
 Accepted at first, then built to match Convex:
 - **N2:** a nested error reaches the caller as Convex's `JsError` display (`run_udf`'s `result?`, `From<JsError>`): "Uncaught Error: <message>", then the nested frames, each "    at …", and a newline; a nested timeout is `JsError::from_message`, its message and a newline. A `BunvexError` keeps its data.
