@@ -285,6 +285,12 @@ DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
 
+Awaiting the owner:
+
+| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
+|---|---|---|---|---|---|
+| DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | accept until components (then "Waiting on a dependency": Components) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+
 | # | Divergence | Convex | Visible to apps? | Recommendation | Study |
 |---|---|---|---|---|---|
 | DV-220 | A failed import step fails the import at once | retries errors that are not the import's own up to 5 times (30 s → 5 min) | yes (an import a transient error would not fail) | accept for now; build the retries later | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |

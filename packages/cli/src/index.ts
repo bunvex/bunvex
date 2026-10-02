@@ -1,6 +1,7 @@
-// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `dev` (STUDY-37, STUDY-40), `export` and `import` (STUDY-42).
+// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `dev` (STUDY-37, STUDY-40), `export` and `import` (STUDY-42), `data` (STUDY-43).
 import { adminKeyCommand } from "./admin-key.ts";
 import { codegenCommand } from "./codegen-command.ts";
+import { dataCommand } from "./data.ts";
 import { deployCommand } from "./deploy.ts";
 import { devCommand } from "./dev.ts";
 import { envCommand } from "./env.ts";
@@ -16,6 +17,7 @@ const USAGE = `Usage: bunvex <command> [options]
 Commands:
   admin-key   print an admin key for this deployment
   codegen     generate the functions directory's _generated/ (api, server, dataModel)
+  data        list the tables, or print a table's documents
   deploy      bundle the functions and push them to a deployment
   dev         push the functions, and again whenever they change
   env         set and view the deployment's environment variables
@@ -28,6 +30,7 @@ Run \`bunvex <command> --help\` for a command's options, \`bunvex --version\` fo
 const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   "admin-key": adminKeyCommand,
   codegen: codegenCommand,
+  data: dataCommand,
   deploy: deployCommand,
   dev: (args, io) => devCommand(args, io),
   env: envCommand,

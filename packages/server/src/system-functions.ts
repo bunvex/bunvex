@@ -152,6 +152,39 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
     handler: async (db) =>
       db.asSystem(async () => (await db.query(SNAPSHOT_IMPORTS_TABLE).order("desc").take(20)).map(importDoc)),
   },
+  // The CLI's `data` (Convex's `_system/cli/tables`): the user tables, as one page.
+  "_system/cli/tables": {
+    args: { paginationOpts: paginationOptsValidator },
+    handler: async (db) => {
+      const tables = (await db.asSystem(() => db.query("_tables").collect())) as unknown as {
+        name: string;
+        state?: string;
+      }[];
+      return {
+        page: tables
+          .filter((t) => (t.state ?? "active") === "active" && !t.name.startsWith("_"))
+          .map((t) => ({ name: t.name })),
+        isDone: true,
+        continueCursor: "end",
+      };
+    },
+  },
+  // The CLI's `data <table>` (Convex's `_system/cli/tableData`): a page of a table, `db.system` for `_` names.
+  "_system/cli/tableData": {
+    args: {
+      table: v.string(),
+      order: v.union(v.literal("asc"), v.literal("desc")),
+      paginationOpts: paginationOptsValidator,
+    },
+    handler: async (
+      db,
+      { table, order, paginationOpts }: { table: string; order: "asc" | "desc"; paginationOpts: PaginationOptions },
+    ) =>
+      (table.startsWith("_") ? db.system : db)
+        .query(table)
+        .order(order)
+        .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
+  },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
     args: { componentId },

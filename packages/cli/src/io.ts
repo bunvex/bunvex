@@ -9,6 +9,8 @@ export type Io = {
   stdin?: () => Promise<string | null>;
   /** Whether standard output is a terminal (values are then printed for people, not as JSON). */
   isTTY?: boolean;
+  /** The terminal's width, when standard output is one (`bunvex data` cuts its table to it). */
+  columns?: number;
   /** Ask the user on the terminal; null when there is none. */
   prompt?: (question: string) => string | null;
 };
@@ -19,6 +21,7 @@ export const processIo = (): Io => ({
   out: (l) => process.stdout.write(`${l}\n`),
   err: (l) => process.stderr.write(`${l}\n`),
   isTTY: !!process.stdout.isTTY,
+  columns: process.stdout.isTTY ? process.stdout.columns : undefined,
   stdin: async () => (process.stdin.isTTY ? null : await Bun.stdin.text()),
   prompt: (q) => (process.stdin.isTTY ? globalThis.prompt(q) : null),
 });
