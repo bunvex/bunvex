@@ -2044,3 +2044,28 @@ writes when on), the screen and the editor.
   the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
+
+## UX review 2 (the owner approved all 28 findings, 2 Oct 2026)
+
+The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
+every one. They land in five pull requests, one subsection each.
+
+### UX review 2 — Overview and pages (UX2-1, UX2-4, UX2-9, UX2-10, UX2-16, UX2-17, UX2-26, UX2-28)
+
+- **The main nav is pinned** (UX2-1): from `md` it is `sticky`, as tall as the viewport, and scrolls on its
+  own, so a long page never shows where the sidebar ends (an e2e test checks it after scrolling).
+- **The empty Database** (UX2-4) uses a table's frame: the section column (search, Create table, an empty
+  Tables list saying "No tables yet.") and Bar 1 ("Database · No tables yet"), the empty state centred where the
+  grid goes; below `lg` (no column) the empty state keeps its own Create table.
+- **Settings pages don't repeat their title** (UX2-9): a page renders its actions into Bar 1 through
+  `BarActions` (Environment variables: "Copy all as .env", "Add a variable"); the body starts with its content.
+- **Logs keep the message in view** (UX2-10): with the details panel open the columns run Time, Level,
+  Message, Outcome, Function, Request; the Functions → Logs tab has no Function column (it is always the open
+  function).
+- **Overview** (UX2-16, UX2-17, UX2-26): the summary is one row of four — both URLs in one cell — and Bar 1 no
+  longer repeats the deployment's name and version from the header; "Needs attention" runs across the page
+  above the indicators, and Recent activity sits beside the Metrics charts; numbers in attention items use
+  `formatCount`; a finished Get started step has a check and "Done", and the snippet's copy button is inside
+  the code block's corner.
+- **Topology's windows** (UX2-28): the node panel says "last minute" (the samples' interval counted once per
+  sample, then said as a person would), not "last 59 s".

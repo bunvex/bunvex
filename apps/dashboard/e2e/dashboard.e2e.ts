@@ -124,6 +124,19 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("the main nav is pinned to the viewport: a long page never shows where it ends (UX2-1)", async () => {
+    const { page, close } = await open("/settings/snapshots", { viewport: { width: 1400, height: 600 } });
+    await page.getByRole("heading", { level: 1, name: "Snapshots" }).waitFor();
+    await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(200);
+    const nav = await page.getByRole("navigation", { name: "Dashboard" }).evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), position: getComputedStyle(el).position };
+    });
+    expect(nav).toEqual({ top: 0, bottom: 600, position: "sticky" });
+    await close();
+  });
+
   test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));

@@ -44,7 +44,6 @@ const Engine = lazy(() => import("./engine.tsx").then((m) => ({ default: m.Engin
 
 export function Overview() {
   const scope = useQueryScope();
-  const deployment = useQuery(deploymentQuery(scope));
   const tables = useQuery(tablesQuery(scope));
   const functions = useQuery(functionsQuery(scope));
   const empty = tables.data?.length === 0 || functions.data?.length === 0;
@@ -52,12 +51,8 @@ export function Overview() {
     <div className={SCREEN}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
+          {/* the deployment's name and version are in the header above: not repeated here (UX2-16) */}
           <h1 className={BAR_TITLE}>Overview</h1>
-          {deployment.data && (
-            <span className="text-sm text-muted-foreground">
-              {deployment.data.name} · {deployment.data.version}
-            </span>
-          )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="flex flex-col gap-8 p-4 md:p-6">
@@ -65,19 +60,20 @@ export function Overview() {
               <GettingStarted noTables={tables.data?.length === 0} noFunctions={functions.data?.length === 0} />
             )}
             <Summary />
+            {/* the most urgent first, across the page; the long activity list beside the charts (UX2-17) */}
+            <NeedsAttention />
             <Indicators />
-            <div className="grid grid-cols-1 gap-8 xl:grid-cols-2">
-              <NeedsAttention />
+            <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <section aria-labelledby="overview-metrics" className="min-w-0">
+                <h2 id="overview-metrics" className={SECTION_TITLE}>
+                  Metrics
+                </h2>
+                <WhenVisible fallback={<p className="mt-2 text-sm text-muted-foreground">Loading the charts…</p>}>
+                  <HealthMetrics />
+                </WhenVisible>
+              </section>
               <RecentActivity />
             </div>
-            <section aria-labelledby="overview-metrics">
-              <h2 id="overview-metrics" className={SECTION_TITLE}>
-                Metrics
-              </h2>
-              <WhenVisible fallback={<p className="mt-2 text-sm text-muted-foreground">Loading the charts…</p>}>
-                <HealthMetrics />
-              </WhenVisible>
-            </section>
             <EngineSection />
           </div>
         </div>
@@ -101,7 +97,7 @@ function Summary() {
       <h2 id="overview-summary" className="sr-only">
         The deployment
       </h2>
-      <dl className="grid grid-cols-1 gap-px border bg-border sm:grid-cols-2 xl:grid-cols-4">
+      <dl className="grid grid-cols-1 gap-px border bg-border sm:grid-cols-2 xl:grid-cols-[1fr_1.35fr_1fr_0.75fr]">
         <Fact label="Deployment">
           {d ? (
             <>
@@ -115,8 +111,16 @@ function Summary() {
             "…"
           )}
         </Fact>
-        <Fact label="Client URL">
-          {d?.url ? <Url url={d.url} label="client URL" /> : <Muted>Not shown by this host</Muted>}
+        {/* both URLs in one cell, so the summary is one row of four (UX2-16) */}
+        <Fact label="URLs">
+          {d?.url ? (
+            <span className="flex flex-col gap-0.5">
+              <Url url={d.url} label="client URL" prefix="Client" />
+              {d.httpActionsUrl && <Url url={d.httpActionsUrl} label="HTTP actions URL" prefix="HTTP actions" />}
+            </span>
+          ) : (
+            <Muted>Not shown by this host</Muted>
+          )}
         </Fact>
         <Fact label="Last deploy">
           {typeof source.listAuditEvents !== "function" ? (
@@ -146,28 +150,24 @@ function Summary() {
             <Muted>{typeof source.getTopology === "function" ? "…" : "Not reported"}</Muted>
           )}
         </Fact>
-        {d?.httpActionsUrl && (
-          <Fact label="HTTP actions URL" wide>
-            <Url url={d.httpActionsUrl} label="HTTP actions URL" />
-          </Fact>
-        )}
       </dl>
     </section>
   );
 }
 
-function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className={cn("min-w-0 bg-background px-4 py-3", wide && "sm:col-span-2 xl:col-span-4")}>
+    <div className="min-w-0 bg-background px-4 py-3">
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-1 truncate text-sm">{children}</dd>
     </div>
   );
 }
 
-function Url({ url, label }: { url: string; label: string }) {
+function Url({ url, label, prefix }: { url: string; label: string; prefix?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
+      {prefix && <span className="w-20 shrink-0 text-xs text-muted-foreground">{prefix}</span>}
       <code className="truncate font-mono text-xs">{url}</code>
       <CopyButton text={url} label={`Copy the ${label}`} iconOnly />
     </span>
@@ -473,7 +473,7 @@ function GettingStarted({ noTables, noFunctions }: { noTables: boolean; noFuncti
               Deploy your functions: <code className="font-mono text-xs">bunx bunvex dev</code>
             </>
           ) : (
-            "Functions deployed."
+            <Done>Functions deployed.</Done>
           )}
         </li>
         <li className={cn(!noTables && "text-muted-foreground")}>
@@ -486,18 +486,34 @@ function GettingStarted({ noTables, noFunctions }: { noTables: boolean; noFuncti
               , or insert a document from a mutation.
             </>
           ) : (
-            "Tables created."
+            <Done>Tables created.</Done>
           )}
         </li>
         <li>
           Connect a client:
-          <div className="mt-2 flex items-start gap-2">
-            <pre className="min-w-0 flex-1 overflow-x-auto border bg-muted/40 p-3 font-mono text-xs">{snippet}</pre>
-            <CopyButton text={snippet} label="Copy the client snippet" iconOnly />
+          {/* the copy button inside the block's corner, as in the runner (UX2-26) */}
+          <div className="relative mt-2">
+            <pre className="overflow-x-auto border bg-muted/40 p-3 pr-10 font-mono text-xs">{snippet}</pre>
+            <span className="absolute top-1.5 right-1.5">
+              <CopyButton text={snippet} label="Copy the client snippet" iconOnly />
+            </span>
           </div>
         </li>
       </ol>
     </section>
+  );
+}
+
+/** A finished step: a check and the word, not only a lighter colour (UX2-26). */
+function Done({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <CircleCheck aria-hidden="true" className="size-4 text-success" />
+      <span>
+        <span className="sr-only">Done: </span>
+        {children}
+      </span>
+    </span>
   );
 }
 

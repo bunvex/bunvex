@@ -35,6 +35,8 @@ const cells = (r: HTMLElement) =>
     .getAllByRole("gridcell")
     .map((c) => c.textContent ?? "");
 const COL = { time: 0, level: 1, function: 2, outcome: 3, request: 4, message: 5 };
+/** With the details open beside the list the message moves up, so it stays in view (UX2-10). */
+const OPEN = { time: 0, level: 1, message: 2, outcome: 3, function: 4, request: 5 };
 const box = (name: string) => screen.getByRole("checkbox", { name });
 const isChecked = (name: string) => box(name).getAttribute("aria-checked") === "true";
 const checkedTypes = () => ["success", "failure", "debug", "info", "warn", "error"].filter(isChecked);
@@ -219,16 +221,16 @@ describe("the Logs screen", () => {
     const panel = await screen.findByRole("complementary");
     const request = within(panel).getByRole("list");
     const first = cells(rows()[0]!);
-    expect(within(panel).getByText(first[COL.message]!, { selector: "pre" })).toBeDefined();
+    expect(within(panel).getByText(first[OPEN.message]!, { selector: "pre" })).toBeDefined();
     expect(within(request).getAllByRole("listitem").length).toBeGreaterThan(0);
     await user.keyboard("{ArrowDown}");
     const second = cells(rows()[1]!);
-    await waitFor(() => expect(within(panel).getByText(second[COL.message]!, { selector: "pre" })).toBeDefined());
+    await waitFor(() => expect(within(panel).getByText(second[OPEN.message]!, { selector: "pre" })).toBeDefined());
     await user.click(within(panel).getByRole("button", { name: "Filter by this request" }));
     const box = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
     expect(box.value).toHaveLength(16);
     await waitFor(() =>
-      expect(new Set(rows().map((r) => cells(r)[COL.request]))).toEqual(new Set([box.value.slice(0, 4)])),
+      expect(new Set(rows().map((r) => cells(r)[OPEN.request]))).toEqual(new Set([box.value.slice(0, 4)])),
     );
     await expectAccessible();
     await user.keyboard("{Escape}");

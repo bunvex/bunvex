@@ -47,6 +47,9 @@ describe("Settings: environment variables", () => {
   test("values are hidden until shown", async () => {
     mount("/settings/environment-variables");
     await loaded();
+    // the page's actions sit in Bar 1, and its title is not repeated in the body (UX2-9)
+    expect(screen.queryByRole("heading", { level: 2, name: "Environment variables" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add a variable" }).closest("[class*='min-h-11']")).not.toBeNull();
     const secret = item("AUTH_SECRET");
     expect(secret.textContent).not.toContain("s3cr3t");
     expect(within(secret).getByText("Hidden value")).toBeDefined();

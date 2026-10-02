@@ -15,7 +15,7 @@ import { type EnvironmentVariable, type EnvironmentVariableChange, toDataSourceE
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { formatDotenv, nameProblem, parseDotenv, setProblem, valueProblem, valueWarning } from "./env-vars.ts";
-import { SettingsLayout } from "./layout.tsx";
+import { BarActions, SettingsLayout } from "./layout.tsx";
 
 export const envVarsQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
@@ -116,7 +116,6 @@ function EnvironmentVariables() {
   const problems = useMemo(() => validate(rows), [rows]);
   const update = (key: string, patch: Partial<Row>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
-  const titleId = useId();
 
   if (!canView)
     return <p className="text-sm text-muted-foreground">This credential cannot view environment variables.</p>;
@@ -143,17 +142,20 @@ function EnvironmentVariables() {
   };
 
   return (
-    <section aria-labelledby={titleId} className="flex max-w-4xl flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 id={titleId} className="text-lg font-medium">
-          Environment variables
-        </h2>
-        <span className="ml-auto" />
+    // the page starts with its content: Bar 1 has the title and the page's actions (UX2-9)
+    <section aria-label="Environment variables" className="flex max-w-4xl flex-col gap-4">
+      <BarActions>
         {vars.data.length > 0 && <CopyButton text={formatDotenv(vars.data)} label="Copy all as .env" />}
-      </div>
+        {canWrite && (
+          <Button size="sm" variant="outline" onClick={() => add([newRow()])}>
+            <Plus aria-hidden="true" />
+            Add a variable
+          </Button>
+        )}
+      </BarActions>
       <p className="text-sm text-muted-foreground">
-        Functions read them with <code className="font-mono text-xs">process.env.NAME</code>. Changes apply to functions
-        that start after they are saved.
+        Read with <code className="font-mono text-xs">process.env.NAME</code>; a change applies to functions that start
+        after it is saved.
       </p>
       {rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">No environment variables yet.</p>
@@ -203,15 +205,7 @@ function EnvironmentVariables() {
         </ul>
       )}
       {canWrite && (
-        <div>
-          <Button size="sm" variant="outline" onClick={() => add([newRow()])}>
-            <Plus aria-hidden="true" />
-            Add a variable
-          </Button>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Tip: paste a .env file into a name box to add all its lines.
-          </p>
-        </div>
+        <p className="text-xs text-muted-foreground">Tip: paste a .env file into a name box to add all its lines.</p>
       )}
       {problems.set && (
         <p role="alert" className="text-sm text-destructive">

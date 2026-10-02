@@ -1,6 +1,7 @@
 // What the Overview derives from the contract (UI-01 §27), kept pure so it is tested apart from the screen:
 // totals over the top-k series, the latest minute that has data, and the "needs attention" list.
 import type { Timeseries, TopKSeries, Topology } from "../data-source.ts";
+import { formatCount } from "./stats.ts";
 
 /** Per bucket, the sum of every series (a missing value counts as nothing; a bucket with none stays null). */
 export function sumSeries(all: Timeseries[]): Timeseries {
@@ -85,7 +86,7 @@ export function attention(input: AttentionInput): Attention[] {
       out.push({
         id: `lag-${n.id}`,
         severity: "warning",
-        text: `${n.id} is behind the leader${n.lag ? ` by ${Math.round(n.lag.ms)} ms` : ""}`,
+        text: `${n.id} is behind the leader${n.lag ? ` by ${formatCount(Math.round(n.lag.ms))} ms` : ""}`,
         to: "topology",
         search: { node: n.id },
       });
@@ -116,7 +117,7 @@ export function attention(input: AttentionInput): Attention[] {
     out.push({
       id: "scheduler-lag",
       severity: "warning",
-      text: `Scheduled runs start ${Math.round(lag)} s late`,
+      text: `Scheduled runs start ${formatCount(Math.round(lag))} s late`,
       to: "scheduled",
     });
   return out.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));

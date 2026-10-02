@@ -15,6 +15,14 @@ import { lagText, servesClients, uptime } from "./words.ts";
 const peak = (xs: number[]) => (xs.length ? Math.max(...xs) : 0);
 const last = (xs: number[]) => xs.at(-1) ?? 0;
 
+/** "last minute", "last 5 minutes", "last 30 s". */
+export function windowLabel(seconds: number): string {
+  const s = Math.round(seconds);
+  if (s >= 55 && s <= 65) return "last minute";
+  if (s >= 90) return `last ${Math.round(s / 60)} minutes`;
+  return `last ${s} s`;
+}
+
 export function NodePanel({
   node: n,
   topology: t,
@@ -24,7 +32,10 @@ export function NodePanel({
   topology: Topology;
   onClose: () => void;
 }) {
-  const span = n.history.length > 1 ? Math.round((n.history.at(-1)!.time - n.history[0]!.time) / 1000) : 0;
+  // the window the samples cover — N samples are N intervals, not N − 1 — said as a person would: "last
+  // minute", not "last 59 s" (UX2-28)
+  const n1 = n.history.length;
+  const span = n1 > 1 ? windowLabel(((n.history.at(-1)!.time - n.history[0]!.time) / 1000) * (n1 / (n1 - 1))) : "";
   return (
     <Panel kind="topology-node" title={<span className="font-mono">{n.id}</span>} onClose={onClose}>
       <Tabs defaultValue="overview">
@@ -47,7 +58,7 @@ export function NodePanel({
   );
 }
 
-function Overview({ n, t, span }: { n: TopologyNode; t: Topology; span: number }) {
+function Overview({ n, t, span }: { n: TopologyNode; t: Topology; span: string }) {
   const cpu = n.history.map((h) => Math.round((h.cpu ?? 0) * 100));
   const lag = n.history.map((h) => h.lagMs ?? 0);
   const conns = n.history.map((h) => h.connections);
@@ -83,28 +94,28 @@ function Overview({ n, t, span }: { n: TopologyNode; t: Topology; span: number }
       </Facts>
       {n.history.length > 1 && (
         <section aria-label="Recent history" className="flex flex-col gap-3">
-          <Trend title={`CPU, last ${span} s`}>
+          <Trend title={`CPU, ${span}`}>
             <Sparkline
               values={cpu}
               formatValue={(v) => `${v}%`}
-              summary={`CPU over the last ${span} seconds: now ${last(cpu)}%, peak ${peak(cpu)}%.`}
+              summary={`CPU over the ${span}: now ${last(cpu)}%, peak ${peak(cpu)}%.`}
             />
           </Trend>
           {n.lag ? (
-            <Trend title={`Lag, last ${span} s`}>
+            <Trend title={`Lag, ${span}`}>
               <Sparkline
                 values={lag}
                 formatValue={(v) => `${formatCount(v)} ms`}
-                summary={`Lag over the last ${span} seconds: now ${formatCount(last(lag))} ms, peak ${formatCount(peak(lag))} ms.`}
+                summary={`Lag over the ${span}: now ${formatCount(last(lag))} ms, peak ${formatCount(peak(lag))} ms.`}
               />
             </Trend>
           ) : (
             servesClients(n, t) && (
-              <Trend title={`Connections, last ${span} s`}>
+              <Trend title={`Connections, ${span}`}>
                 <Sparkline
                   values={conns}
                   formatValue={formatCount}
-                  summary={`Connections over the last ${span} seconds: now ${formatCount(last(conns))}, peak ${formatCount(peak(conns))}.`}
+                  summary={`Connections over the ${span}: now ${formatCount(last(conns))}, peak ${formatCount(peak(conns))}.`}
                 />
               </Trend>
             )
@@ -115,7 +126,7 @@ function Overview({ n, t, span }: { n: TopologyNode; t: Topology; span: number }
   );
 }
 
-function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache; span: number }) {
+function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache; span: string }) {
   const hits = n.history.map((h) => Math.round((h.cacheHitRate ?? 0) * 100));
   const invalidations = n.history.map((h) => h.invalidationsPerSecond ?? 0);
   const top = c.topQueries ?? [];
@@ -151,18 +162,18 @@ function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache
       </div>
       {n.history.length > 1 && (
         <section aria-label="Recent cache history" className="flex flex-col gap-3">
-          <Trend title={`Hit rate, last ${span} s`}>
+          <Trend title={`Hit rate, ${span}`}>
             <Sparkline
               values={hits}
               formatValue={(v) => `${v}%`}
-              summary={`Cache hit rate over the last ${span} seconds: now ${last(hits)}%, peak ${peak(hits)}%.`}
+              summary={`Cache hit rate over the ${span}: now ${last(hits)}%, peak ${peak(hits)}%.`}
             />
           </Trend>
-          <Trend title={`Invalidations per second, last ${span} s`}>
+          <Trend title={`Invalidations per second, ${span}`}>
             <Sparkline
               values={invalidations}
               formatValue={(v) => `${formatCount(v)}/s`}
-              summary={`Invalidations over the last ${span} seconds: now ${formatCount(last(invalidations))} per second, peak ${formatCount(peak(invalidations))}.`}
+              summary={`Invalidations over the ${span}: now ${formatCount(last(invalidations))} per second, peak ${formatCount(peak(invalidations))}.`}
             />
           </Trend>
         </section>
