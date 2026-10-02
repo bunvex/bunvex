@@ -4,6 +4,59 @@
 > `apps/dashboard` — and the contract between the dashboard and whatever serves its data,
 > `DashboardDataSource`. The server side of that contract is implemented elsewhere; this document is the
 > agreement both sides build against. The living map stays in [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
+>
+> Amended through §25 (1 Oct 2026). Sections are kept as the record of each round; where a later one
+> replaced an earlier rule, the earlier section says so. **§0 is the current state.**
+
+## 0. Current state (1 Oct 2026)
+
+Everything below runs on `MockDataSource`; no server implements the contract yet (§5.7).
+
+**Screens** (main sidebar, in labelled groups, §23.2):
+
+| Screen | Route | Specified in |
+|---|---|---|
+| Health | `/` | §18.1 (metrics charts); the engine counters from slice 4 (§12.5.1) |
+| Topology | `/topology?node=` | §22 (a bunvex addition) |
+| *Data* — Database | `/database/$table?filter&doc&panel` | §12.3, §12.5.2–§12.5.10, §15.2–§15.5, §22.3 |
+| *Data* — Schema | `/schema?table=` | §21, §22.2, §22.6 |
+| *Data* — Files | `/files` | §14.3, §24 |
+| *Functions* — Functions | `/functions?function&tab` | §13.2, §15.1, §18.2, §22.5 |
+| *Functions* — Schedules | `/schedules/functions`, `/schedules/crons` | §14.2, §23.3 |
+| *Manage* — Authentication | `/auth/$section` (`/settings/authentication` redirects) | §25 (a bunvex addition) |
+| *Observe* — Logs | `/logs?function&type&kind&q&range&from&to` | §22.4 (supersedes the layout of §13.1) |
+| *Observe* — History | `/history` | §14.5, §22.5 |
+| Settings | `/settings/general`, `/settings/environment-variables`, `/settings/snapshots` | §17.1, §17.2, §14.4, §19.2, §23.3 |
+| The function runner | a panel on every screen | §13.3, §16.1–§16.3 |
+
+**Shared patterns:** the **section column** (`shell/section-column.tsx`: title and action, labelled nav,
+the current page's filters; resizable; a sheet on phones; §23.1); the **docked side panel**
+(`shell/panel.tsx`, resizable, persisted width, a sheet on phones; §22.1); the **full-bleed grid** with
+Bar 1 (title, count, actions; 44 px, aligned with the panel header) and Bar 2 (search, filters)
+(`shell/bars.ts`, `DataTable` `fill`; §22.3, §22.5); the **flow canvas** with shared controls
+(`shell/flow-controls.tsx`; Schema §21, Topology §22); values as **JavaScript literals** in the code
+editor (§12.5.7); **plain-path routes** (§11.2).
+
+**The contract** (`@bunvex/dashboard/data-source`; every optional method is detected with `typeof`, and
+`describeDataSourceContract` covers each area, the writes opt-in):
+
+- required: deployment, capabilities, stats, tables, schema, documents (list, get, `watchTable`), functions, logs (list, watch);
+- data: `insertDocuments`, `patchDocuments`, `replaceDocument`, `deleteDocuments`, `clearTable`, `createTable`, `tableOfId`, `inferDocumentType`;
+- functions: `runFunction`, `watchFunction`;
+- deployment (`data-source-deployment.ts`): scheduled functions and crons, files (`listFiles`, `countFiles`, `fileStats`, `getFile`, `uploadFile`, `deleteFiles`, `watchFiles`), environment variables, the audit log;
+- state (`data-source-state.ts`): `getDeploymentState`, `pauseDeployment`, `resumeDeployment`;
+- metrics (`data-source-metrics.ts`): function rate, cache hit, latency percentiles, top functions, table rate, scheduler lag;
+- snapshots (`data-source-snapshot.ts`): export and import;
+- auth (`data-source-auth.ts`): `listAuthProviders`; auth admin (`data-source-auth-admin.ts`): users, sessions, organizations, events, config;
+- topology (`data-source-topology.ts`): `getTopology`, `watchTopology`.
+
+**The dev host's mock knobs** (`apps/dashboard`, query params kept for the tab, §11.2): `latency`,
+`fail`, `writes`, `tables` (`0`: no tables), `tasks`, `executions` (volume, §19.3), `nodes` (Topology).
+
+**Tests:** happy-dom + Testing Library + axe per package (`bun test`); the contract suite on the mock;
+Playwright end-to-end in Chromium (`bun run e2e` in `apps/dashboard`, the CI job "e2e · dashboard in
+Chromium", not a required check), with axe and colour contrast in both themes and a guard on Health's
+first load (§12.5.10, §14.1, §19.4).
 
 ## 1. Goals and non-goals
 
@@ -360,6 +413,8 @@ change of `@bunvex/dashboard`, recorded in a changeset and in an amendment to th
 
 ### 5.6 Room for later (not in v0)
 
+> All of these exist now, with more (§0 lists the contract as it stands).
+
 Optional methods, detected with `typeof source.x === "function"`, so older sources stay valid:
 `runFunction(path, args)`, `insertDocument` / `patchDocument` / `deleteDocuments`, `watchTable(table)`
 (live document lists), `getSchema()` (declared validators once `@bunvex/values` has them).
@@ -428,6 +483,8 @@ edits are unavoidable for `bun run check` to cover the new code; each is the min
 
 ## 9. Slices
 
+> Replanned in §12.5 after the Convex study; every slice is done. Kept as the v1 record.
+
 Each one ends with `bun run check` green and is shown before the next.
 
 1. **Scaffold**: the three workspaces, configs of §8, `check-deps` rules, ARCHITECTURE.md lines, one
@@ -491,9 +548,10 @@ are removed — the router owns the URL.
   the browser history in `apps/dashboard` (plain paths, as Convex's dashboard; ~~`createHashHistory()`~~
   until 30 Sep 2026, when the owner dropped the `/#/` addresses), the browser history under a
   `basepath` in a control plane (`/projects/p1/dashboard`), `createMemoryHistory()` in tests.
-- Routes: `/`, `/tables`, `/tables/$table?index&order`, `/tables/$table/$id`, `/functions`,
-  `/logs?function&level`. Search params are validated by hand (`validateDocumentsSearch`,
-  `validateLogsSearch`): an invalid option is dropped, not an error — a hand-edited URL still opens.
+- Routes: today's list is in §0 (the v1 routes `/tables…` became `/database/$table`, §12.6). Search params
+  are validated by hand (`validateTableSearch`, `validateLogsSearch`, …): an invalid option is dropped,
+  not an error — a hand-edited URL still opens. Every validator returns all its keys, `undefined` when
+  invalid, because TanStack Router keeps a raw param a validator leaves out (#47).
 - **No global `Register`.** TanStack Router's type safety normally comes from declaring the app's router in
   `interface Register`; a package that did so would collide with a host that has its own router. Links
   are typed against `DashboardRouter` explicitly: `DashLink` takes `link: ValidateLinkOptions<DashboardRouter,
@@ -567,6 +625,8 @@ declared by the packages that import them, as `check-deps` requires.
   `.dark` class, an injected `Link`).
 
 ### 12.2 Navigation
+
+> Superseded by §23.2 (labelled groups, more screens). Kept as the record.
 
 Health · **Database** · Schema · Functions · Logs, then Settings. (Files, Schedules and History come with the
 server features they show.) The overview is renamed **Health**; its commit clock stays and gains the
@@ -654,6 +714,8 @@ type IndexInfo = { name: string; fields: string[]; system: boolean; state: "read
   and — when a source declares `writeData` — the writes.
 
 ### 12.5 Slices, replanned
+
+> All done; the amendments §13–§25 went further. Kept as the record.
 
 5. **Contract v2 + mock + contract suite** (filters, schema, capabilities, watchTable; writes in the mock).
 6. **Database screen, read-only**: sidebar, table view, filter bar with the filter model, side panel with the
@@ -921,6 +983,9 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 
 ### 13.2 The Functions screen
 
+> The Logs tab now uses the shared logs view (§22.4) with its own filter column, and the argument and
+> return validators moved to the Statistics tab (§22.5).
+
 - **`/functions?function=<module:name>`** (`src/functions/`), the URL as in Convex. A sidebar holds the
   modules as a **tree** (`buildFunctionTree`): folders from the module path, then files, each
   alphabetical, with the functions as links (kind letter, name, "internal"). Files and folders collapse,
@@ -979,6 +1044,9 @@ the client as in Convex (L2), and an optional `runFunction` in the contract with
 
 ### 14.2 Schedules
 
+> Navigation between Scheduled functions and Cron jobs moved to the section column, with the scheduled
+> filters under it (§23.3); the grids follow §22.5.
+
 STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 
 - **Contract** (`data-source-deployment.ts`, re-exported by `@bunvex/dashboard/data-source`), all optional:
@@ -1011,6 +1079,8 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 
 ### 14.3 Files
 
+> The screen's layout is §24 (section column: upload, storage use, views by type, filters, buckets).
+
 - **Contract**, optional: `listFiles({ numItems, cursor, order?, from?, to? })` — newest first by default
   (`StoredFile`: storage id, creation time, base64 SHA-256, size, content type or null, a URL);
   `countFiles()`; `getFile(id)` (null when absent); `uploadFile(blob)` → the new storage id (the content type
@@ -1030,6 +1100,8 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
   e2e case (a real upload and an image that loads) and axe with colour contrast in both themes.
 
 ### 14.4 Settings: environment variables
+
+> Settings' pages are reached from the section column now (§23.3), not a frame with tabs.
 
 - **Contract**, optional: `listEnvironmentVariables()` — by name; `updateEnvironmentVariables(changes)` — a
   batch of `{ name, value | null }` (null deletes), applied whole or not at all, as Convex's
@@ -1226,6 +1298,8 @@ STUDY-12 §9. The owner asked for it on 30 Sep 2026, contract and mock first.
 
 ### 17.1 Settings → General (STUDY-12 §11)
 
+> The Settings frame (`settings/layout.tsx`) now draws the section column, not tabs (§23.3).
+
 - `/settings` now opens **General**, the first page, as Convex's; the Settings frame (`settings/layout.tsx`)
   lists General and Environment variables.
 - **Deployment**: name, version, persistence, the **client URL** and the **HTTP actions URL**, each with a
@@ -1328,6 +1402,9 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
 ## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
 
 ### 19.1 Settings → Authentication (STUDY-12 §13.1)
+
+> Moved to the Authentication screen as "Sign in / Providers" (§25.3); `/settings/authentication`
+> redirects there.
 
 - **Contract** (`data-source-auth.ts`): optional `listAuthProviders()` → `AuthProvider[]`, Convex's OIDC
   `{ domain, applicationID }` or custom JWT `{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`,

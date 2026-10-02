@@ -1,6 +1,8 @@
 # STUDY-12 — The dashboard (Data browser first)
 
-- **Status:** accepted — every divergence in §4 decided by the owner (29–30 Sep 2026)
+- **Status:** accepted — every divergence decided by the owner (29 Sep–1 Oct 2026); bunvex additions
+  (snapshots, Topology, Files buckets placeholder, Authentication, the design language) recorded as such;
+  what is still open, or a call the owner can veto, is listed in §6
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard`,
   `dashboard-common`, `dashboard-self-hosted`, `@convex-dev/design-system`, `system-udfs`,
   `crates/local_backend`)
@@ -230,6 +232,8 @@ relies on, and bunvex keeps:
 
 ## 3. How bunvex does it
 
+> The current state of every screen is UI-01 §0; this section describes the first round.
+
 As built, the design is recorded in UI-01 §11–§12. In short: `@bunvex/dashboard` holds every screen and
 reads everything through an injected `DashboardDataSource` (contract v2, UI-01 §12.4) — never the engine;
 `apps/dashboard` is a thin Vite host over a `MockDataSource` until the server's admin API exists (§1.6 is
@@ -252,7 +256,7 @@ columns, add documents).
 | D8 | A link to a document is `?doc=<id>` (opens the side panel); Convex links a filter `_id eq <id>` | the document opens beside the list instead of replacing it | **decided: keep** (30 Sep 2026) |
 | D9 | ~~Values typed in a syntax of our own (`42`, `"text"`, `42n`, a bare word is text)~~ | — | **decided: match Convex** (30 Sep 2026): values are JavaScript literals (`{ name: "Ada", credits: 10n }`, `Bytes("…")`, `undefined` removes a field), edited in a Monaco editor where a value can be long — filter values, cells with objects or arrays, the whole document, adding documents. No longer a divergence. |
 | D10 | Columns are reordered by **dragging a header**, as Convex (dnd-kit there, pointer events here), **and** from a **Columns** panel (keyboard-first) | the panel is the keyboard and screen-reader way | **decided** (30 Sep 2026): both — dragging added (UI-01 §17.3), the panel kept |
-| D11 | Not yet built: custom query, metrics per table. **Generate schema** added 30 Sep 2026: the schema panel's Saved / Generated tabs, as Convex's `ShowSchema.tsx` and `GenerateSchema.tsx` (Convex infers "shapes" on the server over every document, `/api/shapes2`; bunvex asks the source's optional `inferDocumentType(table)`, which the mock computes over its whole table). **Create table** added 30 Sep 2026 (also on a deployment with no tables at all: `/database` shows "There are no tables here yet" and Create table, as Convex's `EmptyData.tsx`) (the sidebar's name box, as Convex's `DataSidebar.tsx`, `validateConvexIdentifier`; the contract's optional `createTable`, which Convex does with `_system/frontend/createTable`, inserting and deleting a document). The cell menu is complete (§1.4.1): **View value** (Space) and **Delete document** added 30 Sep 2026, and **Go to reference** (Cmd/Ctrl+G) through the contract's optional `tableOfId` (what Convex reads off an id with its table mapping) | scope | follow-up |
+| D11 | Not yet built: custom query (it needs the server to run code the dashboard sends). **Metrics per table** built 30 Sep 2026 (§12, M4). **Generate schema** added 30 Sep 2026: the schema panel's Saved / Generated tabs, as Convex's `ShowSchema.tsx` and `GenerateSchema.tsx` (Convex infers "shapes" on the server over every document, `/api/shapes2`; bunvex asks the source's optional `inferDocumentType(table)`, which the mock computes over its whole table). **Create table** added 30 Sep 2026 (also on a deployment with no tables at all: `/database` shows "There are no tables here yet" and Create table, as Convex's `EmptyData.tsx`) (the sidebar's name box, as Convex's `DataSidebar.tsx`, `validateConvexIdentifier`; the contract's optional `createTable`, which Convex does with `_system/frontend/createTable`, inserting and deleting a document). The cell menu is complete (§1.4.1): **View value** (Space) and **Delete document** added 30 Sep 2026, and **Go to reference** (Cmd/Ctrl+G) through the contract's optional `tableOfId` (what Convex reads off an id with its table mapping) | scope | follow-up |
 | D13 | **Delete document** from a cell's menu asks first ("Delete 1 document?"), as Delete selected does; Convex deletes at once, and asks only on a production deployment (`TableContextMenu.tsx`, `isProtectedDeployment`) | a delete cannot be undone, and bunvex has no production/development distinction yet | **decided** (30 Sep 2026): keep asking, since bunvex will have production deployments too; `CONFIRM_DELETE_FROM_CELL_MENU` in `database/screen.tsx` switches it, to become a check of the deployment's kind (ask on production only, as Convex) once deployments have one |
 | D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | **closed on the mock** (30 Sep 2026): the Health screen keeps the engine's counters and adds Convex's function metrics from the contract's optional metrics methods (§12, UI-01 §18.1); a server fills them once it measures them |
 
@@ -272,6 +276,15 @@ columns, add documents).
 1. ~~D5–D10~~ decided (§4).
 2. Should the admin API mirror Convex's system UDFs and routes (§1.5) closely enough that Convex's own
    dashboard could run against bunvex too? (UI-01 §5.7 puts the admin messages in `@bunvex/protocol`.)
+   — the owner left the admin API to the server track (1 Oct 2026); still open there.
+3. **Health review** (raised 1 Oct 2026, not decided): what to do with the engine counters from slice 4
+   (the commit clock, commits/s, cache, subscriptions, commit groups) — a collapsed "Engine" section, out,
+   or as is — and whether to add what Convex's Health still has over ours (a deployment summary with the
+   last push, scheduler lag, running and queued functions, subscription invalidations), contract and mock
+   first.
+4. Calls made while building that the owner can still veto: T5 and T6 (§15), M4 (§12).
+5. Follow-ups, none blocking: S2 (component picker), M2 (heatmap view), SC1 and SC3 (§14), custom
+   queries (D11, L6).
 
 ## 7. Logs, Functions and the function runner (added 29–30 Sep 2026)
 
@@ -355,7 +368,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
 | L5 | The list does not pause by itself when you scroll down; it keeps your place instead (the row at the top of the view stays put while lines arrive above it), and the pause button stops new lines | the data grid anchors its top row already; the result a reader sees is the same | **decided** (30 Sep 2026): keep ours |
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
-| L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10: live query results, run history, acting as a user, deployment events, usage and identity all built |
+| L6 | Not yet: custom test queries (they need the server to run code the dashboard sends); everything else first listed here was built in §10 | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10: live query results, run history, acting as a user, deployment events, usage and identity all built |
 
 ### 7.4 The Logs redesign (added 1 Oct 2026, UI-01 §22.4)
 
@@ -479,12 +492,7 @@ into Authentication → Sign in / Providers (L22, owner's call). No server imple
   (without system fields). The schema panel prints the whole `bunvex/schema.ts` (imports from
   `bunvex/server` and `bunvex/values`, declared indexes from the table list, the option only when
   validation is off), with the table's lines tinted and scrolled to, a screen-reader note naming them, and
-  Copy. The "Generated" tab comes with the D11 follow-ups.
-- **The saved schema**: `SchemaInfo.tables[].validator` is the declared document type in the same form
-  (without system fields). The schema panel prints the whole `bunvex/schema.ts` (imports from
-  `bunvex/server` and `bunvex/values`, declared indexes from the table list, the option only when
-  validation is off), with the table's lines tinted and scrolled to, a screen-reader note naming them, and
-  Copy. The "Generated" tab comes with the D11 follow-ups.
+  Copy. The "Generated" tab came with D11 (UI-01 §15.5).
 
 ### 8.3 Divergences
 

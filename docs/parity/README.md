@@ -110,4 +110,5 @@ In this order:
 - Node actions;
 - log streaming and metrics;
 - streaming export;
-- the dashboard. The UI session is building it; see #2.
+- the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
+  it needs the server's admin API and admin-key login.

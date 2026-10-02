@@ -102,18 +102,23 @@ bunvex/
 │   │                                light/dark themes, shadcn/ui on Base UI; no bunvex dependency 🟡
 │   ├── dashboard/                   @bunvex/dashboard  the dashboard screens (UI-01), fed by an
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
+│   │   │                            (required core + optional areas: writes, runner, deployment,
+│   │   │                            state, metrics, snapshots, auth, auth admin, topology; UI-01 §0)
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
+│   │   ├── shell                    sidebar in groups, section column, docked panel, bars (§0)    ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
 │   │   ├── schema                   the schema as a diagram: tables, references (STUDY-12 §14)     ✅
-│   │   ├── topology                 nodes by role, lag, the store and lease (a bunvex addition)     ✅
-│   │   ├── logs                     live log lines, client filters, details (STUDY-12 §7)          ✅
-│   │   ├── functions                module tree, a function's details and logs (no metrics yet)   ✅
-│   │   ├── runner                   run a function: literal args, value or error, its log lines    ✅
+│   │   ├── topology                 nodes by role, lag, cache, the store and lease (an addition)    ✅
+│   │   ├── logs                     filter column, histogram, live lines, details (STUDY-12 §7)    ✅
+│   │   ├── functions                module tree; statistics, validators and logs of a function    ✅
+│   │   ├── runner                   run a function: literal args, live queries, history, as a user ✅
+│   │   ├── metrics                  Health charts, a function's and a table's metrics (§12)       ✅
 │   │   ├── schedules                scheduled runs (cancel), cron jobs and their runs (STUDY-12 §9) ✅
-│   │   ├── files                    stored files: upload, image preview, download, delete (§9)     ✅
-│   │   ├── settings                 environment variables: hidden values, batch edits (§9)        ✅
+│   │   ├── files                    upload, storage used, views by type, preview, delete (§9)     ✅
+│   │   ├── auth                     users, sessions, organizations, auth config (an addition)    ✅
+│   │   ├── settings                 general and pause, environment variables, snapshots          ✅
 │   │   ├── history                  the audit log, in words, filtered, live (STUDY-12 §9)           ✅
-│   │   └── screens                  health ✅ (engine counters)                                    ✅
+│   │   └── screens                  health: metrics charts + engine counters (review open)        ✅
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── dev                      watch files and push                                      M

@@ -17,5 +17,16 @@ delete every 500 ms; `0` turns it off), `?tables=0` (a deployment with no tables
 executions in the logs (each writes 1–4 lines). `?nodes=4` shows a leader and three followers on the Topology screen
 (one node by default, as bunvex runs today).
 
+## Tests
+
+```sh
+bun run test      # the dev knobs (happy-dom not needed)
+bun run e2e       # builds, then Playwright against `vite preview` on :4179: every screen, axe with colour
+                  # contrast in both themes, phone width, Health's first-load size
+```
+
+The end-to-end tests use the system Chrome locally and Playwright's Chromium in CI (`E2E_BROWSER=chromium`);
+the CI job "e2e · dashboard in Chromium" is not a required check.
+
 It is a host only: screens, data and styles come from `@bunvex/dashboard` and `@bunvex/ui`
 ([UI-01](../../docs/specs/UI-01-ui-and-dashboard.md)).
