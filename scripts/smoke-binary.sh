@@ -34,6 +34,8 @@ start() {
   fail "the backend did not come up"
 }
 start
+# the backend prints its instance line after it starts listening, so the API can answer first
+for _ in $(seq 1 25); do grep -q "instance $NAME, " "$WORK/backend.log" && break; sleep 0.2; done
 [[ "$(cat "$WORK/backend.log")" == *"instance $NAME, $want"* ]] || fail "not on $want"
 [ "$want" = postgres ] || [ -f "$WORK/bunvex_local_backend.sqlite3" ] || fail "no SQLite file in the working directory"
 
