@@ -268,6 +268,17 @@ DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-
 DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
+STUDY-41 (nested calls and the 1 s limit), awaiting the owner:
+
+| ID | bunvex | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-204 | Nested calls in the parent's `Tx`, own 1 s budget, parent's clock paused | separate isolate (default), own budget | no | accept | [STUDY-41 N1](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-205 | Nested errors without Convex's appended stack-frame text | message plus stack text | minor | accept | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-206 | `transactionLimits`: reads and writes only; the rest ignored | every limit | yes (rare) | accept | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-207 | Concurrent nested calls serialized | serialized | no | accept | [STUDY-41 N4](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-208 | The 1 s limit is cooperative (checked at database calls and the end); a synchronous infinite loop is not interrupted | V8 terminates the isolate | yes | accept | [STUDY-41 N5](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-209 | Store errors in a nested call propagate as they are | upgraded to a non-catchable internal error | minor | accept | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not
