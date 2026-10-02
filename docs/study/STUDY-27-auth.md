@@ -94,7 +94,7 @@
     `AuthError {authUpdateAttempted: false}`.
   - An identity about to expire (admins) is revalidated.
 - **`Admin` tokens** (`value`, `impersonating?`) are the dashboard's. They are verified as admin keys
-  (roadmap Phase 3 item 6).
+  (STUDY-34, built).
 
 ### 1.6 The client (`browser/sync/authentication_manager.ts`)
 

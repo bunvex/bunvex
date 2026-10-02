@@ -28,6 +28,7 @@ import {
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
+import { BadAdminKeyError } from "./admin-keys.ts";
 import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
 import { callerOf, type Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -131,6 +132,12 @@ export type SyncDeps = {
   splay?: SplayOptions;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
   verifyToken: (token: string) => Promise<VerifiedIdentity>;
+  /**
+   * An `Admin` token's caller (STUDY-34): the key checked, acting as `impersonating` when given; throws
+   * `BadAdminKeyError` for a bad key, `HeaderParseError` for an identity that is not one. Absent: admin
+   * tokens are refused.
+   */
+  adminCaller?: (key: string, impersonating: unknown) => Caller;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -292,6 +299,14 @@ export class SyncHub {
   resultAt(q: SessionQuery, ts: number, caller: Caller): Promise<{ exec: Execution; idPart: string }> {
     const committer = this.deps.engine.committer;
     const mine = idPartOf(caller);
+    // Access first (STUDY-34): a caller who may not run the query (an internal or system function without
+    // an admin key, an operation the key lacks) never reuses another caller's run; its own run fails, and
+    // is not kept for anyone.
+    try {
+      this.deps.functions.checkQueryAccess(q.udfPath, caller);
+    } catch {
+      return this.execute(q, ts, caller).then((exec) => ({ exec, idPart: mine }));
+    }
     const valid = (l: Execution | undefined): l is Execution =>
       l !== undefined && !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts));
     // Where the query lives now, when that is shared or this caller's.
@@ -349,7 +364,7 @@ export class SyncHub {
     this.stats.executions++;
     const { engine, functions, fromWire } = this.deps;
     const r = await collectLogs(async () => {
-      const body = functions.queryBody(q.udfPath, fromWire(q.args));
+      const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
       return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
     });
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
@@ -533,9 +548,19 @@ export class SyncSession {
           return this.internalError(
             new Error(`identity base version ${m.baseVersion} does not match ${this.received.identity}`),
           );
-        // Admin keys come with Phase 3 item 6 (the dashboard's `Admin` tokens).
-        if (m.tokenType === "Admin") return this.authError("Admin keys are not supported yet", true);
-        if (m.tokenType === "User") {
+        if (m.tokenType === "Admin") {
+          // Convex's `authenticate` for an admin key: a bad key is unauthenticated (`AuthError`, not an
+          // update the client can retry); an acting identity that is not one ends the session.
+          const make = this.hub.deps.adminCaller;
+          if (!make) return this.authError("The provided admin key was invalid for this instance", false);
+          try {
+            this.caller = make(m.value, m.impersonating);
+          } catch (e) {
+            if (e instanceof BadAdminKeyError) return this.authError(e.message, false);
+            return this.fail({ fatal: (e as Error).message });
+          }
+          this.expiresAt = undefined; // admin identities do not expire (DV-163)
+        } else if (m.tokenType === "User") {
           let verified: VerifiedIdentity;
           try {
             verified = await this.hub.deps.verifyToken(m.value);

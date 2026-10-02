@@ -248,7 +248,10 @@ export function parseClientMessage(frame: string): ClientMessage {
           tokenType: "Admin",
           value: str(m.value, "value"),
           baseVersion,
-          ...(m.impersonating === undefined ? {} : { impersonating: m.impersonating as JSONValue }),
+          // Convex accepts `actingAs` too (crates/convex/sync_types json.rs).
+          ...((m.impersonating ?? m.actingAs) === undefined
+            ? {}
+            : { impersonating: (m.impersonating ?? m.actingAs) as JSONValue }),
         };
       throw new ProtocolError(`Invalid message: unknown tokenType ${JSON.stringify(m.tokenType)}`);
     }
