@@ -113,6 +113,9 @@ function VisitorsTile({ r }: { r: AnalyticsRealtime }) {
 }
 
 function Feed({ r }: { r: AnalyticsRealtime }) {
+  // on a phone the feed comes last, five items until asked for more (UX2-27)
+  const [more, setMore] = useState(false);
+  const items = r.recent.slice(0, 12);
   return (
     <section aria-label="Live events" className="flex h-full min-h-0 flex-col border bg-background/95 backdrop-blur-sm">
       <h2 className="border-b px-4 py-2 text-xs text-muted-foreground">Live events</h2>
@@ -122,8 +125,8 @@ function Feed({ r }: { r: AnalyticsRealtime }) {
         aria-label="Newest events"
         className="min-h-0 flex-1 divide-y overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
-        {r.recent.slice(0, 12).map((e) => (
-          <li key={e.id} className="px-4 py-2">
+        {items.map((e, i) => (
+          <li key={e.id} className={cn("px-4 py-2", i >= 5 && !more && "max-md:hidden")}>
             <p className="truncate font-mono text-xs">{e.name === "page_view" ? e.path : e.name}</p>
             <p className="truncate text-xs text-muted-foreground">
               {ago(r.time, e.time)} · {e.city ?? e.country} · {e.browser}, {e.device}
@@ -131,13 +134,22 @@ function Feed({ r }: { r: AnalyticsRealtime }) {
           </li>
         ))}
       </ol>
+      {items.length > 5 && !more && (
+        <button
+          type="button"
+          className="border-t px-4 py-2 text-left text-xs text-muted-foreground hover:text-foreground md:hidden"
+          onClick={() => setMore(true)}
+        >
+          Show {items.length - 5} more
+        </button>
+      )}
     </section>
   );
 }
 
 function MapArea({ r }: { r: AnalyticsRealtime }) {
   return (
-    <div className="relative min-h-80 min-w-0 flex-1 bg-muted/40">
+    <div className="relative min-h-80 min-w-0 flex-1 bg-muted/40 max-md:order-2 max-md:h-[260px] max-md:min-h-0 max-md:flex-none">
       {canDrawMap() ? (
         <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Loading the map…</p>}>
           <WorldMap live={r.live} />
@@ -168,18 +180,21 @@ export function RealtimePage({ heading }: { heading: ReactNode }) {
       ) : !r ? (
         <p className="p-6 text-sm text-muted-foreground">Loading…</p>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {/* the visitors and the live feed beside the map (above it on a phone) */}
-          <div className="flex border-b max-md:flex-col md:h-[min(62svh,580px)]">
-            <div className="flex min-h-0 shrink-0 flex-col gap-3 p-3 md:w-80 md:border-r">
-              <VisitorsTile r={r} />
-              <div className="min-h-0 flex-1 max-md:max-h-72">
+        <div className="min-h-0 flex-1 overflow-y-auto max-md:flex max-md:flex-col">
+          {/* the visitors and the live feed beside the map; on a phone (UX2-27): the visitors, the map, the
+              breakdowns, then the feed — the map no longer below the fold */}
+          <div className="flex border-b max-md:contents md:h-[min(62svh,580px)]">
+            <div className="flex min-h-0 shrink-0 flex-col gap-3 p-3 max-md:contents md:w-80 md:border-r">
+              <div className="max-md:order-1 max-md:p-3">
+                <VisitorsTile r={r} />
+              </div>
+              <div className="min-h-0 flex-1 max-md:order-4 max-md:p-3">
                 <Feed r={r} />
               </div>
             </div>
             <MapArea r={r} />
           </div>
-          <div className="grid gap-3 p-3 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="grid gap-3 p-3 max-md:order-3 md:grid-cols-2 2xl:grid-cols-4">
             <Breakdown title="Pages" column="Path" rows={r.pages} />
             <Breakdown title="Referrers" column="Referrer" rows={r.referrers} />
             <Breakdown title="Countries" column="Country" rows={r.countries} />

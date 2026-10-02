@@ -125,6 +125,19 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("the main nav is pinned to the viewport: a long page never shows where it ends (UX2-1)", async () => {
+    const { page, close } = await open("/settings/snapshots", { viewport: { width: 1400, height: 600 } });
+    await page.getByRole("heading", { level: 1, name: "Snapshots" }).waitFor();
+    await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(200);
+    const nav = await page.getByRole("navigation", { name: "Dashboard" }).evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), position: getComputedStyle(el).position };
+    });
+    expect(nav).toEqual({ top: 0, bottom: 600, position: "sticky" });
+    await close();
+  });
+
   test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
@@ -138,7 +151,9 @@ describe("the dashboard in a browser", () => {
     // after; 583 kB on main on 1 Oct 2026 as screens grew, ~600 kB with the Overview (UI-01 §27: its own
     // ~17 kB; its charts and engine counters are lazy, the charts mounted when scrolled to) and the extension
     // registry's declarations in the shell (Analytics, Feature flags, Workflows: titles, icons, routes — the
-    // screens stay lazy). The guard keeps headroom: a screen imported eagerly again adds far more than that.
+    // screens stay lazy); ~641 kB on 2 Oct 2026 with UX review 2 (shared code the Vite split moved into the
+    // entry, no screen in it), so the guard went from 640 to 660 kB (the owner's call). It keeps headroom: a
+    // screen imported eagerly again adds far more than that.
     const { page, close } = await open("/");
     await heading(page, "Overview");
     const kb = await page.evaluate(
@@ -148,7 +163,7 @@ describe("the dashboard in a browser", () => {
           .filter((e) => e.name.endsWith(".js"))
           .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
     );
-    expect(kb).toBeLessThan(640);
+    expect(kb).toBeLessThan(660);
     await close();
   });
 

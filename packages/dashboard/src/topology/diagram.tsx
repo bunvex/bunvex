@@ -69,7 +69,7 @@ type ClientsData = { node: string; connections: number };
 type ServerData = { node: TopologyNode; topology: Topology; opened: boolean };
 type StoreData = { store: TopologyStore };
 
-const CARD = "w-[220px] border bg-card text-card-foreground text-[11px] leading-4 transition-opacity";
+const CARD = "w-[220px] border bg-card text-card-foreground text-xs leading-4 transition-opacity";
 const HANDLE = "!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-border";
 const MUTED = "text-muted-foreground";
 
@@ -281,7 +281,7 @@ function FlowEdge(props: EdgeProps<Edge<FlowData, "flow">>) {
         <EdgeLabelRenderer>
           <div
             className={cn(
-              "nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 border bg-background px-1 font-mono text-[10px] leading-4 text-muted-foreground tabular-nums transition-opacity",
+              "nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 border bg-background px-1 font-mono text-[11px] leading-4 text-muted-foreground tabular-nums transition-opacity",
               d.tone === "warning" && "border-warning text-foreground",
               d.tone === "critical" && "border-destructive text-destructive",
               faded && "opacity-20",
@@ -436,7 +436,7 @@ function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpe
   const shape = t.nodes.map((n) => `${n.id}:${n.role}`).join(",");
   const duration = reduced ? 0 : 200;
   const frame = () => {
-    // never past 100 %: one node would otherwise fill the canvas with oversized cards
+    // never past 100 % (the owner found bigger cards too big, 1 Oct 2026); the cards' own text is 12 px (UX2-14)
     if (mode === "wide") return void flow.fitView({ padding: 0.1, maxZoom: 1, duration });
     // a phone: the column fills the width at a readable zoom, its top in view; the reader pans down
     const w = box.current?.clientWidth ?? 360;

@@ -178,6 +178,8 @@ export function LogsView(props: {
             lines={rows}
             onOpen={(row) => (row.event ? props.onOpenEvent?.(row.event) : setOpen(row))}
             onMove={open ? (row) => row.event || setOpen(row) : undefined}
+            narrow={!!open}
+            hideFunction={!props.functions}
             onEndReached={logs.loadOlder}
             empty={
               logs.pending
