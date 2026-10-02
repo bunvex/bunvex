@@ -279,6 +279,16 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
 
+STUDY-42 (snapshot export and import), awaiting the owner:
+
+| ID | bunvex | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-210 | Export has only the root; a ZIP with `_components/…` is refused on import | creates the components | yes (components only) | accept until components | [STUDY-42 X1](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-211 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-212 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-213 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-214 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one | both | old Convex exports only | later if needed | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not
