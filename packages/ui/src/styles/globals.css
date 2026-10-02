@@ -56,6 +56,13 @@
   --series-p90: #5598e7;
   --series-p95: #256abf;
   --series-p99: #104281;
+  /* a heatmap's five steps (UI-01 §18.4): one hue, faint → dark; validated as an ordinal ramp on the
+     light surface (monotone, adjacent ΔL ≥ 0.06, the faintest 2.06:1) */
+  --heat-1: #86b6ef;
+  --heat-2: #5598e7;
+  --heat-3: #2a78d6;
+  --heat-4: #1c5cab;
+  --heat-5: #104281;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -108,6 +115,12 @@
   --series-p90: #256abf;
   --series-p95: #5598e7;
   --series-p99: #b7d3f6;
+  /* dark: the ramp flips, near the surface → bright (the faintest 2.10:1 on the dark surface) */
+  --heat-1: #184f95;
+  --heat-2: #256abf;
+  --heat-3: #3987e5;
+  --heat-4: #6da7ec;
+  --heat-5: #b7d3f6;
   --sidebar: oklch(0.19 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.74 0.12 250);

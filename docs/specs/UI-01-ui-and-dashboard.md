@@ -1399,6 +1399,18 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
   same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
 
+### 18.4 The rate cards' heatmap (2 Oct 2026, STUDY-12 M2, M5)
+
+- **Failure rate** and **Cache hit rate** get a "Line chart / Heatmap" switch, as Convex's `FailureRate.tsx` /
+  `CacheHitRate.tsx`: failure rate opens as a chart, cache hit rate as a heatmap; the choice is kept in this
+  browser (`bunvex:health-<measure>-view`). Same data as the chart (`topFunctions`), no new contract.
+- **`Heatmap`** (`@bunvex/ui/components/heatmap`): a row per function, worst first by its average (failures
+  high, cache hits low; rows with no value last, "Other functions" among them), a cell per bucket. Five steps of
+  one blue (`--heat-1…5`, light and dark; validated as an ordinal ramp in both themes), the darker the worse; an
+  empty bucket is a dashed, unfilled cell, never zero. It is a real table — row headers, time column headers,
+  each cell's value in text — and the hovered cell is said in a line under it; a legend names both ends and
+  "no data".
+
 ## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
 
 ### 19.1 Settings → Authentication (STUDY-12 §13.1)
@@ -1963,7 +1975,14 @@ components may bring screens of their own. Such a screen is an **extension**: on
   entry never holds MapLibre (e2e). The map chunk is about 1.16 MB (≈ 320 kB gzip), MapLibre's worker a
   separate file.
 - **Not yet** (server work): the client `track()` helper and automatic page views, the server-side GeoIP
-  lookup that places a session, retention of analytics events, and a custom tile style setting.
+  lookup that places a session, and retention of analytics events.
+- **Map style** (2 Oct 2026): **Settings → Map style** (`settings-page.tsx`, `map-style.ts`) — the extension
+  adds the page through the registry's `settings` entries, listed under an "Extensions" group of the Settings
+  column only when the deployment offers Analytics. A MapLibre style URL (https, or http on localhost) is
+  fetched once and checked (version 8, `sources`, `layers`), with a warning that each viewer's browser then
+  contacts that provider and the map no longer works offline; "Use the built-in basemap" goes back. Kept in this
+  browser per deployment (`bunvex:analytics-map-style:<scope>`); the Realtime map uses it, else the bundled
+  countries.
 
 ### 26.3 Workflows and work pools (an extension; STUDY-12 §18)
 
