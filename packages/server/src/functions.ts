@@ -7,12 +7,14 @@ import {
   type Caller,
   checkEnvVarName,
   type Engine,
+  failExecution,
   newUserTimer,
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
   stringifyValue,
   type Tx,
+  type UserTimer,
   withUserTimer,
 } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
@@ -38,7 +40,7 @@ import {
   OperationNotPermittedError,
 } from "./admin-keys.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-import { FunctionPathError } from "./errors.ts";
+import { describeUncaught, FunctionPathError, isSystemError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import type {
   ActionBuilder,
@@ -82,12 +84,14 @@ export type NestedOptions = {
 };
 
 /**
- * A nested call's error as its caller sees it (Convex's `performAsyncSyscall`): a new `Error` with the
- * message, or a `BunvexError` with the data (STUDY-41 N2: without Convex's appended stack text).
+ * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a
+ * `BunvexError` with the data; else a new `Error` whose message is the nested `JsError`'s display — the
+ * uncaught line and the nested stack frames (STUDY-41 N2), or for a timeout its message alone.
  */
-function toCallerError(e: unknown): Error {
+function toCallerError(e: unknown, timer: UserTimer): Error {
   if (isBunvexError(e)) return new BunvexError(e.data);
-  return new Error(e instanceof Error ? e.message : String(e));
+  if (e === timer.failed) return new Error(`${(e as Error).message}\n`);
+  return new Error(describeUncaught(e).message);
 }
 
 /** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
@@ -521,37 +525,56 @@ export class Functions {
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
     if (opts?.useStaleSnapshot) {
       const caller: Caller = { identity: db.identity, key: "" };
-      const value = await this.engine.query(
-        (stale) => {
-          stale.identity = db.identity;
-          return this.withLimits(stale, opts.transactionLimits, () =>
-            withUserTimer(this.newTimer(), () => this.invoke(f, stale, a, depth + 1)),
-          );
-        },
-        undefined,
-        undefined,
-        caller,
-        db.snapshot,
-      );
+      const timer = this.newTimer();
+      let value: unknown;
+      try {
+        value = await this.engine.query(
+          (stale) => {
+            stale.identity = db.identity;
+            return this.withLimits(stale, opts.transactionLimits, () =>
+              withUserTimer(timer, () => this.invoke(f, stale, a, depth + 1)),
+            );
+          },
+          undefined,
+          undefined,
+          caller,
+          db.snapshot,
+        );
+      } catch (e) {
+        throw this.nestedError(e, timer);
+      }
       return this.checkReturns(f, value);
     }
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
+    const timer = this.newTimer();
     try {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
-        withUserTimer(this.newTimer(), () => this.invoke(f, db, a, depth + 1)),
+        withUserTimer(timer, () => this.invoke(f, db, a, depth + 1)),
       );
     } catch (e) {
       if (sp) db.rollback(sp);
-      throw toCallerError(e);
+      throw this.nestedError(e, timer);
     }
     return this.checkReturns(f, value);
   }
 
   /**
+   * What a nested call's failure becomes for its caller: a system error (the store failed) cannot be caught —
+   * the whole request fails (STUDY-41 N6); anything else is the caller's catchable error (N2).
+   */
+  private nestedError(e: unknown, timer: UserTimer): unknown {
+    if (isSystemError(e)) {
+      failExecution(e as Error);
+      return e;
+    }
+    return toCallerError(e, timer);
+  }
+
+  /**
    * Run `fn` with `db`'s limits lowered by `budget` (Convex's `TransactionLimits::from_budget`: each limit
-   * becomes the usage so far plus the budget, never above the current one), restored after. Only the limits
-   * bunvex counts apply (STUDY-41 N3).
+   * becomes the usage so far plus the budget, never above the current one), restored after. The file limits
+   * are accepted and ignored: Convex never counts file reads or writes in a transaction either.
    */
   private async withLimits<T>(db: Tx, budget: NestedOptions["transactionLimits"], fn: () => T): Promise<Awaited<T>> {
     if (!budget) return await fn();
@@ -564,6 +587,9 @@ export class Functions {
       bytesRead: lower("bytesRead", budget.bytesRead),
       documentsWritten: lower("documentsWritten", budget.documentsWritten),
       bytesWritten: lower("bytesWritten", budget.bytesWritten),
+      databaseQueries: lower("databaseQueries", budget.databaseQueries),
+      functionsScheduled: lower("functionsScheduled", budget.functionsScheduled),
+      scheduledFunctionArgsBytes: lower("scheduledFunctionArgsBytes", budget.scheduledFunctionArgsBytes),
     };
     try {
       return await fn();

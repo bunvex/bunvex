@@ -73,6 +73,15 @@ export function checkUserTime() {
   if (t.failed) throw t.failed;
 }
 
+/**
+ * Fail the running function for good (a nested call's system error, STUDY-41 N6): the error is thrown at its
+ * next store call and when it ends, even if it was caught, as Convex's non-catchable system errors.
+ */
+export function failExecution(e: Error) {
+  const t = executions.getStore()?.timer;
+  if (t && !t.failed) t.failed = e;
+}
+
 /** Run `fn` with the running function's clock paused (a nested call: it has its own budget). */
 export async function pausingUserTime<T>(fn: () => Promise<T>): Promise<T> {
   const t = executions.getStore()?.timer;

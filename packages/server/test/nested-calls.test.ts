@@ -2,10 +2,15 @@
 // one transaction (the caller's writes, time and read set), a nested mutation rolled back when it throws,
 // checks and the depth limit with Convex's messages, `useStaleSnapshot`, `transactionLimits`.
 import { expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { CommitterStoppedError, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { BunvexError, v } from "@bunvex/values";
 import { Functions, internalMutation, internalQuery, mutation, query } from "../src/functions.ts";
+
+/** A named function, so its frame shows in the nested error. */
+async function throwsBoom(): Promise<never> {
+  throw new Error("boom");
+}
 
 async function setup() {
   const engine = await new Engine(
@@ -115,6 +120,63 @@ async function setup() {
       await db.insert("items", { n: "kept" });
       await runMutation("m:newTableThenFail").catch(() => {});
     }),
+    /** A nested function whose error has a stack frame of its own. */
+    boom: internalQuery(async () => throwsBoom()),
+    catchesBoom: query(async ({ runQuery }) => {
+      try {
+        await runQuery("m:boom");
+      } catch (e) {
+        return (e as Error).message;
+      }
+    }),
+    /** Two reads in a nested call allowed one database query. */
+    twoReads: internalQuery(async ({ db }) => {
+      await db.query("items").collect();
+      await db.query("log").collect();
+      return "read";
+    }),
+    queriesLimited: query(async ({ db, runQuery }) => {
+      try {
+        await runQuery("m:twoReads", {}, { transactionLimits: { databaseQueries: 1 } });
+      } catch (e) {
+        // The caller's own limit is back: it can read more.
+        await db.query("items").collect();
+        await db.query("log").collect();
+        return (e as Error).message;
+      }
+    }),
+    scheduleTwo: internalMutation(async ({ scheduler }, { bytes }: { bytes?: boolean }) => {
+      await scheduler.runAfter(1000, "m:count", bytes ? { pad: "x".repeat(40) } : {});
+      await scheduler.runAfter(1000, "m:count", {});
+    }),
+    schedulingLimited: mutation(async ({ runMutation, scheduler }) => {
+      const out: string[] = [];
+      for (const limits of [{ functionsScheduled: 1 }, { scheduledFunctionArgsBytes: 30 }])
+        try {
+          await runMutation(
+            "m:scheduleTwo",
+            { bytes: "scheduledFunctionArgsBytes" in limits },
+            { transactionLimits: limits },
+          );
+        } catch (e) {
+          out.push((e as Error).message.split("\n")[0]!);
+        }
+      // Restored: the caller schedules as many as it likes.
+      await scheduler.runAfter(1000, "m:count", {});
+      await scheduler.runAfter(1000, "m:count", {});
+      return out;
+    }),
+    /** A store failure inside a nested call: the caller cannot catch it. */
+    storeFails: internalQuery(async () => {
+      throw new CommitterStoppedError(new Error("disk gone"));
+    }),
+    catchesStoreFailure: query(async ({ runQuery }) => {
+      try {
+        await runQuery("m:storeFails");
+      } catch {
+        return "caught";
+      }
+    }),
     addCount: internalMutation(async ({ db }) => {
       const n = (await db.query("items").collect()).length;
       await Bun.sleep(1);
@@ -179,7 +241,7 @@ test("transactionLimits lowers the nested call's limits; the caller's are restor
   const { engine, fns } = await setup();
   for (const n of ["a", "b", "c"]) await fns.runMutation("m:add", { n });
   expect(await fns.runQuery("m:limited", {})).toStartWith(
-    "Too many documents read in a single function execution (limit: 2).",
+    "Uncaught Error: Too many documents read in a single function execution (limit: 2).",
   );
   expect(await fns.runQuery("m:countVia", {})).toBe(3);
   await engine.close();
@@ -207,5 +269,33 @@ test("a rolled-back nested mutation leaves no table it created", async () => {
   await fns.runMutation("m:tryNewTable", {});
   expect(engine.catalog.tables.has("fresh")).toBe(false);
   expect(await fns.runQuery("m:names", {}, false)).toEqual(["kept"]);
+  await engine.close();
+});
+
+test("a nested error reaches the caller as Convex's JsError display: the uncaught line and the nested frames (N2)", async () => {
+  const { engine, fns } = await setup();
+  const message = (await fns.runQuery("m:catchesBoom", {})) as string;
+  expect(message).toStartWith("Uncaught Error: boom\n    at throwsBoom (");
+  expect(message).toEndWith("\n");
+  await engine.close();
+});
+
+test("transactionLimits budgets database queries, scheduled functions and their argument bytes (N3)", async () => {
+  const { engine, fns } = await setup();
+  expect(await fns.runQuery("m:queriesLimited", {})).toStartWith(
+    "Uncaught Error: Too many reads in a single function execution (limit: 1).",
+  );
+  expect(await fns.runMutation("m:schedulingLimited", {})).toEqual([
+    "Uncaught Error: Too many functions scheduled by this mutation (limit: 1)",
+    // 30 on top of the 4 bytes the first, rolled-back call scheduled: as Convex, a rollback does not give
+    // back scheduling usage (`scheduled_size` is not part of a subtransaction).
+    "Uncaught Error: Too large total size of the arguments of scheduled functions from this mutation (limit: 34 bytes)",
+  ]);
+  await engine.close();
+});
+
+test("a store failure inside a nested call cannot be caught: the whole call fails (N6)", async () => {
+  const { engine, fns } = await setup();
+  await expect(fns.runQuery("m:catchesStoreFailure", {})).rejects.toBeInstanceOf(CommitterStoppedError);
   await engine.close();
 });
