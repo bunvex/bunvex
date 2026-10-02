@@ -11,7 +11,14 @@ import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
 import type { Io } from "./io.ts";
-import { NO_DEPLOYMENT, resolveTarget, TARGET_OPTIONS, type TargetFlags, takeTargetFlags } from "./target.ts";
+import {
+  NO_DEPLOYMENT,
+  resolveTarget,
+  TARGET_OPTIONS,
+  type Target,
+  type TargetFlags,
+  takeTargetFlags,
+} from "./target.ts";
 
 export { parseEnvFile } from "./target.ts";
 
@@ -119,6 +126,15 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     io.err(`bunvex deploy: ${NO_DEPLOYMENT}`);
     return 1;
   }
+  return (await deploy(target, flags, io)).code;
+}
+
+export type DeployOptions = { dryRun: boolean; codegen: boolean; typecheck: TypecheckMode };
+/** The exit code, and whether a failure is worth retrying (`bunvex dev`'s backoff). */
+export type DeployResult = { code: number; transient?: boolean };
+
+/** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
+export async function deploy(target: Target, flags: DeployOptions, io: Io): Promise<DeployResult> {
   const { url, adminKey } = target;
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
   let dir: string;
@@ -131,7 +147,7 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     bundled = await bundleFunctions(dir);
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
-    return 1;
+    return { code: 1 };
   }
   const post = async (path: string, body: object) => {
     let r: Response;
@@ -181,7 +197,7 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     if (!checked.ok) {
       io.err(checked.output);
       io.err("To ignore failing typecheck, use `--typecheck=disable`.");
-      return 1;
+      return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
     if (flags.dryRun) {
@@ -191,18 +207,18 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
       io.out(
         `Dry run: ${bundled.modules.length} modules, ${fns.reduce((n, m) => n + m.functions.length, 0)} functions; nothing was changed.`,
       );
-      return 0;
+      return { code: 0 };
     }
     for (;;) {
       const s = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 10_000 });
       if (s.type === "complete") break;
       if (s.type === "failed") {
         io.err(`Schema validation failed${s.tableName ? ` in table "${s.tableName}"` : ""}.\n${s.error}`);
-        return 1;
+        return { code: 1 };
       }
       if (s.type === "raceDetected") {
         io.err("Schema was overwritten by another push.");
-        return 1;
+        return { code: 1 };
       }
       const c = (s.components as Record<string, { indexesComplete: number; indexesTotal: number }>)[""];
       io.err(
@@ -228,9 +244,11 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
       for (const c of d.cronDiff.deleted) io.err(`  [-] cron ${c}`);
     }
     io.out(`✔ Deployed functions to ${url}`);
-    return 0;
+    return { code: 0 };
   } catch (e) {
-    io.err(`bunvex deploy: ${(e as Error).message}`);
-    return 1;
+    const message = (e as Error).message;
+    io.err(`bunvex deploy: ${message}`);
+    // As Convex's CLI: an unreachable deployment and a push race are worth retrying.
+    return { code: 1, transient: /^could not reach |changed during push|overwritten by another push/.test(message) };
   }
 }
