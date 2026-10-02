@@ -194,7 +194,7 @@ Key bunvex facts behind the statuses:
 | `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | missing | |
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
-| `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
+| `Id<T>` / `GenericId` branded string type | values/value.ts | done (STUDY-36) | `GenericId<T>` in `@bunvex/values`; `v.id(t)` infers it; `_generated/dataModel` names it `Id<T>` (codegen PR). |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
@@ -216,7 +216,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | `_id` on every document | server/system_fields.ts | done (#7) | A Convex-format id. |
 | `_creationTime` (float64 ms since epoch) | system_fields.ts; common/src/document.rs | done | |
-| Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | missing | |
+| Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | done (STUDY-36) | In `@bunvex/core` (`data-model.ts`); `Doc<T>` comes with `_generated/dataModel`. |
 | Top-level user fields can't start with `_` | crates/common/src/document.rs (validate) | missing | |
 | Field names: ≤1024 chars, non-control ASCII, no leading `$` | crates/convex/sync_types/src/identifier.rs; values/value.ts | done (#21) | `validateObjectField`, with the same messages. |
 | Documents must be objects | common/src/document.rs | partial | Implicit through the TS signature only. |
@@ -233,7 +233,7 @@ Key bunvex facts behind the statuses:
 | `.vectorIndex(name, { vectorField, dimensions, filterFields, staged })` | server/schema.ts | missing | |
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
 | `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
-| `strictTableNameTypes` option (type-level) | server/schema.ts | missing | |
+| `strictTableNameTypes` option (type-level) | server/schema.ts | done (STUDY-36) | `false` adds `AnyDataModel` to the data model: any other table name is allowed. |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | missing | |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | partial (#6) | Backfilled synchronously at startup, before serving; Convex backfills in the background (STUDY-04 D3). |
@@ -243,7 +243,7 @@ Key bunvex facts behind the statuses:
 | No two indexes with identical fields on a table | index_validation_error.rs | missing | |
 | ≤64 indexes per table (`MAX_INDEXES_PER_TABLE`) and ≤10,000 tables | common/src/schemas/mod.rs; database/src/bootstrap_model/table.rs | missing | |
 | Vector dimensions between 2 and 4096; ≤16 filter fields for search and vector indexes | common/src/bootstrap_model/index | missing | |
-| `DataModelFromSchemaDefinition` typed data model | server/schema.ts | missing | |
+| `DataModelFromSchemaDefinition` typed data model | server/schema.ts | done (STUDY-36) | Each table's document (system fields on every union branch; `v.any()` tables are `any`), field paths (nested object fields dotted, not into arrays or records) and indexes (`_creationTime` appended, plus `by_id` / `by_creation_time`); `defineTable` / `.index` / `defineSchema` keep their types. The typed database comes next. |
 
 ### 12. Auth (`ctx.auth`)
 

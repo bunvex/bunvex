@@ -5,6 +5,7 @@ export { BunvexError, isBunvexError } from "./errors.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
 export { valuesToKey } from "./sorting.ts";
 export {
+  type GenericId,
   type GenericValidator,
   type Infer,
   type ObjectType,

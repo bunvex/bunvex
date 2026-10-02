@@ -5,6 +5,12 @@ import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "./value.
 
 export type OptionalProperty = "required" | "optional";
 
+/**
+ * A document's id in a table, as Convex's `GenericId`: a string branded with its table name, so ids of
+ * different tables do not mix (STUDY-36). `_generated/dataModel` names it `Id<TableName>`.
+ */
+export type GenericId<TableName extends string> = string & { __tableName: TableName };
+
 export type ValidatorJSON =
   | { type: "null" | "number" | "bigint" | "boolean" | "string" | "bytes" | "any" }
   | { type: "id"; tableName: string }
@@ -307,8 +313,7 @@ type Required<V extends GenericValidator> = V extends { isOptional: "optional" }
 
 /** The validator builders. */
 export const v = {
-  id: <TableName extends string>(tableName: TableName) =>
-    new VId<string & { __tableName: TableName }>("required", tableName),
+  id: <TableName extends string>(tableName: TableName) => new VId<GenericId<TableName>>("required", tableName),
   null: () => new VNull("required"),
   number: () => new VFloat64("required"),
   float64: () => new VFloat64("required"),
