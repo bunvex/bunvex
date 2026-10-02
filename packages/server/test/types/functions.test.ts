@@ -6,15 +6,20 @@ import { type DataModelFromSchemaDefinition, defineSchema, defineTable, Engine }
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { anyApi, type FunctionReference } from "@bunvex/protocol";
 import { type GenericId, v } from "@bunvex/values";
-import type { ApiFromModules, FilterApi } from "../../src/api-types.ts";
+// From the package's index, as `_generated/` imports them.
 import {
+  type ActionBuilder,
+  type ApiFromModules,
   actionGeneric,
+  type FilterApi,
   Functions,
+  type GenericQueryCtx,
   internalMutationGeneric,
+  type MutationBuilder,
   mutationGeneric,
+  type QueryBuilder,
   queryGeneric,
-} from "../../src/functions.ts";
-import type { ActionBuilder, GenericQueryCtx, MutationBuilder, QueryBuilder } from "../../src/registration.ts";
+} from "../../src/index.ts";
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const check = <T extends true>(_: T) => {};

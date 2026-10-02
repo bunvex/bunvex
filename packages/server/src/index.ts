@@ -90,6 +90,20 @@ export {
 } from "./functions.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
+export type {
+  ActionBuilder,
+  ArgsArray,
+  ArgsArrayToObject,
+  GenericActionCtx,
+  GenericMutationCtx,
+  GenericQueryCtx,
+  HttpActionBuilder,
+  MutationBuilder,
+  QueryBuilder,
+  RegisteredAction,
+  RegisteredMutation,
+  RegisteredQuery,
+} from "./registration.ts";
 export {
   type HttpActionCtx,
   type HttpActionHandler,
