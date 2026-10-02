@@ -944,6 +944,6 @@ an injected data source):
 | ID | Difference | Why | Status |
 |---|---|---|---|
 | LG1 | **Use the demo data** on the sign-in page: the screens on the mock, kept for the tab (`sessionStorage`), "Leave the demo" in the header | a bunvex addition: explore the dashboard without a deployment; it is also how development and the e2e tests open it (`?demo=1`) | addition, as the owner asked (2 Oct 2026) |
-| LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | pending (DV-204) |
+| LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | pending (DV-210) |
 | LG3 | Embedded credentials accepted from any origin, as Convex | match Convex; an allow-list of parent origins would be safer | matches Convex (no divergence); a question for the owner in the PR |
 | LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |

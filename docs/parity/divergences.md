@@ -270,7 +270,7 @@ DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |
 |---|---|---|---|---|---|---|
-| DV-204 | Dashboard sign-in: the admin key is never written to storage | written to `sessionStorage`, but not used to sign in again on reload | no (dashboard) | same observable behaviour; no secret in storage | accept | [STUDY-12 LG2](../study/STUDY-12-dashboard.md#194-divergences-and-additions) |
+| DV-210 | Dashboard sign-in: the admin key is never written to storage | written to `sessionStorage`, but not used to sign in again on reload | no (dashboard) | same observable behaviour; no secret in storage | accept | [STUDY-12 LG2](../study/STUDY-12-dashboard.md#194-divergences-and-additions) |
 
 ## Gaps recorded in studies
 
