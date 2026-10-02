@@ -19,7 +19,7 @@ import {
   useNodesState,
   useReactFlow,
 } from "@xyflow/react";
-import { Link2, ListTree, RotateCcw, Table2 } from "lucide-react";
+import { GripVertical, Link2, ListTree, Pencil, RotateCcw, Table2 } from "lucide-react";
 import {
   createContext,
   type ReactNode,
@@ -39,12 +39,13 @@ import { type Cluster, computeClusters } from "./clusters.ts";
 import type { SchemaGraph, SchemaNode } from "./graph.ts";
 import { CLUSTER_TOP, computeLayout, type Layout, MAX_INDEXES, MAX_ROWS, userIndexes } from "./layout.ts";
 import { TablePanel } from "./panel.tsx";
+import { readSavedLayout, type SavedLayout, savedPosition, writeSavedLayout } from "./saved-layout.ts";
 
 type TableData = { node: SchemaNode; dimmed: boolean; linked: boolean; flash: boolean };
 
 /** Go to a referenced table: what a card's `Id<"t">` type does (set by the diagram). */
 const GoToContext = createContext<(table: string) => void>(() => {});
-type GroupData = { label: string; count: number };
+type GroupData = { label: string; count: number; onRename: (name: string) => void };
 type FlowNode = Node<TableData, "table"> | Node<GroupData, "cluster">;
 
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -154,11 +155,61 @@ function TableNodeView({ data, selected }: NodeProps<Node<TableData, "table">>) 
   );
 }
 
+/** A group's box: its header drags the whole group (`dragHandle`), and its name can be changed in place. */
 function GroupView({ data }: NodeProps<Node<GroupData, "cluster">>) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(data.label);
+  useEffect(() => setName(data.label), [data.label]);
+  // a browser may blur the box as it goes away: only the first way out counts (Escape must not save)
+  const closed = useRef(false);
+  const done = (save: boolean) => {
+    if (closed.current) return;
+    closed.current = true;
+    if (save) data.onRename(name.trim());
+    setEditing(false);
+  };
+  const open = () => {
+    closed.current = false;
+    setEditing(true);
+  };
   return (
     <div className="pointer-events-none size-full border border-dashed border-muted-foreground/40 bg-muted/30">
-      <div className="px-3 text-xs font-medium text-muted-foreground" style={{ lineHeight: `${CLUSTER_TOP}px` }}>
-        {data.label} <span className="tabular-nums">· {data.count} tables</span>
+      <div
+        className="schema-group-handle pointer-events-auto flex cursor-grab items-center gap-1 px-2 text-xs font-medium text-muted-foreground active:cursor-grabbing"
+        style={{ height: CLUSTER_TOP }}
+      >
+        <GripVertical aria-hidden="true" className="size-3.5 shrink-0" />
+        {editing ? (
+          <Input
+            // nodrag: typing and selecting text in the box must not drag the group
+            className="nodrag h-6 w-40 text-xs"
+            aria-label={`Name of the group ${data.label}`}
+            // biome-ignore lint/a11y/noAutofocus: the box opens on the reader's request, to type in
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") done(true);
+              if (e.key === "Escape") done(false);
+            }}
+            onBlur={() => done(true)}
+          />
+        ) : (
+          <>
+            <span className="truncate">{data.label}</span>
+            <span className="shrink-0 tabular-nums">· {data.count} tables</span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="nodrag ml-1"
+              aria-label={`Rename the group ${data.label}`}
+              onClick={open}
+            >
+              <Pencil aria-hidden="true" />
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -199,7 +250,7 @@ function readGroups(scope: string): boolean {
   }
 }
 
-function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode }) {
+function Diagram({ graph, heading, status }: { graph: SchemaGraph; heading: ReactNode; status?: ReactNode }) {
   const { scope } = useQueryScope();
   const search$ = schemaRoute.useSearch();
   const navigate = schemaRoute.useNavigate();
@@ -211,7 +262,29 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   const flow = useReactFlow();
   const dark = useDark();
   const [grouped, setGrouped] = useState(() => readGroups(scope));
-  const clusters = useMemo(() => (grouped ? computeClusters(graph) : []), [graph, grouped]);
+  // names and dragged positions kept in this browser (SC1); applied over the computed layout
+  const [saved, setSaved] = useState<SavedLayout>(() => readSavedLayout(scope));
+  const save = useCallback(
+    (next: SavedLayout) => {
+      setSaved(next);
+      writeSavedLayout(scope, next);
+    },
+    [scope],
+  );
+  const rename = useCallback(
+    (id: string, name: string) => {
+      const names = { ...saved.names };
+      if (name) names[id] = name;
+      else delete names[id]; // an empty name gives the group its own back
+      save({ ...saved, names });
+    },
+    [saved, save],
+  );
+  const computed = useMemo(() => (grouped ? computeClusters(graph) : []), [graph, grouped]);
+  const clusters = useMemo(
+    () => computed.map((c) => ({ ...c, label: saved.names[c.id] ?? c.label })),
+    [computed, saved.names],
+  );
   const [layout, setLayout] = useState<Layout>();
   const [query, setQuery] = useState("");
   /** A table lit a moment after going to it. */
@@ -228,7 +301,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   useEffect(() => {
     let live = true;
     setLaying(true);
-    void computeLayout(graph, clusters).then((l) => {
+    void computeLayout(graph, computed).then((l) => {
       if (!live) return;
       setLayout(l);
       setLaying(false);
@@ -236,7 +309,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
     return () => {
       live = false;
     };
-  }, [graph, clusters, generation]);
+  }, [graph, computed, generation]);
 
   const linked = useMemo(() => {
     const s = new Set<string>();
@@ -251,16 +324,18 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   useEffect(() => {
     if (!layout) return;
+    const parentOf = new Map(clusters.flatMap((c) => c.tables.map((t) => [t, c.id] as const)));
     const groups: FlowNode[] = clusters.map((c) => {
       const b = layout.clusters[c.id]!;
       return {
         id: c.id,
         type: "cluster",
-        position: { x: b.x, y: b.y },
+        position: savedPosition(saved, c.id, null) ?? { x: b.x, y: b.y },
         width: b.width,
         height: b.height,
-        data: { label: c.label, count: c.tables.length },
-        draggable: false,
+        data: { label: c.label, count: c.tables.length, onRename: (name) => rename(c.id, name) },
+        // the header drags the whole group: its tables are its children and move with it
+        dragHandle: ".schema-group-handle",
         selectable: false,
         focusable: false,
         zIndex: -1,
@@ -268,11 +343,16 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
     });
     const tables: FlowNode[] = graph.nodes.map((n) => {
       const b = layout.nodes[n.table]!;
+      const parent = parentOf.get(n.table) ?? null;
+      const box = parent ? layout.clusters[parent]! : undefined;
+      // inside a group, a table's position is relative to the group's box
+      const computedPos = box ? { x: b.x - box.x, y: b.y - box.y } : { x: b.x, y: b.y };
       const refs = graph.edges.filter((e) => e.source === n.table).map((e) => e.target);
       return {
         id: n.table,
         type: "table",
-        position: { x: b.x, y: b.y },
+        ...(parent && { parentId: parent }),
+        position: savedPosition(saved, n.table, parent) ?? computedPos,
         width: b.width,
         height: b.height,
         data: { node: n, dimmed: false, linked: false, flash: false },
@@ -280,7 +360,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
       };
     });
     setNodes([...groups, ...tables]);
-  }, [layout, graph, clusters, setNodes]);
+  }, [layout, graph, clusters, saved, rename, setNodes]);
 
   // dimming and selection follow the search and the URL without moving anything
   const shown = useMemo(
@@ -366,6 +446,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
           <span role="status" className="text-sm text-muted-foreground">
             {laying ? "Laying out…" : ""}
           </span>
+          {status}
           <div className="relative ml-auto w-full sm:w-72">
             <label htmlFor={searchId} className="sr-only">
               Search groups, tables, fields and indexes
@@ -436,6 +517,12 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
               edges={edges}
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
+              onNodeDragStop={(_, __, dragged) => {
+                const positions = { ...saved.positions };
+                for (const n of dragged)
+                  positions[n.id] = { x: n.position.x, y: n.position.y, parent: n.parentId ?? null };
+                save({ ...saved, positions });
+              }}
               onNodeClick={(_, n) => n.type === "table" && select(n.id)}
               onPaneClick={() => selected && select(undefined)}
               colorMode={dark ? "dark" : "light"}
@@ -474,7 +561,11 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Reset layout"
-                  onClick={() => setGeneration((g) => g + 1)}
+                  onClick={() => {
+                    // forgets where tables and groups were dragged; names stay
+                    save({ ...saved, positions: {} });
+                    setGeneration((g) => g + 1);
+                  }}
                 >
                   <RotateCcw aria-hidden="true" />
                 </Button>
@@ -510,7 +601,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   );
 }
 
-export function SchemaDiagram(props: { graph: SchemaGraph; heading: ReactNode }) {
+export function SchemaDiagram(props: { graph: SchemaGraph; heading: ReactNode; status?: ReactNode }) {
   return (
     <ReactFlowProvider>
       <Diagram {...props} />

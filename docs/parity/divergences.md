@@ -180,6 +180,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-207 | Concurrent nested calls serialized | serialized | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N4](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-208 | The 1 s limit is cooperative (checked at database calls and the end); a synchronous infinite loop is not interrupted | V8 terminates the isolate | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N5](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-209 | Store errors in a nested call propagate as they are | upgraded to a non-catchable internal error | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-211 | Dashboard: a failed schema validation says how many stored documents do not match and lists a few, each opening in Database | the push fails with the first document that does not match | no (dashboard) | Seeing the scale and the documents helps fix the data | owner, 2026-10-02 (follow-up SC3) | [STUDY-12 SC4](../study/STUDY-12-dashboard.md#144-divergences) |
 
 ## Resolved to match Convex
 

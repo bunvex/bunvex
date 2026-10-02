@@ -13,6 +13,7 @@ import { useQueryScope } from "../context.tsx";
 import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { TableMetrics } from "../metrics/table-metrics.tsx";
+import { SchemaValidationStatus } from "../schema/validation.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -177,6 +178,11 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
           <>{info.name} has a declared type, but documents are not validated against it.</>
         )}
       </p>
+      {schema.validation && (
+        <div className="mt-3">
+          <SchemaValidationStatus validation={schema.validation} />
+        </div>
+      )}
       {saved ? (
         <SavedSchema code={saved} table={info.name} />
       ) : (
