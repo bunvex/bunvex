@@ -17,6 +17,8 @@ import {
   removeTypePrefix,
   splitActingAs,
 } from "./admin-keys.ts";
+import { loadLatestCodeVersion, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
+import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
@@ -104,6 +106,14 @@ export type ServerOptions = {
    * the environment as Convex's image chooses — S3 when `S3_STORAGE_FILES_BUCKET` is set, else `STORAGE_DIR`,
    * else `<DATA>/storage`.
    */
+  /**
+   * A deployable server (STUDY-35): its functions are the deployed code — the latest version in the store,
+   * loaded on start (`codeReady`), replaced by every push. Default false: an embedded server, whose
+   * functions are registered in process (DV-167).
+   */
+  deployable?: boolean;
+  /** Where pushed code packages are kept (default: the `modules` use case of the blob store, STUDY-35). */
+  moduleStorage?: BlobStore;
   fileStorage?: BlobStore | null;
   /**
    * The public origins (F2): the API's, which file URLs start with (Convex's `CONVEX_CLOUD_ORIGIN`), and the
@@ -217,13 +227,15 @@ export function createServer(opts: ServerOptions) {
     }
   };
   const router = opts.http === undefined ? undefined : checkRouter(opts.http);
-  const serveHttpAction = httpActionServer({
+  /** What HTTP actions are served from; a code version replaces its router (STUDY-35). */
+  const httpOptions = {
     functions,
     router,
     identify: identifyHttpAction,
     redact,
     headTimeoutMs: opts.httpActionHeadTimeoutMs,
-  });
+  };
+  const serveHttpAction = httpActionServer(httpOptions);
 
   /** A failed function run, for a client: the message (without its request id) and the app's data. */
   const formatError = (e: unknown): { error: string; data?: string } => {
@@ -301,7 +313,7 @@ export function createServer(opts: ServerOptions) {
     ...(splay === undefined || splay === "" ? {} : { cronSplaySeconds: Number(splay) }),
   });
   /** Resolves once the crons are registered (the diff with what was stored). */
-  const cronsReady = cronExecutor.start();
+  const cronsReady = cronExecutor.start(!opts.deployable);
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
@@ -535,7 +547,61 @@ export function createServer(opts: ServerOptions) {
             return serveHttpAction(req, url.pathname, url.search);
           },
         });
+  /**
+   * Make a code version live (STUDY-35): its functions replace every function at once, its router the
+   * HTTP actions', its crons the stored ones (the same diff as at start); then every subscription to a
+   * changed module runs again. Requests already running finish on the code they started with.
+   */
+  /** Pushed code packages: their own use case of the blob store, apart from user files (STUDY-35). */
+  const modulesStore =
+    opts.moduleStorage ??
+    blobStoreFromEnv(process.env, {
+      useCase: "modules",
+      s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+    });
+  /**
+   * Deploy a push's modules (STUDY-35): load and analyze them (nothing changes if that fails), store the
+   * package, commit the module rows, then make the version live. Unused packages are deleted after.
+   */
+  const deployCode = async (modules: ModuleSource[]) => {
+    const config = await udfConfig(engine);
+    const version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
+    const pkg = await writePackage(modulesStore, modules);
+    let unused: SourcePackage[];
+    try {
+      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "push");
+    } catch (e) {
+      await modulesStore.delete(pkg.storageKey).catch(() => {});
+      throw e;
+    }
+    const live = await installCodeVersion(version);
+    for (const p of unused) await modulesStore.delete(p.storageKey).catch(() => {});
+    return { version, ...live };
+  };
+  /** A deployable server's code: the latest version in the store, live once this resolves. */
+  const codeReady: Promise<void> = opts.deployable
+    ? loadLatestCodeVersion(engine, modulesStore).then(async (v) => {
+        if (v) await installCodeVersion(v);
+      })
+    : Promise.resolve();
+  codeReady.catch((e) =>
+    console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
+  );
+
+  const installCodeVersion = async (version: CodeVersion) => {
+    const changed = functions.install(version.functions, version.moduleHashes);
+    httpOptions.router = version.router;
+    const crons = await cronExecutor.push(
+      version.crons ? cronSpecs(version.crons, (id, name) => functions.cronTarget(id, name)) : new Map(),
+    );
+    sync.invalidateModules(changed);
+    return { changed, crons };
+  };
+
   return {
+    installCodeVersion,
+    deployCode,
+    codeReady,
     server,
     /** The site port's server (HTTP actions), if any. */
     site,

@@ -58,7 +58,7 @@ export class CronJobExecutor {
   constructor(
     private readonly engine: Engine,
     private readonly functions: Functions,
-    private readonly specs: Map<string, CronSpec>,
+    private specs: Map<string, CronSpec>,
     options: CronExecutorOptions = {},
   ) {
     this.o = {
@@ -72,14 +72,27 @@ export class CronJobExecutor {
     };
   }
 
-  /** Register the declared crons (S1: the start is the push), then run them. */
-  async start() {
-    const diff = await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push");
+  /**
+   * Register the declared crons (S1: the start is the push), then run them. `apply: false` (a deployable
+   * server, STUDY-35): the stored crons stay as they are until a code version pushes its own.
+   */
+  async start(apply = true) {
+    const diff = apply
+      ? await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push")
+      : undefined;
     const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs))) this.poke();
     });
     this.loop = this.run();
+    return diff;
+  }
+
+  /** A new code version's crons (STUDY-35): the same diff as at start, against what is stored. */
+  async push(specs: Map<string, CronSpec>) {
+    this.specs = specs;
+    const diff = await this.engine.mutation((db) => applyCrons(db, specs, Date.now(), this.o), "cron_push");
+    this.poke();
     return diff;
   }
 

@@ -140,6 +140,20 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | as recommended | owner, 2026-10-02 | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | rule 5 | owner, 2026-10-02 | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | as recommended | owner, 2026-10-02 | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-173 | `bunvex codegen` writes `_generated/` from the code alone (no running deployment); the static modes are not implemented | a `start_push` against the deployment | no (the same output; works offline) | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-176 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables (item 9) | typed `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and declared variables | yes (types) | accept until item 9 | owner, 2026-10-02 (as recommended) | [STUDY-36 G4](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-177 | The generated `tsconfig.json` adds `"allowImportingTsExtensions": true` | Convex's settings only | no (it lets the app's `tsc` read bunvex's TypeScript sources) | accept, or publish `.d.ts` builds | owner, 2026-10-02 (as recommended) | [STUDY-36 G5](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-178 | `bunvex start` runs the self-hosted server; credentials from the env, else `<data-dir>/credentials`, else generated | a `convex-local-backend` binary plus Docker scripts | operational | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E1](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-179 | Built-in variables `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL` | `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` | yes | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-37 E2](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-180 | Deployment variables reach pushed code only; embedded functions see the host's `process.env` | every function sees the deployment's | yes (embedded servers only) | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E3](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-181 | `run --identity` default issuer `https://bunvex.test` | `https://convex.test` | yes (minor) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-37 E4](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-182 | `@bunvex/cli` may import `@bunvex/client` / `protocol` (`run --watch`, `dev`) | the CLI uses its WebSocket client | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E5](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-183 | `bunvex dev` with no deployment starts one in process (SQLite under `.bunvex/`) | downloads a local backend, or configures a cloud one | operational | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E6](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-184 | `dev --tail-logs` defaults to `disable` until log streaming (item 12) | `pause-on-deploy` | yes, until item 12 | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-185 | `run`'s JSON5 args parsed by bunvex's own reader | the `json5` package | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E8](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-186 | Not built: `env default`, declared/required variables (components), `run --component` / `--inline-query`, dev's cloud and `--local-*` flags | all of them | yes | later | owner, 2026-10-02 (as recommended) | [STUDY-37 E9](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -228,6 +242,8 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
+DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
+DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
 ## Gaps recorded in studies
 

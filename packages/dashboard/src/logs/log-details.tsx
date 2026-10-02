@@ -3,6 +3,7 @@
 // every loaded line of the same request, oldest first, and — when the request ran more than one function —
 // the functions it called, as a tree (Convex's "Functions Called"; STUDY-12 L6); last, the line as raw JSON.
 // "Filter by this request" puts the request id in the text filter.
+
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { JsonView } from "@bunvex/ui/components/json-view";
@@ -10,7 +11,7 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 import { useId } from "react";
 import type { LogEntry } from "../data-source.ts";
-import { formatBytes } from "../screens/stats.ts";
+import { formatBytes, timeAgo } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
 import { formatDuration, formatLogTime, isFailure, KIND_LETTER } from "./log-list.tsx";
@@ -54,21 +55,7 @@ function CallItem({ node, current }: { node: CallNode; current?: string }) {
   );
 }
 
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["day", 86_400_000],
-  ["hour", 3_600_000],
-  ["minute", 60_000],
-  ["second", 1_000],
-];
-const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-
-/** "58 seconds ago", "3 minutes ago", "now". */
-export function timeAgo(ms: number, now: number): string {
-  const d = ms - now;
-  for (const [unit, size] of UNITS)
-    if (Math.abs(d) >= size || unit === "second") return relative.format(Math.trunc(d / size), unit);
-  return "now";
-}
+export { timeAgo };
 
 export function LogDetails(props: {
   line: LogEntry;

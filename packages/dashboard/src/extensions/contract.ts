@@ -2,6 +2,7 @@
 // methods the source offers. To remove an extension: delete its line here (and its folder, `index.ts`, `mock.ts`).
 import { analyticsContract } from "./analytics/contract.ts";
 import type { ContractExtensionPart } from "./contract-types.ts";
+import { flagsContract } from "./flags/contract.ts";
 import { workflowsContract } from "./workflows/contract.ts";
 
-export const contractParts: readonly ContractExtensionPart[] = [analyticsContract, workflowsContract];
+export const contractParts: readonly ContractExtensionPart[] = [analyticsContract, flagsContract, workflowsContract];

@@ -6,9 +6,12 @@ export {
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
+  MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
+  SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  UDF_CONFIG_TABLE,
 } from "./catalog.ts";
 export {
   Committer,
@@ -35,7 +38,7 @@ export {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
-export { type ExecutionKind, wallClock } from "./determinism.ts";
+export { type ExecutionKind, installDeterminismIn, runImportPhase, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,

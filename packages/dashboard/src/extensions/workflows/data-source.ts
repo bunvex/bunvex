@@ -1,4 +1,4 @@
-// The Workflows extension's part of the dashboard contract (UI-01 §26.3, STUDY-12 §17) — a bunvex addition: the
+// The Workflows extension's part of the dashboard contract (UI-01 §26.3, STUDY-12 §18) — a bunvex addition: the
 // durable workflows and the work pools apps build with Convex's `@convex-dev/workflow` and `@convex-dev/workpool`
 // components have no screen in Convex's dashboard. A workflow is a function whose steps (queries, mutations,
 // actions, sleeps, waits for an event, nested workflows) are journaled: each runs once, failed ones retry by a

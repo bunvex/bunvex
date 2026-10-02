@@ -83,7 +83,7 @@ describe("the function runner", () => {
 
   test("Ctrl+` shows and hides it anywhere; the header button too", async () => {
     mount("/");
-    await screen.findByRole("heading", { level: 1, name: "Health" });
+    await screen.findByRole("heading", { level: 1, name: "Overview" });
     const user = userEvent.setup();
     await user.keyboard("{Control>}`{/Control}");
     expect(runner()).toBeDefined();

@@ -31,6 +31,7 @@ export {
   compareValues,
   copyValue,
   fromJsonValue,
+  isBytes,
   isSimpleObject,
   isSpecialFloat,
   type JSONValue,

@@ -1,4 +1,4 @@
-// The Workflows extension's screen (UI-01 §26.3, STUDY-12 §17 — a bunvex addition): on the section column, Runs
+// The Workflows extension's screen (UI-01 §26.3, STUDY-12 §18 — a bunvex addition): on the section column, Runs
 // and Work pools; on Runs, the status and workflow filters. A run opens in place (`?run=`), its step selected by
 // `?step=`.
 import { useQuery } from "@tanstack/react-query";

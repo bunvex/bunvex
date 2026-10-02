@@ -1,4 +1,4 @@
-// The Workflows extension (UI-01 §26.3, STUDY-12 §17 — a bunvex addition, owner's call 1 Oct 2026, possibly
+// The Workflows extension (UI-01 §26.3, STUDY-12 §18 — a bunvex addition, owner's call 1 Oct 2026, possibly
 // removed later): durable workflow runs (a journal of steps, drawn as a diagram and a timeline) and work pools.
 import { Workflow } from "lucide-react";
 import type { DashboardExtension } from "../types.ts";
