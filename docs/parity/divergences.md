@@ -217,6 +217,15 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| # | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-164 | Functions run in-process, one `vm` context per code version (hot swap, no restart; not a security sandbox) | a fresh V8 context per request in pooled isolates | partly (P2) | accept: frees old versions, per-version deterministic globals, ~0.4 µs per call | [STUDY-35 P1](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-165 | Module-level state lives as long as its code version | fresh per request (`experimental_reuseContext` keeps it) | yes | accept | [STUDY-35 P2](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-166 | A pushed package is one gzip JSON blob in the file-storage backend | a zip in module storage | no | accept | [STUDY-35 P3](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | accept | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | accept (rule 5) | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | accept | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
