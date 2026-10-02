@@ -197,7 +197,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | `export --path [--include-file-storage]` | `cli/convexExport.ts` | missing | |
 | `data [table] --limit --order --format --component` | `cli/data.ts` | missing | |
 | `logs` (`--history`, `--success`, `--jsonl`) | `cli/logs.ts` | missing | |
-| `env set\|get\|remove\|list` (and `env default …`, which is cloud-only) | `cli/env.ts` | missing | |
+| `env set\|get\|remove\|list` (and `env default …`, which is cloud-only) | `cli/env.ts` | missing | Studied in [STUDY-37](../study/STUDY-37-cli-and-environment-variables.md) (item 9). |
 | `codegen` (`--typecheck`, `--init`, `--commonjs`, …) | `cli/codegen.ts` | partial (STUDY-36) | `bunvex codegen [--init] [--typecheck]`, from the code alone with no deployment (DV-173). `--init` writes `tsconfig.json` (with `allowImportingTsExtensions`, DV-177) and `README.md`. The typecheck is the app's own `tsc --project <functions>`. No `--commonjs`, `--dry-run`, `--debug` or `--component-dir`. |
 | `function-spec` (JSON of every function's args and returns) | `cli/functionSpec.ts` | missing | |
 | `typecheck`, `dashboard`, `docs`, `update`, `network-test` | `cli/*.ts` | missing | Low priority. |
