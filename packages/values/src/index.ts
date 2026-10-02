@@ -26,6 +26,7 @@ export {
   VString,
   VUnion,
   v,
+  validatorFromJson,
 } from "./validators.ts";
 export {
   compareValues,

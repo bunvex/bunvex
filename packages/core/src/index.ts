@@ -8,6 +8,7 @@ export {
   type IndexState,
   MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMAS_TABLE,
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
@@ -54,6 +55,8 @@ export {
   parseValue,
   type QueryJournal,
   readInstanceRecord,
+  readSystemRows,
+  SchemaPushError,
   stringifyValue,
   type TxBody,
 } from "./engine.ts";
@@ -116,6 +119,7 @@ export {
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
+export { type SchemaJson, schemaFromJson, schemaToJson, type TableJson } from "./schema-json.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
