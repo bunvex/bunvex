@@ -154,7 +154,13 @@ for (const [name, dir] of dirOfName) {
           errors.push(`${rel}: ${name} may not import ${pkg} (allowed: ${allowed.join(", ") || "none"})`);
         if (targetDir !== dir && !declared.has(pkg))
           errors.push(`${rel}: imports ${pkg} but ${name}/package.json does not declare it`);
-      } else if (!spec.startsWith("node:") && !spec.startsWith("bun") && !declared.has(pkg)) {
+      } else if (
+        !spec.startsWith("node:") &&
+        !spec.startsWith("bun") &&
+        !declared.has(pkg) &&
+        // a types-only package (e.g. "geojson") is declared by its @types package
+        !declared.has(`@types/${pkg.replace(/^@/, "").replace("/", "__")}`)
+      ) {
         errors.push(`${rel}: imports "${pkg}" but ${name}/package.json does not declare it`);
       }
       if (dir === "core" && CORE_FORBIDDEN.some((r) => r.test(spec)))

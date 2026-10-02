@@ -258,7 +258,7 @@ columns, add documents).
 | D10 | Columns are reordered by **dragging a header**, as Convex (dnd-kit there, pointer events here), **and** from a **Columns** panel (keyboard-first) | the panel is the keyboard and screen-reader way | **decided** (30 Sep 2026): both — dragging added (UI-01 §17.3), the panel kept |
 | D11 | Not yet built: custom query (it needs the server to run code the dashboard sends). **Metrics per table** built 30 Sep 2026 (§12, M4). **Generate schema** added 30 Sep 2026: the schema panel's Saved / Generated tabs, as Convex's `ShowSchema.tsx` and `GenerateSchema.tsx` (Convex infers "shapes" on the server over every document, `/api/shapes2`; bunvex asks the source's optional `inferDocumentType(table)`, which the mock computes over its whole table). **Create table** added 30 Sep 2026 (also on a deployment with no tables at all: `/database` shows "There are no tables here yet" and Create table, as Convex's `EmptyData.tsx`) (the sidebar's name box, as Convex's `DataSidebar.tsx`, `validateConvexIdentifier`; the contract's optional `createTable`, which Convex does with `_system/frontend/createTable`, inserting and deleting a document). The cell menu is complete (§1.4.1): **View value** (Space) and **Delete document** added 30 Sep 2026, and **Go to reference** (Cmd/Ctrl+G) through the contract's optional `tableOfId` (what Convex reads off an id with its table mapping) | scope | follow-up |
 | D13 | **Delete document** from a cell's menu asks first ("Delete 1 document?"), as Delete selected does; Convex deletes at once, and asks only on a production deployment (`TableContextMenu.tsx`, `isProtectedDeployment`) | a delete cannot be undone, and bunvex has no production/development distinction yet | **decided** (30 Sep 2026): keep asking, since bunvex will have production deployments too; `CONFIRM_DELETE_FROM_CELL_MENU` in `database/screen.tsx` switches it, to become a check of the deployment's kind (ask on production only, as Convex) once deployments have one |
-| D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | **closed on the mock** (30 Sep 2026): the Health screen keeps the engine's counters and adds Convex's function metrics from the contract's optional metrics methods (§12, UI-01 §18.1); a server fills them once it measures them |
+| D12 | The Health screen shows the engine's counters (commit clock, cache, subscriptions, conflicts), not Convex's function metrics | the server has no app-metrics API yet (parity §20) | **closed on the mock** (30 Sep 2026): the Health screen keeps the engine's counters and adds Convex's function metrics from the contract's optional metrics methods (§12, UI-01 §18.1); a server fills them once it measures them. **1 Oct 2026:** the screen is now the Overview (UI-01 §27): the engine counters moved to a collapsed "Engine" section |
 
 ## 5. Tests
 
@@ -277,11 +277,11 @@ columns, add documents).
 2. Should the admin API mirror Convex's system UDFs and routes (§1.5) closely enough that Convex's own
    dashboard could run against bunvex too? (UI-01 §5.7 puts the admin messages in `@bunvex/protocol`.)
    — the owner left the admin API to the server track (1 Oct 2026); still open there.
-3. **Health review** (raised 1 Oct 2026, not decided): what to do with the engine counters from slice 4
-   (the commit clock, commits/s, cache, subscriptions, commit groups) — a collapsed "Engine" section, out,
-   or as is — and whether to add what Convex's Health still has over ours (a deployment summary with the
-   last push, scheduler lag, running and queued functions, subscription invalidations), contract and mock
-   first.
+3. ~~**Health review**~~ **decided (1 Oct 2026, the owner):** Health becomes the **Overview** (UI-01 §27), a
+   bunvex reshaping of Convex's Health: a deployment summary with the last deploy, indicators with their
+   last hour, what needs attention, recent activity and getting started; Convex's charts under "Metrics";
+   the engine counters in a collapsed "Engine" section. Still not shown (no contract data yet): running and
+   queued functions, subscription invalidations.
 4. Calls made while building that the owner can still veto: T5 and T6 (§15), M4 (§12).
 5. Follow-ups, none blocking: S2 (component picker), M2 (heatmap view), SC1 and SC3 (§14), custom
    queries (D11, L6).
@@ -816,3 +816,70 @@ the List view.
 
 Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
 own clock for the lease; per-node logs.
+
+## 16. Analytics (a bunvex addition, added 1 Oct 2026)
+
+Convex has no analytics screen; apps send events to a third party. The owner asked for one (reference:
+OpenPanel's "Realtime" page and mapcn's analytics-map block), built as an extension (UI-01 §26) that may be
+removed later.
+
+- **Why bunvex can**: every client holds a WebSocket to the deployment, so the deployment knows who is here
+  now — the live visitors are its open sessions, placed by a server-side GeoIP lookup (future work).
+- **What it shows** (UI-01 §26.2): the live map, visitors in the last 30 minutes, devices, the live event
+  feed, top pages / referrers / countries / browsers; Events, Sessions, Profiles.
+- **Events** would come from a client `track()` helper (page views automatically) — future work, like the
+  GeoIP lookup and the retention of events. Only the mock feeds the screen today.
+- **Map without third parties**: mapcn's default (CARTO tiles, a worker from unpkg) was replaced by a bundled
+  Natural Earth basemap and a bundled worker (UI-01 §26.2) — a self-hosted dashboard works offline and no
+  request leaves it.
+- **Decided by the agent, the owner can veto**: A1 — the screen needs `viewMetrics` (no new permission);
+  A2 — the tile and the feed sit beside the map, not floating over it (MapLibre ignored the fit padding in
+  headless Chrome, so the overlay hid the Americas).
+
+## 17. Feature flags (a bunvex addition, added 1 Oct 2026)
+
+**Convex** has no feature-flag screen or API; apps use a third-party service (LaunchDarkly, PostHog, Unleash,
+Statsig…) or roll their own table. The owner wants bunvex to offer more than Convex (an addition, decided
+1 Oct 2026), built as an **extension** (UI-01 §26) so it can be removed if it does not prove itself.
+
+**The concepts**, as those services share them (used conceptually; no code or wording copied): a flag has
+**variants** (boolean on/off, named variants, or JSON values); a **kill switch** (off serves the off variant
+to everyone); **targeting rules** on the caller's identity attributes, in order, the first match serving a
+variant; a **default** for everyone else — one variant or a **percentage rollout**, where an identity's bucket
+is a stable hash of the flag and the identity, so the same person always gets the same variant; a change
+history; and **exposures** (how often each variant was served).
+
+**bunvex**: the dashboard's part is the contract area `FlagsFeatures` (all optional: `listFlags`, `watchFlags`,
+`getFlagHistory`, `flagExposures`, `saveFlag`, `setFlagEnabled`, `archiveFlag`), the evaluation logic
+(`extensions/flags/logic.ts`, pure: what a source and the screen's "who gets what" preview both use), the
+mock and the screen (UI-01 §28). Bunvex's own angle, for when a server implements it: **flags are reactive**
+— read like a query (`useFlag("x")`, `ctx.flags.get("x")`), so a change reaches every client at once with no
+polling. Not decided yet (questions for the owner when a server implements it): where flags live (a system
+table), which identity attributes rules may use, whether exposures are counted on read.
+
+| # | What | Status |
+|---|---|---|
+| FF1 | Feature flags as a dashboard extension, contract and mock first | **decided (1 Oct 2026, the owner)**: a bunvex addition |
+| FF2 | Who may change flags: a credential that can write data (no new operation yet) | the screen's choice; the owner can ask for a dedicated operation |
+| FF3 | Rules serve one variant in the editor (rollouts only in the default); the contract allows a rollout per rule | the editor's simplification; the screen shows a rule's rollout when a source sends one |
+
+## 18. Workflows and work pools (a bunvex addition, added 1 Oct 2026)
+
+Convex ships durable workflows and work pools as components (`@convex-dev/workflow`, `@convex-dev/workpool`;
+their READMEs, read 1 Oct 2026) but its dashboard has no view of them — users ask for one. The owner asked
+for it, built as an extension (UI-01 §26) that may be removed later.
+
+- **Concepts taken from the components** (no code copied): a workflow's steps are queries, mutations,
+  actions, sleeps, waits for an event and nested workflows, journaled so each runs once; steps started
+  together run in parallel (the workflow starts at most `maxParallelism` at once); failed steps retry by a
+  policy (`maxAttempts`, `initialBackoffMs`, `base`); a run ends `success`, `failed` or `canceled` (the
+  `onComplete` kinds) and can be canceled, or **restarted from a step**. A work pool runs functions with a
+  `maxParallelism`, retries actions with exponential backoff (by default or per call) and reports completion.
+- **What bunvex shows** (UI-01 §26.3): runs, a run as a diagram + timeline + journal, cancel / rerun /
+  restart from a step, and the pools' parallelism, queues, retries and throughput.
+- **Future**: a source that reads the components' tables (or bunvex's own durable workflows) and pushes
+  changes instead of the 5 s refresh; awaited events and sleeps shown with what they wait for.
+- **Decided by the agent, the owner can veto**: W1 — reads need `viewData`, the actions `writeData` (no new
+  permissions); W2 — a run opens in place of the list (`?run=`), not in the side panel (a diagram needs the
+  room); W3 — Restart is offered on finished runs only (cancel a running one first).
+

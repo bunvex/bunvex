@@ -22,6 +22,23 @@ for (const [key, size] of Object.entries({ offsetHeight: 360, offsetWidth: 800 }
   });
 }
 
+// No layout either for "is it on screen": an IntersectionObserver that sees every element as visible at once
+// (the Overview mounts its below-the-fold charts when they come into view, UI-01 §27).
+globalThis.IntersectionObserver = class {
+  constructor(private readonly callback: IntersectionObserverCallback) {}
+  observe(target: Element) {
+    queueMicrotask(() => this.callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as never));
+  }
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+  readonly root = null;
+  readonly rootMargin = "0px";
+  readonly thresholds = [0];
+} as unknown as typeof IntersectionObserver;
+
 const { cleanup } = await import("@testing-library/react");
 afterEach(() => {
   cleanup();

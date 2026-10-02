@@ -66,12 +66,15 @@ to a spec.
 | [STUDY-30](STUDY-30-scheduler-and-crons.md) | Scheduled functions (`ctx.scheduler`, `_scheduled_functions`) and cron jobs | accepted: S1–S3 as recommended (owner, 2026-10-01) |
 | [STUDY-33](STUDY-33-retention.md) | Retention: garbage collection of old index and document versions, the windows, reads below them | implemented; R1–R4 accepted (owner, 2026-10-01) |
 | [STUDY-34](STUDY-34-admin-keys.md) | Admin keys: format and crypto, instance name, identities (admin, acting user, system), admin-only functions and endpoints | accepted: AK1–AK6 as recommended (owner, 2026-10-01) |
-| [STUDY-35](STUDY-35-push-and-deploy.md) | Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | draft: P1–P6 pending |
+| [STUDY-35](STUDY-35-push-and-deploy.md) | Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | implemented (PRs #160–#166); P1–P6 accepted (owner, 2026-10-02) |
+| [STUDY-36](STUDY-36-codegen.md) | Codegen: `_generated/` (api, server, dataModel) and the typed data model behind it | accepted: all as recommended (owner, 2026-10-02) |
+| [STUDY-37](STUDY-37-cli-and-environment-variables.md) | Deployment environment variables (`process.env`, limits, auth config) and the CLI part 1: `start`, `run`, `env`, `dev` | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-39](STUDY-39-standalone-binary.md) | The standalone executable: `bunvex` compiled per platform, released as Convex releases `convex-local-backend` | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-28](STUDY-28-builtin-auth.md) | Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done |
 | [STUDY-31](STUDY-31-http-actions.md) | HTTP actions: `httpRouter`, `httpAction`, serving on `/http` and the site port, errors, limits, auth | accepted: H1–H5 as recommended (owner, 2026-10-01) |
 | [STUDY-29](STUDY-29-index-backfill.md) | Background index backfill: index states, staged indexes, the worker, checkpoints and resume, queries on a backfilling index | implemented (#115); B1, B2 decided (owner, 2026-10-01: DV-126, DV-127) |
 | [STUDY-32](STUDY-32-file-storage.md) | File storage: `ctx.storage`, `_storage`, upload tokens and URLs, downloads, local and S3 backends | accepted: F1–F4 as recommended (owner, 2026-10-01) |
+| [STUDY-40](STUDY-40-local-backend-and-local-deployments.md) | `bunvex-local-backend` as Convex's `convex-local-backend`, local deployments in `bunvex dev` (download, state, `.env.local`), the npm package | accepted: all as recommended (owner, 2026-10-02) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
