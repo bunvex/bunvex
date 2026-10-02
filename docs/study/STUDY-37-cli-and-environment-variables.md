@@ -1,6 +1,6 @@
 # STUDY-37 — Deployment environment variables, and the CLI part 1 (`start`, `run`, `env`, `dev`)
 
-- **Status:** draft (E1–E9 await the owner)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 9 ([parity README](../parity/README.md));
@@ -221,15 +221,15 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| E1 | `bunvex start` is a CLI command that runs the self-hosted server. Convex ships a binary (`convex-local-backend`) and Docker scripts. Its flags mirror the binary's, and the Docker image (item 10) runs `bunvex start`. **Credentials (recommended):** the env, else `<data-dir>/credentials` files, else generated and saved there, as Convex's `read_credentials.sh`. Keep accepting the store's stored secret for `bunvex admin-key` (DV-160) | bunvex is one Bun process; the CLI is what an app installs | pending |
-| E2 | The built-in variables are `BUNVEX_CLOUD_URL` and `BUNVEX_SITE_URL`, not `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` | rule 5: no "convex" in shipped strings. An app reading the Convex names gets `undefined` | pending |
-| E3 | Deployment variables reach pushed code only. Functions registered in an embedded server (`createServer({ functions })`) see the host's real `process.env` | embedded functions run in the host's own context, where replacing `process.env` would break the server itself | pending |
-| E4 | `run --identity` fills `issuer` with `https://bunvex.test` (Convex: `https://convex.test`) | rule 5 | pending |
-| E5 | `@bunvex/cli` may import `@bunvex/client` (and `protocol`), for `run --watch` and `dev`'s waits on variables and tables. **Alternative:** poll over HTTP | Convex's CLI uses its WebSocket client for these; ARCH-01's rule today allows the CLI only `server`, `core` and `values` | pending |
-| E6 | `bunvex dev` without a configured deployment starts a local one in process, with SQLite under `.bunvex/`. Convex downloads and runs its local backend, or configures a cloud one | the closest equivalent of Convex's local deployments; no download | pending |
-| E7 | `dev --tail-logs` defaults to `disable` until log streaming exists (item 12); then Convex's `pause-on-deploy` | the endpoint does not exist yet | pending |
-| E8 | `run`'s args are JSON5, parsed by a small reader of bunvex's own (no dependency) | Convex uses the `json5` package; the CLI has no external dependencies | pending |
-| E9 | Not built: `env default` (cloud), variable validators and "required" variables declared in `convex.config.ts` (components), `run --component` / `--inline-query`, dev's cloud and `--local-*` flags | no cloud, no components yet | pending |
+| E1 | `bunvex start` is a CLI command that runs the self-hosted server. Convex ships a binary (`convex-local-backend`) and Docker scripts. Its flags mirror the binary's, and the Docker image (item 10) runs `bunvex start`. **Credentials (recommended):** the env, else `<data-dir>/credentials` files, else generated and saved there, as Convex's `read_credentials.sh`. Keep accepting the store's stored secret for `bunvex admin-key` (DV-160) | bunvex is one Bun process; the CLI is what an app installs | accepted (owner, 2026-10-02) |
+| E2 | The built-in variables are `BUNVEX_CLOUD_URL` and `BUNVEX_SITE_URL`, not `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` | rule 5: no "convex" in shipped strings. An app reading the Convex names gets `undefined` | accepted (owner, 2026-10-02) |
+| E3 | Deployment variables reach pushed code only. Functions registered in an embedded server (`createServer({ functions })`) see the host's real `process.env` | embedded functions run in the host's own context, where replacing `process.env` would break the server itself | accepted (owner, 2026-10-02) |
+| E4 | `run --identity` fills `issuer` with `https://bunvex.test` (Convex: `https://convex.test`) | rule 5 | accepted (owner, 2026-10-02) |
+| E5 | `@bunvex/cli` may import `@bunvex/client` (and `protocol`), for `run --watch` and `dev`'s waits on variables and tables. **Alternative:** poll over HTTP | Convex's CLI uses its WebSocket client for these; ARCH-01's rule today allows the CLI only `server`, `core` and `values` | accepted (owner, 2026-10-02) |
+| E6 | `bunvex dev` without a configured deployment starts a local one in process, with SQLite under `.bunvex/`. Convex downloads and runs its local backend, or configures a cloud one | the closest equivalent of Convex's local deployments; no download | accepted (owner, 2026-10-02) |
+| E7 | `dev --tail-logs` defaults to `disable` until log streaming exists (item 12); then Convex's `pause-on-deploy` | the endpoint does not exist yet | accepted (owner, 2026-10-02) |
+| E8 | `run`'s args are JSON5, parsed by a small reader of bunvex's own (no dependency) | Convex uses the `json5` package; the CLI has no external dependencies | accepted (owner, 2026-10-02) |
+| E9 | Not built: `env default` (cloud), variable validators and "required" variables declared in `convex.config.ts` (components), `run --component` / `--inline-query`, dev's cloud and `--local-*` flags | no cloud, no components yet | accepted (owner, 2026-10-02) |
 
 ## 5. Tests
 
