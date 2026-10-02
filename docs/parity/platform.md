@@ -338,8 +338,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 bunvex additions to the dashboard, with no Convex counterpart (STUDY-12 §13.2, §15, §7.7, §7.8, §21): snapshot
 export and import in Settings, **who the clients are** (platform, SDK, app and version per connection, an
-optional app registry and an SDK policy, on the mock; Convex sends only `Convex-Client: npm-<version>`;
-UI-01 §33), the **Topology** screen (UI-01 §22), the Files "Buckets" placeholder
+optional app registry and an SDK policy, on the mock — on Topology, the Overview, Logs, a function's
+Statistics and Settings → Apps; Convex sends only `Convex-Client: npm-<version>`; UI-01 §33), the **Topology** screen (UI-01 §22), the Files "Buckets" placeholder
 (§24), the **Authentication** screen (users, sessions, organizations and auth configuration, after
 better-auth's concepts; §25), **Analytics** (live visitors on a map, events, sessions and profiles — an
 extension, UI-01 §26.2, STUDY-12 §16) and **Workflows** (durable workflow runs as a diagram, timeline and

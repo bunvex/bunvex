@@ -2,7 +2,9 @@
 // (presets), Functions, Type and Function kind, each choice with how many loaded lines it holds (under the
 // time range and the search). The Functions screen's column has Time range and Type only: its list is one
 // function's. On a phone the same sections open in a sheet.
+import { PLATFORM_LABEL } from "../clients/names.ts";
 import type { FunctionKind } from "../data-source.ts";
+import { CLIENT_PLATFORMS, type ClientPlatform } from "../data-source-clients.ts";
 import { FacetGroup, FacetRadios, SectionColumn, SectionFilters } from "../shell/section-column.tsx";
 import {
   FUNCTION_KINDS,
@@ -18,6 +20,9 @@ export type Counts = {
   functions: Map<string, number>;
   kinds: Map<FunctionKind, number>;
   types: Map<LogType, number>;
+  /** The clients that made the requests (UI-01 §33); empty when no line says. */
+  platforms?: Map<ClientPlatform, number>;
+  appVersions?: Map<string, number>;
 };
 
 export type FilterSectionsProps = {
@@ -64,6 +69,26 @@ export function FilterSections(props: FilterSectionsProps) {
         counts={counts.types}
         onChange={(types) => onView({ ...view, types })}
       />
+      {counts.platforms && counts.platforms.size > 0 && (
+        <FacetGroup<ClientPlatform>
+          title="Platform"
+          options={CLIENT_PLATFORMS.filter((p) => counts.platforms!.has(p))}
+          value={view.platforms ?? "all"}
+          counts={counts.platforms}
+          label={(p) => PLATFORM_LABEL[p]}
+          onChange={(platforms) => onView({ ...view, platforms })}
+        />
+      )}
+      {counts.appVersions && counts.appVersions.size > 0 && (
+        <FacetGroup
+          title="App version"
+          options={[...counts.appVersions.keys()].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))}
+          value={view.appVersions ?? "all"}
+          counts={counts.appVersions}
+          onChange={(appVersions) => onView({ ...view, appVersions })}
+          mono
+        />
+      )}
       {props.kinds && (
         <FacetGroup<FunctionKind>
           title="Function kind"

@@ -2239,3 +2239,25 @@ to be registered. The real handshake and `@bunvex/client` come with a later serv
   their state), loaded lazily; **Needs attention** lists each outdated SDK (unsupported: critical; upgrade
   required: warning) and links to the platform's group on Topology.
 
+### 33.2 Logs, Functions → Statistics and Settings → Apps
+
+- **Logs:** a line carries the `client` that made its request (`LogEntry.client`; the mock gives users'
+  calls one, scheduled runs and crons none). The filter column gains **Platform** and **App version** facets
+  with counts, shown only when the loaded lines say who made them; in the URL as `platform=` and
+  `appVersion=` (comma lists, `none` for an empty choice) and kept per deployment with the rest of the view.
+  Choosing either leaves out the lines no client made. A line's details show its **Client**: the device,
+  runtime and app (named by the registry: "iPhone 14 · iOS 18.6 · Shop iOS 2.3.0"), then the SDK, build and a
+  development environment.
+- **Functions → Statistics:** a **By platform** card (optional `functionClients(fn, window)`, needs
+  `viewMetrics`): the function's calls in the last hour per platform as bars, with their errors, most calls
+  first, and the calls no client made (scheduled, crons, other functions) in a line below. The mock measures
+  it from its log history, so it adds up to the Function calls chart (contract suite).
+- **Settings → Apps** (under Configuration, and in the command palette; shown when the source offers the
+  registry): the registered apps with their platform, identifiers, notes, when a client last connected and
+  the app versions seen with their connections. **Register an app** and **Edit** open an inline form (name,
+  platform, identifiers one per line with a hint per platform, notes); a save that drops identifiers or
+  changes the platform — clients that stop being named by the app — asks first; **Remove** asks first and
+  says the clients keep connecting. Read-only credentials see the list without its actions. Last, **How a
+  client says who it is**: a per-platform snippet (TypeScript for the JS platforms, Swift for iOS, Kotlin for
+  Android) marked **Planned API**, since `@bunvex/client` and the native SDKs are not released.
+

@@ -5,7 +5,7 @@
 // SDK versions are old (Convex's `ClientVersionState`: upgrade required, unsupported). Today only the mock
 // reports any of it: the handshake and `@bunvex/client` are a later study. Every method is optional, detected
 // with `typeof`; reads need `viewMetrics`, the registry's writes `writeData`. Re-exported by `data-source.ts`.
-import type { CallOptions } from "./data-source.ts";
+import type { CallOptions, MetricsWindow } from "./data-source.ts";
 
 export type ClientPlatform =
   | "web"
@@ -95,12 +95,21 @@ export type ClientSummary = {
   policy: ClientPolicy;
 };
 
+/** A function's calls in a window, split by the platform of the client that made them (Functions → Statistics). */
+export type FunctionClients = {
+  byPlatform: { platform: ClientPlatform; calls: number; errors: number }[];
+  /** Calls no client made: scheduled functions, crons, other functions' calls. */
+  withoutClient: { calls: number; errors: number };
+};
+
 export interface ClientsFeatures {
   getClientSummary?(opts?: CallOptions): Promise<ClientSummary>;
   listClientApps?(opts?: CallOptions): Promise<ClientApp[]>;
   createClientApp?(app: ClientAppInput, opts?: CallOptions): Promise<ClientApp>;
   updateClientApp?(id: string, patch: Partial<ClientAppInput>, opts?: CallOptions): Promise<ClientApp>;
   deleteClientApp?(id: string, opts?: CallOptions): Promise<void>;
+  /** A function's calls and errors by platform, over a window; needs `viewMetrics`. */
+  functionClients?(fn: string, w: MetricsWindow, opts?: CallOptions): Promise<FunctionClients>;
 }
 
 // ------------------------------------------------------------------ shared logic

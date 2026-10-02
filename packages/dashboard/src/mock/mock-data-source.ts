@@ -39,6 +39,7 @@ import {
   type FileQuery,
   type FileStats,
   type FilterExpression,
+  type FunctionClients,
   type FunctionInfo,
   type FunctionMetric,
   type FunctionRun,
@@ -1160,6 +1161,10 @@ export class MockDataSource implements DashboardDataSource {
 
   functionRate(fn: string, metric: FunctionMetric, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
     return this.metrics(opts?.signal, w, () => metrics.functionRate(this.logs, fn, metric, w));
+  }
+
+  functionClients(fn: string, w: MetricsWindow, opts?: CallOptions): Promise<FunctionClients> {
+    return this.metrics(opts?.signal, w, () => metrics.functionClients(this.logs, fn, w));
   }
 
   cacheHitPercentage(fn: string, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {

@@ -151,6 +151,30 @@ const POLICY: ClientPolicy = {
   kotlin: { upgradeBelow: "0.2.0", unsupportedBelow: "0.1.6" },
 };
 
+/** The client of the `n`th request: drawn by weight from `n` alone (no random stream), so fixtures stay put. */
+export function clientFor(n: number): ClientInfo {
+  const total = SEGMENTS.reduce((a, s) => a + s.weight, 0);
+  // a cheap integer hash: neighbouring requests come from different clients
+  const h = Math.imul(n ^ 0x5bd1e995, 0x9e3779b1) >>> 0;
+  const at = ((h % 10_000) / 10_000) * total;
+  let acc = 0;
+  const s =
+    SEGMENTS.find((x) => {
+      acc += x.weight;
+      return at < acc;
+    }) ?? SEGMENTS[0]!;
+  return {
+    platform: s.platform,
+    sdk: { name: s.sdk, version: s.sdkVersion },
+    ...(s.appId && {
+      app: { id: s.appId, ...(s.appVersion && { version: s.appVersion }), ...(s.build && { build: s.build }) },
+    }),
+    runtime: s.runtimes[h % s.runtimes.length]!,
+    ...(s.devices && { device: s.devices[(h >>> 8) % s.devices.length]! }),
+    ...(s.environment && { environment: s.environment }),
+  };
+}
+
 /** Split `total` by `weights`, whole numbers that add up (largest remainder). */
 function split(total: number, weights: number[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0) || 1;

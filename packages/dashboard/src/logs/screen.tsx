@@ -3,9 +3,10 @@
 // with their volume over time above them and a line's details beside them.
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useClientApps } from "../clients/queries.ts";
 import { useQueryScope } from "../context.tsx";
 import { functionsQuery } from "../data/queries.ts";
-import { type AuditEvent, type LogEntry, toDataSourceError } from "../data-source.ts";
+import { type AuditEvent, type ClientApp, type LogEntry, toDataSourceError } from "../data-source.ts";
 import { logsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -100,6 +101,8 @@ export function LogsView(props: {
   /** The deployment's events to place among the lines (STUDY-12 §10.4), and what Enter on one does. */
   events?: AuditEvent[];
   onOpenEvent?: (e: AuditEvent) => void;
+  /** The registered apps, to name a line's client (UI-01 §33). */
+  apps?: ClientApp[];
 }) {
   const { logs, view, onView } = props;
   const now = useNow(view.range !== "all");
@@ -199,6 +202,7 @@ export function LogsView(props: {
           line={open}
           lines={logs.lines}
           onFilterByRequest={(requestId) => onView({ ...view, text: requestId })}
+          apps={props.apps}
           onClose={() => setOpen(null)}
         />
       )}
@@ -215,6 +219,7 @@ export function LogsScreen() {
   );
   const logs = useLogLines();
   const events = useLogEvents(logs.lines.at(-1)?.time);
+  const apps = useClientApps();
   return (
     // full-bleed inside <main>: the details panel runs to its edges
     <div className="-m-4 flex h-[calc(100svh-3rem)] md:-m-6">
@@ -230,6 +235,7 @@ export function LogsScreen() {
         view={view}
         onView={setView}
         functions={functions.map((f) => f.path).sort()}
+        apps={apps.data}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 // A log line's details (STUDY-12 §7, UI-01 §22.4): when it was (ISO, local and relative), its level, its
-// function, its execution's outcome and duration, the resources it used and who started it, the message,
+// function, the client that made the request (UI-01 §33), its execution's outcome and duration, the resources it used and who started it, the message,
 // every loaded line of the same request, oldest first, and — when the request ran more than one function —
 // the functions it called, as a tree (Convex's "Functions Called"; STUDY-12 L6); last, the line as raw JSON.
 // "Filter by this request" puts the request id in the text filter.
@@ -10,7 +10,8 @@ import { JsonView } from "@bunvex/ui/components/json-view";
 import { cn } from "@bunvex/ui/lib/utils";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 import { useId } from "react";
-import type { LogEntry } from "../data-source.ts";
+import { clientLine, PlatformIcon } from "../clients/words.tsx";
+import type { ClientApp, LogEntry } from "../data-source.ts";
 import { formatBytes, timeAgo } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { formatTime } from "../shell/time.tsx";
@@ -63,6 +64,8 @@ export function LogDetails(props: {
   /** The loaded lines, to find the rest of the request. */
   lines: LogEntry[];
   onFilterByRequest?: (requestId: string) => void;
+  /** The registered apps, to name the line's client (UI-01 §33). */
+  apps?: ClientApp[];
   onClose: () => void;
   /** For "58 seconds ago" (tests pin it). */
   now?: number;
@@ -124,6 +127,22 @@ export function LogDetails(props: {
             <dd className="flex min-w-0 items-center gap-1">
               <span className="truncate font-mono text-xs">{line.requestId}</span>
               <CopyButton text={line.requestId} label="Copy request ID" iconOnly />
+            </dd>
+          </>
+        )}
+        {line.client && (
+          <>
+            <dt className="text-muted-foreground">Client</dt>
+            <dd className="min-w-0 leading-5" data-testid="log-client">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <PlatformIcon platform={line.client.platform} className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{clientLine(line.client, props.apps)}</span>
+              </span>
+              <span className="block truncate font-mono text-xs text-muted-foreground">
+                {line.client.sdk.name} {line.client.sdk.version}
+                {line.client.app?.build && ` · build ${line.client.app.build}`}
+                {line.client.environment === "development" && " · development"}
+              </span>
             </dd>
           </>
         )}

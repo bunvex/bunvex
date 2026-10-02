@@ -105,6 +105,7 @@ describe("Functions: a function's Statistics tab", () => {
       "Errors",
       "Execution time",
       "Cache hit rate",
+      "By platform", // the clients that made the calls (UI-01 §33)
     ]);
     const latency = within(panel).getByRole("region", { name: "Execution time" });
     await within(latency).findByRole("figure");
