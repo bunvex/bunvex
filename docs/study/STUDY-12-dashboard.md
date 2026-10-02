@@ -440,6 +440,12 @@ The contract (`data-source-auth-admin.ts`) uses these names where sensible (`ban
 `providerId`s); timestamps are ms like the rest of the dashboard contract. Settings → Authentication moves
 into Authentication → Sign in / Providers (L22, owner's call). No server implements the contract yet.
 
+Follow-up (2 Oct 2026): an organization's **members and invitations**, in the organization plugin's terms —
+roles `owner` / `admin` / `member` (custom roles allowed by the type), invitation statuses `pending` /
+`accepted` / `rejected` / `canceled`, `cancelInvitation`, and the rule that an organization keeps an owner — and
+the **email templates' preview** (a bunvex addition: better-auth leaves email rendering to the app's senders;
+the dashboard previews the template text with sample values in a sandboxed iframe).
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
@@ -677,7 +683,8 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 |---|---|---|---|
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
 | M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
-| M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
+| M2 | ~~Failure and cache hit rate show lines only~~ — built 2 Oct 2026 (UI-01 §18.4): a line chart / heatmap switch on both, as Convex's `CategoricalHeatmap.tsx` (failure rate opens as a chart, cache hit rate as a heatmap, the choice kept in the browser; rows worst first; an empty bucket is not zero) | — | done |
+| M5 | The heatmap's colours are five steps of one blue, faint → dark (the darker, the worse: more failures, fewer cache hits), in the design system's tokens; Convex uses a 10-stop viridis ramp | a sequential encoding is one hue, light → dark; the ramp was validated as ordinal in both themes (monotone, ΔL ≥ 0.06, the faintest ≥ 2:1 on the surface) | agent's call (2 Oct 2026), the owner can veto |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
 ## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
@@ -832,6 +839,12 @@ removed later.
 - **Map without third parties**: mapcn's default (CARTO tiles, a worker from unpkg) was replaced by a bundled
   Natural Earth basemap and a bundled worker (UI-01 §26.2) — a self-hosted dashboard works offline and no
   request leaves it.
+- **Map style** (follow-up, 2 Oct 2026; UI-01 §26.2): Settings → Map style, a page the extension adds to
+  Settings (the registry's new `settings` entries, under an "Extensions" group), takes a MapLibre style URL for
+  a richer map. It is fetched once and checked (version 8, `sources`, `layers`) before it is used; https only
+  (http on localhost); a warning says each viewer's browser then contacts the provider and the map stops
+  working offline. Kept **in this browser** per deployment — a viewer's preference, not the deployment's; the
+  bundled basemap stays the default.
 - **Decided by the agent, the owner can veto**: A1 — the screen needs `viewMetrics` (no new permission);
   A2 — the tile and the feed sit beside the map, not floating over it (MapLibre ignored the fit padding in
   headless Chrome, so the overlay hid the Americas).

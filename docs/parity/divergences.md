@@ -174,6 +174,12 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-201 | `BUNVEX_LOCAL_BACKEND_BINARY` overrides the download | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L5](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-202 | No local dashboard until item 12 | a local dashboard on 6790 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L6](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-203 | `bunvex` reserved on npm with a placeholder now; the real package later; the CLI runs on Bun (`bunx bunvex`) | `convex` on npm, `npx convex` on Node | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L7](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-204 | Nested calls in the parent's `Tx`, own 1 s budget, parent's clock paused | separate isolate (default), own budget | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N1](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-205 | Nested errors without Convex's appended stack-frame text | message plus stack text | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-206 | `transactionLimits`: reads and writes only; the rest ignored | every limit | yes (rare) | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-207 | Concurrent nested calls serialized | serialized | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N4](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-208 | The 1 s limit is cooperative (checked at database calls and the end); a synchronous infinite loop is not interrupted | V8 terminates the isolate | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N5](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-209 | Store errors in a nested call propagate as they are | upgraded to a non-catchable internal error | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -252,6 +258,9 @@ classed as bugs by their study; they are listed here because they change what op
 | DV-84 | Storage ids: only document ids | `Id<"_storage">` and legacy UUIDs | [platform §3](platform.md#3-file-storage) |
 | DV-85 | Crons: no splay | runs without `minuteUTC` get a stable random offset in the hour | [platform §5](platform.md#5-cron-jobs) |
 | DV-86 | HTTP actions: not served yet | `/http/*` and a separate site origin (port 3211) | [platform §8](platform.md#8-http-actions) |
+| DV-205 | A nested error reaches the parent without Convex's appended stack-frame text. To build: append the nested function's formatted stack to the message, as Convex's `JsError` Debug form | message plus stack text | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-206 | `transactionLimits` covers documents and bytes read and written only. To build: count database queries, scheduled functions, scheduled-function argument bytes and file reads and writes per transaction, then apply their budgets | every limit | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-209 | Store errors in a nested call propagate as they are. To build: mark the transaction failed and turn them into the non-catchable internal error ("Internal Server Error") | upgraded to a non-catchable internal error | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 
 ## Pending owner decisions
 
@@ -267,6 +276,7 @@ DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-
 DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
 DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
+DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
 
 ## Gaps recorded in studies
 

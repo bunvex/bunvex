@@ -60,6 +60,8 @@ describe("the Files screen", () => {
     await waitFor(() => expect(params(history)).toEqual({ order: "asc" }));
     const oldest = await all(source, "asc");
     await waitFor(() => expect(idOf(rows()[0]!)).toBe(oldest[0]!.id));
+    // one date filter, in the column's filters — not a second one in the bar above the list (UX2-2)
+    within(screen.getByRole("navigation", { name: "File filters" })).getByLabelText("Uploaded until");
     fireEvent.change(screen.getByLabelText("Uploaded until"), { target: { value: "2020-01-01" } });
     fireEvent.blur(screen.getByLabelText("Uploaded until")); // a typed day applies once complete (UX-15)
     await waitFor(() => expect(params(history)).toEqual({ order: "asc", to: "2020-01-01" }));

@@ -9,23 +9,37 @@ const n = (v: Json | undefined, one: string, many = `${one}s`) =>
 const str = (v: Json | undefined) => (typeof v === "string" ? v : "");
 
 /** The actions the dashboard has words for, in the order a filter lists them. */
-export const ACTION_LABELS: Record<string, string> = {
-  add_documents: "Added documents",
-  update_documents: "Edited documents",
-  delete_documents: "Deleted documents",
-  clear_tables: "Cleared tables",
-  create_table: "Created a table",
-  generate_upload_url: "Uploaded a file",
-  delete_files: "Deleted files",
-  create_environment_variable: "Added an environment variable",
-  update_environment_variable: "Changed an environment variable",
-  delete_environment_variable: "Deleted an environment variable",
-  replace_environment_variable: "Renamed an environment variable",
-  cancel_scheduled_function: "Canceled a scheduled run",
-  cancel_all_scheduled_functions: "Canceled scheduled runs",
-  push_config: "Deployed functions",
-  build_indexes: "Built indexes",
-};
+// The action facet's words: short, so they fit the column (UX2-24), under the area they belong to.
+export const ACTION_AREAS: readonly { area: string; actions: Record<string, string> }[] = [
+  {
+    area: "Data",
+    actions: {
+      add_documents: "Documents added",
+      update_documents: "Documents edited",
+      delete_documents: "Documents deleted",
+      clear_tables: "Tables cleared",
+      create_table: "Table created",
+    },
+  },
+  { area: "Files", actions: { generate_upload_url: "File uploaded", delete_files: "Files deleted" } },
+  {
+    area: "Environment variables",
+    actions: {
+      create_environment_variable: "Env var added",
+      update_environment_variable: "Env var changed",
+      delete_environment_variable: "Env var deleted",
+      replace_environment_variable: "Env var renamed",
+    },
+  },
+  {
+    area: "Schedules",
+    actions: { cancel_scheduled_function: "Run canceled", cancel_all_scheduled_functions: "Runs canceled" },
+  },
+  { area: "Deploys", actions: { push_config: "Functions deployed", build_indexes: "Indexes built" } },
+];
+export const ACTION_LABELS: Record<string, string> = Object.assign({}, ...ACTION_AREAS.map((a) => a.actions));
+/** An action's area in the facet; "Other" for one no area lists (e.g. an extension's). */
+export const areaOf = (action: string) => ACTION_AREAS.find((a) => action in a.actions)?.area ?? "Other";
 
 export function describeEvent(e: AuditEvent): string {
   const m = e.metadata;

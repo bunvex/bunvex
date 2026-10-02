@@ -197,6 +197,8 @@ describe("the Feature flags screen (an extension, UI-01 §26, §28)", () => {
     const panel = await screen.findByRole("complementary", { name: "New flag" });
     const create = within(panel).getByRole("button", { name: "Create flag" });
     expect(create.hasAttribute("disabled")).toBe(true);
+    // nothing typed yet: no mistake is said (UX2-5), though Create waits for a valid flag
+    expect(within(panel).queryByText(/starts with a letter|needs a key/i)).toBeNull();
     await user.type(within(panel).getByLabelText("Key"), "Beta");
     expect(within(panel).getByText(/starts with a letter/)).toBeDefined();
     await user.clear(within(panel).getByLabelText("Key"));

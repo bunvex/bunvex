@@ -68,7 +68,7 @@ describe("Settings: Snapshots — import", () => {
     const s = await importSection();
     const user = userEvent.setup();
     await user.upload(within(s).getByLabelText("File"), new File(['{"t":"a"}\n{"t":"b"}\n'], "notes.jsonl"));
-    expect((within(s).getByRole("radio", { name: "JSON Lines (.jsonl)" }) as HTMLInputElement).checked).toBe(true);
+    expect(within(s).getByRole("radio", { name: "JSON Lines (.jsonl)" }).getAttribute("aria-checked")).toBe("true");
     expect((within(s).getByLabelText("Into the table") as HTMLInputElement).value).toBe("notes");
     expect(within(s).queryByRole("radio", { name: /Replace everything/ })).toBeNull(); // a zip's mode only
     await user.click(within(s).getByRole("button", { name: "Upload and review" }));

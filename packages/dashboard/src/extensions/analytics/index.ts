@@ -22,7 +22,9 @@ export const analyticsExtension: DashboardExtension = {
   routes: [
     { path: "analytics", load, component: "AnalyticsScreen" },
     { path: "analytics/$section", load, component: "AnalyticsScreen", validateSearch: validateAnalyticsSearch },
+    { path: "settings/map-style", load: () => import("./settings-page.tsx"), component: "MapStyleSettingsScreen" },
   ],
+  settings: [{ label: "Map style", to: "/settings/map-style" }],
   requires: [
     "getAnalyticsRealtime",
     "watchAnalyticsRealtime",
