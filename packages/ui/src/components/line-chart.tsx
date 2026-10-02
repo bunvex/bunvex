@@ -63,6 +63,27 @@ function pathOf(points: ChartPoint[], x: (i: number) => number, y: (v: number) =
   return d;
 }
 
+/**
+ * The stretches where a value is missing, bridged (UX2-25): from the last value before a gap to the first after
+ * it, drawn lighter and dashed, so a minute without calls does not break a line into fragments.
+ */
+function gapsOf(points: ChartPoint[], x: (i: number) => number, y: (v: number) => number): string {
+  let d = "";
+  let last: number | null = null;
+  let open = false;
+  points.forEach((p, i) => {
+    if (p.value === null) {
+      if (last !== null) open = true;
+      return;
+    }
+    if (open && last !== null)
+      d += `M${x(last).toFixed(1)},${y(points[last]!.value!).toFixed(1)}L${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
+    open = false;
+    last = i;
+  });
+  return d;
+}
+
 function LineChart(props: LineChartProps) {
   const { series, formatValue = (v) => v.toLocaleString(), formatTime = defaultTime } = props;
   const height = props.height ?? 180;
@@ -107,11 +128,17 @@ function LineChart(props: LineChartProps) {
         })
         .filter((e): e is { s: ChartSeries; y: number } => e.y !== null)
         .sort((a, b) => a.y - b.y)
-        // each at least a line below the one above it, as already moved
-        .reduce<{ s: ChartSeries; y: number }[]>(
-          (placed, e) => [...placed, { ...e, y: Math.max(e.y, (placed.at(-1)?.y ?? -Infinity) + 12) }],
-          [],
-        )
+        // each at least a line below the one above it, as already moved…
+        .reduce<{ s: ChartSeries; y: number }[]>((placed, e) => {
+          placed.push({ ...e, y: Math.max(e.y, (placed.at(-1)?.y ?? -Infinity) + 12) });
+          return placed;
+        }, [])
+        // …then none below the plot: pushed up from the bottom, still a line apart (UX2-25)
+        .reduceRight<{ s: ChartSeries; y: number }[]>((placed, e) => {
+          const below = placed[0]?.y ?? PAD.top + plotH + 12;
+          placed.unshift({ ...e, y: Math.min(e.y, below - 12) });
+          return placed;
+        }, [])
     : [];
 
   const move = (e: PointerEvent<HTMLElement>) => {
@@ -183,6 +210,18 @@ function LineChart(props: LineChartProps) {
             >
               {formatTime(times[i]!)}
             </text>
+          ))}
+          {series.map((s) => (
+            <path
+              key={`${s.id}-gaps`}
+              data-gaps=""
+              d={gapsOf(s.points, x, y)}
+              fill="none"
+              strokeWidth={1.5}
+              strokeDasharray="3 3"
+              opacity={0.45}
+              style={{ stroke: `var(--${s.color})` }}
+            />
           ))}
           {series.map((s) => (
             <path

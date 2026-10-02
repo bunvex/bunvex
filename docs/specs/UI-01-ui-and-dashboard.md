@@ -2144,6 +2144,40 @@ every one. They land in five pull requests, one subsection each.
   labelled in both); unchanged.
 - **Copy buttons** (UX2-7) are only on Authentication's Sign in / Providers: its pull request.
 
+### UX review 2 — Overview and pages (UX2-1, UX2-4, UX2-9, UX2-10, UX2-16, UX2-17, UX2-26, UX2-28)
+
+- **The main nav is pinned** (UX2-1): from `md` it is `sticky`, as tall as the viewport, and scrolls on its
+  own, so a long page never shows where the sidebar ends (an e2e test checks it after scrolling).
+- **The empty Database** (UX2-4) uses a table's frame: the section column (search, Create table, an empty
+  Tables list saying "No tables yet.") and Bar 1 ("Database · No tables yet"), the empty state centred where the
+  grid goes; below `lg` (no column) the empty state keeps its own Create table.
+- **Settings pages don't repeat their title** (UX2-9): a page renders its actions into Bar 1 through
+  `BarActions` (Environment variables: "Copy all as .env", "Add a variable"); the body starts with its content.
+- **Logs keep the message in view** (UX2-10): with the details panel open the columns run Time, Level,
+  Message, Outcome, Function, Request; the Functions → Logs tab has no Function column (it is always the open
+  function).
+- **Overview** (UX2-16, UX2-17, UX2-26): the summary is one row of four — both URLs in one cell — and Bar 1 no
+  longer repeats the deployment's name and version from the header; "Needs attention" runs across the page
+  above the indicators, and Recent activity sits beside the Metrics charts; numbers in attention items use
+  `formatCount`; a finished Get started step has a check and "Done", and the snippet's copy button is inside
+  the code block's corner.
+- **Topology's windows** (UX2-28): the node panel says "last minute" (the samples' interval counted once per
+  sample, then said as a person would), not "last 59 s".
+
+### UX review 2 — canvases and charts (UX2-14, UX2-15, UX2-25, UX2-27)
+
+- **Readable canvases** (UX2-14): `fitOptions` (shell/flow-controls) fits a small graph (up to six nodes) at
+  85–125 % and a big one never past 100 % — Schema and Workflows use it; a workflow without parallel steps runs
+  left to right. Topology keeps "never past 100 %" (the owner found bigger cards too big, §22), and its cards'
+  text goes from 11 to 12 px (labels 11 px).
+- **The workflow timeline** (UX2-15): a long idle gap — no step running, over a fifth of the run and over a
+  minute — is drawn short with a ⫽ marker saying how long it was ("Compress waits", on by default, can be
+  turned off); each bar says its duration; bars are at least 4 px.
+- **Charts** (UX2-25): `LineChart` bridges a missing stretch with a lighter dashed line instead of leaving
+  fragments, and its direct labels stay inside the plot (pushed up from the bottom, still a line apart).
+- **Analytics on a phone** (UX2-27): the visitors card, then the map (260 px), the breakdowns, and the live
+  feed last — five items until "Show N more".
+
 ### UX review 2 — Authentication (UX2-18, UX2-19, and the Authentication parts of UX2-3)
 
 - **One "Sessions"** (UX2-18): the configuration page is "Session lifetime"; "Sessions" is the list of who is

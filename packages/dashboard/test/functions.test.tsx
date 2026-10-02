@@ -83,11 +83,8 @@ describe("the Functions screen", () => {
     expect(history.location.search).toContain("tab=logs");
     const grid = screen.getByRole("grid", { name: "Log lines of users:syncFromAuth" });
     await waitFor(() => expect(within(grid).getAllByRole("row").length).toBeGreaterThan(1));
-    const fns = within(grid)
-      .getAllByRole("row")
-      .slice(1)
-      .map((r) => within(r).getAllByRole("gridcell")[2]!.textContent);
-    expect(new Set(fns)).toEqual(new Set(["Ausers:syncFromAuth"]));
+    // only this function's lines, so no Function column: it would say the same on every row (UX2-10)
+    expect(within(grid).queryByRole("columnheader", { name: /Function/ })).toBeNull();
     // one function: its filter column has the time range and the types, no functions or kinds (UI-01 §22.4)
     const filters = screen.getByRole("navigation", { name: "Log filters" });
     expect(within(filters).getByRole("region", { name: "Time range" })).toBeDefined();
