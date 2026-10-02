@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { generatedFiles, importPath, moduleIdentifier, modulePaths, runCodegen } from "../src/codegen.ts";
+import { codegenConfig } from "../src/deploy.ts";
 import { main } from "../src/index.ts";
 
 const dirs: string[] = [];
@@ -61,6 +62,26 @@ describe("the generated files", () => {
     expect(dts).toContain(`  messages: typeof messages;`);
     expect(dts).not.toMatch(/convex/i);
   });
+  test("an app on the scoped packages gets @bunvex/* imports (STUDY-40)", () => {
+    const scoped = generatedFiles(["a.ts"], { hasSchema: true, fileType: "js/dts", packages: "@bunvex" });
+    const all = [
+      ...Object.values(scoped.server),
+      ...Object.values(scoped.api),
+      ...Object.values(scoped.dataModel),
+    ].join("\n");
+    expect(all).toContain(`from "@${SERVER}"`);
+    expect(all).toContain(`from "@${VALUES}"`);
+    expect(all).not.toMatch(/from "bunvex\//);
+    const dir = tmp();
+    const config = (deps: Record<string, string>) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: deps }));
+      return codegenConfig(dir).packages;
+    };
+    expect(config({ "@bunvex/server": "0.1.0" })).toBe("@bunvex");
+    expect(config({ bunvex: "0.1.0", "@bunvex/react": "0.1.0" })).toBe("bunvex");
+    expect(config({})).toBe("bunvex");
+  });
+
   test("the modules are the bundler's entry points, in code-unit order", () => {
     const app = tmp();
     write(app, {

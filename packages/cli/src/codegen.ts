@@ -17,12 +17,22 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, relative, sep } from "node:path";
 import { entryPoints } from "./bundle.ts";
 
-export type CodegenConfig = { fileType: "ts" | "js/dts" };
+export type CodegenConfig = {
+  fileType: "ts" | "js/dts";
+  /** Where the generated files import from: `bunvex/*`, or `@bunvex/*` for an app on the scoped packages (STUDY-40). */
+  packages?: "bunvex" | "@bunvex";
+};
 
 const posix = (p: string) => p.split(sep).join("/");
 // The packages the generated files import (spelled at run time: they are text here, not imports).
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
+type Imports = { server: string; values: string };
+/** The quoted specifiers the generated files import. */
+const importsOf = (packages: CodegenConfig["packages"]): Imports =>
+  packages === "@bunvex"
+    ? { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) }
+    : { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) };
 
 function header(description: string) {
   return `/* eslint-disable */
@@ -146,17 +156,18 @@ const SERVER_DESCRIPTION = "Generated utilities for implementing server-side bun
 /** The generated files, by name (Convex's dynamic modes: what the code says, no deployment needed). */
 export function generatedFiles(
   paths: string[],
-  opts: { hasSchema: boolean; fileType: CodegenConfig["fileType"] },
+  opts: { hasSchema: boolean; fileType: CodegenConfig["fileType"]; packages?: CodegenConfig["packages"] },
 ): {
   dataModel: Record<string, string>;
   server: Record<string, string>;
   api: Record<string, string>;
   apiStub: Record<string, string>;
 } {
+  const q = importsOf(opts.packages);
   const ts = opts.fileType === "ts";
-  const dataModel = opts.hasSchema ? dataModelWithSchema() : dataModelWithoutSchema();
+  const dataModel = opts.hasSchema ? dataModelWithSchema(q) : dataModelWithoutSchema(q);
   const serverDts = `${header(SERVER_DESCRIPTION)}
-import type ${importList(SERVER_TYPES)} from ${JSON.stringify(SERVER)};
+import type ${importList(SERVER_TYPES)} from ${q.server};
 import type { DataModel } from "./dataModel.js";
 
 ${BUILDERS.map(([n, t]) => `${doc(BUILDER_DOCS[n]!)}\nexport declare const ${n}: ${t};`).join("\n\n")}
@@ -166,7 +177,7 @@ export declare const env: Record<string, string | undefined>;
 
 ${CTX_TYPES}`;
   const serverJs = `${header(SERVER_DESCRIPTION)}
-import ${importList(GENERIC_BUILDERS)} from ${JSON.stringify(SERVER)};
+import ${importList(GENERIC_BUILDERS)} from ${q.server};
 
 ${BUILDERS.map(([n, , g]) => `${doc(BUILDER_DOCS[n]!)}\nexport const ${n} = ${g};`).join("\n\n")}
 
@@ -174,8 +185,8 @@ ${doc("The deployment's environment variables.")}
 export const env = process.env;
 `;
   const serverTs = `${header(SERVER_DESCRIPTION)}
-import ${importList(GENERIC_BUILDERS)} from ${JSON.stringify(SERVER)};
-import type ${importList(SERVER_TYPES)} from ${JSON.stringify(SERVER)};
+import ${importList(GENERIC_BUILDERS)} from ${q.server};
+import type ${importList(SERVER_TYPES)} from ${q.server};
 import type { DataModel } from "./dataModel.js";
 
 ${BUILDERS.map(([n, t, g]) => `${doc(BUILDER_DOCS[n]!)}\nexport const ${n}: ${t} = ${g};`).join("\n\n")}
@@ -194,7 +205,7 @@ ${imports}import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
-} from ${JSON.stringify(SERVER)};
+} from ${q.server};
 
 declare const fullApi: ${fullApiType};
 
@@ -213,7 +224,7 @@ export declare const internal: FilterApi<
 export declare const components: {};
 `;
   const apiJs = `${apiHeader}
-import { anyApi } from ${JSON.stringify(SERVER)};
+import { anyApi } from ${q.server};
 
 ${apiComment("api", null)}
 export const api = anyApi;
@@ -225,8 +236,8 @@ ${imports}import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
-} from ${JSON.stringify(SERVER)};
-import { anyApi } from ${JSON.stringify(SERVER)};
+} from ${q.server};
+import { anyApi } from ${q.server};
 
 const fullApi: ${fullApiType} = anyApi as any;
 
@@ -246,15 +257,15 @@ export const components = {};
 `;
   // Before the modules can be read: any api, so that the modules (which import it) bundle.
   const apiStubDts = `${apiHeader}
-import type { AnyApi } from ${JSON.stringify(SERVER)};
+import type { AnyApi } from ${q.server};
 
 export declare const api: AnyApi;
 export declare const internal: AnyApi;
 export declare const components: {};
 `;
   const apiStubTs = `${apiHeader}
-import type { AnyApi } from ${JSON.stringify(SERVER)};
-import { anyApi } from ${JSON.stringify(SERVER)};
+import type { AnyApi } from ${q.server};
+import { anyApi } from ${q.server};
 
 export const api: AnyApi = anyApi;
 export const internal: AnyApi = anyApi;
@@ -289,15 +300,15 @@ const DATA_MODEL_DOC = `/**
  * It parameterizes \`queryGeneric\`, \`mutationGeneric\` and the database types.
  */`;
 
-function dataModelWithSchema() {
+function dataModelWithSchema(q: Imports) {
   return `${header("Generated data model types.")}
 import type {
   DataModelFromSchemaDefinition,
   DocumentByName,
   SystemTableNames,
   TableNamesInDataModel,
-} from ${JSON.stringify(SERVER)};
-import type { GenericId } from ${JSON.stringify(VALUES)};
+} from ${q.server};
+import type { GenericId } from ${q.values};
 import schema from "../schema.js";
 
 /**
@@ -320,10 +331,10 @@ export type DataModel = DataModelFromSchemaDefinition<typeof schema>;
 `;
 }
 
-function dataModelWithoutSchema() {
+function dataModelWithoutSchema(q: Imports) {
   return `${header("Generated data model types.")}
-import type { AnyDataModel } from ${JSON.stringify(SERVER)};
-import type { GenericId } from ${JSON.stringify(VALUES)};
+import type { AnyDataModel } from ${q.server};
+import type { GenericId } from ${q.values};
 
 /**
  * No \`schema.ts\` file found!
@@ -367,7 +378,11 @@ export function runCodegen(functionsDir: string, config: CodegenConfig, opts: { 
   const dir = join(functionsDir, "_generated");
   mkdirSync(dir, { recursive: true });
   const hasSchema = existsSync(join(functionsDir, "schema.ts")) || existsSync(join(functionsDir, "schema.js"));
-  const files = generatedFiles(opts.initial ? [] : modulePaths(functionsDir), { hasSchema, fileType: config.fileType });
+  const files = generatedFiles(opts.initial ? [] : modulePaths(functionsDir), {
+    hasSchema,
+    fileType: config.fileType,
+    packages: config.packages,
+  });
   const result: CodegenResult = { written: [], removed: [] };
   const keep = new Set<string>();
   // In dependency order: dataModel (imports the schema), server (imports dataModel), api (imports the

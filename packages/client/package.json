@@ -1,7 +1,6 @@
 {
   "name": "@bunvex/client",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0-alpha.0",
   "description": "The bunvex sync client: WebSocket, reconnect, consistent local state, optimistic updates, pagination.",
   "license": "Apache-2.0",
   "type": "module",
@@ -16,5 +15,17 @@
   "dependencies": {
     "@bunvex/protocol": "workspace:*",
     "@bunvex/values": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
   }
 }

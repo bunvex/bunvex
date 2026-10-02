@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/server",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "description": "The bunvex server: function runtime, HTTP API, WebSocket sync, configuration.",
   "license": "Apache-2.0",
   "type": "module",
@@ -13,6 +13,7 @@
     "@bunvex/file-storage": "workspace:*",
     "@bunvex/protocol": "workspace:*",
     "@bunvex/values": "workspace:*",
+    "@types/object-inspect": "^1.13.0",
     "object-inspect": "^1.13.4"
   },
   "peerDependencies": {
@@ -25,12 +26,23 @@
   },
   "devDependencies": {
     "@bunvex/persistence": "workspace:*",
-    "@types/object-inspect": "^1.13.0",
     "jose": "^6.2.12"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
   }
 }

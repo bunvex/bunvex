@@ -9,6 +9,8 @@ on:
       - "packages/**"
       - "scripts/build-binary.ts"
       - "scripts/smoke-binary.sh"
+      - "scripts/smoke-npm.sh"
+      - "scripts/publish-npm.ts"
       - "bun.lock"
       - ".github/workflows/binaries.yml"
 
@@ -70,3 +72,17 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --host
       - run: scripts/smoke-binary.sh dist/bin/aarch64-apple-darwin/bunvex-local-backend
+
+  smoke-npm:
+    name: npm packages in a new app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/build-binary.ts --target x86_64-unknown-linux-gnu
+      - run: scripts/smoke-npm.sh
+        env:
+          BUNVEX_LOCAL_BACKEND_BINARY: ${{ github.workspace }}/dist/bin/x86_64-unknown-linux-gnu/bunvex-local-backend
