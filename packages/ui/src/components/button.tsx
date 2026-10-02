@@ -19,7 +19,8 @@ const buttonVariants = cva(
         // a row's delete (UX-10): quiet until hovered, but always in the destructive colour
         "destructive-ghost":
           "text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/20 dark:hover:bg-destructive/20",
-        // a reversible but disruptive action (Pause deployment): outlined, in the destructive colour
+        // every destructive trigger on a row, a panel or a bar (UX-10, UX2-8): outlined, in the destructive colour;
+        // only the confirm button inside a confirmation dialog uses "destructive"
         "destructive-outline":
           "border-destructive/40 bg-background text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/20 dark:bg-input/30 dark:hover:bg-destructive/20",
         link: "text-primary underline-offset-4 hover:underline",

@@ -9,7 +9,7 @@ import { Input } from "@bunvex/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { Textarea } from "@bunvex/ui/components/textarea";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery } from "../data/queries.ts";
 import { type AuthConfig, type AuthEmailKind, type AuthEvent, toDataSourceError } from "../data-source.ts";
@@ -18,6 +18,7 @@ import type { AuthSection } from "../router.tsx";
 import { TokenProviders } from "../settings/auth.tsx";
 import { BAR1 } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
+import { EMAIL_VARIABLES, renderEmail, unknownVariables } from "./email-preview.ts";
 import { configQuery, eventsQuery, useRefreshAuth } from "./queries.ts";
 
 const MFA_REQUIRED = [
@@ -284,41 +285,123 @@ function Form<K extends keyof AuthConfig>(props: {
   }
   const v = props.value as AuthConfig["emails"];
   const set = props.set as (v: AuthConfig["emails"]) => void;
-  const NAMES: Record<AuthEmailKind, string> = {
-    "verify-email": "Verify email",
-    "password-reset": "Reset password",
-    "magic-link": "Magic link",
-    invitation: "Invitation",
-  };
   return (
     <div className="flex flex-col gap-6">
-      {(Object.keys(NAMES) as AuthEmailKind[]).map((kind) => (
-        <section key={kind} aria-label={NAMES[kind]} className="flex flex-col gap-2 border p-3">
-          <h2 className="text-sm font-medium">{NAMES[kind]}</h2>
-          <Field label="Subject">
-            {(id) => (
-              <Input
-                id={id}
-                className="h-8"
-                value={v[kind].subject}
-                onChange={(e) => set({ ...v, [kind]: { ...v[kind], subject: e.target.value } })}
-              />
-            )}
-          </Field>
-          <Field label="Body" hint="{{name}}, {{url}}, {{inviter}} and {{organization}} are filled in.">
-            {(id) => (
-              <Textarea
-                id={id}
-                rows={3}
-                className="font-mono text-xs"
-                value={v[kind].body}
-                onChange={(e) => set({ ...v, [kind]: { ...v[kind], body: e.target.value } })}
-              />
-            )}
-          </Field>
-        </section>
+      {(Object.keys(EMAIL_NAMES) as AuthEmailKind[]).map((kind) => (
+        <EmailTemplate key={kind} kind={kind} value={v[kind]} onChange={(t) => set({ ...v, [kind]: t })} />
       ))}
     </div>
+  );
+}
+
+const EMAIL_NAMES: Record<AuthEmailKind, string> = {
+  "verify-email": "Verify email",
+  "password-reset": "Reset password",
+  "magic-link": "Magic link",
+  invitation: "Invitation",
+};
+
+/** One template: subject and body with the variables it may use, and a preview as the recipient sees it. */
+function EmailTemplate(props: {
+  kind: AuthEmailKind;
+  value: { subject: string; body: string };
+  onChange: (v: { subject: string; body: string }) => void;
+}) {
+  const { kind, value } = props;
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const unknown = [...new Set([...unknownVariables(kind, value.subject), ...unknownVariables(kind, value.body)])];
+  const warnId = useId();
+  // inserts at the caret (or at the end), then puts the caret after it
+  const insert = (name: string) => {
+    const el = bodyRef.current;
+    const token = `{{${name}}}`;
+    const at = el?.selectionStart ?? value.body.length;
+    const end = el?.selectionEnd ?? at;
+    props.onChange({ ...value, body: value.body.slice(0, at) + token + value.body.slice(end) });
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(at + token.length, at + token.length);
+    });
+  };
+  return (
+    <section aria-label={EMAIL_NAMES[kind]} className="grid gap-4 border p-3 lg:grid-cols-2">
+      <div className="flex min-w-0 flex-col gap-2">
+        <h2 className="text-sm font-medium">{EMAIL_NAMES[kind]}</h2>
+        <Field label="Subject">
+          {(id) => (
+            <Input
+              id={id}
+              className="h-8"
+              value={value.subject}
+              onChange={(e) => props.onChange({ ...value, subject: e.target.value })}
+            />
+          )}
+        </Field>
+        <Field label="Body" hint="Plain text (links and line breaks are kept) or HTML.">
+          {(id) => (
+            <Textarea
+              id={id}
+              ref={bodyRef}
+              rows={6}
+              className="font-mono text-xs"
+              value={value.body}
+              aria-invalid={unknown.length > 0 ? true : undefined}
+              aria-describedby={unknown.length > 0 ? warnId : undefined}
+              onChange={(e) => props.onChange({ ...value, body: e.target.value })}
+            />
+          )}
+        </Field>
+        <fieldset className="m-0 flex min-w-0 flex-wrap items-center gap-1.5 border-0 p-0">
+          <legend className="float-left mr-1.5 text-xs text-muted-foreground">Insert a variable</legend>
+          {EMAIL_VARIABLES[kind].map((name) => (
+            <Button
+              key={name}
+              type="button"
+              size="xs"
+              variant="outline"
+              className="font-mono"
+              aria-label={`Insert {{${name}}} into the ${EMAIL_NAMES[kind]} body`}
+              onClick={() => insert(name)}
+            >
+              {`{{${name}}}`}
+            </Button>
+          ))}
+        </fieldset>
+        {unknown.length > 0 && (
+          <p id={warnId} className="text-xs text-destructive">
+            {`Not filled in by this email, so it reaches the recipient as written: ${unknown.map((n) => `{{${n}}}`).join(", ")}`}
+          </p>
+        )}
+      </div>
+      <div className="flex min-w-0 flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-medium text-muted-foreground">Preview, with sample values</h3>
+          <fieldset className="m-0 flex gap-1 border-0 p-0">
+            <legend className="sr-only">{`Preview theme of ${EMAIL_NAMES[kind]}`}</legend>
+            {(["light", "dark"] as const).map((t) => (
+              <Button
+                key={t}
+                type="button"
+                size="xs"
+                variant={theme === t ? "secondary" : "ghost"}
+                aria-pressed={theme === t}
+                onClick={() => setTheme(t)}
+              >
+                {t === "light" ? "Light" : "Dark"}
+              </Button>
+            ))}
+          </fieldset>
+        </div>
+        {/* no scripts, no same origin: a template's HTML cannot reach the dashboard */}
+        <iframe
+          title={`Preview of the ${EMAIL_NAMES[kind]} email`}
+          sandbox=""
+          srcDoc={renderEmail(kind, value, theme)}
+          className="h-64 w-full border bg-background"
+        />
+      </div>
+    </section>
   );
 }
 
@@ -346,7 +429,7 @@ export function ConfigPage({ section }: { section: AuthSection }) {
   if (!config.data || draft === undefined) return <p className="text-sm text-muted-foreground">Loading…</p>;
   const changed = JSON.stringify(draft) !== JSON.stringify(config.data[key]);
   return (
-    <div className="flex max-w-3xl flex-col gap-6">
+    <div className={`flex flex-col gap-6 ${key === "emails" ? "max-w-6xl" : "max-w-3xl"}`}>
       <form
         className="flex flex-col gap-4"
         onSubmit={async (e) => {

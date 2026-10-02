@@ -189,6 +189,14 @@ describe("the Feature flags screen (an extension, UI-01 §26, §28)", () => {
     expect(audit.page[0]!.action).toBe("disable_feature_flag");
   });
 
+  test("a flag's state is said as every status is: an icon and a word, not a solid pill (UX2-12)", async () => {
+    mount("/flags");
+    await heading();
+    const badges = within(grid()).getAllByText(/^(On|Off|Archived)$/);
+    expect(badges.length).toBeGreaterThan(0);
+    for (const b of badges) expect(b.closest("[data-slot=status-badge]")).not.toBeNull();
+  });
+
   test("a new flag: checked as it is typed, created, then open", async () => {
     const { src, history } = mount("/flags");
     await heading();
@@ -197,6 +205,8 @@ describe("the Feature flags screen (an extension, UI-01 §26, §28)", () => {
     const panel = await screen.findByRole("complementary", { name: "New flag" });
     const create = within(panel).getByRole("button", { name: "Create flag" });
     expect(create.hasAttribute("disabled")).toBe(true);
+    // nothing typed yet: no mistake is said (UX2-5), though Create waits for a valid flag
+    expect(within(panel).queryByText(/starts with a letter|needs a key/i)).toBeNull();
     await user.type(within(panel).getByLabelText("Key"), "Beta");
     expect(within(panel).getByText(/starts with a letter/)).toBeDefined();
     await user.clear(within(panel).getByLabelText("Key"));

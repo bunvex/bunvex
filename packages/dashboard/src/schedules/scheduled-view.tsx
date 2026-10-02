@@ -7,7 +7,7 @@ import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery } from "../data/queries.ts";
 import { type FunctionKind, type ScheduledFunction, toDataSourceError } from "../data-source.ts";
@@ -19,13 +19,12 @@ import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
-import { FacetGroup, FacetRadios, SectionFilters } from "../shell/section-column.tsx";
+import { FacetGroup, SectionFilters } from "../shell/section-column.tsx";
 import { useSchedulesColumn } from "./column.tsx";
 import { formatRelative } from "./format.ts";
 import { scheduledQuery, scheduleKeys, useSchedulesLive } from "./queries.ts";
 
 const col = dataTableColumns<ScheduledFunction>();
-const ALL = "*";
 
 function FunctionName({ path, kind }: { path: string; kind?: FunctionKind }) {
   return (
@@ -62,7 +61,11 @@ export function ScheduledView() {
     !caps.readOnly &&
     caps.operations.includes("writeData") &&
     typeof source.cancelScheduledFunction === "function";
-  const list = useInfiniteQuery(scheduledQuery(scope, search.function));
+  // functions are a multi-choice facet like everywhere (UX2-23): one picked is filtered by the source, several
+  // over the loaded runs
+  const picked = search.function?.split(",").filter(Boolean);
+  const one = picked?.length === 1 ? picked[0] : undefined;
+  const list = useInfiniteQuery(scheduledQuery(scope, one));
   // the column's counts: the loaded runs of every function (the same query when none is picked)
   const every = useInfiniteQuery(scheduledQuery(scope, undefined));
   const liveError = useSchedulesLive();
@@ -70,7 +73,9 @@ export function ScheduledView() {
   const loaded = list.data?.pages.flatMap((p) => p.page) ?? [];
   const states = search.state?.split(",") as RunState[] | undefined;
   // the state is filtered here, over the loaded runs; the function by the source
-  const runs = states ? loaded.filter((r) => states.includes(r.state)) : loaded;
+  const runs = loaded.filter(
+    (r) => (!states || states.includes(r.state)) && (!picked || picked.length < 2 || picked.includes(r.function)),
+  );
   const counts = useMemo(() => {
     const byFunction = new Map<string, number>();
     for (const p of every.data?.pages ?? [])
@@ -117,7 +122,7 @@ export function ScheduledView() {
   ];
 
   const cancelAll = async () => {
-    const { canceled } = await source.cancelAllScheduledFunctions!(search.function);
+    const { canceled } = await source.cancelAllScheduledFunctions!(one);
     setOutcome(`Canceled ${canceled} scheduled ${canceled === 1 ? "run" : "runs"}.`);
     await refresh();
   };
@@ -136,19 +141,15 @@ export function ScheduledView() {
           setSearch({ state: v === "all" ? undefined : v.length ? v.join(",") : "none", run: undefined })
         }
       />
-      <FacetRadios
+      <FacetGroup<string>
         title="Function"
-        value={search.function ?? ALL}
-        onChange={(v) => setSearch({ function: v === ALL ? undefined : v, run: undefined })}
-        options={[
-          { value: ALL, label: "All functions", count: counts.all },
-          ...functions.map((f) => ({
-            value: f.path,
-            label: f.path,
-            count: counts.byFunction.get(f.path) ?? 0,
-            mono: true,
-          })),
-        ]}
+        mono
+        options={functions.map((f) => f.path)}
+        value={picked ?? "all"}
+        counts={counts.byFunction}
+        onChange={(v) =>
+          setSearch({ function: v === "all" ? undefined : v.length ? v.join(",") : "none", run: undefined })
+        }
       />
     </>
   );
@@ -171,13 +172,12 @@ export function ScheduledView() {
             <span className="sr-only text-sm text-muted-foreground tabular-nums @xl/schedules:not-sr-only">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
           )}
           <span className="ml-auto flex items-center gap-1">
-            {typeof source.cancelAllScheduledFunctions === "function" && (
+            {typeof source.cancelAllScheduledFunctions === "function" && (!picked || one) && (
               <ConfirmButton
-                label={search.function ? `Cancel all runs of ${search.function}` : "Cancel all"}
+                label={one ? `Cancel all runs of ${one}` : "Cancel all"}
+                variant="destructive-outline"
                 disabled={!canCancel || !loaded.some((r) => r.state === "pending")}
-                title={
-                  search.function ? `Cancel every pending run of ${search.function}?` : "Cancel every pending run?"
-                }
+                title={one ? `Cancel every pending run of ${one}?` : "Cancel every pending run?"}
                 description="Runs that have started finish. This cannot be undone."
                 confirm="Cancel the runs"
                 busy="Canceling…"
@@ -211,8 +211,8 @@ export function ScheduledView() {
             empty={
               list.isPending
                 ? "Loading…"
-                : search.function
-                  ? `No run of ${search.function} is scheduled.`
+                : one
+                  ? `No run of ${one} is scheduled.`
                   : filtered
                     ? "No loaded run matches these filters."
                     : "Nothing is scheduled. Functions scheduled with ctx.scheduler.runAfter or runAt wait here until they run."
@@ -288,7 +288,7 @@ function RunDetails(props: {
             <div>
               <ConfirmButton
                 label="Cancel run"
-                variant="destructive"
+                variant="destructive-outline"
                 disabled={!props.canCancel || run.state !== "pending"}
                 title="Cancel this run?"
                 description={`The run of ${run.function} scheduled for ${formatTime(run.scheduledTime)} will not happen. This cannot be undone.`}

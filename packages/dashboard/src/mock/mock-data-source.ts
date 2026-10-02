@@ -9,6 +9,9 @@ import {
   type AuthConfig,
   type AuthEmailAction,
   type AuthEvent,
+  type AuthInvitation,
+  type AuthMember,
+  type AuthMemberRole,
   type AuthOrganization,
   type AuthProvider,
   type AuthSession,
@@ -45,6 +48,7 @@ import {
   type ScheduledFunction,
   type ScheduledFunctionQuery,
   type SchemaInfo,
+  type SchemaValidation,
   type SnapshotExport,
   type SnapshotImport,
   type SnapshotImportRequest,
@@ -437,8 +441,49 @@ export class MockDataSource implements DashboardDataSource {
     );
   }
 
+  /**
+   * As if a new schema had been pushed (STUDY-12 §14.7): it is checked against the stored documents over
+   * `durationMs`, then accepted (`pass`), or rejected with the documents that do not match (`fail`). The dev
+   * host's `?validate=pass|fail` starts one.
+   */
+  simulateSchemaValidation(outcome: "pass" | "fail", durationMs = 20_000) {
+    this.schemaValidation = { start: this.scheduler.now(), durationMs, outcome };
+  }
+  private schemaValidation?: { start: number; durationMs: number; outcome: "pass" | "fail" };
+
+  private validationNow(): SchemaValidation | undefined {
+    const v = this.schemaValidation;
+    if (!v) return undefined;
+    const declared = [...this.tables.values()].filter((t) => t.declared);
+    const total = declared.reduce((n, t) => n + t.documents.length, 0);
+    const done = Math.min(1, (this.scheduler.now() - v.start) / v.durationMs);
+    if (done < 1)
+      return {
+        state: "validating",
+        numDocsValidated: Math.floor(total * done),
+        // the total is known after the first moment, as a server counts while it walks
+        totalDocs: done < 0.1 ? null : total,
+      };
+    if (v.outcome === "pass") {
+      this.schemaValidation = undefined;
+      return undefined;
+    }
+    const table = declared.find((t) => t.documents.length > 0);
+    const bad = (table?.documents ?? []).slice(0, 3);
+    return {
+      state: "failed",
+      failedDocs: Math.max(bad.length, Math.floor(total * 0.004)),
+      sample: bad.map((d) => ({
+        table: table!.name,
+        id: d._id as string,
+        error: "Object is missing the required field `owner`.",
+      })),
+    };
+  }
+
   getSchema(opts?: CallOptions): Promise<SchemaInfo> {
     return this.call(opts?.signal, () => ({
+      ...(this.validationNow() && { validation: this.validationNow() }),
       enforced: false,
       tables: [...this.tables.values()]
         .filter((t) => t.declared)
@@ -965,6 +1010,31 @@ export class MockDataSource implements DashboardDataSource {
   }
   listAuthOrganizations(opts?: CallOptions): Promise<AuthOrganization[]> {
     return this.viewAuth(opts?.signal, () => this.authAdmin.organizations());
+  }
+  listAuthMembers(organizationId: string, opts?: CallOptions): Promise<AuthMember[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listMembers(organizationId));
+  }
+  updateAuthMemberRole(memberId: string, role: AuthMemberRole, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.updateMemberRole(memberId, role));
+  }
+  removeAuthMember(memberId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.removeMember(memberId));
+  }
+  listAuthInvitations(organizationId: string, opts?: CallOptions): Promise<AuthInvitation[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listInvitations(organizationId));
+  }
+  inviteAuthMember(
+    organizationId: string,
+    invite: { email: string; role: AuthMemberRole },
+    opts?: CallOptions,
+  ): Promise<string> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.inviteMember(organizationId, invite));
+  }
+  resendAuthInvitation(invitationId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.resendInvitation(invitationId));
+  }
+  cancelAuthInvitation(invitationId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.cancelInvitation(invitationId));
   }
   getAuthConfig(opts?: CallOptions): Promise<AuthConfig> {
     return this.viewAuth(opts?.signal, () => this.authAdmin.getConfig());

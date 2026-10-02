@@ -17,7 +17,6 @@ import { type FilesSearch, filesRoute } from "../router.tsx";
 import { formatBytes, formatCount } from "../screens/stats.ts";
 import { BAR_TITLE, BAR1, BAR2, SCREEN } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
-import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -117,7 +116,7 @@ function Files() {
 
   const view = VIEWS.find((v) => v.value === search.view);
   const sections = stats ? <FilesSections search={search} setSearch={(patch) => setSearch(patch)} /> : null;
-  const sheet = useSectionSheet({ kind: "files-sections", label: "Views", children: sections });
+  const sheet = useSectionSheet({ kind: "files-sections", label: "Files", children: sections });
   // the primary action, on top of the section column (UI-01 §23)
   const uploadButton = typeof source.uploadFile === "function" && (
     <>
@@ -164,7 +163,7 @@ function Files() {
             {canWrite && selectedIds.length > 0 && typeof source.deleteFiles === "function" && (
               <ConfirmButton
                 label={`Delete ${formatCount(selectedIds.length)}`}
-                variant="destructive"
+                variant="destructive-outline"
                 title={`Delete ${files(selectedIds.length)}?`}
                 description="They are removed from storage, and their URLs stop working. This cannot be undone."
                 confirm={`Delete ${files(selectedIds.length)}`}
@@ -176,28 +175,28 @@ function Files() {
           </span>
         </div>
         <div className={BAR2}>
+          {/* one Bar 2 recipe on every screen: inline controls, no labels above them (UX2-2) */}
           <form
-            className="flex items-end gap-2"
+            className="flex items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               if (lookup.trim()) setSearch({ file: lookup.trim() });
             }}
           >
-            <label className="flex flex-col gap-1 text-sm text-muted-foreground" htmlFor={lookupId}>
-              Look up by storage ID
-              <Input
-                id={lookupId}
-                className="h-8 w-56 font-mono text-xs @3xl/files:w-72"
-                value={lookup}
-                onChange={(e) => setLookup(e.target.value)}
-              />
-            </label>
+            <Input
+              id={lookupId}
+              aria-label="Look up by storage ID"
+              placeholder="Look up by storage ID…"
+              className="h-8 w-56 font-mono text-xs @3xl/files:w-72"
+              value={lookup}
+              onChange={(e) => setLookup(e.target.value)}
+            />
             {/* as tall as its input (UX-16) */}
             <Button type="submit" variant="outline" className="h-8">
               Open
             </Button>
           </form>
-          <div className="flex flex-col gap-1">
+          <div className="ml-auto flex items-center gap-2">
             <span id={orderId} className="text-sm text-muted-foreground">
               Order
             </span>
@@ -218,14 +217,6 @@ function Files() {
               </SelectContent>
             </Select>
           </div>
-          {(["from", "to"] as const).map((side) => (
-            <DayInput
-              key={side}
-              label={side === "from" ? "Uploaded from" : "Uploaded until"}
-              value={search[side]}
-              onChange={(v) => setSearch({ [side]: v }, true)}
-            />
-          ))}
         </div>
         {/* no reserved line when there is nothing to say (UX-17) */}
         <p
@@ -333,7 +324,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
             </a>
             <ConfirmButton
               label="Delete"
-              variant="destructive"
+              variant="destructive-outline"
               disabled={!props.canDelete}
               title="Delete this file?"
               description="It is removed from storage, and its URL stops working. This cannot be undone."

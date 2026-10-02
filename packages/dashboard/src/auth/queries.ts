@@ -41,6 +41,20 @@ export const organizationsQuery = ({ source, scope }: QueryScope) =>
     enabled: typeof source.listAuthOrganizations === "function",
   });
 
+export const membersQuery = ({ source, scope }: QueryScope, organizationId: string) =>
+  queryOptions({
+    queryKey: [...authKeys.all(scope), "members", organizationId] as const,
+    queryFn: ({ signal }) => source.listAuthMembers!(organizationId, { signal }),
+    enabled: typeof source.listAuthMembers === "function",
+  });
+
+export const invitationsQuery = ({ source, scope }: QueryScope, organizationId: string) =>
+  queryOptions({
+    queryKey: [...authKeys.all(scope), "invitations", organizationId] as const,
+    queryFn: ({ signal }) => source.listAuthInvitations!(organizationId, { signal }),
+    enabled: typeof source.listAuthInvitations === "function",
+  });
+
 export const configQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: [...authKeys.all(scope), "config"] as const,

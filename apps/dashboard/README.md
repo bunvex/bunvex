@@ -15,7 +15,8 @@ Query parameters on any page tune the mock (they are taken out of the address an
 `?latency=300` (ms per call), `?fail=0.2` (share of calls that fail), `?writes=500` (a live insert or
 delete every 500 ms; `0` turns it off), `?tables=0` (a deployment with no tables yet). `?tasks=100000&executions=4000` give volume: that many tasks, and that many function
 executions in the logs (each writes 1–4 lines). `?nodes=4` shows a leader and three followers on the Topology screen
-(one node by default, as bunvex runs today).
+(one node by default, as bunvex runs today). `?validate=pass` or `?validate=fail` starts a schema validation, as after a push, that
+ends accepted or with documents that do not match (Schema screen and the Database schema panel).
 
 ## Tests
 

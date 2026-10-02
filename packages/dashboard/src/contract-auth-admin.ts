@@ -86,6 +86,53 @@ export function describeAuthAdminContract({ make, test }: Ctx) {
     }
   });
 
+  test("organizations (when offered): counts match members and pending invitations; an owner is kept", async () => {
+    const src = await make();
+    if (!src.listAuthOrganizations || !src.listAuthMembers) return;
+    if (!(await src.getCapabilities()).operations.includes("viewData")) return;
+    const orgs = await src.listAuthOrganizations();
+    const org = orgs[0];
+    if (!org) return;
+    const members = await src.listAuthMembers(org.id);
+    expect(members.length).toBe(org.members);
+    for (const m of members) expect(m.organizationId).toBe(org.id);
+    for (let i = 1; i < members.length; i++)
+      expect(members[i]!.createdAt).toBeGreaterThanOrEqual(members[i - 1]!.createdAt);
+    if (src.listAuthInvitations)
+      expect((await src.listAuthInvitations(org.id)).filter((i) => i.status === "pending").length).toBe(
+        org.invitations,
+      );
+    if (!(await canWrite(src))) return;
+    // the last owner can be neither demoted nor removed
+    const owners = members.filter((m) => m.role === "owner");
+    if (owners.length === 1 && src.updateAuthMemberRole)
+      await expect(src.updateAuthMemberRole(owners[0]!.id, "member")).rejects.toThrow();
+    if (owners.length === 1 && src.removeAuthMember)
+      await expect(src.removeAuthMember(owners[0]!.id)).rejects.toThrow();
+    const other = members.find((m) => m.role !== "owner");
+    if (other && src.updateAuthMemberRole) {
+      await src.updateAuthMemberRole(other.id, "admin");
+      expect((await src.listAuthMembers(org.id)).find((m) => m.id === other.id)?.role).toBe("admin");
+    }
+    if (src.inviteAuthMember && src.listAuthInvitations) {
+      const id = await src.inviteAuthMember(org.id, { email: "contract-invite@example.com", role: "member" });
+      const invited = (await src.listAuthInvitations(org.id)).find((i) => i.id === id);
+      expect([invited?.email, invited?.status]).toEqual(["contract-invite@example.com", "pending"]);
+      await expect(
+        src.inviteAuthMember(org.id, { email: "contract-invite@example.com", role: "member" }),
+      ).rejects.toThrow();
+      if (src.cancelAuthInvitation) {
+        await src.cancelAuthInvitation(id);
+        expect((await src.listAuthInvitations(org.id)).find((i) => i.id === id)?.status).toBe("canceled");
+        if (src.resendAuthInvitation) await expect(src.resendAuthInvitation(id)).rejects.toThrow();
+      }
+    }
+    if (other && src.removeAuthMember) {
+      await src.removeAuthMember(other.id);
+      expect((await src.listAuthMembers(org.id)).some((m) => m.id === other.id)).toBe(false);
+    }
+  });
+
   test("auth config (when offered): read whole, a page merged in, the rest kept", async () => {
     const src = await make();
     if (!src.getAuthConfig) return;

@@ -1399,6 +1399,18 @@ Checked on every screen at 390 px (a phone) and 768 px (a tablet); nothing scrol
   the table's functions read and wrote per minute over the last hour, one chart with Reads and Writes (the
   same unit, one axis). A table no function touches shows a flat zero line; without the permission, why.
 
+### 18.4 The rate cards' heatmap (2 Oct 2026, STUDY-12 M2, M5)
+
+- **Failure rate** and **Cache hit rate** get a "Line chart / Heatmap" switch, as Convex's `FailureRate.tsx` /
+  `CacheHitRate.tsx`: failure rate opens as a chart, cache hit rate as a heatmap; the choice is kept in this
+  browser (`bunvex:health-<measure>-view`). Same data as the chart (`topFunctions`), no new contract.
+- **`Heatmap`** (`@bunvex/ui/components/heatmap`): a row per function, worst first by its average (failures
+  high, cache hits low; rows with no value last, "Other functions" among them), a cell per bucket. Five steps of
+  one blue (`--heat-1…5`, light and dark; validated as an ordinal ramp in both themes), the darker the worse; an
+  empty bucket is a dashed, unfilled cell, never zero. It is a real table — row headers, time column headers,
+  each cell's value in text — and the hovered cell is said in a line under it; a legend names both ends and
+  "no data".
+
 ## 19. Amendment — Settings: authentication, snapshots; volume; every screen in the browser (30 Sep 2026)
 
 ### 19.1 Settings → Authentication (STUDY-12 §13.1)
@@ -1581,6 +1593,23 @@ a table), lazy like the other screens.
 - Tested: the model, groups and layout (unit); the screen in happy-dom with axe (navigation, counts, the panel
   from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
   grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
+
+### 21.4 Groups renamed and dragged; schema validation (2 Oct 2026, STUDY-12 §14.7)
+
+- **Groups**: the group's header is its drag handle (a grip; xyflow `dragHandle`), and its tables are its children
+  (`parentId`, positions relative to the box), so the whole group moves. **Rename** (a pencil button) turns the
+  name into a box: Enter or leaving saves, Escape keeps the old name, an empty name restores the computed one.
+  Names and dropped positions (tables and groups) are kept per deployment (`schema/saved-layout.ts`,
+  `bunvex:schema-layout:<scope>`); a saved position applies only while the table sits in the same group.
+  **Reset layout** forgets the positions, keeps the names. Renaming does not lay the diagram out again.
+- **Validation**: `SchemaInfo.validation` (optional) — while validating, "Validating the schema against the
+  stored documents…" with a progress bar capped at 99 % (a spinner while the total is unknown), on the Schema
+  bar and in the Database schema panel; the schema query polls every 2 s meanwhile. Failed: an alert, "Schema
+  validation failed: N documents do not match.", and in the Database panel a few of them, each opening its
+  document. Mock: `simulateSchemaValidation`; dev host: `?validate=pass|fail`.
+- Tested: the saved layout and the 99 % cap (unit); rename, Escape, empty name, validation on both screens and a
+  failing document opening (happy-dom, axe); dragging a group, kept after a reload, Reset layout (e2e in
+  Chromium). Each behaviour was sabotaged once (two of them in the e2e).
 
 ## 22. Amendment — Topology (1 Oct 2026)
 
@@ -1881,6 +1910,15 @@ plugin's ban, impersonation and session revocation); STUDY-12 §7.8 cites what w
 Full-bleed tables: every session (user, signed in, expires, device in words, IP, impersonated by, Revoke after
 a confirmation); every organization (name, slug, members, pending invitations, created).
 
+**An organization's panel** (2 Oct 2026, owner's follow-up): a row (click, Enter) opens it, docked, in the URL
+(`?org=<id>&orgTab=members|invitations`), following the current row like Users. **Members**: name, email, role
+(Owner / Admin / Member, changed in place), Remove after a confirmation (the user account stays); an
+organization keeps an owner — the source refuses to demote or remove the last one and the panel says why.
+**Invitations**: every status (Pending, Accepted, Rejected, Canceled — icon and word), newest first, with the
+role, when it was sent and when a pending one expires; **Invite by email** with a role; **Resend** (extends
+the expiry) and **Cancel** (after a confirmation) for pending ones. The counts in the grid are the members and
+the pending invitations, so they stay true after a change.
+
 ### 25.3 Configuration
 
 A form per page over its part of the configuration, saved alone (`updateAuthConfig({ <part> })`), with
@@ -1890,17 +1928,23 @@ providers** that were Settings → Authentication (§19.1; that page is gone, it
 Settings' column loses the item). **Multi-factor**: TOTP, email codes, backup codes, who must use one.
 **Passkeys**: on/off, relying party name and ID. **Sessions**: lifetime, refresh age, fresh age. **Rate
 limits**: on/off, max per window. **URL configuration**: site URL, redirect allow-list. **Emails**: subject and
-body per template. **Audit**: the auth events, newest first.
+body per template, now with the **variables** each email fills in (insert at the caret), a warning for one it
+does not fill (it would reach the recipient as written), and a **preview** with sample values, light or dark,
+rendered in a **sandboxed iframe** (`sandbox=""`: no scripts, no same origin) — plain text keeps its links and
+line breaks, HTML is used as such (`auth/email-preview.ts`, pure and unit-tested). **Audit**: the auth events,
+newest first.
 
 ### 25.4 Contract
 
 `data-source-auth-admin.ts`: every method optional, detected with `typeof`; `listAuthUsers` offers the screen.
 Users (paged, searched, filtered by provider and status), one user, create, invite, send an email, sessions
-(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations, the
-configuration (read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
+(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations and
+their members (list, change role, remove) and invitations (list, invite, resend, cancel), the configuration
+(read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
 random stream; reads need `viewData`, writes `writeData` and not read-only. The contract suite
 (`contract-auth-admin.ts`) checks the listing and its filters, create / ban (signing out) / unban / remove, and
-the configuration's merge.
+the configuration's merge, and organizations: counts match members and pending invitations, the last owner
+is kept, a role changes, an invitation is pending then canceled (and cannot be resent), a member is removed.
 
 ## 26. Extensions (the owner's call, 1 Oct 2026)
 
@@ -1963,7 +2007,14 @@ components may bring screens of their own. Such a screen is an **extension**: on
   entry never holds MapLibre (e2e). The map chunk is about 1.16 MB (≈ 320 kB gzip), MapLibre's worker a
   separate file.
 - **Not yet** (server work): the client `track()` helper and automatic page views, the server-side GeoIP
-  lookup that places a session, retention of analytics events, and a custom tile style setting.
+  lookup that places a session, and retention of analytics events.
+- **Map style** (2 Oct 2026): **Settings → Map style** (`settings-page.tsx`, `map-style.ts`) — the extension
+  adds the page through the registry's `settings` entries, listed under an "Extensions" group of the Settings
+  column only when the deployment offers Analytics. A MapLibre style URL (https, or http on localhost) is
+  fetched once and checked (version 8, `sources`, `layers`), with a warning that each viewer's browser then
+  contacts that provider and the map no longer works offline; "Use the built-in basemap" goes back. Kept in this
+  browser per deployment (`bunvex:analytics-map-style:<scope>`); the Realtime map uses it, else the bundled
+  countries.
 
 ### 26.3 Workflows and work pools (an extension; STUDY-12 §18)
 
@@ -2049,6 +2100,49 @@ writes when on), the screen and the editor.
 
 The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
 every one. They land in five pull requests, one subsection each.
+
+### UX review 2 — filters and forms (UX2-2, UX2-3, UX2-5, UX2-21, UX2-23, UX2-24)
+
+- **One Bar 2 recipe** (UX2-2): inline controls, vertically centred, no labels above inputs (`BAR2` is
+  `items-center`). Files' Bar 2 is the storage-ID lookup and Order; its custom upload-date range moved into
+  the column under the Uploaded presets (as History's), so the date filter is no longer in two places.
+- **No browser chrome in forms** (UX2-3): `@bunvex/ui` gains `ChoiceSelect` (a single choice in the design
+  system's Select), `ChoiceRadios` (Base UI RadioGroup with a label) and `FilePicker` (a button, the file's
+  name and a drop zone over a hidden `<input type="file">`). The flag editor and Snapshots use them; a test
+  (`test/native-controls.test.ts`) fails on any `<select>` or native file/radio/checkbox input outside an
+  explicit allow-list (the column's facet radios, Files' hidden upload input, the Schema toolbar's toggle, and
+  — until the Authentication pull request — two Authentication selects).
+- **No error before typing** (UX2-5): the new-flag form says nothing until something is typed; Create stays
+  disabled meanwhile (as the filters since UX-2).
+- **The Database bar keeps one row when narrow** (UX2-21): below a 42 rem table width (the panel open) "Index",
+  "Order" and the buttons' first words go to screen readers only.
+- **Facets** (UX2-23): many-valued facets are checkboxes with **Only** on hover/focus — Schedules' Function
+  facet too (one function is filtered by the source, several over the loaded runs; "Cancel all" only with none
+  or one picked); radios stay for exclusive ranges (days, size). A facet's "All" is named "All: <facet>".
+- **History's actions** (UX2-24): short words ("Env var added", "Run canceled") grouped by area — Data, Files,
+  Environment variables, Schedules, Deploys, Other — as labelled groups.
+
+### UX review 2 — consistency components (UX2-6, UX2-7, UX2-8, UX2-11, UX2-12, UX2-13, UX2-20, UX2-22)
+
+- **One tab pattern** (UX2-6): `TabsList` is underlined (`variant="line"`, 13 px) by default — Functions, the
+  flag panel, the Topology node panel, the Database schema panel and the Authentication user panel alike.
+- **One destructive trigger** (UX2-8): a delete or cancel on a row, a panel or a bar is `destructive-outline`
+  (Files' Delete, env vars' Delete, Delete selected, Cancel run, Cancel all, Pause, Turn off); only the confirm
+  button inside a confirmation dialog is the filled `destructive`.
+- **Status badges** (UX2-12): `StatusBadge` gains state words — on, off, archived, verified, unverified,
+  banned, active, revoked — so a flag's state is an icon and a word, never a solid pill (Authentication uses
+  them in its pull request).
+- **One time rule** (UX2-20, `shell/time.tsx`): grids show `YYYY-MM-DD HH:mm:ss`; log lines add milliseconds
+  and drop the date for today; summaries show a relative time with the absolute one in the tooltip
+  (`RelativeTime`); no `toLocaleString`.
+- **Section column nav** (UX2-22): headings only when the column has more than one group or filters below
+  (`SectionNav withFilters`); Analytics' pages are one group.
+- **The phone button** (UX2-13): named after what the column holds — the screen's name with a chevron
+  ("Settings ▾", "Files ▾", "Analytics ▾") when it holds navigation, "Filters" when only filters.
+- **Logs' Export and Clear** (UX2-11): already one rule on `main` — labelled when the logs area is at least
+  42 rem wide, icons when narrower, the same on the Logs screen and the Functions → Logs tab (checked at 1440:
+  labelled in both); unchanged.
+- **Copy buttons** (UX2-7) are only on Authentication's Sign in / Providers: its pull request.
 
 ### UX review 2 — Authentication (UX2-18, UX2-19, and the Authentication parts of UX2-3)
 

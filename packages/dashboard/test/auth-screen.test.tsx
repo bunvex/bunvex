@@ -176,7 +176,8 @@ describe("the Authentication screen", () => {
     await user.click(screen.getAllByRole("button", { name: "Revoke" }).at(-1)!);
     await waitFor(async () => expect((await source.listAuthSessions({})).length).toBe(sessions.length - 1));
     await user.click(screen.getByRole("link", { name: "Organizations" }));
-    const orgs = await screen.findByRole("table", { name: "Organizations" });
+    // a grid: a row opens the organization (auth-orgs-emails.test.tsx)
+    const orgs = await screen.findByRole("grid", { name: "Organizations" });
     await waitFor(() => expect(within(orgs).getAllByRole("row").length).toBe(5));
   });
 
