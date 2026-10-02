@@ -152,9 +152,11 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
   with Convex's internal-error message; each attempt resumes into the hidden tables recorded in the row
   (`hidden_tables`, bunvex's own field, not returned by `queryImport`), skipping what they already hold. A
   failed or canceled import's hidden tables are dropped.
-- **Not verified:** a Convex ZIP **with files**: Convex's `_storage` ids carry Convex's number for it, which
-  may be held by another bunvex system table (then the import fails with a table-number error). The only
-  real Convex ZIP at hand (convex-backend's `demos/cron-jobs/test.zip`) has no files; it imports.
+- **A Convex ZIP with files (verified):** Convex gives its system tables fixed numbers (`DefaultTableNumber`
+  in `crates/model/src/lib.rs`, "to make import/export more likely to work nicely"): `_storage` ids always
+  carry 540. bunvex numbers its system tables in order (`_storage` is 522), and 540 is free, so such a ZIP
+  imports and `_storage` takes number 540 (test "a Convex ZIP with files"). Matching Convex's fixed numbers
+  is X9.
 
 ### PR 3 — import (plan)
 - **Formats:** all four. CSV with Rust's `f64` parse rules; JSON and JSONL with numbers as float64; the ZIP's `uniform` encoding.
@@ -177,6 +179,8 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 | X6 | A failed step fails the import at once. Convex retries an error that is not the import's own (a bad request) up to 5 times, with a backoff from 30 s to 5 minutes | bunvex did not yet tell a transient system error from a content error | accepted, then built (owner, 2026-10-02; #210): resolved |
 | X7 | An import interrupted by a restart starts over (its hidden tables are dropped and written again). Convex resumes from its checkpoints, skipping the documents already in each hidden table (an append cannot resume in Convex either) | not built yet; only the time it takes differed | accepted, then built (owner, 2026-10-02; #210): resolved |
 | X8 | The parser's detail in "Row N wasn't valid JSON: …" and "Not valid JSON: …" is JavaScript's wording (serde_json's in Convex), and invalid UTF-8 in a CSV says "Failed to parse CSV row 1: invalid UTF-8" | bunvex parses with the runtime's JSON parser and its own CSV reader; the message structure is Convex's | accepted (owner, 2026-10-02) |
+
+| X9 | bunvex numbers its system tables in order from 513 (`_storage` 522, `_scheduled_functions` 518, …). Convex gives each one a fixed number (`_storage` 540, `_scheduled_functions` 539, `_exports` 516, …), so the ids of system documents differ between the two, and an import changes `_storage`'s number | not built yet; can be matched by giving bunvex's system tables Convex's numbers (and bunvex-only tables numbers Convex does not use) | awaits owner (recommended: match Convex) |
 
 **Follow-up:** X1, X3 and X4 are in the ledger's "Waiting on a dependency" (components, item 12, an audit log); X5 can be built any time.
 

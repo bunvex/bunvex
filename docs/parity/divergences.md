@@ -291,6 +291,10 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).
 
+| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
+|---|---|---|---|---|---|
+| DV-223 | System tables are numbered in order from 513 (`_storage` 522) | fixed numbers per system table (`_storage` 540, `_scheduled_functions` 539, …) | yes (the ids of files and scheduled functions; an import changes `_storage`'s number) | match Convex's numbers | [STUDY-42 X9](../study/STUDY-42-import-export.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
