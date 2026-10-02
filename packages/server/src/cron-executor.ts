@@ -58,7 +58,7 @@ export class CronJobExecutor {
   constructor(
     private readonly engine: Engine,
     private readonly functions: Functions,
-    private readonly specs: Map<string, CronSpec>,
+    private specs: Map<string, CronSpec>,
     options: CronExecutorOptions = {},
   ) {
     this.o = {
@@ -80,6 +80,14 @@ export class CronJobExecutor {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs))) this.poke();
     });
     this.loop = this.run();
+    return diff;
+  }
+
+  /** A new code version's crons (STUDY-35): the same diff as at start, against what is stored. */
+  async push(specs: Map<string, CronSpec>) {
+    this.specs = specs;
+    const diff = await this.engine.mutation((db) => applyCrons(db, specs, Date.now(), this.o), "cron_push");
+    this.poke();
     return diff;
   }
 

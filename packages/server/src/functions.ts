@@ -37,8 +37,10 @@ import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 
-/** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
-const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
+/** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
+ *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result. */
+const cacheKeyOf = (hash: string, name: string, args: unknown) =>
+  `${hash}\u0000${name}\u0000${stringifyValue(args ?? {})}`;
 
 /** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
 const registryKey = (name: string) => {
@@ -147,7 +149,17 @@ export type FunctionDef =
 const asObjectValidator = (a: ArgsValidator): GenericValidator =>
   (a as GenericValidator).isValidator ? (a as GenericValidator) : v.object(a as PropertyValidators);
 
+/** Every function a builder made: how a code version's analysis tells its functions from other exports. */
+const DEFINED = new WeakSet<object>();
+export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
+
 function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
+  const f = defineUnmarked(kind, visibility, def);
+  DEFINED.add(f);
+  return f;
+}
+
+function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
   if (typeof def === "function") return { kind, visibility, handler: def } as FunctionDef;
   const d = def as { args?: ArgsValidator; returns?: GenericValidator; handler: unknown };
   if (typeof d?.handler !== "function")
@@ -182,6 +194,33 @@ export const internalAction = builder<ActionCtx>("action", "internal");
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
+  /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
+  private moduleHashes = new Map<string, string>();
+
+  /** A function name's module, as the registry and code versions key it (`dir/file` of `dir/file:fn`). */
+  static moduleOf(name: string) {
+    const key = registryKey(name);
+    return key.slice(0, key.lastIndexOf(":"));
+  }
+
+  private cacheKey(name: string, args: unknown) {
+    return cacheKeyOf(this.moduleHashes.get(Functions.moduleOf(name)) ?? "", name, args);
+  }
+
+  /**
+   * Replace every function at once with a code version's (STUDY-35): the next call of any name runs the new
+   * code. The modules whose code changed (added, removed or a new hash), for re-running what read them.
+   */
+  install(fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>): Set<string> {
+    const changed = new Set<string>();
+    for (const [m, h] of moduleHashes) if (this.moduleHashes.get(m) !== h) changed.add(m);
+    for (const m of this.moduleHashes.keys()) if (!moduleHashes.has(m)) changed.add(m);
+    for (const k of this.fns.keys()) if (!fns.has(k)) changed.add(Functions.moduleOf(k));
+    for (const k of fns.keys()) if (!this.fns.has(k)) changed.add(Functions.moduleOf(k));
+    this.fns = new Map(fns);
+    this.moduleHashes = new Map(moduleHashes);
+    return changed;
+  }
 
   /** Where files go (STUDY-32); set by `createServer`. */
   fileStorage: FileStorage | null = null;
@@ -227,7 +266,8 @@ export class Functions {
   }
 
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
-    const f = this.fns.get(name);
+    // `dir/file` is its default export, and `.js` is optional, as Convex canonicalizes a path.
+    const f = this.fns.get(name) ?? this.fns.get(registryKey(name));
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
     // names the canonical path (`module.js:name`) and both kinds.
@@ -351,7 +391,7 @@ export class Functions {
     if (isSystemPath(name)) {
       const n = name.replace(/:default$/, "");
       this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", caller);
-    } else this.checkAccess(this.fns.get(name), name, "query", caller);
+    } else this.checkAccess(this.fns.get(name) ?? this.fns.get(registryKey(name)), name, "query", caller);
   }
 
   private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
@@ -422,7 +462,7 @@ export class Functions {
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
     return this.engine.query(
       this.queryBody(name, args, fromClient, caller),
-      cacheKey(name, args),
+      this.cacheKey(name, args),
       cachedQueryLogs,
       caller,
     );
@@ -431,7 +471,7 @@ export class Functions {
   async runQueryJson(name: string, args: unknown, caller?: Caller): Promise<string> {
     return this.engine.queryJson(
       this.queryBody(name, args, true, caller),
-      cacheKey(name, args),
+      this.cacheKey(name, args),
       cachedQueryLogs,
       caller,
     );
@@ -446,7 +486,7 @@ export class Functions {
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
     const body = this.queryBody(name, args, true, caller);
-    return this.engine.queryJson(body, cacheKey(name, args), cachedQueryLogs, caller, ts);
+    return this.engine.queryJson(body, this.cacheKey(name, args), cachedQueryLogs, caller, ts);
   }
 
   async runMutation(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {

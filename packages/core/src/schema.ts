@@ -3,7 +3,7 @@
 // persistence stores are assigned once and kept in the `_tables` / `_index` system tables, and each Engine
 // resolves them into its own catalog (catalog.ts, STUDY-04). Every table also gets Convex's two system
 // indexes, `by_id` and `by_creation_time`.
-import { type GenericValidator, type PropertyValidators, v } from "@bunvex/values";
+import { type GenericValidator, isBytes, type PropertyValidators, v } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
 export type FieldValue = null | boolean | number | string;
@@ -144,7 +144,7 @@ export function documentValidator(table: string, doc: GenericValidator): Generic
 export function fieldValue(doc: Doc, path: string): KeyValue {
   let v: unknown = doc;
   for (const part of path.split(".")) {
-    if (v === null || typeof v !== "object" || Array.isArray(v) || v instanceof ArrayBuffer) return undefined;
+    if (v === null || typeof v !== "object" || Array.isArray(v) || isBytes(v)) return undefined;
     v = (v as Record<string, unknown>)[part];
   }
   return v as KeyValue;

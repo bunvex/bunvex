@@ -3,7 +3,7 @@
 // value and the validator in the same display forms.
 import { decodeId } from "./id.ts";
 import type { GenericValidator } from "./validators.ts";
-import { compareValues, isSimpleObject, type Value } from "./value.ts";
+import { compareValues, isBytes, isSimpleObject, type Value } from "./value.ts";
 
 /** An id's table name, or undefined when it names no known table (the engine's catalog answers). */
 export type TableOfId = (tableNumber: number) => string | undefined;
@@ -22,7 +22,7 @@ export function displayValue(v: Value | undefined): string {
   }
   if (typeof v === "boolean") return String(v);
   if (typeof v === "string") return JSON.stringify(v);
-  if (v instanceof ArrayBuffer) return `ArrayBuffer(${v.byteLength} bytes)`;
+  if (isBytes(v)) return `ArrayBuffer(${v.byteLength} bytes)`;
   if (Array.isArray(v)) return `[${v.map(displayValue).join(", ")}]`;
   return `{${Object.keys(v)
     .sort()
@@ -92,7 +92,7 @@ function check(x: GenericValidator, value: Value | undefined, tableOf: TableOfId
     case "string":
       return typeof value === "string" ? null : noMatch(value, x);
     case "bytes":
-      return value instanceof ArrayBuffer ? null : noMatch(value, x);
+      return isBytes(value) ? null : noMatch(value, x);
     case "id": {
       if (typeof value !== "string") return noMatch(value, x);
       let number: number;

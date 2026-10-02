@@ -222,15 +222,15 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 |---|---|---|---|
 | Bundling functions with esbuild (ESM, splitting, source maps, wasm, `server-only` stub) | `npm/convex/bundler/*` | missing | Open decision #2: restart vs hot swap. Bun.build is the natural equivalent. |
 | Push protocol: `start_push`, `evaluate_push`, `wait_for_schema`, `finish_push`, `report_push_completed` | `cli/lib/deploy2.ts`; `crates/local_backend/deploy_config2.rs`; `crates/application/deploy_config.rs` | missing | |
-| Module analysis (functions, visibility, arg and return validators, http routes, crons) | `crates/isolate/environment/analyze.rs` | missing | Feeds function-spec, the dashboard and validation. |
+| Module analysis (functions, visibility, arg and return validators, http routes, crons) | `crates/isolate/environment/analyze.rs` | done (STUDY-35) | `CodeVersion.load`: each module in a `vm` context (DV-164), analyzed into Convex's `AnalyzedModule` (`udfType`, `visibility`, `args`/`returns` validator JSON, `httpRoutes`, `cronSpecs`); `http.js` / `crons.js` default exports and cron targets checked with Convex's messages; `"use node"` files may define only actions (DV-169). Reached by a push in PR 3. |
 | Storing modules and source packages (`_modules`, `_source_packages`, `_udf_config`) | `crates/model/modules`, `source_packages`, `udf_config` | missing | `_udf_config` holds the npm version and the import-phase RNG seed and timestamp, which matter for determinism. |
 | Skipping unchanged modules (`get_config_hashes`) | `/api/get_config_hashes` | missing | |
 | Schema push: diff indexes, add pending indexes, enable on finish | `crates/database/bootstrap_model/index.rs` | missing | |
 | Schema validation of existing documents on push (Pending, Validated, Active, Failed) | `crates/application/schema_worker`; `crates/common/schemas` | missing | Uses shape inference to skip walks; tracked in `_schemas` and `_schema_validation_progress`. bunvex has no document validation yet (N). |
 | `schemaValidation: false`, `strictTableNameTypes` | `npm/convex/server/schema.ts` | missing | |
 | Large-backfill guard (100k docs) and `staged` indexes | `cli/lib/checkForLargeIndexBackfill.ts` | missing | |
-| Push limits: 200 MB request, 4096 modules, 90 MB zipped / 230 MB unzipped | knobs `MAX_PUSH_BYTES` etc. | missing | |
-| Analyze timeout 4 s | `ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS` | missing | |
+| Push limits: 200 MB request, 4096 modules, 90 MB zipped / 230 MB unzipped | knobs `MAX_PUSH_BYTES` etc. | partial (STUDY-35) | 4096 modules checked at load; the byte limits come with the push endpoints. |
+| Analyze timeout 4 s | `ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS` | done (STUDY-35) | `SourceTextModule.evaluate({ timeout })`. |
 
 ### 15. Indexes, backfill, table metadata
 

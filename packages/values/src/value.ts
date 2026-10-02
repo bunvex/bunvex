@@ -33,7 +33,15 @@ export function validateObjectField(k: string) {
   }
 }
 
-/** A plain object: `{}` / `Object.create(null)` / an object literal, not a class instance. */
+/**
+ * An ArrayBuffer (a bytes value), from this realm or another: a function's code runs in its own context
+ * (STUDY-35), whose `ArrayBuffer` is not this one, so `instanceof` would miss it.
+ */
+export function isBytes(v: unknown): v is ArrayBuffer {
+  return v instanceof ArrayBuffer || Object.prototype.toString.call(v) === "[object ArrayBuffer]";
+}
+
+/** A plain object: `{}` / `Object.create(null)` / an object literal, not a class instance (of any realm). */
 export function isSimpleObject(v: unknown): v is Record<string, unknown> {
   if (typeof v !== "object" || v === null) return false;
   const proto = Object.getPrototypeOf(v);
@@ -78,7 +86,7 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
     return { $float: b64(buf) };
   }
   if (typeof value === "boolean" || typeof value === "string") return value;
-  if (value instanceof ArrayBuffer) return { $bytes: b64(new Uint8Array(value)) };
+  if (isBytes(value)) return { $bytes: b64(new Uint8Array(value)) };
   if (Array.isArray(value)) return value.map((v, i) => toJson(v, original, `${context}[${i}]`));
   if (value instanceof Set) throw new Error(unsupported(context, "Set", [...value], original));
   if (value instanceof Map) throw new Error(unsupported(context, "Map", [...value], original));
@@ -141,7 +149,7 @@ function rank(v: Value | undefined): number {
   if (typeof v === "number") return 3;
   if (typeof v === "boolean") return 4;
   if (typeof v === "string") return 5;
-  if (v instanceof ArrayBuffer) return 6;
+  if (isBytes(v)) return 6;
   if (Array.isArray(v)) return 7;
   return 8;
 }
@@ -209,7 +217,7 @@ function copy(value: unknown, original: unknown, context: string): Value {
   if (value === null || typeof value === "number" || typeof value === "boolean" || typeof value === "string")
     return value;
   if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
-  if (value instanceof ArrayBuffer) return value.slice(0);
+  if (isBytes(value)) return value.slice(0);
   if (Array.isArray(value)) {
     if (value.length > MAX_ARRAY_LEN)
       throw new Error(`Array length is too long (${value.length} > maximum length ${MAX_ARRAY_LEN})`);
@@ -236,7 +244,7 @@ export function valueSize(v: Value): number {
   if (v === null || typeof v === "boolean") return 1;
   if (typeof v === "number" || typeof v === "bigint") return 9;
   if (typeof v === "string") return utf8len(v) + 2;
-  if (v instanceof ArrayBuffer) return v.byteLength + 2;
+  if (isBytes(v)) return v.byteLength + 2;
   if (Array.isArray(v)) return v.reduce<number>((n, e) => n + valueSize(e), 2);
   let n = 2;
   for (const [k, e] of Object.entries(v)) if (e !== undefined) n += utf8len(k) + 1 + valueSize(e);
@@ -246,7 +254,7 @@ export function valueSize(v: Value): number {
 /** How deeply arrays and objects nest: a scalar is 0, `[1]` is 1, `{a: [1]}` is 2. */
 export function valueNesting(v: Value): number {
   if (Array.isArray(v)) return 1 + v.reduce<number>((m, e) => Math.max(m, valueNesting(e)), 0);
-  if (v !== null && typeof v === "object" && !(v instanceof ArrayBuffer))
+  if (v !== null && typeof v === "object" && !isBytes(v))
     return 1 + Object.values(v).reduce<number>((m, e) => Math.max(m, e === undefined ? 0 : valueNesting(e)), 0);
   return 0;
 }

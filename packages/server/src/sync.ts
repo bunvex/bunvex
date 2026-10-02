@@ -30,7 +30,7 @@ import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
-import { callerOf, type Functions } from "./functions.ts";
+import { callerOf, Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
@@ -153,6 +153,8 @@ type Execution = {
   hash: string;
   /** Whether the run read the caller's identity: then it is that caller's result alone. */
   identityObserved: boolean;
+  /** The code generation it ran (STUDY-35): a run of superseded code is never reused nor adopted. */
+  generation: number;
 };
 
 type SessionQuery = {
@@ -201,6 +203,8 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
+  private generation = 0;
   stats = { executions: 0, reused: 0, transitions: 0, splayed: 0 };
   readonly splay: SplayOptions;
 
@@ -215,6 +219,16 @@ export class SyncHub {
       for (const s of this.sessions) s.pingIfIdle(now);
     }, HEARTBEAT_CHECK_MS);
     this.heartbeat.unref?.();
+  }
+
+  /**
+   * New code is live (STUDY-35): every subscription to a function of a changed module runs again, as
+   * Convex's re-run the queries whose `_modules` row a push rewrote; no run of the old code is reused.
+   */
+  invalidateModules(changed: Set<string>) {
+    if (changed.size === 0) return;
+    this.generation++;
+    for (const s of this.sessions) if (s.invalidateModules(changed)) s.schedule();
   }
 
   stop() {
@@ -271,6 +285,7 @@ export class SyncHub {
    * the key's watchers are notified by.
    */
   adopt(key: string, e: Execution) {
+    if (e.generation !== this.generation) return;
     const cur = this.latest.get(key);
     if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) {
       this.latest.set(key, e);
@@ -308,7 +323,9 @@ export class SyncHub {
       return this.execute(q, ts, caller).then((exec) => ({ exec, idPart: mine }));
     }
     const valid = (l: Execution | undefined): l is Execution =>
-      l !== undefined && !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts));
+      l !== undefined &&
+      l.generation === this.generation &&
+      !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts));
     // Where the query lives now, when that is shared or this caller's.
     if (q.idPart === SHARED || q.idPart === mine) {
       const l = this.latest.get(q.key);
@@ -340,7 +357,7 @@ export class SyncHub {
     caller: Caller,
     at: string,
   ): Promise<{ exec: Execution; idPart: string }> {
-    const key = `${ts}\u0000${at}`;
+    const key = `${this.generation}\u0000${ts}\u0000${at}`;
     const mine = idPartOf(caller);
     let f = this.inflight.get(key);
     if (!f) {
@@ -362,6 +379,7 @@ export class SyncHub {
 
   private async execute(q: SessionQuery, ts: number, caller: Caller): Promise<Execution> {
     this.stats.executions++;
+    const generation = this.generation;
     const { engine, functions, fromWire } = this.deps;
     const r = await collectLogs(async () => {
       const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
@@ -384,6 +402,7 @@ export class SyncHub {
         fields: `,"value":${value}${tail}`,
         hash: `v${value}\u0000${lines}`,
         identityObserved: run.identityObserved,
+        generation,
       };
     }
     const f = this.deps.formatError(run.error);
@@ -396,6 +415,7 @@ export class SyncHub {
       fields: `,"errorMessage":${JSON.stringify(withRequestId(f.error))}${tail}${data}`,
       hash: `e${f.data ?? ""}\u0000${f.error}\u0000${lines}`,
       identityObserved: run.identityObserved,
+      generation,
     };
   }
 }
@@ -621,6 +641,17 @@ export class SyncSession {
   }
 
   /** Ask for a transition; it starts now, or after the one being computed. */
+  /** Drop the results of queries to a changed module (they re-run); whether any was. */
+  invalidateModules(changed: Set<string>): boolean {
+    let any = false;
+    for (const q of this.queries.values())
+      if (changed.has(Functions.moduleOf(q.udfPath))) {
+        q.exec = null;
+        any = true;
+      }
+    return any;
+  }
+
   schedule() {
     this.scheduled = true;
     if (!this.updating && !this.closed) void this.update();

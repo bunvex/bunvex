@@ -1,7 +1,7 @@
 // `.filter(q => …)` (STUDY-15): the filter builder and its evaluation, with the semantics of Convex's
 // `Expression::eval` (crates/common/src/query.rs): comparisons in index-key order (a missing field is
 // `undefined`, below null), arithmetic only on two int64s or two float64s, booleans only for and/or/not.
-import { compareValues, displayValue, type Value } from "@bunvex/values";
+import { compareValues, displayValue, isBytes, type Value } from "@bunvex/values";
 import type { Doc } from "./schema.ts";
 import { fieldValue } from "./schema.ts";
 
@@ -22,7 +22,7 @@ function typeName(v: MaybeValue): string {
   if (typeof v === "number") return "float64";
   if (typeof v === "boolean") return "boolean";
   if (typeof v === "string") return "string";
-  if (v instanceof ArrayBuffer) return "bytes";
+  if (isBytes(v)) return "bytes";
   return Array.isArray(v) ? "array" : "object";
 }
 
