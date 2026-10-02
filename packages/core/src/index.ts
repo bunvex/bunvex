@@ -83,7 +83,19 @@ export type {
   SystemDataModel,
   UpperBoundIndexRangeBuilder,
 } from "./database-types.ts";
-export { type ExecutionKind, installDeterminismIn, runImportPhase, wallClock } from "./determinism.ts";
+export {
+  checkUserTime,
+  type ExecutionKind,
+  formatDuration,
+  installDeterminismIn,
+  newUserTimer,
+  pausingUserTime,
+  runImportPhase,
+  SYSTEM_TIMEOUT_MESSAGE,
+  type UserTimer,
+  wallClock,
+  withUserTimer,
+} from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,

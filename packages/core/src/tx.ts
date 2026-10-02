@@ -33,7 +33,7 @@ import {
 } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
+import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
@@ -533,7 +533,7 @@ export class Tx {
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
-    const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+    const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
     if (json) this.recordDoc(json);
     return json ? decodeDoc(json) : null;
@@ -585,15 +585,15 @@ export class Tx {
     this.retention?.check(this.snapshot);
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
-      const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
+      const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
       this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
       return rows.map(decodeDoc);
     }
-    const ids = await outsideExecution(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
+    const ids = await storeCall(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
     const out: Doc[] = [];
     for (const id of ids) {
-      const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+      const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
       if (json) {
         this.recordDoc(json);
         out.push(decodeDoc(json));

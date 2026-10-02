@@ -340,7 +340,7 @@ Key bunvex facts behind the statuses:
 | Reads per transaction ≤ 32,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_READ_SIZE_ROWS/BYTES`) | missing | `collect()` silently truncates at 8192 instead. |
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | missing | |
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
-| Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | missing | No timeout at all. |
+| Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | done (STUDY-41) | User time is wall time minus the time awaiting the store and nested calls (each nested call has its own budget); Convex's message ("Function execution timed out (maximum duration: 1s)"), not catchable, a mutation commits nothing; the 15 s system budget with Convex's message; `DATABASE_UDF_USER_TIMEOUT_SECONDS` / `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS`. Checked at store calls and at the end: a synchronous loop that never reaches the store is not interrupted (DV-208). |
 | Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
 | Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | missing | |
 | Log lines ≤ 256 per execution, ≤ 32 KiB each | isolate/src/environment/helpers/mod.rs | missing | |

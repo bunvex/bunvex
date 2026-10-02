@@ -7,10 +7,13 @@ import {
   type Caller,
   checkEnvVarName,
   type Engine,
+  newUserTimer,
+  pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
   stringifyValue,
   type Tx,
+  withUserTimer,
 } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
@@ -425,7 +428,7 @@ export class Functions {
     return async (db: Tx) => {
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => this.invoke(f, db, a, 0);
+      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
       return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     };
   }
@@ -438,10 +441,19 @@ export class Functions {
     return perAttempt(async (db: Tx) => {
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => this.invoke(f, db, a, 0, job);
+      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
       return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     });
   }
+
+  /**
+   * Convex's limits on a query's or mutation's own time (STUDY-41): 1 s of user time
+   * (DATABASE_UDF_USER_TIMEOUT_SECONDS) and 15 s awaiting the store (DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS).
+   * Each nested call gets its own; the caller's clock is paused during it.
+   */
+  userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
+  systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
+  private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs);
 
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
@@ -481,7 +493,7 @@ export class Functions {
     const call = (kind: "query" | "mutation", ref: FunctionRef, args: unknown, opts?: NestedOptions) => {
       if (opts?.useStaleSnapshot && callerKind === "query")
         throw new Error("`useStaleSnapshot` is only supported in mutations, not queries.");
-      const run = queue.then(() => this.runNested(db, kind, ref, args, opts, depth));
+      const run = queue.then(() => pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth)));
       queue = run.catch(() => {});
       return run;
     };
@@ -512,7 +524,9 @@ export class Functions {
       const value = await this.engine.query(
         (stale) => {
           stale.identity = db.identity;
-          return this.withLimits(stale, opts.transactionLimits, () => this.invoke(f, stale, a, depth + 1));
+          return this.withLimits(stale, opts.transactionLimits, () =>
+            withUserTimer(this.newTimer(), () => this.invoke(f, stale, a, depth + 1)),
+          );
         },
         undefined,
         undefined,
@@ -524,7 +538,9 @@ export class Functions {
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
     try {
-      value = await this.withLimits(db, opts?.transactionLimits, () => this.invoke(f, db, a, depth + 1));
+      value = await this.withLimits(db, opts?.transactionLimits, () =>
+        withUserTimer(this.newTimer(), () => this.invoke(f, db, a, depth + 1)),
+      );
     } catch (e) {
       if (sp) db.rollback(sp);
       throw toCallerError(e);
