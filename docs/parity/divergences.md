@@ -245,6 +245,18 @@ DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and a
 DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
+STUDY-40 (the local backend executable, local deployments, npm), awaiting the owner:
+
+| ID | bunvex | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-197 | `bunvex-local-backend` flags: `--cloud-origin`/`--site-origin`, `--db sqlite\|postgres\|mysql\|mongodb`, default name `bunvex-self-hosted` | `--convex-origin`/`--convex-site`, `postgres-v5`/`mysql-v5`, `carnitas` | yes | rule 5 | [STUDY-40 L1](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-198 | `bunvex start` removed; the image runs `bunvex-local-backend` through Convex's scripts | the same scripts | yes | accept | [STUDY-40 L2](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-199 | Local deployments `local-<basename(cwd)>`, no account or prompt | anonymous mode, `anonymous-<basename>` | yes | accept | [STUDY-40 L3](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-200 | The latest executable from GitHub's releases API | a version service | no | accept | [STUDY-40 L4](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-201 | `BUNVEX_LOCAL_BACKEND_BINARY` overrides the download | — | no | accept | [STUDY-40 L5](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-202 | No local dashboard until item 12 | a local dashboard on 6790 | yes | accept | [STUDY-40 L6](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-203 | `bunvex` reserved on npm with a placeholder now; the real package later; the CLI runs on Bun (`bunx bunvex`) | `convex` on npm, `npx convex` on Node | yes | accept | [STUDY-40 L7](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not
