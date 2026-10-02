@@ -9,6 +9,9 @@ import {
   type AuthConfig,
   type AuthEmailAction,
   type AuthEvent,
+  type AuthInvitation,
+  type AuthMember,
+  type AuthMemberRole,
   type AuthOrganization,
   type AuthProvider,
   type AuthSession,
@@ -1007,6 +1010,31 @@ export class MockDataSource implements DashboardDataSource {
   }
   listAuthOrganizations(opts?: CallOptions): Promise<AuthOrganization[]> {
     return this.viewAuth(opts?.signal, () => this.authAdmin.organizations());
+  }
+  listAuthMembers(organizationId: string, opts?: CallOptions): Promise<AuthMember[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listMembers(organizationId));
+  }
+  updateAuthMemberRole(memberId: string, role: AuthMemberRole, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.updateMemberRole(memberId, role));
+  }
+  removeAuthMember(memberId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.removeMember(memberId));
+  }
+  listAuthInvitations(organizationId: string, opts?: CallOptions): Promise<AuthInvitation[]> {
+    return this.viewAuth(opts?.signal, () => this.authAdmin.listInvitations(organizationId));
+  }
+  inviteAuthMember(
+    organizationId: string,
+    invite: { email: string; role: AuthMemberRole },
+    opts?: CallOptions,
+  ): Promise<string> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.inviteMember(organizationId, invite));
+  }
+  resendAuthInvitation(invitationId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.resendInvitation(invitationId));
+  }
+  cancelAuthInvitation(invitationId: string, opts?: CallOptions): Promise<void> {
+    return this.writeAuth(opts?.signal, () => this.authAdmin.cancelInvitation(invitationId));
   }
   getAuthConfig(opts?: CallOptions): Promise<AuthConfig> {
     return this.viewAuth(opts?.signal, () => this.authAdmin.getConfig());

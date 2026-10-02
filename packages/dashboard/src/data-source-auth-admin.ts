@@ -70,6 +70,34 @@ export type AuthOrganization = {
   invitations: number;
 };
 
+/** A member's role in an organization (better-auth's organization plugin: owner, admin, member, or custom). */
+export type AuthMemberRole = "owner" | "admin" | "member" | (string & {});
+export const AUTH_MEMBER_ROLES: readonly AuthMemberRole[] = ["owner", "admin", "member"];
+
+/** A user's membership of an organization (better-auth's `member`), with the user's name and email. */
+export type AuthMember = {
+  id: string;
+  organizationId: string;
+  userId: string;
+  name: string;
+  email: string;
+  role: AuthMemberRole;
+  createdAt: number;
+};
+
+/** An invitation to an organization (better-auth's `invitation`). */
+export type AuthInvitation = {
+  id: string;
+  organizationId: string;
+  email: string;
+  role: AuthMemberRole;
+  status: "pending" | "accepted" | "rejected" | "canceled";
+  /** Who invited, a user id; `null` for the dashboard. */
+  inviterId: string | null;
+  createdAt: number;
+  expiresAt: number;
+};
+
 /** What happened, for the auth audit log and a user's Logs tab. */
 export type AuthEvent = {
   id: string;
@@ -124,6 +152,24 @@ export interface AuthAdminFeatures {
   /** Deletes the user, their accounts and sessions. */
   removeAuthUser?(userId: string, opts?: CallOptions): Promise<void>;
   listAuthOrganizations?(opts?: CallOptions): Promise<AuthOrganization[]>;
+  /** An organization's members, oldest first. Offering it offers the organization's panel. */
+  listAuthMembers?(organizationId: string, opts?: CallOptions): Promise<AuthMember[]>;
+  /** Changes a member's role. An organization keeps at least one owner. */
+  updateAuthMemberRole?(memberId: string, role: AuthMemberRole, opts?: CallOptions): Promise<void>;
+  /** Removes a member (not the user). An organization keeps at least one owner. */
+  removeAuthMember?(memberId: string, opts?: CallOptions): Promise<void>;
+  /** An organization's invitations, newest first, every status. */
+  listAuthInvitations?(organizationId: string, opts?: CallOptions): Promise<AuthInvitation[]>;
+  /** Invites an email to the organization with a role; the invitation's id. */
+  inviteAuthMember?(
+    organizationId: string,
+    invite: { email: string; role: AuthMemberRole },
+    opts?: CallOptions,
+  ): Promise<string>;
+  /** Sends a pending invitation's email again and extends its expiry. */
+  resendAuthInvitation?(invitationId: string, opts?: CallOptions): Promise<void>;
+  /** Cancels a pending invitation. */
+  cancelAuthInvitation?(invitationId: string, opts?: CallOptions): Promise<void>;
   getAuthConfig?(opts?: CallOptions): Promise<AuthConfig>;
   /** Merges a page of the configuration (one top-level key at a time); the whole result. */
   updateAuthConfig?(patch: Partial<AuthConfig>, opts?: CallOptions): Promise<AuthConfig>;

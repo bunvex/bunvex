@@ -440,6 +440,12 @@ The contract (`data-source-auth-admin.ts`) uses these names where sensible (`ban
 `providerId`s); timestamps are ms like the rest of the dashboard contract. Settings → Authentication moves
 into Authentication → Sign in / Providers (L22, owner's call). No server implements the contract yet.
 
+Follow-up (2 Oct 2026): an organization's **members and invitations**, in the organization plugin's terms —
+roles `owner` / `admin` / `member` (custom roles allowed by the type), invitation statuses `pending` /
+`accepted` / `rejected` / `canceled`, `cancelInvitation`, and the rule that an organization keeps an owner — and
+the **email templates' preview** (a bunvex addition: better-auth leaves email rendering to the app's senders;
+the dashboard previews the template text with sample values in a sandboxed iframe).
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
