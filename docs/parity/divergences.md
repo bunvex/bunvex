@@ -128,6 +128,12 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-155 | Document retention reads `documents` by a new ts index (created as C11's; no layout change) and deletes, per id, what a newer version supersedes, with no `prev_ts` column | walks the log with `prev_ts` | no (same rows deleted) | `prev_ts` (DV-66) stays for export | owner, 2026-10-01 | [STUDY-33 R2](../study/STUDY-33-retention.md#4-divergences) |
 | DV-156 | The memory driver prunes old versions in RAM but does not compact its durable log file | (no such driver) | no | — | owner, 2026-10-01 | [STUDY-33 R3](../study/STUDY-33-retention.md#4-divergences) |
 | DV-157 | `DOCUMENT_RETENTION_DELAY` defaults to 14 days, Convex's knob default (its self-hosted docker-compose sets 2 days) | 14 d knob, 2 d in docker-compose | operational | 14 days, settable by env | owner, 2026-10-01 | [STUDY-33 R4](../study/STUDY-33-retention.md#4-divergences) |
+| DV-158 | Only the current admin key format is accepted; legacy secretbox keys get `BadAdminKey` | still accepts and logs legacy keys | operational | bunvex never issued them | owner, 2026-10-01 | [STUDY-34 AK1](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-159 | Default instance name `bunvex-self-hosted`, stored in `_instance` with the generated secret | `convex-self-hosted`, in the credentials directory | operational |  (rule 5; DV-07); `INSTANCE_NAME=convex-self-hosted` keeps Convex keys working | owner, 2026-10-01 | [STUDY-34 AK2](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-160 | Keys issued by `bunvex admin-key` (env, flags, or the store read without the lease) | separate `generate_key` binary and a docker script | operational | the secret may live in the database | owner, 2026-10-01 | [STUDY-34 AK3](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-161 | Read-only admin keys can be issued (`--read-only`) | supported by the format, issued only by the cloud | operational | as recommended | owner, 2026-10-01 | [STUDY-34 AK4](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-162 | `/stats` (bunvex-only) requires an admin key with `ViewMetrics` | (no such endpoint; metrics need `ViewMetrics`) | yes (it is open today) | as recommended | owner, 2026-10-01 | [STUDY-34 AK5](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-163 | An admin identity on a WebSocket does not expire | revalidated after 2000 s | no | as recommended | owner, 2026-10-01 | [STUDY-34 AK6](../study/STUDY-34-admin-keys.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -210,15 +216,6 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
-
-| # | Divergence | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-158 | Only the current admin key format is accepted; legacy secretbox keys get `BadAdminKey` | still accepts and logs legacy keys | operational | accept: bunvex never issued them | [STUDY-34 AK1](../study/STUDY-34-admin-keys.md#4-divergences) |
-| DV-159 | Default instance name `bunvex-self-hosted`, stored in `_instance` with the generated secret | `convex-self-hosted`, in the credentials directory | operational | accept (rule 5; DV-07); `INSTANCE_NAME=convex-self-hosted` keeps Convex keys working | [STUDY-34 AK2](../study/STUDY-34-admin-keys.md#4-divergences) |
-| DV-160 | Keys issued by `bunvex admin-key` (env, flags, or the store read without the lease) | separate `generate_key` binary and a docker script | operational | accept: the secret may live in the database | [STUDY-34 AK3](../study/STUDY-34-admin-keys.md#4-divergences) |
-| DV-161 | Read-only admin keys can be issued (`--read-only`) | supported by the format, issued only by the cloud | operational | accept | [STUDY-34 AK4](../study/STUDY-34-admin-keys.md#4-divergences) |
-| DV-162 | `/stats` (bunvex-only) requires an admin key with `ViewMetrics` | (no such endpoint; metrics need `ViewMetrics`) | yes (it is open today) | accept | [STUDY-34 AK5](../study/STUDY-34-admin-keys.md#4-divergences) |
-| DV-163 | An admin identity on a WebSocket does not expire | revalidated after 2000 s | no | accept | [STUDY-34 AK6](../study/STUDY-34-admin-keys.md#4-divergences) |
 
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to

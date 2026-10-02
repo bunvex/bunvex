@@ -1,6 +1,6 @@
 # STUDY-34 — Admin keys and admin access
 
-- **Status:** draft
+- **Status:** accepted: AK1–AK6 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend.
 - **Crypto checked.** The key cryptography was checked against `aws-lc-rs` 1.18.1, the library and version
   Convex's keybroker uses, with a small Rust harness (§5). Building `generate_key` itself pulls Convex's V8
@@ -263,12 +263,12 @@ audit log; reads are not.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| AK1 | Only the current key format is accepted: keys sealed with the old libsodium secretbox (Convex's legacy format, still accepted and logged) are refused with `BadAdminKey` | bunvex never issued them, and Convex's own self-hosted image has issued the current format for a long time. A legacy key holder generates a new one | pending |
-| AK2 | The default instance name, when `INSTANCE_NAME` is not set, is `bunvex-self-hosted` (Convex: `convex-self-hosted`). It is stored in `_instance` next to the generated secret, where Convex keeps both in its credentials directory | rule 5 (no "convex" in shipped strings). `_instance` is where DV-07 already keeps the secret. A Convex key works on bunvex when `INSTANCE_NAME=convex-self-hosted` is set with the same secret | pending |
-| AK3 | Keys are issued by `bunvex admin-key` (CLI), which reads the credentials from the environment, its flags, or the store itself (read only, no lease). Convex has a separate `generate_key` binary and a docker script reading its credentials directory | the secret may live in the database (DV-07), not in a file | pending |
-| AK4 | `bunvex admin-key --read-only` issues read-only keys. Convex's format and checks support them, but only its cloud issues them | the check is already there (`is_read_only` → read-only operations); issuing one costs a flag, and a read-only key is what a viewer of the dashboard should get | pending |
-| AK5 | `/stats` (a bunvex-only endpoint: engine and committer counters) requires an admin key with `ViewMetrics` | today it is open; Convex's metrics endpoints require `ViewMetrics` | pending |
-| AK6 | An admin identity on a WebSocket does not expire (Convex: revalidated after 2000 s) | keys do not expire and the instance secret cannot change while the process runs, so revalidation would always succeed; not observable | pending |
+| AK1 | Only the current key format is accepted: keys sealed with the old libsodium secretbox (Convex's legacy format, still accepted and logged) are refused with `BadAdminKey` | bunvex never issued them, and Convex's own self-hosted image has issued the current format for a long time. A legacy key holder generates a new one | **accepted** (owner, 2026-10-01) |
+| AK2 | The default instance name, when `INSTANCE_NAME` is not set, is `bunvex-self-hosted` (Convex: `convex-self-hosted`). It is stored in `_instance` next to the generated secret, where Convex keeps both in its credentials directory | rule 5 (no "convex" in shipped strings). `_instance` is where DV-07 already keeps the secret. A Convex key works on bunvex when `INSTANCE_NAME=convex-self-hosted` is set with the same secret | **accepted** (owner, 2026-10-01) |
+| AK3 | Keys are issued by `bunvex admin-key` (CLI), which reads the credentials from the environment, its flags, or the store itself (read only, no lease). Convex has a separate `generate_key` binary and a docker script reading its credentials directory | the secret may live in the database (DV-07), not in a file | **accepted** (owner, 2026-10-01) |
+| AK4 | `bunvex admin-key --read-only` issues read-only keys. Convex's format and checks support them, but only its cloud issues them | the check is already there (`is_read_only` → read-only operations); issuing one costs a flag, and a read-only key is what a viewer of the dashboard should get | **accepted** (owner, 2026-10-01) |
+| AK5 | `/stats` (a bunvex-only endpoint: engine and committer counters) requires an admin key with `ViewMetrics` | today it is open; Convex's metrics endpoints require `ViewMetrics` | **accepted** (owner, 2026-10-01) |
+| AK6 | An admin identity on a WebSocket does not expire (Convex: revalidated after 2000 s) | keys do not expire and the instance secret cannot change while the process runs, so revalidation would always succeed; not observable | **accepted** (owner, 2026-10-01) |
 
 Not divergences, but recorded:
 - The header scheme is `Bunvex` (DV-97, decided).
