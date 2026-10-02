@@ -143,6 +143,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-170 | An app's functions live in `bunvex/` and its config in `bunvex.json` (`"functions"` overrides the directory) | `convex/`, `convex.json` | yes (a migrated app renames its directory or sets `functions`) | rule 5 | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
 | DV-171 | The CLI targets a self-hosted deployment with `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (and `--url` / `--admin-key`) | `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY` | yes (the names) | rule 5, as `BUNVEX_CLOUD_ORIGIN` (DV-149) | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
 | DV-172 | A pushed `auth.config.js` sees the server's process environment as `process.env` until deployment environment variables exist (item 9) | the deployment's environment variables | yes (until item 9) | works before `env set` exists; the app does not change when it does | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-173 | `bunvex codegen` writes `_generated/` from the code alone (no running deployment); the static modes are not implemented | a `start_push` against the deployment | no (the same output; works offline) | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-176 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables (item 9) | typed `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and declared variables | yes (types) | accept until item 9 | owner, 2026-10-02 (as recommended) | [STUDY-36 G4](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-177 | The generated `tsconfig.json` adds `"allowImportingTsExtensions": true` | Convex's settings only | no (it lets the app's `tsc` read bunvex's TypeScript sources) | accept, or publish `.d.ts` builds | owner, 2026-10-02 (as recommended) | [STUDY-36 G5](../study/STUDY-36-codegen.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -231,6 +236,7 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
+DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
 ## Gaps recorded in studies
 

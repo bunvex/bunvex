@@ -5,9 +5,11 @@
 
 import type { AnalyticsFeatures } from "./analytics/data-source.ts";
 import { analyticsExtension } from "./analytics/index.ts";
+import { flagsExtension } from "./flags/extension.ts";
+import type { FlagsFeatures } from "./flags/types.ts";
 import type { DashboardExtension } from "./types.ts";
 
 /** Every extension's contract features, merged into `DashboardDataSource` (all optional methods). */
-export interface ExtensionFeatures extends AnalyticsFeatures {}
+export interface ExtensionFeatures extends AnalyticsFeatures, FlagsFeatures {}
 
-export const extensions: readonly DashboardExtension[] = [analyticsExtension];
+export const extensions: readonly DashboardExtension[] = [analyticsExtension, flagsExtension];
