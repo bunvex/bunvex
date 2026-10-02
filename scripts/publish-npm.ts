@@ -4,6 +4,8 @@
 //
 //   bun scripts/publish-npm.ts --dry-run     pack and check, publish nothing
 //   bun scripts/publish-npm.ts               publish (run it in a terminal: npm asks to confirm each one)
+//   bun scripts/publish-npm.ts --tag alpha   under another dist-tag (default latest: npm wants one named for a
+//                                            prerelease, and while there is no stable version the alpha is it)
 //
 // `bunvex` (the umbrella) is kept back while npm blocks the name (STUDY-40).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -25,6 +27,9 @@ export const PACKAGES = [
 ];
 
 const dryRun = process.argv.includes("--dry-run");
+const tagAt = process.argv.indexOf("--tag");
+const tag = tagAt === -1 ? "latest" : process.argv[tagAt + 1];
+if (!tag) throw new Error("--tag needs a value");
 const out = join(ROOT, "dist", "npm");
 
 const manifest = (dir: string) =>
@@ -94,8 +99,8 @@ for (const dir of PACKAGES) {
       console.log(`  packed ${tgz}`);
       continue;
     }
-    console.log(`  publishing ${m.name}@${version}`);
-    const published = await run(["npm", "publish", tgz, "--access", "public"], ROOT);
+    console.log(`  publishing ${m.name}@${version} (${tag})`);
+    const published = await run(["npm", "publish", tgz, "--access", "public", "--tag", tag], ROOT);
     if (published.code !== 0) throw new Error(`npm publish failed for ${m.name}`);
   } finally {
     for (const f of added) rmSync(join(pkgDir, f), { force: true });
