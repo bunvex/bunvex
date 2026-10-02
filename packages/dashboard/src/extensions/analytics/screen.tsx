@@ -27,7 +27,7 @@ const SECTION: Record<AnalyticsSection, { title: string; description: string }> 
   profiles: { title: "Profiles", description: "The people behind the sessions" },
 };
 
-function Nav() {
+function Nav({ withFilters }: { withFilters?: boolean }) {
   const item = (section: AnalyticsSection) => (
     <li key={section}>
       <ExtensionLink to={`/analytics/${section}`} className={SECTION_ITEM}>
@@ -35,12 +35,7 @@ function Nav() {
       </ExtensionLink>
     </li>
   );
-  return (
-    <SectionNav
-      label="Analytics"
-      groups={[{ items: item("realtime") }, { label: "Explore", items: ANALYTICS_SECTIONS.slice(1).map(item) }]}
-    />
-  );
+  return <SectionNav label="Analytics" withFilters={withFilters} groups={[{ items: ANALYTICS_SECTIONS.map(item) }]} />;
 }
 
 /** Events: narrow to one event name, from the names among the loaded events. */
@@ -86,10 +81,10 @@ function Analytics() {
     ) : null;
   const sheet = useSectionSheet({
     kind: "analytics-pages",
-    label: "Pages",
+    label: "Analytics",
     children: (
       <>
-        <Nav />
+        <Nav withFilters={!!filters} />
         {filters}
       </>
     ),
@@ -104,7 +99,7 @@ function Analytics() {
   return (
     <div className={SCREEN}>
       <SectionColumn title="Analytics" widthKey="bunvex-dashboard:analytics-column-width">
-        <Nav />
+        <Nav withFilters={!!filters} />
         {filters}
       </SectionColumn>
       {s === "realtime" ? (

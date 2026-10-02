@@ -49,16 +49,22 @@ describe("the Schedules screen", () => {
     const all = (await source.listScheduledFunctions({ numItems: 100, cursor: null })).page;
     const fn = all[2]!.function;
     const column = screen.getByRole("navigation", { name: "Schedule filters" });
-    const radio = within(column).getByRole("radio", { name: fn });
+    const box = within(column).getByRole("checkbox", { name: fn });
     // the count of each function among the loaded runs, in text
-    expect(radio.parentElement!.lastElementChild!.textContent).toBe(
-      String(all.filter((r) => r.function === fn).length),
-    );
+    expect(box.closest("li")!.lastElementChild!.textContent).toBe(String(all.filter((r) => r.function === fn).length));
     const user = userEvent.setup();
-    await user.click(radio);
+    // functions are a multi-choice facet, as on Logs (UX2-23): "Only" picks one, the source filters by it
+    await user.click(within(column).getByRole("button", { name: `Only ${fn}` }));
     await waitFor(() => expect(params(history)).toEqual({ function: fn }));
     await waitFor(() => expect(rows("Scheduled functions").every((r) => cells(r)[2]!.endsWith(fn))).toBe(true));
-    await user.click(within(column).getByRole("radio", { name: "All functions" }));
+    // a second one: both, over the loaded runs
+    const other = all.find((r) => r.function !== fn)!.function;
+    await user.click(within(column).getByRole("checkbox", { name: other }));
+    await waitFor(() => expect(params(history)).toEqual({ function: `${fn},${other}` }));
+    await waitFor(() =>
+      expect(rows("Scheduled functions").every((r) => [fn, other].some((f) => cells(r)[2]!.endsWith(f)))).toBe(true),
+    );
+    await user.click(within(column).getByRole("button", { name: "All: Function" }));
     await waitFor(() => expect(params(history)).toEqual({}));
     // states: keep the running ones only
     const pending = all.filter((r) => r.state === "pending").length;

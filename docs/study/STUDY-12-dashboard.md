@@ -440,6 +440,12 @@ The contract (`data-source-auth-admin.ts`) uses these names where sensible (`ban
 `providerId`s); timestamps are ms like the rest of the dashboard contract. Settings → Authentication moves
 into Authentication → Sign in / Providers (L22, owner's call). No server implements the contract yet.
 
+Follow-up (2 Oct 2026): an organization's **members and invitations**, in the organization plugin's terms —
+roles `owner` / `admin` / `member` (custom roles allowed by the type), invitation statuses `pending` /
+`accepted` / `rejected` / `canceled`, `cancelInvitation`, and the rule that an organization keeps an owner — and
+the **email templates' preview** (a bunvex addition: better-auth leaves email rendering to the app's senders;
+the dashboard previews the template text with sample values in a sandboxed iframe).
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it
@@ -677,7 +683,8 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 |---|---|---|---|
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
 | M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
-| M2 | Failure and cache hit rate show lines only; Convex also has a heatmap view of them | lines first; the heatmap can follow | follow-up |
+| M2 | ~~Failure and cache hit rate show lines only~~ — built 2 Oct 2026 (UI-01 §18.4): a line chart / heatmap switch on both, as Convex's `CategoricalHeatmap.tsx` (failure rate opens as a chart, cache hit rate as a heatmap, the choice kept in the browser; rows worst first; an empty bucket is not zero) | — | done |
+| M5 | The heatmap's colours are five steps of one blue, faint → dark (the darker, the worse: more failures, fewer cache hits), in the design system's tokens; Convex uses a 10-stop viridis ramp | a sequential encoding is one hue, light → dark; the ramp was validated as ordinal in both themes (monotone, ΔL ≥ 0.06, the faintest ≥ 2:1 on the surface) | agent's call (2 Oct 2026), the owner can veto |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
 ## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
@@ -760,9 +767,10 @@ search, minimap, controls and side panel. The open table is in the URL (`?table=
 
 | # | bunvex | why | status |
 |---|---|---|---|
-| SC1 | Groups cannot be renamed or dragged as a whole; tables can be dragged, and Reset layout lays everything out again | a first version; nothing an app observes | follow-up |
+| SC1 | ~~Groups cannot be renamed or dragged as a whole~~ — built 2 Oct 2026 (§14.7): a group is renamed in place and dragged by its header with its tables; both kept per deployment; Reset layout forgets the positions | — | done |
 | SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
-| SC3 | No schema-validation progress (Convex links the CLI's `?showSchema=true` to it) | the contract has no validation progress yet | follow-up |
+| SC3 | ~~No schema-validation progress~~ — built 2 Oct 2026 (§14.7), as Convex's `getSchemas.schemaValidationProgress` | — | done |
+| SC4 | A failed validation says how many documents do not match and lists a few, each opening in Database; Convex's push fails with the first one | seeing the scale helps fix the data | decided (owner, 2 Oct 2026; DV-211) |
 
 ### 14.5 Indexes on the cards and going to a relation (added 1 Oct 2026)
 
@@ -779,6 +787,25 @@ that shows the rows ticked in the **selection** — it follows the checkboxes, n
 document panel **follows the current row** (a click on any cell, ↑/↓), as its Logs details do, and holds while
 its editor has unsaved changes (UI-01 §22.3): a deliberate difference, **the owner's call** (1 Oct 2026). Its
 docked, resizable shape matches Convex's (UI-01 §22.1).
+
+### 14.7 Groups renamed and dragged; schema validation progress (added 2 Oct 2026)
+
+**Groups (SC1).** Convex's `SchemaClusters.tsx` draws the groups but neither names nor moves them as one. bunvex
+now does both, as the owner asked: the group's header (a grip, its name, "N tables", a rename button) drags the
+whole group — its tables are its children in xyflow, so they move with it — and the name changes in place
+(Enter or leaving the box saves, Escape keeps the old one, an empty name gives the group its own back). Names
+and dropped positions are kept in this browser per deployment (`schema/saved-layout.ts`), keyed by the group's
+id, which is stable for a given set of tables; a group whose tables change is a new group. Reset layout forgets
+the positions, not the names. Nothing an app observes.
+
+**Validation progress (SC3).** Convex's `getSchemas.schemaValidationProgress` (`system-udfs`) sums
+`numDocsValidated` over the pending schema's `_schema_validations` and gives `totalDocs` (or `null` while
+unknown); `ShowSchema.tsx` shows a spinner until the total is known, then a progress bar **capped at 99 %**,
+because the total may come from another snapshot. bunvex's contract carries the same on `SchemaInfo.validation`
+(`{ state: "validating", numDocsValidated, totalDocs }`), polled every 2 s while validating, shown on the
+Schema screen's bar and in the Database schema panel (`schema/validation.tsx`). A failure is
+`{ state: "failed", failedDocs, sample: [{ table, id, error }] }` (SC4). The mock simulates a push's
+validation (`simulateSchemaValidation("pass" | "fail")`; the dev host's `?validate=`).
 
 ## 15. Topology (a bunvex addition, added 1 Oct 2026)
 
@@ -832,6 +859,12 @@ removed later.
 - **Map without third parties**: mapcn's default (CARTO tiles, a worker from unpkg) was replaced by a bundled
   Natural Earth basemap and a bundled worker (UI-01 §26.2) — a self-hosted dashboard works offline and no
   request leaves it.
+- **Map style** (follow-up, 2 Oct 2026; UI-01 §26.2): Settings → Map style, a page the extension adds to
+  Settings (the registry's new `settings` entries, under an "Extensions" group), takes a MapLibre style URL for
+  a richer map. It is fetched once and checked (version 8, `sources`, `layers`) before it is used; https only
+  (http on localhost); a warning says each viewer's browser then contacts the provider and the map stops
+  working offline. Kept **in this browser** per deployment — a viewer's preference, not the deployment's; the
+  bundled basemap stays the default.
 - **Decided by the agent, the owner can veto**: A1 — the screen needs `viewMetrics` (no new permission);
   A2 — the tile and the feed sit beside the map, not floating over it (MapLibre ignored the fit padding in
   headless Chrome, so the overlay hid the Americas).

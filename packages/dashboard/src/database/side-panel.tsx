@@ -13,6 +13,7 @@ import { useQueryScope } from "../context.tsx";
 import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { TableMetrics } from "../metrics/table-metrics.tsx";
+import { SchemaValidationStatus } from "../schema/validation.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -177,6 +178,11 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
           <>{info.name} has a declared type, but documents are not validated against it.</>
         )}
       </p>
+      {schema.validation && (
+        <div className="mt-3">
+          <SchemaValidationStatus validation={schema.validation} />
+        </div>
+      )}
       {saved ? (
         <SavedSchema code={saved} table={info.name} />
       ) : (
@@ -192,13 +198,9 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
       {canGenerate ? (
         <Tabs value={shown} onValueChange={(v) => setTab(v as "saved" | "generated")}>
           {/* underlined, as every switch between sibling views (Schedules' tabs) is (UX-7) */}
-          <TabsList variant="line">
-            <TabsTrigger value="saved" className="text-sm">
-              Saved
-            </TabsTrigger>
-            <TabsTrigger value="generated" className="text-sm">
-              Generated
-            </TabsTrigger>
+          <TabsList>
+            <TabsTrigger value="saved">Saved</TabsTrigger>
+            <TabsTrigger value="generated">Generated</TabsTrigger>
           </TabsList>
           <TabsContent value="saved" className="pt-3">
             {savedView}

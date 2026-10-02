@@ -6,7 +6,7 @@ import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { ResizeHandle } from "@bunvex/ui/components/resize-handle";
 import { cn } from "@bunvex/ui/lib/utils";
-import { ListFilter } from "lucide-react";
+import { ChevronDown, ListFilter } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { formatCount } from "../screens/stats.ts";
 import { Panel } from "./panel.tsx";
@@ -86,13 +86,20 @@ export function SectionColumn(props: {
 }
 
 /** The screen's pages, in labelled groups (a group may have no label). */
-export function SectionNav(props: { label: string; groups: { label?: string; items: ReactNode }[] }) {
+export function SectionNav(props: {
+  label: string;
+  groups: { label?: string; items: ReactNode }[];
+  /** The column also holds filters: the nav keeps its heading so the two read apart. */
+  withFilters?: boolean;
+}) {
+  // one rule (UX2-22): headings only when there is more than one group, or filters below; otherwise none
+  const headed = props.groups.length > 1 || props.withFilters;
   return (
     <nav aria-label={props.label}>
       {props.groups.map((g, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: groups are fixed per screen
         <div key={i}>
-          {g.label ? <h3 className={GROUP_LABEL}>{g.label}</h3> : <div className="pt-2" />}
+          {headed ? <h3 className={GROUP_LABEL}>{g.label ?? "Views"}</h3> : <div className="pt-2" />}
           <ul>{g.items}</ul>
         </div>
       ))}
@@ -129,7 +136,10 @@ export function SectionFilters(props: {
 /** Below the column's breakpoint: a button for Bar 1, and the sheet it opens with the column's content. */
 export function useSectionSheet(props: {
   kind: string;
-  /** The button's and the sheet's name; "Filters" by default. */
+  /**
+   * The button's and the sheet's name (UX2-13): the screen's name when the column holds its navigation (the
+   * button then shows a chevron), "Filters" (the default) when it holds filters only.
+   */
   label?: string;
   from?: "md" | "lg";
   onReset?: () => void;
@@ -145,8 +155,9 @@ export function useSectionSheet(props: {
       aria-pressed={open}
       onClick={() => setOpen(!open)}
     >
-      <ListFilter aria-hidden="true" />
+      {label === "Filters" && <ListFilter aria-hidden="true" />}
       {label}
+      {label !== "Filters" && <ChevronDown aria-hidden="true" />}
     </Button>
   );
   const sheet = open && (
@@ -179,6 +190,7 @@ export function FacetSection(props: { title: string; onAll?: () => void; childre
         {props.onAll && (
           <button
             type="button"
+            aria-label={`All: ${props.title}`}
             className="text-xs text-muted-foreground underline-offset-2 hover:underline"
             onClick={props.onAll}
           >
@@ -203,14 +215,27 @@ function Choice(props: {
   count?: number;
   onChange: (on: boolean) => void;
   mono?: boolean;
+  /** "Only this one", shown on hover and focus (UX2-23). */
+  onOnly?: () => void;
+  onlyLabel?: string;
 }) {
   const id = useId();
   return (
-    <li className="flex items-center gap-2 px-3 py-1 hover:bg-muted/50">
+    <li className="group/choice flex items-center gap-2 px-3 py-1 hover:bg-muted/50">
       <Checkbox id={id} checked={props.checked} onCheckedChange={(on) => props.onChange(on === true)} />
       <label htmlFor={id} className={cn("min-w-0 flex-1 cursor-pointer truncate", props.mono && "font-mono text-xs")}>
         {props.label}
       </label>
+      {props.onOnly && (
+        <button
+          type="button"
+          aria-label={props.onlyLabel}
+          className="text-xs text-muted-foreground underline-offset-2 opacity-0 group-hover/choice:opacity-100 hover:text-foreground hover:underline focus-visible:opacity-100"
+          onClick={props.onOnly}
+        >
+          Only
+        </button>
+      )}
       <Count n={props.count} />
     </li>
   );
@@ -226,27 +251,49 @@ export function FacetGroup<T extends string>(props: {
   /** A choice's words; the value itself by default. */
   label?: (o: T) => ReactNode;
   mono?: boolean;
+  /** Group the choices under small headings (in the options' order of first appearance). */
+  groupOf?: (o: T) => string;
 }) {
   const chosen = props.value === "all" ? props.options : props.value;
+  const groups = props.groupOf
+    ? [...new Set(props.options.map(props.groupOf))].map((g) => ({
+        title: g,
+        options: props.options.filter((o) => props.groupOf!(o) === g),
+      }))
+    : [{ title: undefined, options: props.options }];
   const set = (o: T, on: boolean) => {
     const next = on ? [...chosen, o] : chosen.filter((x) => x !== o);
     props.onChange(props.options.every((x) => next.includes(x)) ? "all" : next);
   };
   return (
     <FacetSection title={props.title} onAll={props.value !== "all" ? () => props.onChange("all") : undefined}>
-      <ul className="text-sm">
-        {props.options.map((o) => (
-          <Choice
-            key={o}
-            label={props.label?.(o) ?? o}
-            mono={props.mono}
-            checked={chosen.includes(o)}
-            count={props.counts.get(o) ?? 0}
-            onChange={(on) => set(o, on)}
-          />
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <FacetGroupList key={g.title ?? ""} title={g.title}>
+          {g.options.map((o) => (
+            <Choice
+              key={o}
+              label={props.label?.(o) ?? o}
+              mono={props.mono}
+              checked={chosen.includes(o)}
+              count={props.counts.get(o) ?? 0}
+              onChange={(on) => set(o, on)}
+              onOnly={props.options.length > 2 ? () => props.onChange([o]) : undefined}
+              onlyLabel={`Only ${o}`}
+            />
+          ))}
+        </FacetGroupList>
+      ))}
     </FacetSection>
+  );
+}
+
+function FacetGroupList(props: { title?: string; children: ReactNode }) {
+  if (!props.title) return <ul className="text-sm">{props.children}</ul>;
+  return (
+    <fieldset className="m-0 min-w-0 border-0 p-0">
+      <legend className="px-3 pt-1.5 text-[11px] text-muted-foreground">{props.title}</legend>
+      <ul className="text-sm">{props.children}</ul>
+    </fieldset>
   );
 }
 

@@ -116,7 +116,8 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
     // a bar across the screen under its title bar (UI-01 §22.3): no box; clause rows stack inside it
     <section aria-label="Filters" className="flex flex-col gap-2 border-b px-4 py-2 text-sm md:px-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span id={indexLabel} className="text-muted-foreground">
+        {/* a narrow bar (the panel open) keeps one row: labels go to screen readers only (UX2-21) */}
+        <span id={indexLabel} className="sr-only text-muted-foreground @2xl/table:not-sr-only">
           Index
         </span>
         <Select
@@ -166,12 +167,12 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           ) : (
             <Button variant="outline" size="sm" onClick={() => setDraft(openRange)}>
               <Plus aria-hidden="true" />
-              {rangeOn} range
+              <span className="sr-only @2xl/table:not-sr-only">{rangeOn} </span>range
             </Button>
           ))}
         <Button variant="outline" size="sm" onClick={() => setDraft((d) => addClause(d))}>
           <Plus aria-hidden="true" />
-          Add filter
+          <span className="sr-only @2xl/table:not-sr-only">Add </span>filter
         </Button>
         {(draft.clauses.length > 0 || draft.eq.length > 0 || draft.range.lower || draft.range.upper) && (
           <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, eq: [], range: {}, clauses: [] }))}>
@@ -179,7 +180,7 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           </Button>
         )}
         <span className="ml-auto flex items-center gap-2">
-          <span id={orderLabel} className="text-muted-foreground">
+          <span id={orderLabel} className="sr-only text-muted-foreground @2xl/table:not-sr-only">
             Order
           </span>
           <Select

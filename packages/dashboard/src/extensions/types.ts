@@ -38,6 +38,11 @@ export type DashboardExtension = {
   requires: readonly (keyof DashboardDataSource)[];
   /** The section column's navigation (UI-01 §23), when the extension has sub-screens. */
   column?: readonly { label?: string; items: readonly ExtensionNavItem[] }[];
+  /**
+   * Pages it adds to Settings (UI-01 §26, "Extensions" group of the Settings column): each a link to one of its
+   * own `routes` (e.g. "/settings/map-style"), whose screen wraps itself in `SettingsLayout`.
+   */
+  settings?: readonly ExtensionNavItem[];
 };
 
 /** Whether a source offers everything an extension needs. */

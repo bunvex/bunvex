@@ -10,13 +10,11 @@ import type { FunctionKind, LogEntry } from "../data-source.ts";
 import type { LogRow } from "./events.ts";
 
 const col = dataTableColumns<LogRow>();
-const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 
-/** "09-29 12:04:05.123" in the viewer's time zone. */
-export function formatLogTime(ms: number): string {
-  const d = new Date(ms);
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
-}
+// the shared time rule (UX2-20): milliseconds, and the date unless it is today
+import { formatLogTime } from "../shell/time.tsx";
+
+export { formatLogTime };
 
 export const formatDuration = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`);
 
