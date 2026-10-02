@@ -46,8 +46,14 @@ cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 
 # A restart keeps the data, the code and the credentials: the same key still works (a key is issued anew each
 # time, with its own time and nonce, so the secret is what stays the same).
-compose restart backend >/dev/null
-compose up -d --wait >/dev/null
+compose restart backend >/dev/null || fail "restart failed"
+healthy=""
+for _ in $(seq 1 60); do
+  id=$(compose ps -q backend)
+  [ "$(docker inspect -f '{{.State.Health.Status}}' "$id" 2>/dev/null)" = healthy ] && healthy=1 && break
+  sleep 1
+done
+[ -n "$healthy" ] || fail "not healthy after the restart"
 [ "$(cli run items:all 2>/dev/null | tr -d ' \n')" = "[42]" ] || fail "data lost across a restart"
 [ "$(compose exec -T backend cat /bunvex/data/credentials/instance_secret)" = "$SECRET" ] || fail "credentials changed across a restart"
 echo "smoke: ok"
