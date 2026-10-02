@@ -5,6 +5,9 @@ import {
   type AuthConfig,
   type AuthEmailAction,
   type AuthEvent,
+  type AuthInvitation,
+  type AuthMember,
+  type AuthMemberRole,
   type AuthOrganization,
   type AuthProviderId,
   type AuthSession,
@@ -66,6 +69,8 @@ export class MockAuthAdmin {
   private users: AuthUser[] = [];
   private sessions: AuthSession[] = [];
   private orgs: AuthOrganization[] = [];
+  private members: AuthMember[] = [];
+  private invitations: AuthInvitation[] = [];
   private events: AuthEvent[] = [];
   private config: AuthConfig = structuredClone(DEFAULT_AUTH_CONFIG);
   private readonly rnd: Random;
@@ -129,9 +134,43 @@ export class MockAuthAdmin {
         name,
         slug: name.toLowerCase(),
         createdAt: t0 - this.rnd.int(10, 200) * DAY,
-        members: this.rnd.int(2, 12),
-        invitations: this.rnd.int(0, 3),
+        members: 0,
+        invitations: 0,
       });
+    // members from the users (the first an owner), and a few invitations in every status
+    for (const org of this.orgs) {
+      const people = this.users.filter((u) => !u.banned).slice();
+      for (let n = this.rnd.int(2, 9); n > 0 && people.length > 0; n--) {
+        const u = people.splice(this.rnd.int(0, people.length - 1), 1)[0]!;
+        const role: AuthMemberRole = this.members.some((m) => m.organizationId === org.id)
+          ? this.rnd.chance(0.25)
+            ? "admin"
+            : "member"
+          : "owner";
+        this.members.push({
+          id: this.rnd.id(),
+          organizationId: org.id,
+          userId: u.id,
+          name: u.name,
+          email: u.email,
+          role,
+          createdAt: org.createdAt + this.rnd.int(0, 5) * DAY,
+        });
+      }
+      for (let n = this.rnd.int(1, 4); n > 0; n--) {
+        const createdAt = t0 - this.rnd.int(0, 10) * DAY;
+        this.invitations.push({
+          id: this.rnd.id(),
+          organizationId: org.id,
+          email: `${this.rnd.pick(FIRST)}.${this.rnd.pick(LAST)}@example.org`.toLowerCase(),
+          role: this.rnd.chance(0.2) ? "admin" : "member",
+          status: this.rnd.pick(["pending", "pending", "accepted", "canceled", "rejected"] as const),
+          inviterId: this.members.find((m) => m.organizationId === org.id)?.userId ?? null,
+          createdAt,
+          expiresAt: createdAt + 2 * DAY,
+        });
+      }
+    }
     this.events.sort((a, b) => b.time - a.time);
   }
 
@@ -278,7 +317,107 @@ export class MockAuthAdmin {
   }
 
   organizations(): AuthOrganization[] {
-    return structuredClone(this.orgs);
+    // the counts come from the members and the pending invitations, so they stay true after a change
+    return this.orgs.map((o) => ({
+      ...o,
+      members: this.members.filter((m) => m.organizationId === o.id).length,
+      invitations: this.invitations.filter((i) => i.organizationId === o.id && i.status === "pending").length,
+    }));
+  }
+
+  private org(id: string): AuthOrganization {
+    const o = this.orgs.find((x) => x.id === id);
+    if (!o) throw new DataSourceError("not_found", `there is no organization ${id}`);
+    return o;
+  }
+
+  private member(id: string): AuthMember {
+    const m = this.members.find((x) => x.id === id);
+    if (!m) throw new DataSourceError("not_found", `there is no member ${id}`);
+    return m;
+  }
+
+  private invitation(id: string): AuthInvitation {
+    const i = this.invitations.find((x) => x.id === id);
+    if (!i) throw new DataSourceError("not_found", `there is no invitation ${id}`);
+    return i;
+  }
+
+  /** An organization keeps at least one owner (as better-auth refuses to leave none). */
+  private keepOwner(m: AuthMember, next: AuthMemberRole | null) {
+    if (m.role !== "owner" || next === "owner") return;
+    const owners = this.members.filter((x) => x.organizationId === m.organizationId && x.role === "owner");
+    if (owners.length <= 1)
+      throw new DataSourceError("invalid_request", "an organization needs an owner: make someone else owner first");
+  }
+
+  listMembers(organizationId: string): AuthMember[] {
+    this.org(organizationId);
+    return structuredClone(
+      this.members.filter((m) => m.organizationId === organizationId).sort((a, b) => a.createdAt - b.createdAt),
+    );
+  }
+
+  updateMemberRole(memberId: string, role: AuthMemberRole) {
+    if (!/^[a-z][a-z0-9-]*$/.test(role)) throw new DataSourceError("invalid_request", `not a role: ${role}`);
+    const m = this.member(memberId);
+    this.keepOwner(m, role);
+    m.role = role;
+    this.event("update-member-role", m.userId, "dashboard", this.now(), { organization: m.organizationId, role });
+  }
+
+  removeMember(memberId: string) {
+    const m = this.member(memberId);
+    this.keepOwner(m, null);
+    this.members = this.members.filter((x) => x.id !== memberId);
+    this.event("remove-member", m.userId, "dashboard", this.now(), { organization: m.organizationId });
+  }
+
+  listInvitations(organizationId: string): AuthInvitation[] {
+    this.org(organizationId);
+    return structuredClone(
+      this.invitations.filter((i) => i.organizationId === organizationId).sort((a, b) => b.createdAt - a.createdAt),
+    );
+  }
+
+  inviteMember(organizationId: string, invite: { email: string; role: AuthMemberRole }): string {
+    this.org(organizationId);
+    const email = invite.email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new DataSourceError("invalid_request", "not an email address");
+    if (this.members.some((m) => m.organizationId === organizationId && m.email === email))
+      throw new DataSourceError("invalid_request", `${email} is already a member`);
+    if (
+      this.invitations.some((i) => i.organizationId === organizationId && i.email === email && i.status === "pending")
+    )
+      throw new DataSourceError("invalid_request", `${email} already has a pending invitation`);
+    const t = this.now();
+    const id = this.rnd.id();
+    this.invitations.push({
+      id,
+      organizationId,
+      email,
+      role: invite.role,
+      status: "pending",
+      inviterId: null,
+      createdAt: t,
+      expiresAt: t + 2 * DAY,
+    });
+    this.event("invite-member", null, "dashboard", t, { organization: organizationId, email, role: invite.role });
+    return id;
+  }
+
+  resendInvitation(invitationId: string) {
+    const i = this.invitation(invitationId);
+    if (i.status !== "pending") throw new DataSourceError("invalid_request", `the invitation is ${i.status}`);
+    i.expiresAt = this.now() + 2 * DAY;
+    this.event("resend-invitation", null, "dashboard", this.now(), { email: i.email });
+  }
+
+  cancelInvitation(invitationId: string) {
+    const i = this.invitation(invitationId);
+    if (i.status !== "pending") throw new DataSourceError("invalid_request", `the invitation is ${i.status}`);
+    i.status = "canceled";
+    this.event("cancel-invitation", null, "dashboard", this.now(), { email: i.email });
   }
 
   getConfig(): AuthConfig {
