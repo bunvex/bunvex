@@ -32,6 +32,8 @@ export const SCHEMAS_TABLE = "_schemas";
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
 export const EXPORTS_TABLE = "_exports";
+/** Snapshot imports (STUDY-42), as Convex's `_snapshot_imports`: one row per import, its state and checkpoints. */
+export const SNAPSHOT_IMPORTS_TABLE = "_snapshot_imports";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";
@@ -162,6 +164,12 @@ export class Catalog {
     for (const [k, t] of this.hidden) out.hidden.set(k, t);
     for (const [k, t] of this.deleting) out.deleting.set(k, t);
     for (const tablet of c.delete ?? []) {
+      const hidden = out.hidden.get(tablet);
+      if (hidden) {
+        out.hidden.delete(tablet);
+        out.deleting.set(tablet, hidden);
+        continue;
+      }
       const t = [...out.tables.values()].find((x) => x.id === tablet);
       if (!t) continue;
       out.tables.delete(t.name);
