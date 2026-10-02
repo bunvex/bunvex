@@ -6,15 +6,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Io } from "./io.ts";
-import {
-  adminRequest,
-  NO_DEPLOYMENT,
-  parseEnvFile,
-  resolveTarget,
-  TARGET_OPTIONS,
-  type Target,
-  takeTargetFlags,
-} from "./target.ts";
+import { acquireTarget } from "./local-deployment.ts";
+import { adminRequest, NO_DEPLOYMENT, parseEnvFile, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 
 export const ENV_USAGE = `Usage: bunvex env <command> [options]
 
@@ -243,12 +236,18 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
     io.err(`bunvex env: unknown command ${sub}\n\n${ENV_USAGE}`);
     return 2;
   }
-  const target = resolveTarget(taken.flags, io);
-  if (!target) {
+  let acquired: Awaited<ReturnType<typeof acquireTarget>>;
+  try {
+    acquired = await acquireTarget(taken.flags, io);
+  } catch (e) {
+    io.err(`bunvex env: ${(e as Error).message}`);
+    return 1;
+  }
+  if (!acquired) {
     io.err(`bunvex env: ${NO_DEPLOYMENT}`);
     return 1;
   }
-  const b = backendOf(target);
+  const b = backendOf(acquired.target);
   try {
     if (sub === "set") await set(io, b, positional, { fromFile, force });
     else if (sub === "get") {
@@ -281,5 +280,7 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
   } catch (e) {
     io.err(e instanceof EnvFailure ? e.message : `✖ ${(e as Error).message}`);
     return 1;
+  } finally {
+    await acquired.release();
   }
 }

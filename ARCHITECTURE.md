@@ -125,7 +125,7 @@ bunvex/
 │   │   ├── dev                      watch files and push (STUDY-37)                           🟡
 │   │   ├── codegen                  _generated/ api, server, dataModel (STUDY-36)             🟡
 │   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
-│   │   ├── run, env, start          run a function, env vars, the server (STUDY-37)           🟡
+│   │   ├── run, env                 run a function, env vars (STUDY-37)                       🟡
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
 │   │   └── mcp                      for AI agents                                              D
@@ -146,7 +146,7 @@ bunvex/
 │   └── with-postgres/, with-auth/…                                                             D
 │
 ├── bench/                           microbenchmarks + convex-bench adapters (not published)    ✅
-├── docker/                          server image (bunvex start), compose (STUDY-38)            🟡
+├── docker/                          image (bunvex-local-backend), compose (STUDY-38, STUDY-40) 🟡
 ├── docs/
 │   ├── specs/                       design records for MAINTAINERS (ENGINE-00, PERSIST-01, ARCH-01…) ✅
 │   ├── study/                       how Convex does X and how bunvex maps it (STUDY-NN), before code ✅
@@ -178,7 +178,7 @@ import { BunvexProvider, useQuery } from "bunvex/react";
 
 // an external database: install its native driver and point at it
 //   bun add postgres
-//   PERSISTENCE=postgres PERSISTENCE_URL=postgres://… bunvex start
+//   bunvex-local-backend --db postgres postgres://…/<database> --instance-secret …
 // or, when embedding the engine in your own code:
 import { postgres } from "@bunvex/persistence/postgres";
 ```
