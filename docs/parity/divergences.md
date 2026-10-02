@@ -223,6 +223,13 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| # | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-173 | `bunvex codegen` analyzes the modules locally (no running deployment) | a `start_push` against the deployment | no (works offline) | accept | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-176 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables (item 9) | typed `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and declared variables | yes (types) | accept until item 9 | [STUDY-36 G4](../study/STUDY-36-codegen.md#4-divergences) |
+
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
