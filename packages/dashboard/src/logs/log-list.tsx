@@ -105,6 +105,9 @@ const columns = pick(["time", "level", "function", "outcome", "request", "messag
 /** On a phone the message comes right after the time: it is what a reader wants (UX-6). */
 const PHONE = "(max-width: 639px)";
 const phoneColumns = pick(["time", "message", "level", "function", "outcome", "request"]);
+/** Beside a docked panel the list is narrow: the message right after the level, so it stays in view (UX2-10). */
+const narrowColumns = pick(["time", "level", "message", "outcome", "function", "request"]);
+const without = (cs: DataTableColumn<LogRow>[], id?: string) => (id ? cs.filter((c) => c.id !== id) : cs);
 
 function useMatches(query: string) {
   const [matches, setMatches] = useState(() => typeof matchMedia === "function" && matchMedia(query).matches);
@@ -136,14 +139,22 @@ export function LogList(props: {
   className?: string;
   /** Fills its container, edge to edge (UI-01 §22.4). */
   fill?: boolean;
+  /** A details panel is open beside the list: the message moves up (UX2-10). */
+  narrow?: boolean;
+  /** One function's lines (Functions → Logs): no Function column, it is always that one (UX2-10). */
+  hideFunction?: boolean;
 }) {
   const phone = useMatches(PHONE);
+  const shown = without(
+    phone ? phoneColumns : props.narrow ? narrowColumns : columns,
+    props.hideFunction ? "function" : undefined,
+  );
   return (
     <DataTable
       label={props.label}
       className={props.className}
       fill={props.fill}
-      columns={phone ? phoneColumns : columns}
+      columns={shown}
       // the time stays in view when a long message scrolls the list sideways (UX-5)
       stickyColumn="time"
       data={props.lines}

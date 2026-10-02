@@ -86,6 +86,12 @@ describe("the Overview screen (UI-01 §27)", () => {
     await heading();
     const summary = screen.getByRole("region", { name: "The deployment" });
     expect(within(summary).getByText("Deployment")).toBeDefined();
+    // one row of four: both URLs in one cell, no lone wide cell (UX2-16)
+    expect(
+      within(summary)
+        .getAllByRole("term")
+        .map((t) => t.textContent),
+    ).toEqual(["Deployment", "URLs", "Last deploy", "Nodes"]);
     await within(summary).findByText(/ago|yesterday|last/); // the last deploy, from the audit log
     const now = screen.getByRole("region", { name: "Now" });
     for (const label of ["Calls per minute", "Failure rate", "Latency p95", "Documents", "File storage"])
@@ -129,6 +135,12 @@ describe("the Overview screen (UI-01 §27)", () => {
     const start = await screen.findByRole("region", { name: "Get started" });
     expect(within(start).getByRole("link", { name: "Database" }).getAttribute("href")).toBe("/database");
     expect(within(start).getByText(/BunvexClient/)).toBeDefined();
+    // a finished step says so in words, not only in a lighter colour (UX2-26)
+    expect(
+      within(start)
+        .getByText(/Functions deployed/)
+        .closest("li")!.textContent,
+    ).toContain("Done:");
   });
 
   test("/health, the old address, opens the Overview", async () => {

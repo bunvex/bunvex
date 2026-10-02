@@ -22,27 +22,29 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
   const shown = sorted.filter((t) => t.name.toLowerCase().includes(query.trim().toLowerCase()));
   return (
     <>
-      <div className="flex items-center gap-2 border-b px-4 py-2 lg:hidden">
-        <span id={pickerLabel} className="text-sm text-muted-foreground">
-          Table
-        </span>
-        <Select
-          items={sorted.map((t) => ({ value: t.name, label: t.name }))}
-          value={current}
-          onValueChange={(v) => navigate({ to: "/database/$table", params: { table: v as string } })}
-        >
-          <SelectTrigger aria-labelledby={pickerLabel} className="min-w-40 flex-1">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {sorted.map((t) => (
-              <SelectItem key={t.name} value={t.name}>
-                {t.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {sorted.length > 0 && (
+        <div className="flex items-center gap-2 border-b px-4 py-2 lg:hidden">
+          <span id={pickerLabel} className="text-sm text-muted-foreground">
+            Table
+          </span>
+          <Select
+            items={sorted.map((t) => ({ value: t.name, label: t.name }))}
+            value={current}
+            onValueChange={(v) => navigate({ to: "/database/$table", params: { table: v as string } })}
+          >
+            <SelectTrigger aria-labelledby={pickerLabel} className="min-w-40 flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {sorted.map((t) => (
+                <SelectItem key={t.name} value={t.name}>
+                  {t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <SectionColumn title="Database" widthKey={WIDTH_KEY} from="lg">
         <nav aria-label="Tables">
           <div className="px-3 pt-3">
@@ -86,8 +88,12 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
                 </DashLink>
               </li>
             ))}
-            {shown.length === 0 && (
-              <li className="px-3 py-2 text-sm text-muted-foreground">No table matches “{query}”.</li>
+            {sorted.length === 0 ? (
+              <li className="px-3 py-2 text-sm text-muted-foreground">No tables yet.</li>
+            ) : (
+              shown.length === 0 && (
+                <li className="px-3 py-2 text-sm text-muted-foreground">No table matches “{query}”.</li>
+              )
             )}
           </ul>
         </nav>

@@ -217,8 +217,8 @@ describe("the Topology screen", () => {
     const cache = await within(panel).findByTestId("cache-details");
     expect(within(cache).getByText("3,100 of 5,000")).toBeDefined();
     expect(within(cache).getByText("950")).toBeDefined();
-    expect(within(cache).getByText(/^Hit rate, last \d+ s$/)).toBeDefined();
-    expect(within(cache).getByText(/^Invalidations per second, last \d+ s$/)).toBeDefined();
+    expect(within(cache).getByText("Hit rate, last minute")).toBeDefined();
+    expect(within(cache).getByText("Invalidations per second, last minute")).toBeDefined();
     const top = within(cache)
       .getAllByRole("listitem")
       .map((li) => li.textContent);
