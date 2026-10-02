@@ -39,6 +39,7 @@ export { type ExecutionKind, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,
+  DEFAULT_INSTANCE_NAME,
   Engine,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,
@@ -53,6 +54,7 @@ export {
   type TxBody,
 } from "./engine.ts";
 export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
   DatabaseTimeoutError,

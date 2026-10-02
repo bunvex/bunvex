@@ -10,6 +10,7 @@ const config = persistenceConfigFromEnv();
 const engine = await new Engine(benchSchema, await openPersistence(config), {
   // The query cache's byte budget comes from UDF_CACHE_MAX_SIZE (default 100 MiB), as in Convex.
   instanceSecret: process.env.INSTANCE_SECRET,
+  instanceName: process.env.INSTANCE_NAME,
   // PERSIST-01 C7: the store's lease (drivers that have one). LEASE_WAIT_MS > 0 waits for a held lease.
   lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 5000), waitMs: Number(process.env.LEASE_WAIT_MS ?? 0) },
 }).init();
