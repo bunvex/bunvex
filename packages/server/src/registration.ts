@@ -14,6 +14,7 @@ import type {
 } from "@bunvex/protocol";
 import type { GenericValidator, Infer, ObjectType, PropertyValidators, Validator } from "@bunvex/values";
 import type { Auth, FunctionDef, StorageActionWriter, StorageReader, StorageWriter } from "./functions.ts";
+import type { ActionMeta, MutationMeta, QueryMeta } from "./meta.ts";
 import type { PublicHttpAction } from "./router.ts";
 import type { Scheduler } from "./scheduler.ts";
 
@@ -46,6 +47,8 @@ export interface GenericQueryCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseReader<DataModel>;
   auth: Auth;
   storage: StorageReader;
+  /** The function's, transaction's and deployment's metadata (STUDY-44). */
+  meta: QueryMeta;
   /** Run a query in this query's transaction: its reads join this query's (STUDY-41). */
   runQuery<Query extends Callable<"query">>(
     query: Query,
@@ -65,6 +68,8 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   auth: Auth;
   storage: StorageWriter;
   scheduler: Scheduler;
+  /** The function's, transaction's, deployment's and request's metadata (STUDY-44). */
+  meta: MutationMeta;
   /** Run a query in this mutation's transaction, seeing its writes (or, `useStaleSnapshot`, its snapshot). */
   runQuery<Query extends Callable<"query">>(
     query: Query,
@@ -112,6 +117,8 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
   auth: Auth;
   storage: StorageActionWriter;
   scheduler: Scheduler;
+  /** The function's, deployment's and request's metadata (STUDY-44). */
+  meta: ActionMeta;
 }
 
 /** A function's arguments: one object, or none. */
