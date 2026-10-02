@@ -1,6 +1,6 @@
 # STUDY-43 — `bunvex data` (print tables and documents)
 
-- **Status:** D1 awaits the owner (recommended: accept until components)
+- **Status:** accepted: D1 as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-37](STUDY-37-cli-and-environment-variables.md) (the CLI), [STUDY-42](STUDY-42-import-export.md)
   (its sibling commands), [platform §CLI](../parity/platform.md).
@@ -57,7 +57,7 @@ two system queries and their operation (ViewData).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | `--component` is refused ("bunvex does not have components yet") | bunvex has no components (Phase 4; as DV-215) | awaits owner (recommended: accept until components) |
+| D1 | `--component` is refused ("bunvex does not have components yet") | bunvex has no components (Phase 4; as DV-215) | accepted until components (owner, 2026-10-02); DV-224, waiting on components |
 
 ## 5. Tests
 
