@@ -2110,8 +2110,8 @@ every one. They land in five pull requests, one subsection each.
   system's Select), `ChoiceRadios` (Base UI RadioGroup with a label) and `FilePicker` (a button, the file's
   name and a drop zone over a hidden `<input type="file">`). The flag editor and Snapshots use them; a test
   (`test/native-controls.test.ts`) fails on any `<select>` or native file/radio/checkbox input outside an
-  explicit allow-list (the column's facet radios, Files' hidden upload input, the Schema toolbar's toggle, and
-  — until the Authentication pull request — two Authentication selects).
+  explicit allow-list (the column's facet radios, Files' hidden upload input and the Schema toolbar's toggle;
+  Authentication's two native selects use the design system's Select since its UX review 2 pull request).
 - **No error before typing** (UX2-5): the new-flag form says nothing until something is typed; Create stays
   disabled meanwhile (as the filters since UX-2).
 - **The Database bar keeps one row when narrow** (UX2-21): below a 42 rem table width (the panel open) "Index",
