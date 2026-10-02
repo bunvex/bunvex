@@ -1,0 +1,46 @@
+# A self-hosted bunvex deployment (STUDY-38), as Convex's self-hosted/docker/docker-compose.yml:
+#   docker compose up
+#   docker compose exec backend ./generate_admin_key.sh
+services:
+  backend:
+    # Built from this repository; change to a published image once there is one (STUDY-38 K5).
+    image: ${BUNVEX_IMAGE:-bunvex-backend:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      - "${PORT:-3210}:3210"
+      - "${SITE_PROXY_PORT:-3211}:3211"
+    volumes:
+      - data:/bunvex/data
+    environment:
+      - APPLICATION_MAX_CONCURRENT_V8_ACTIONS
+      - AWS_ACCESS_KEY_ID
+      - AWS_REGION
+      - AWS_S3_FORCE_PATH_STYLE
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - BUNVEX_CLOUD_ORIGIN=${BUNVEX_CLOUD_ORIGIN:-http://127.0.0.1:${PORT:-3210}}
+      - BUNVEX_SITE_ORIGIN=${BUNVEX_SITE_ORIGIN:-http://127.0.0.1:${SITE_PROXY_PORT:-3211}}
+      - DATABASE_URL
+      - DOCUMENT_RETENTION_DELAY=${DOCUMENT_RETENTION_DELAY:-172800} # 2 days, as Convex's compose file
+      - DO_NOT_REQUIRE_SSL
+      - INSTANCE_NAME
+      - INSTANCE_SECRET
+      - MYSQL_URL
+      - PERSISTENCE
+      - PERSISTENCE_URL
+      - POSTGRES_URL
+      - REDACT_LOGS_TO_CLIENT
+      - S3_ENDPOINT_URL
+      - S3_STORAGE_FILES_BUCKET
+      - S3_STORAGE_MODULES_BUCKET
+    healthcheck:
+      test: curl -f http://localhost:3210/version
+      interval: 5s
+      start_period: 10s
+
+volumes:
+  data:

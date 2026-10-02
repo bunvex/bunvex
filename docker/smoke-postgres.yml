@@ -1,0 +1,17 @@
+# For docker/smoke.sh with SMOKE_POSTGRES=1: the same deployment on Postgres.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      - POSTGRES_PASSWORD=smoke
+      - POSTGRES_DB=bunvex
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 2s
+  backend:
+    environment:
+      - POSTGRES_URL=postgres://postgres:smoke@postgres:5432/bunvex
+      - DO_NOT_REQUIRE_SSL=1
+    depends_on:
+      postgres:
+        condition: service_healthy

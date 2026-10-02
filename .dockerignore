@@ -1,0 +1,8 @@
+**/node_modules
+**/dist
+**/.data
+**/.bunvex
+.git
+.github
+docs
+bench/results
