@@ -188,6 +188,7 @@ export class ImportService {
   private readonly backoff: { initial: number; max: number };
   /** The import the worker is running, if any. */
   private current: string | null = null;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -375,10 +376,20 @@ export class ImportService {
   /** Start the worker (the lease holder's). */
   startWorker() {
     this.running ??= this.loop();
+    this.cleanupTimer ??= setInterval(() => void this.cleanup().catch(() => {}), 30 * 60 * 1000);
+  }
+
+  /**
+   * Drop hidden tables left behind for more than twice the import age limit (Convex's system-table cleanup):
+   * an import's own are dropped when it fails, so these are a crash's.
+   */
+  cleanup(): Promise<number> {
+    return this.engine.dropStaleHiddenTables(2 * MAX_IMPORT_AGE_MS, this.now());
   }
 
   async stop() {
     this.stopped = true;
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.wake?.();
     await this.running;
   }

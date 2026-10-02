@@ -648,3 +648,23 @@ describe("round trip", () => {
     expect(await new Response(await dst.files.get(dstFile!.storageKey as string)).text()).toBe("hello");
   });
 });
+
+test("the import service's cleanup drops hidden tables older than twice the import age limit", async () => {
+  const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false }), {
+    instanceName: NAME,
+    instanceSecret: SECRET,
+  }).init();
+  const { ImportService, MAX_IMPORT_AGE_MS } = await import("../src/imports.ts");
+  let now = Date.now();
+  const service = new ImportService(engine, new MemoryBlobStore(), null, { now: () => now });
+  await engine.createHiddenTable("orphan");
+  expect(await service.cleanup()).toBe(0);
+  // Past the import age limit, but not twice it: kept.
+  now += MAX_IMPORT_AGE_MS + 1000;
+  expect(await service.cleanup()).toBe(0);
+  now += MAX_IMPORT_AGE_MS;
+  expect(await service.cleanup()).toBe(1);
+  await engine.tablesDeleted();
+  expect(engine.catalog.hidden.size).toBe(0);
+  await engine.close();
+});

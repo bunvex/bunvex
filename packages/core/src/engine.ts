@@ -875,6 +875,23 @@ export class Engine {
     return { deleted, ts };
   }
 
+  /**
+   * Drop hidden tables older than `maxAgeMs` (Convex's `cleanup_hidden_tables`: an import's tables left behind
+   * by a crash), at most 1000 per call. How many were dropped.
+   */
+  async dropStaleHiddenTables(maxAgeMs: number, now = Date.now()): Promise<number> {
+    const stale = (await this.query((db) =>
+      db.asSystem(async () =>
+        ((await db.query(TABLES_TABLE).collect()) as unknown as (TableMeta & { _creationTime: number })[])
+          .filter((t) => t.state === "hidden" && now - t._creationTime > maxAgeMs)
+          .slice(0, 1000)
+          .map((t) => t.tablet),
+      ),
+    )) as number[];
+    if (stale.length) await this.dropHiddenTables(stale);
+    return stale.length;
+  }
+
   /** Drop hidden tables (a failed import's): invisible already, their documents removed in the background. */
   async dropHiddenTables(tablets: number[]) {
     await this.runMutation(

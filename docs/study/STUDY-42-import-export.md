@@ -152,6 +152,9 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
   with Convex's internal-error message; each attempt resumes into the hidden tables recorded in the row
   (`hidden_tables`, bunvex's own field, not returned by `queryImport`), skipping what they already hold. A
   failed or canceled import's hidden tables are dropped.
+- **Hidden tables left behind** (a crash between creating and dropping them) are dropped once older than
+  twice the import age limit (14 days), as Convex's system-table cleanup (`cleanup_hidden_tables`), every
+  30 minutes, at most 1000 a run. As Convex, `_snapshot_imports` rows and their uploads are kept.
 - **A Convex ZIP with files (verified):** Convex gives its system tables fixed numbers (`DefaultTableNumber`
   in `crates/model/src/lib.rs`, "to make import/export more likely to work nicely"): `_storage` ids always
   carry 540. bunvex numbers its system tables in order (`_storage` is 522), and 540 is free, so such a ZIP
