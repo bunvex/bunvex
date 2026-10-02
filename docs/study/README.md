@@ -69,6 +69,7 @@ to a spec.
 | [STUDY-35](STUDY-35-push-and-deploy.md) | Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | implemented (PRs #160–#166); P1–P6 accepted (owner, 2026-10-02) |
 | [STUDY-36](STUDY-36-codegen.md) | Codegen: `_generated/` (api, server, dataModel) and the typed data model behind it | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-37](STUDY-37-cli-and-environment-variables.md) | Deployment environment variables (`process.env`, limits, auth config) and the CLI part 1: `start`, `run`, `env`, `dev` | accepted: all as recommended (owner, 2026-10-02) |
+| [STUDY-38](STUDY-38-docker.md) | The Docker image and docker-compose: `bunvex start` in a container, credentials in the volume, `generate_admin_key.sh`, publishing | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-39](STUDY-39-standalone-binary.md) | The standalone executable: `bunvex` compiled per platform, released as Convex releases `convex-local-backend` | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-28](STUDY-28-builtin-auth.md) | Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done |
 | [STUDY-31](STUDY-31-http-actions.md) | HTTP actions: `httpRouter`, `httpAction`, serving on `/http` and the site port, errors, limits, auth | accepted: H1–H5 as recommended (owner, 2026-10-01) |
