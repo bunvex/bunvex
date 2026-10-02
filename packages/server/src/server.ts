@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import { type Caller, type Engine, OccError, parseValue, stringifyValue } from "@bunvex/core";
+import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
@@ -14,6 +15,7 @@ import { collectLogs, type WithLogLines } from "./logs.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
+import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
 import {
   fromWireTs,
   MAX_PENDING_MUTATIONS,
@@ -80,8 +82,24 @@ export type ServerOptions = {
    * + 1 (3211 next to 3210); a random one when `port` is 0; null serves no site port.
    */
   sitePort?: number | null;
-  /** The largest request body accepted, in bytes (H3). Default: Bun's (128 MiB). */
+  /**
+   * The largest request body accepted, in bytes (H3). Default: Bun's (128 MiB). File uploads are exempt, as
+   * Convex's upload route has no limit (F4).
+   */
   maxRequestBodySize?: number;
+  /**
+   * Where the bytes of stored files go (STUDY-32): a blob backend, or null for no file storage. Default: from
+   * the environment as Convex's image chooses — S3 when `S3_STORAGE_FILES_BUCKET` is set, else `STORAGE_DIR`,
+   * else `<DATA>/storage`.
+   */
+  fileStorage?: BlobStore | null;
+  /**
+   * The public origins (F2): the API's, which file URLs start with (Convex's `CONVEX_CLOUD_ORIGIN`), and the
+   * site's, where HTTP actions answer (`CONVEX_SITE_ORIGIN`). Defaults: `BUNVEX_CLOUD_ORIGIN` /
+   * `BUNVEX_SITE_ORIGIN`, else `http://127.0.0.1:<port>`.
+   */
+  cloudOrigin?: string;
+  siteOrigin?: string;
   /** No response head from an HTTP action by then answers 408 (Convex: 300 s). For tests. */
   httpActionHeadTimeoutMs?: number;
   /**
@@ -229,10 +247,54 @@ export function createServer(opts: ServerOptions) {
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
   );
 
+  // ---------------------------------------------------------------- request body caps (H3, F4)
+  /** Bun's default `maxRequestBodySize`, the cap every route but uploads keeps. */
+  const cap = opts.maxRequestBodySize ?? 128 * 1024 * 1024;
+  const payloadTooLarge = () => new Response("Payload Too Large", { status: 413 });
+  /** A declared body over the cap: 413, as Bun answers it. */
+  const bodyCap = (req: Request) => {
+    const n = Number(req.headers.get("content-length") ?? 0);
+    return n > cap ? payloadTooLarge() : null;
+  };
+  /** The request with its body cut off past the cap (a body sent without a length). */
+  const capped = (req: Request): Request => {
+    if (!req.body) return req;
+    let seen = 0;
+    const body = req.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, c) {
+          seen += chunk.byteLength;
+          if (seen > cap) c.error(new Error("Request body too large"));
+          else c.enqueue(chunk);
+        },
+      }),
+    );
+    return new Request(req, { body, duplex: "half" } as RequestInit);
+  };
+
+  // ---------------------------------------------------------------- file storage (STUDY-32)
+  let files: FileStorage | null = null;
+  const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
+    if (req.method === "OPTIONS") return fs.preflight(req);
+    try {
+      if (url.pathname === "/api/storage/upload" && req.method === "POST")
+        return fs.cors(req, await fs.upload(req, url));
+      if (req.method === "GET" || req.method === "HEAD")
+        return fs.cors(req, await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length))));
+      return fs.cors(req, new Response(null, { status: 405 }));
+    } catch (e) {
+      if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
+      if (isSystemError(e))
+        return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
+      throw e;
+    }
+  };
+
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
     idleTimeout: 120,
-    ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+    // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
+    maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
       maxPayloadLength: 8 * 1024 * 1024,
       idleTimeout: 960,
@@ -256,9 +318,16 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname === "/version") return new Response("bunvex");
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
+      if (url.pathname.startsWith("/api/storage/") && files) {
+        srv.timeout(req, 0);
+        return serveStorage(files, req, url);
+      }
+      // Every other route keeps the request body cap (H3) that Bun no longer applies on this server.
+      const tooLarge = bodyCap(req);
+      if (tooLarge) return tooLarge;
       if (url.pathname === "/http" || url.pathname.startsWith("/http/")) {
         srv.timeout(req, 0);
-        return serveHttpAction(req, url.pathname.slice(5) || "/", url.search);
+        return serveHttpAction(capped(req), url.pathname.slice(5) || "/", url.search);
       }
       if (url.pathname === "/stats") {
         const c = engine.committer;
@@ -280,7 +349,7 @@ export function createServer(opts: ServerOptions) {
       if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       let body: { path: string; args: unknown; ts?: unknown };
       try {
-        body = (await req.json()) as typeof body;
+        body = JSON.parse(await new Response(capped(req).body).text()) as typeof body;
       } catch (e) {
         return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
       }
@@ -314,6 +383,20 @@ export function createServer(opts: ServerOptions) {
       );
     },
   });
+  // The file storage, once the API's origin is known (its URLs start with it).
+  const blobs =
+    opts.fileStorage === undefined
+      ? blobStoreFromEnv(process.env, {
+          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+        })
+      : opts.fileStorage;
+  const cloudOrigin = opts.cloudOrigin ?? process.env.BUNVEX_CLOUD_ORIGIN ?? `http://127.0.0.1:${server.port}`;
+  if (blobs) {
+    files = new FileStorage(engine, blobs, cloudOrigin.replace(/\/$/, ""));
+    functions.fileStorage = files;
+  }
+  const stopFileSweeps = files ? startFileSweeps(engine, files) : () => {};
+
   // The site port (Convex's site proxy): HTTP actions at every path; `/version` first, as Convex's meta route.
   const sitePort =
     opts.sitePort === undefined
@@ -342,7 +425,11 @@ export function createServer(opts: ServerOptions) {
     /** The site port's server (HTTP actions), if any. */
     site,
     /** The site's origin, as Convex's `CONVEX_SITE_URL` default. */
-    siteUrl: site ? `http://127.0.0.1:${site.port}` : null,
+    siteUrl: site ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`) : null,
+    /** The API's public origin (file URLs start with it). */
+    cloudOrigin,
+    /** The file storage, if any. */
+    files,
     sync,
     scheduler,
     cronsReady,
@@ -350,6 +437,7 @@ export function createServer(opts: ServerOptions) {
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();
+      stopFileSweeps();
       sync.stop();
       site?.stop(true);
       server?.stop(true);
@@ -362,6 +450,7 @@ export function createServer(opts: ServerOptions) {
       sync.stop();
       site?.stop(true);
       server?.stop(true);
+      stopFileSweeps();
       await engine.close();
     },
   };

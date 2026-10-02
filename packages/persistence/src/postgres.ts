@@ -12,6 +12,12 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version') and
 // `read_only`, Convex's table names. Open checks both before writing anything and refuses a foreign, future
 // or read-only store; a new store's version record is written under the lease.
+// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (`documents_by_ts`);
+// prunes are Convex's `ts <= X` deletes per key, one statement per batch; globals are `persistence_globals`
+// rows. A prune or a global write runs only while the lease row carries our epoch: the check is in the same
+// statement, without locking the row (a flush or a takeover is never held up by it). A takeover between that
+// check and the commit can let one batch through; it only deletes versions superseded below a window the
+// old holder had already published, which the new holder reads no lower than either.
 // Timeouts (STUDY-25 L3), as Convex's Postgres driver: every database call is bounded on the client side
 // (30 s by default, Convex's POSTGRES_TIMEOUT_SECONDS), per round trip. A timed-out call's connection is never
 // reused: postgres.js does not expose its connections, so the whole pool is retired (in-flight calls on it
@@ -30,9 +36,12 @@ import {
   checkUnversionedTables,
   chunkRows,
   DatabaseTimeoutError,
+  type DocLogRow,
+  type DocPrune,
   type DocWrite,
   decodeLayoutVersion,
   groupLog,
+  type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
@@ -45,6 +54,7 @@ import {
   POSTGRES_ROWS_PER_STATEMENT,
   ReadOnlyError,
   type ReadOnlyFlag,
+  type RetentionStore,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -103,7 +113,7 @@ export const connectionLost = (e: unknown) => {
   return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
-export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
+export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush (the group's top, written to the lease row as max_ts). */
@@ -116,8 +126,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   /** Retired pools, still ending (closed with the store). */
   private retired = new Set<Promise<void>>();
   private closed = false;
-  /** The store predates PERSIST-01 C11: its ts index is built once we hold the lease. */
+  /** The store predates PERSIST-01 C11 / C12: its ts indexes are built once we hold the lease. */
   private needsLogIndex = false;
+  private needsDocLogIndex = false;
   private constructor(
     private newPool: () => postgresDriver.Sql,
     /** This instance's connections' application_name, recorded in the lease row: a successor that finds us
@@ -229,7 +240,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       (sql) => sql`select to_regclass('documents') is not null as documents,
         to_regclass('indexes') is not null as indexes, to_regclass('bunvex_lease') is not null as lease,
         to_regclass('persistence_globals') is not null as globals, to_regclass('read_only') is not null as ro,
-        to_regclass('indexes_by_ts') is not null as by_ts`,
+        to_regclass('indexes_by_ts') is not null as by_ts, to_regclass('documents_by_ts') is not null as doc_by_ts`,
     );
     await this.checkStore(have, opts);
     // DDL only when a table is missing: a `create … if not exists` still waits for locks another process
@@ -249,6 +260,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           await tx.unsafe(`
           create table if not exists documents (table_id int not null, id text not null, ts bigint not null,
             json_value text, deleted boolean not null, primary key (table_id, id, ts));
+          ${have.documents ? "" : "create index if not exists documents_by_ts on documents (ts); -- the document log (PERSIST-01 C12)"}
           create table if not exists indexes (index_id int not null, key_prefix bytea not null, key_suffix bytea,
             key_suffix_hash bytea not null, ts bigint not null, deleted boolean not null, document_id text);
           -- (key, ts desc): an ascending scan reads each key's newest version first, straight off the index.
@@ -264,6 +276,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     // A store written before C11 (its `indexes` table exists without the ts index): building the index blocks
     // writes, so it waits for the lease, as an upgrade would.
     this.needsLogIndex = have.indexes && !have.by_ts;
+    this.needsDocLogIndex = have.documents && !have.doc_by_ts;
   }
 
   /**
@@ -305,6 +318,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       // One timed call (STUDY-25 L3), not retried: a build that timed out is not run twice.
       await this.call((sql) => sql`create index if not exists indexes_by_ts on indexes (ts)`);
       this.needsLogIndex = false;
+    }
+    if ("epoch" in r && this.needsDocLogIndex) {
+      await this.call((sql) => sql`create index if not exists documents_by_ts on documents (ts)`);
+      this.needsDocLogIndex = false;
     }
     return r;
   }
@@ -653,6 +670,97 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       })),
       Number(rows[0].prev ?? 0),
     );
+  }
+
+  /** PERSIST-01 C12: as readLog, over `documents`. */
+  async readDocumentLog(afterTs: number, upToTs: number, limit: number): Promise<DocLogRow[]> {
+    if (limit <= 0) return [];
+    const [after, upTo, n] = [afterTs, Math.min(upToTs, Number.MAX_SAFE_INTEGER), limit].map((x) => {
+      if (!Number.isSafeInteger(x)) throw new Error(`readDocumentLog: ${x} is not an integer timestamp or limit`);
+      return x;
+    });
+    // Bounds inlined and commits found one index probe at a time, for readLog's reasons.
+    const rows = await this.read((sql) =>
+      sql.unsafe(
+        `with recursive
+         b as (select least(${upTo}, coalesce((select max_ts from bunvex_lease where id = 1), ${upTo})) as hi),
+         c(ts, n) as (
+           (select ts, 1 from documents, b where ts > ${after} and ts <= b.hi order by ts limit 1)
+           union all
+           select (select d.ts from documents d, b where d.ts > c.ts and d.ts <= b.hi order by d.ts limit 1), c.n + 1
+           from c where c.n < ${n} and c.ts is not null)
+       select ts, table_id, id, deleted from documents
+       where ts > ${after} and ts <= (select max(ts) from c) order by ts`,
+        [],
+        { prepare: false },
+      ),
+    );
+    return rows.map((r) => ({ ts: Number(r.ts), table: r.table_id as number, id: r.id as string, deleted: r.deleted }));
+  }
+
+  /** PERSIST-01 C13: one statement per batch, behind the epoch check (see the header). */
+  async pruneIndexes(entries: IndexPrune[]) {
+    if (!entries.length) return 0;
+    const rows = entries.map((e) => {
+      const k = splitKey(e.key);
+      return [e.index, hex(k.prefix), hex(k.suffixHash), e.ts];
+    });
+    return this.fenced(
+      `delete from indexes i using jsonb_array_elements($1::text::jsonb) r
+       where i.index_id = (r->>0)::int and i.key_prefix = decode(r->>1, 'hex')
+         and i.key_suffix_hash = decode(r->>2, 'hex') and i.ts <= (r->>3)::bigint`,
+      rows,
+    );
+  }
+
+  async pruneDocuments(entries: DocPrune[]) {
+    if (!entries.length) return 0;
+    return this.fenced(
+      `delete from documents d using jsonb_array_elements($1::text::jsonb) r
+       where d.table_id = (r->>0)::int and d.id = r->>1 and d.ts <= (r->>2)::bigint`,
+      entries.map((e) => [e.table, e.id, e.ts]),
+    );
+  }
+
+  /** A delete that runs only while the lease row carries our epoch; how many rows it removed. Idempotent,
+   *  so a lost connection runs it once more (a read's retry). */
+  private async fenced(del: string, rows: unknown[]) {
+    const [r] = await this.read((sql) =>
+      sql.unsafe(
+        `with l as (select 1 from bunvex_lease where id = 1 and epoch = $2),
+              d as (${del} and exists (select 1 from l) returning 1)
+         select (select count(*) from l)::int as ok, (select count(*) from d)::int as n`,
+        [JSON.stringify(rows), this.epoch] as any,
+      ),
+    );
+    if (r.ok !== 1) throw new LeaseLostError();
+    return Number(r.n);
+  }
+
+  /** PERSIST-01 C14. */
+  async getGlobal(key: string): Promise<unknown> {
+    const [r] = await this.read((sql) => sql`select json_value::text as v from persistence_globals where key = ${key}`);
+    return r ? JSON.parse(r.v as string) : null;
+  }
+
+  async setGlobal(key: string, value: unknown) {
+    const [r] = await this.read((sql) =>
+      sql.unsafe(
+        `with l as (select 1 from bunvex_lease where id = 1 and epoch = $3),
+              u as (insert into persistence_globals (key, json_value) select $1, $2 where exists (select 1 from l)
+                    on conflict (key) do update set json_value = excluded.json_value returning 1)
+         select (select count(*) from l)::int as ok`,
+        [key, JSON.stringify(value), this.epoch] as any,
+      ),
+    );
+    if (r.ok !== 1) throw new LeaseLostError();
+  }
+
+  async auditRowCount() {
+    const [r] = await this.read(
+      (sql) => sql`select (select count(*) from documents)::int as docs, (select count(*) from indexes)::int as idx`,
+    );
+    return { docs: Number(r.docs), idx: Number(r.idx) };
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store

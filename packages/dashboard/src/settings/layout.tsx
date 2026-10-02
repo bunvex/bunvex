@@ -1,42 +1,66 @@
-// The Settings screens' frame (UI-01 §14.4, §17.1): the heading and the pages beside them, as Convex's
-// settings sidebar (`DeploymentSettingsLayout.tsx`, `deploymentSettingsPages.ts`) — General first.
+// The Settings screens' frame (UI-01 §14.4, §17.1, §23): the section column with the pages in groups, as
+// Convex's settings sidebar (`DeploymentSettingsLayout.tsx`, `deploymentSettingsPages.ts`) — General first —
+// and the page beside it: Bar 1 (its name and what it is for), then its content, scrolling inside.
 import type { ReactNode } from "react";
 import { DashLink } from "../router.tsx";
+import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
+import { SECTION_ITEM, SectionColumn, SectionNav, useSectionSheet } from "../shell/section-column.tsx";
 
-const TAB =
-  "block border-l-2 border-transparent px-2 py-1 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:border-primary aria-[current=page]:font-medium aria-[current=page]:text-foreground";
-
-export function SettingsLayout({ children }: { children: ReactNode }) {
+function SettingsNav() {
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-      <div className="flex flex-col gap-6 lg:flex-row">
-        <nav aria-label="Settings" className="lg:w-52 lg:shrink-0">
-          <ul>
+    <SectionNav
+      label="Settings"
+      groups={[
+        {
+          label: "Configuration",
+          items: (
+            <>
+              <li>
+                <DashLink link={{ to: "/settings/general" }} className={SECTION_ITEM}>
+                  General
+                </DashLink>
+              </li>
+              <li>
+                <DashLink link={{ to: "/settings/environment-variables" }} className={SECTION_ITEM}>
+                  Environment variables
+                </DashLink>
+              </li>
+            </>
+          ),
+        },
+        {
+          label: "Data",
+          items: (
             <li>
-              <DashLink link={{ to: "/settings/general" }} className={TAB}>
-                General
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/settings/environment-variables" }} className={TAB}>
-                Environment variables
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/settings/authentication" }} className={TAB}>
-                Authentication
-              </DashLink>
-            </li>
-            <li>
-              <DashLink link={{ to: "/settings/snapshots" }} className={TAB}>
+              <DashLink link={{ to: "/settings/snapshots" }} className={SECTION_ITEM}>
                 Snapshots
               </DashLink>
             </li>
-          </ul>
-        </nav>
-        <div className="min-w-0 flex-1">{children}</div>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
+export function SettingsLayout(props: { title: string; description?: string; children: ReactNode }) {
+  const sheet = useSectionSheet({ kind: "settings-pages", label: "Pages", children: <SettingsNav /> });
+  return (
+    <div className={SCREEN}>
+      <SectionColumn title="Settings" widthKey="bunvex-dashboard:settings-column-width">
+        <SettingsNav />
+      </SectionColumn>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className={BAR1}>
+          <h1 className={BAR_TITLE}>{props.title}</h1>
+          {props.description && (
+            <span className="hidden text-sm text-muted-foreground sm:inline">{props.description}</span>
+          )}
+          <span className="ml-auto">{sheet.button}</span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">{props.children}</div>
       </div>
+      {sheet.sheet}
     </div>
   );
 }

@@ -17,9 +17,16 @@ import { formatCount } from "../screens/stats.ts";
 import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
 import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
-import { FacetColumn, FacetGroup, FacetRadios, FacetSection, useFiltersSheet } from "../shell/facet-column.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
+import {
+  FacetGroup,
+  FacetRadios,
+  FacetSection,
+  SectionColumn,
+  SectionFilters,
+  useSectionSheet,
+} from "../shell/section-column.tsx";
 import { ACTION_LABELS, describeEvent } from "./describe.ts";
 
 const PAGE = 50;
@@ -130,7 +137,7 @@ function History() {
       </p>
     </>
   );
-  const sheet = useFiltersSheet({ kind: "history-filters", onReset: reset, children: sections });
+  const sheet = useSectionSheet({ kind: "history-filters", onReset: reset, children: sections });
 
   const columns: DataTableColumn<AuditEvent>[] = [
     col.accessor((e) => e.time, {
@@ -154,9 +161,11 @@ function History() {
     // full-bleed (UI-01 §22.5): the filter column, Bar 1, the grid to the bottom, the details docked
     <div className={SCREEN}>
       {allowed && (
-        <FacetColumn label="History filters" widthKey="bunvex-dashboard:history-filters-width" onReset={reset}>
-          {sections}
-        </FacetColumn>
+        <SectionColumn title="History" widthKey="bunvex-dashboard:history-filters-width">
+          <SectionFilters label="History filters" onReset={reset}>
+            {sections}
+          </SectionFilters>
+        </SectionColumn>
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* the count next to the title, as every list screen has it (UX-14) */}

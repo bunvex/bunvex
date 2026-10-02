@@ -127,7 +127,7 @@ describe("the Files screen", () => {
     await waitFor(() => expect(rows().some((r) => ids.includes(idOf(r)!))).toBe(false));
   });
 
-  test("look up a file by its storage ID; an unknown one says so", async () => {
+  test("look up a file by its storage ID; one that is not an ID, or a deleted one, says so", async () => {
     const { history, source } = mount("/files");
     await loaded();
     const target = (await all(source))[5]!;
@@ -138,6 +138,10 @@ describe("the Files screen", () => {
     await within(panel).findByText(target.sha256);
     await user.clear(screen.getByRole("textbox", { name: "Look up by storage ID" }));
     await user.type(screen.getByRole("textbox", { name: "Look up by storage ID" }), "nope{Enter}");
+    await within(panel).findByText(/is not a storage ID/);
+    // A well-formed ID with no file (deleted): there is no such file.
+    await user.clear(screen.getByRole("textbox", { name: "Look up by storage ID" }));
+    await user.type(screen.getByRole("textbox", { name: "Look up by storage ID" }), `${"0".repeat(32)}{Enter}`);
     await within(panel).findByText(/There is no file/);
   });
 
@@ -157,7 +161,7 @@ describe("the Files screen", () => {
   test("a read-only credential browses but cannot upload, select or delete", async () => {
     mount("/files", mockSource({ capabilities: { operations: ["viewData", "writeData"], readOnly: true } }));
     await loaded();
-    expect(screen.getByRole("button", { name: /Upload files/ }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Upload" }).hasAttribute("disabled")).toBe(true);
     expect(within(screen.getByRole("grid", { name: "Files" })).queryAllByRole("checkbox")).toEqual([]);
   });
 
@@ -166,5 +170,43 @@ describe("the Files screen", () => {
     Object.defineProperty(source, "listFiles", { value: undefined });
     mount("/files", source);
     await screen.findByText("This deployment does not offer file storage yet.");
+  });
+
+  test("the section column: Upload, the storage used, views by kind and filters with counts, one bucket", async () => {
+    const { history, source } = mount("/files");
+    await loaded();
+    const files = await all(source);
+    const column = document.querySelector('[data-slot="section-column"]') as HTMLElement;
+    expect(within(column).getByRole("button", { name: "Upload" })).toBeDefined();
+    const used = within(column).getByRole("region", { name: "Storage used" });
+    const bytes = files.reduce((n, f) => n + f.size, 0);
+    await waitFor(() => expect(used.textContent).toContain(`in ${files.length} files`));
+    expect(used.textContent).toContain(formatBytes(bytes));
+    const views = within(column).getByRole("navigation", { name: "File views" });
+    const images = files.filter((f) => f.contentType?.startsWith("image/"));
+    const imagesLink = within(views).getByRole("link", { name: /^Images/ });
+    await waitFor(() => expect(imagesLink.textContent).toBe(`Images${images.length}`));
+    const user = userEvent.setup();
+    await user.click(imagesLink);
+    await waitFor(() => expect(params(history)).toEqual({ view: "images" }));
+    await waitFor(() => expect(rows().length).toBe(images.length));
+    expect(imagesLink.getAttribute("aria-current")).toBe("page");
+    expect(
+      within(views)
+        .getByRole("link", { name: /^All files/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+    // sizes, counted under the view
+    const filters = within(column).getByRole("navigation", { name: "File filters" });
+    const small = images.filter((f) => f.size < 1024).length;
+    const radio = within(filters).getByRole("radio", { name: "Under 1 KB" });
+    await waitFor(() => expect(radio.parentElement!.lastElementChild!.textContent).toBe(String(small)));
+    await user.click(within(filters).getByRole("radio", { name: "Over 1 MB" }));
+    await waitFor(() => expect(params(history)).toEqual({ view: "images", size: "large" }));
+    await screen.findByText(/No file/);
+    await user.click(within(filters).getByRole("button", { name: "Reset" }));
+    await waitFor(() => expect(params(history)).toEqual({ view: "images" }));
+    expect(within(column).getByRole("navigation", { name: "Buckets" }).textContent).toContain("Default");
+    await expectAccessible();
   });
 });

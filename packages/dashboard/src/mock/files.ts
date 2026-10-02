@@ -1,7 +1,16 @@
 // The mock's file storage (UI-01 §14.3, STUDY-12 §9): blobs with Convex's metadata (storage id, base64
 // SHA-256, size, content type, creation time) and a URL the browser can load. A few images, texts and
 // binaries to start with. Pure state; MockDataSource wraps it in its latency and gates.
-import { DataSourceError, type FileQuery, type Page, type StoredFile, type Value } from "../data-source.ts";
+import {
+  DataSourceError,
+  type FileFilter,
+  type FileQuery,
+  type FileStats,
+  fileKind,
+  type Page,
+  type StoredFile,
+  type Value,
+} from "../data-source.ts";
 import type { Random } from "./random.ts";
 
 export type FileHost = {
@@ -46,6 +55,17 @@ async function sha256(blob: Blob): Promise<string> {
   return btoa(String.fromCharCode(...digest));
 }
 
+/** A file's metadata against a filter (time, kind, size). */
+function matches(m: Omit<StoredFile, "url">, f: FileFilter): boolean {
+  return (
+    (f.from === undefined || m.creationTime >= f.from) &&
+    (f.to === undefined || m.creationTime <= f.to) &&
+    (f.kind === undefined || fileKind(m.contentType) === f.kind) &&
+    (f.minSize === undefined || m.size >= f.minSize) &&
+    (f.maxSize === undefined || m.size <= f.maxSize)
+  );
+}
+
 export class MockFiles {
   private entries: Entry[] = [];
   private readonly watchers = new Set<() => void>();
@@ -83,20 +103,14 @@ export class MockFiles {
   async list(q: FileQuery): Promise<Page<StoredFile>> {
     await this.ready;
     const desc = (q.order ?? "desc") === "desc";
-    const rows = this.entries
-      .filter(
-        (e) =>
-          (q.from === undefined || e.meta.creationTime >= q.from) &&
-          (q.to === undefined || e.meta.creationTime <= q.to),
-      )
-      .map((e) => this.file(e));
+    const rows = this.entries.filter((e) => matches(e.meta, q)).map((e) => this.file(e));
     if (desc) rows.reverse();
     const sign = desc ? -1 : 1;
     return this.host.paginate(
       rows,
       (f) => [sign * f.creationTime, f.id],
       q,
-      `files\u0000${q.order ?? "desc"}\u0000${q.from ?? ""}\u0000${q.to ?? ""}`,
+      `files\u0000${q.order ?? "desc"}\u0000${q.from ?? ""}\u0000${q.to ?? ""}\u0000${q.kind ?? ""}\u0000${q.minSize ?? ""}\u0000${q.maxSize ?? ""}`,
     );
   }
 
@@ -105,8 +119,27 @@ export class MockFiles {
     return this.entries.length;
   }
 
+  async stats(f: FileFilter = {}): Promise<FileStats> {
+    await this.ready;
+    const out: FileStats = {
+      count: 0,
+      totalBytes: 0,
+      byKind: { image: { count: 0, bytes: 0 }, document: { count: 0, bytes: 0 }, other: { count: 0, bytes: 0 } },
+    };
+    for (const e of this.entries) {
+      if (!matches(e.meta, f)) continue;
+      const k = out.byKind[fileKind(e.meta.contentType)];
+      k.count++;
+      k.bytes += e.meta.size;
+      out.count++;
+      out.totalBytes += e.meta.size;
+    }
+    return out;
+  }
+
   async get(id: string): Promise<StoredFile | null> {
     await this.ready;
+    checkId(id);
     const e = this.entries.find((x) => x.meta.id === id);
     return e ? this.file(e) : null;
   }
@@ -123,8 +156,13 @@ export class MockFiles {
     return this.add(blob, now, true);
   }
 
+  /** All or nothing, as Convex's `deleteFiles`. */
   async delete(ids: string[]) {
     await this.ready;
+    for (const id of ids) checkId(id);
+    for (const id of ids)
+      if (!this.entries.some((e) => e.meta.id === id))
+        throw new DataSourceError("not_found", `storage id ${id} not found`);
     const gone = new Set(ids);
     const before = this.entries.length;
     for (const e of this.entries) if (gone.has(e.meta.id) && e.url?.startsWith("blob:")) URL.revokeObjectURL(e.url);
@@ -143,4 +181,9 @@ export class MockFiles {
       for (const w of this.watchers) w();
     }, 0);
   }
+}
+
+/** The mock's storage ids (32 characters of its id alphabet); anything else is not a storage id. */
+function checkId(id: string) {
+  if (!/^[0-9a-hjkmnp-tv-z]{32}$/.test(id)) throw new DataSourceError("invalid_request", `Invalid ID "${id}"`);
 }

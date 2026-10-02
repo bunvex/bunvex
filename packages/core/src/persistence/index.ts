@@ -54,6 +54,8 @@ export interface Persistence {
   auditLiveDocs?(table: number, ts: number): number | Promise<number>;
   /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
   auditRowsAt?(ts: number): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
+  /** AUDIT ONLY (conformance K27): every stored row, every version and tombstone included. */
+  auditRowCount?(): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
   close(): void | Promise<void>;
 }
 
@@ -119,6 +121,41 @@ export class LeaseHeldError extends Error {
     this.name = "LeaseHeldError";
   }
 }
+
+/** One stored document version, as the document log returns it (PERSIST-01 C12). */
+export type DocLogRow = { ts: number; table: number; id: string; deleted: boolean };
+/** A retention delete (PERSIST-01 C13): every stored version of one index key at or below `ts`. */
+export type IndexPrune = { index: number; key: Uint8Array; ts: number };
+/** A retention delete (PERSIST-01 C13): every stored version of one document at or below `ts`. */
+export type DocPrune = { table: number; id: string; ts: number };
+
+/**
+ * What retention needs from a store (STUDY-33, Convex's `retention.rs`). Optional per driver: without it
+ * the engine keeps every version, as before.
+ */
+export interface RetentionStore {
+  /**
+   * PERSIST-01 C12, the document log by timestamp: the stored document versions of the durable commits with
+   * `afterTs < ts <= upToTs`, in ts order, whole commits only, at most `limit` commits. Like `readLog`, never
+   * a commit above the durable prefix. Below the retention window it returns what retention left.
+   */
+  readDocumentLog(afterTs: number, upToTs: number, limit: number): DocLogRow[] | Promise<DocLogRow[]>;
+  /**
+   * PERSIST-01 C13: delete every stored version at or below each entry's ts; how many rows went. Only the
+   * lease holder deletes: a holder that lost the lease gets `LeaseLostError` and deletes nothing.
+   * `through` is how far the caller has read the log (every entry is at or below it): a driver that keeps
+   * the log apart from its rows (the memory driver) may forget the log up to there.
+   */
+  pruneIndexes(entries: IndexPrune[], through: number): number | Promise<number>;
+  pruneDocuments(entries: DocPrune[], through: number): number | Promise<number>;
+  /** PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. */
+  getGlobal(key: string): unknown | Promise<unknown>;
+  /** PERSIST-01 C14: set a global; refused (`LeaseLostError`) once the lease is lost. */
+  setGlobal(key: string, value: unknown): void | Promise<void>;
+}
+
+export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
+  typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
 /** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). */
 export interface ScanDocs {

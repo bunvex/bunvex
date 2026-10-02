@@ -465,7 +465,7 @@ describe("the dashboard in a browser", () => {
 
   test("Schedules: the scheduled runs and a cron job's recent runs", async () => {
     const { page, errors, close } = await open("/schedules");
-    await heading(page, "Schedules");
+    await heading(page, "Scheduled functions");
     await page.waitForURL(`${ORIGIN}/schedules/functions`);
     await page.getByRole("grid", { name: "Scheduled functions" }).getByRole("row").nth(3).waitFor();
     await page.getByRole("link", { name: "Cron jobs" }).click();
@@ -499,7 +499,7 @@ describe("the dashboard in a browser", () => {
 
   test("Settings: show a hidden value, add a variable and save", async () => {
     const { page, errors, close } = await open("/settings/environment-variables");
-    await heading(page, "Settings");
+    await heading(page, "Environment variables");
     await page.getByRole("button", { name: "Show the value of LOG_LEVEL" }).click();
     await page.getByText("info", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Add a variable" }).click();
@@ -576,11 +576,10 @@ describe("the dashboard in a browser", () => {
       const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
       return {
         bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().bottom,
-        filtersBar: document.querySelector('nav[aria-label="Log filters"] h2')!.parentElement!.getBoundingClientRect()
-          .bottom,
+        filtersBar: box('[data-slot="section-column-header"]').bottom,
         panelHeader: box('[data-slot="side-panel"] header').bottom,
         gridBottom: box('[data-slot="data-table"]').bottom,
-        filtersRight: box('nav[aria-label="Log filters"]').right,
+        filtersRight: box('[data-slot="section-column"]').right,
         gridLeft: box('[data-slot="data-table"]').left,
         viewport: innerHeight,
         pageScrolls: document.documentElement.scrollHeight > innerHeight,
@@ -618,7 +617,7 @@ describe("the dashboard in a browser", () => {
         return {
           bar1: bottom(document.querySelector("h1")!.closest("div")),
           panelHeader: bottom(document.querySelector('[data-slot="side-panel"] header')),
-          filters: column ? bottom(document.querySelector(`nav[aria-label="${column}"] h2`)?.parentElement) : undefined,
+          filters: column ? bottom(document.querySelector('[data-slot="section-column-header"]')) : undefined,
           gridBottom: bottom(document.querySelector('[data-slot="data-table"]')),
           viewport: innerHeight,
           pageScrolls: document.documentElement.scrollHeight > innerHeight,
@@ -635,6 +634,62 @@ describe("the dashboard in a browser", () => {
       expect(errors).toEqual([]);
       await close();
     }
+  });
+
+  test("the section column: its header on Bar 1's line on every migrated screen; a sheet on a phone", async () => {
+    for (const [path, title, h1] of [
+      ["/database/tasks", "Database", "tasks"],
+      ["/settings/general", "Settings", "General"],
+      ["/schedules/crons", "Schedules", "Cron jobs"],
+      ["/logs", "Logs", "Logs"],
+      ["/history", "History", "History"],
+      ["/files?view=images", "Files", "Files"],
+      ["/auth/users", "Authentication", "Users"],
+      ["/auth/rate-limits", "Authentication", "Rate limits"],
+    ] as const) {
+      const { page, errors, close } = await open(path, { viewport: { width: 1440, height: 900 } });
+      await heading(page, h1);
+      const m = await page.evaluate(() => ({
+        column: document.querySelector('[data-slot="section-column-header"]')!.getBoundingClientRect().bottom,
+        title: document.querySelector('[data-slot="section-column-header"] h2')!.textContent,
+        bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().bottom,
+        pageScrolls: document.documentElement.scrollHeight > innerHeight,
+      }));
+      expect([path, m.title, Math.round(Math.abs(m.column - m.bar1)), m.pageScrolls]).toEqual([path, title, 0, false]);
+      expect(errors).toEqual([]);
+      await close();
+    }
+    const { page, errors, close } = await open("/settings/general", { viewport: { width: 390, height: 844 } });
+    await heading(page, "General");
+    expect(await page.locator('[data-slot="section-column"]').isVisible()).toBe(false);
+    await page.getByRole("button", { name: "Pages" }).click();
+    await page.getByRole("complementary", { name: "Pages" }).getByRole("link", { name: "Snapshots" }).click();
+    await heading(page, "Snapshots");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Authentication: the users grid to the bottom, a user's panel on Bar 1's line, the Danger zone", async () => {
+    const { page, errors, close } = await open("/auth/users", { viewport: { width: 1440, height: 900 } });
+    await heading(page, "Users");
+    const grid = page.getByRole("grid", { name: "Users" });
+    await grid.getByRole("row").nth(3).waitFor();
+    await grid.getByRole("row").nth(1).getByRole("gridcell").nth(1).click();
+    const panel = page.getByRole("complementary");
+    await panel.getByRole("region", { name: "Danger zone" }).waitFor();
+    const m = await page.evaluate(() => ({
+      bar1: document.querySelector("h1")!.parentElement!.getBoundingClientRect().bottom,
+      panelHeader: document.querySelector('[data-slot="side-panel"] header')!.getBoundingClientRect().bottom,
+      gridBottom: document.querySelector('[data-slot="data-table"]')!.getBoundingClientRect().bottom,
+      pageScrolls: document.documentElement.scrollHeight > innerHeight,
+    }));
+    expect(Math.round(Math.abs(m.bar1 - m.panelHeader))).toBe(0);
+    expect(Math.abs(m.gridBottom - 900)).toBeLessThanOrEqual(1);
+    expect(m.pageScrolls).toBe(false);
+    await panel.getByRole("tab", { name: "Raw JSON" }).click();
+    await panel.getByRole("figure", { name: "This user as JSON" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
   });
 
   test("Functions: Bar 1 holds the function and its tabs; the screen does not scroll", async () => {
@@ -698,7 +753,7 @@ describe("the dashboard in a browser", () => {
 
   test("Settings: pause the deployment, see it said on every screen, resume", async () => {
     const { page, errors, close } = await open("/settings/general");
-    await heading(page, "Settings");
+    await heading(page, "General");
     const pause = page.getByRole("region", { name: "Pause deployment" });
     await pause.getByRole("button", { name: "Pause deployment" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Pause deployment" }).click();
@@ -765,16 +820,18 @@ describe("the dashboard in a browser", () => {
         ["/database/users", "users"],
         ["/database/users?panel=schema", "users"],
         ["/database/users?panel=add", "users"],
-        ["/schedules/functions", "Schedules"],
-        ["/schedules/crons?cron=summarize+tasks", "Schedules"],
+        ["/schedules/functions", "Scheduled functions"],
+        ["/schedules/crons?cron=summarize+tasks", "Cron jobs"],
         ["/files", "Files"],
-        ["/settings/environment-variables", "Settings"],
+        ["/settings/environment-variables", "Environment variables"],
         ["/history", "History"],
         ["/functions?function=tasks:list", "list"],
         ["/logs", "Logs"],
-        ["/settings/general", "Settings"],
-        ["/settings/authentication", "Settings"],
-        ["/settings/snapshots", "Settings"],
+        ["/settings/general", "General"],
+        ["/settings/authentication", "Sign in / Providers"], // moved to Authentication (UI-01 §25)
+        ["/settings/snapshots", "Snapshots"],
+        ["/auth/users", "Users"],
+        ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
       ] as const) {

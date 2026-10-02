@@ -16,7 +16,7 @@ import { PauseSection } from "./pause.tsx";
 
 export function GeneralSettingsScreen() {
   return (
-    <SettingsLayout>
+    <SettingsLayout title="General" description="This deployment, and pausing it">
       <div className="flex flex-col gap-8">
         <DeploymentInfoSection />
         <PauseSection />

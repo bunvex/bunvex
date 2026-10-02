@@ -43,6 +43,8 @@ describe("catalog (_tables / _index)", () => {
           _cron_jobs: 519,
           _cron_next_run: 520,
           _cron_job_logs: 521,
+          _storage: 522,
+          _storage_deletions: 523,
           users: 10001,
           posts: 10002,
         });

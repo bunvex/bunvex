@@ -23,6 +23,8 @@ import {
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
+  STORAGE_DELETIONS_TABLE,
+  STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
@@ -38,13 +40,23 @@ import {
 import {
   type ExecutionKind,
   installDeterminism,
+  type Observed,
   outsideExecution,
   preciseClock,
   runDeterministic,
+  wallClock,
 } from "./determinism.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
-import { hasLease, type Lease, LeaseHeldError, LeaseLostError, type Persistence } from "./persistence/index.ts";
-import { ReadSetIndex } from "./read-set-index.ts";
+import {
+  hasLease,
+  hasRetention,
+  type Lease,
+  LeaseHeldError,
+  LeaseLostError,
+  type Persistence,
+} from "./persistence/index.ts";
+import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
@@ -99,16 +111,6 @@ export class OccError extends Error {
 }
 
 /**
- * A cached result is kept SERIALIZED: every caller gets its own copy, as Convex hands out serialized values.
- * Its read-set lives in `cacheReads`, under the same key.
- */
-type CacheEntry = { json: string; extra?: unknown };
-
-/**
- * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
- * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
- */
-/**
  * Who runs a transaction (STUDY-27): the server's identity object, opaque to the engine, and a stable string
  * of it. A cached query result is keyed by that string only if the run read the identity, as Convex's query
  * cache (`observed_identity`, crates/application/src/cache/mod.rs); otherwise it serves every caller.
@@ -118,6 +120,10 @@ const ANONYMOUS: Caller = { identity: null, key: "" };
 /** Separates a cache key from its identity part; `*` is the identity-free entry. */
 const ID_SEP = "\u0001";
 
+/**
+ * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
+ * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
+ */
 export type CacheCompanion = {
   /** On a miss: the body to run instead, and what to store with its result afterwards. */
   wrap<T>(body: TxBody<T>): { body: TxBody<T>; capture(): unknown };
@@ -133,16 +139,24 @@ export class Engine {
   private instanceSecret = "";
   /** Document validators of the declared tables (empty when `schemaValidation` is off). */
   private readonly docValidators = new Map<string, GenericValidator>();
-  private cache = new Map<string, CacheEntry>();
-  /** The read-sets of the cached results, by cache key: what a commit invalidates (STUDY-08 D9). */
-  readonly cacheReads = new ReadSetIndex<string>();
-  stats = { cacheHits: 0, cacheMisses: 0, retries: 0 };
+  /** Query results by function, arguments and (when read) identity: an LRU bounded by bytes (STUDY-08 D8). */
+  readonly cache: QueryCache;
+  /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
+  private cacheEpoch = 0;
+  /**
+   * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
+   * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
+   */
+  stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
 
   constructor(
     readonly schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: {
-      cacheMax?: number;
+      /** The query cache's byte budget (default: UDF_CACHE_MAX_SIZE from the environment, else 100 MiB). */
+      cacheMaxBytes?: number;
+      /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
+      cacheClock?: () => number;
       /** Retries after an OCC conflict (default: Convex's 4). */
       maxRetries?: number;
       /** Backoff between retries, in ms (default: Convex's 100 ms doubling up to 2 s, full jitter). */
@@ -158,6 +172,8 @@ export class Engine {
       lease?: { ttlMs?: number; waitMs?: number };
       /** The committer's write-log retention (default: Convex's 30 s / 300 s / 50 MiB; STUDY-06 D10). */
       writeLogRetention?: Partial<WriteLogRetention>;
+      /** Retention's knobs (Convex's INDEX_RETENTION_DELAY, DOCUMENT_RETENTION_DELAY, …; STUDY-33). */
+      retention?: RetentionOptions;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -177,17 +193,14 @@ export class Engine {
         if (dv) this.docValidators.set(t.name, dv);
       }
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
+    this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
     this.ready.catch(() => {}); // a rejection nobody awaits is not an error
     this.committer.onFatal((e) => this.settleReady(e));
-    // Invalidation: a durable commit drops every cached result whose read-set it overlaps, found through
-    // the index of the cached read-sets rather than by testing every entry.
-    this.committer.onCommit((entries) => {
-      if (this.cache.size === 0) return;
-      for (const k of this.cacheReads.matchingEntries(entries)) this.dropCached(k);
-    });
+    // No invalidation on commit: as Convex's, a cached result is checked against the write log when it is
+    // looked up (`cachedQuery`), so a commit costs the cache nothing.
   }
 
   /**
@@ -208,8 +221,16 @@ export class Engine {
       this.indexWorker = new IndexWorker(this.workerHost(), this.opts.indexBackfill);
       this.indexWorker.start();
     }
+    // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
+    if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
+      this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
+      await this.retention.start();
+    }
     return this;
   }
+
+  /** Retention, on a store that has it (its windows and `stats` are for tests and measurements). */
+  retention: Retention | null = null;
 
   /** The background index backfill, while there is one (its `stats` are for tests and measurements). */
   indexWorker: IndexWorker | null = null;
@@ -277,6 +298,7 @@ export class Engine {
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
   async close() {
     await this.indexWorker?.stop();
+    await this.retention?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
     if (this.lease) {
@@ -307,6 +329,28 @@ export class Engine {
     }, true);
   }
 
+  /**
+   * A key for one purpose, derived from the instance secret (HMAC-SHA256(secret, purpose)), as Convex's
+   * keybroker derives one per use ("store file authorization", …). The secret itself never leaves.
+   */
+  secretKey(purpose: string): Uint8Array {
+    if (!this.instanceSecret) throw new Error("secretKey: the engine is not initialized");
+    return new Uint8Array(new Bun.CryptoHasher("sha256", this.instanceSecret).update(purpose).digest());
+  }
+
+  /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
+  async instanceSetting(name: string, make: () => string): Promise<string> {
+    return this.runMutation(async (db) => {
+      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
+      const have = doc?.[name];
+      if (typeof have === "string") return have;
+      const value = make();
+      if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { [name]: value });
+      else await db.insert(INSTANCE_TABLE, { [name]: value });
+      return value;
+    }, true);
+  }
+
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
@@ -325,6 +369,8 @@ export class Engine {
         document: v.any(),
       },
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
+      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
+      { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }
@@ -387,11 +433,13 @@ export class Engine {
   /**
    * Install a committed `_index` change: a new catalog object (transactions already running keep theirs,
    * as Convex's index registry belongs to a snapshot), and an empty query cache — a cached result may have
-   * read an index that is gone and will never be invalidated by a write again.
+   * read an index that is gone and will never be invalidated by a write again. Runs under way are not
+   * stored either (`cacheEpoch`).
    */
   private installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: number) {
     this.catalog = this.catalog.withIndexChanges(changes, ts);
     this.cache.clear();
+    this.cacheEpoch++;
   }
 
   private workerHost() {
@@ -420,17 +468,28 @@ export class Engine {
   ) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.instanceSecret = this.instanceSecret;
     if (kind === "mutation") tx.docValidators = this.docValidators;
-    const value = await runDeterministic(kind, now, () => body(tx));
-    return { tx, value };
+    const observed: Observed = { time: false };
+    const value = await runDeterministic(kind, now, () => body(tx), observed);
+    return { tx, value, observed, now };
   }
 
-  /** A read-only transaction. With a `cacheKey`, the result is cached until a commit overlaps its reads. */
-  async query<T>(body: TxBody<T>, cacheKey?: string, companion?: CacheCompanion, caller?: Caller): Promise<T> {
-    const r = await this.cachedQuery(body, cacheKey, companion, caller);
-    return "json" in r ? (parseValue(r.json) as T) : r.value;
+  /**
+   * A read-only transaction. With a `cacheKey`, through the query cache (STUDY-08 D8). `at`: the snapshot
+   * (≤ the visible ts) instead of the latest.
+   */
+  async query<T>(
+    body: TxBody<T>,
+    cacheKey?: string,
+    companion?: CacheCompanion,
+    caller?: Caller,
+    at?: number,
+  ): Promise<T> {
+    const r = await this.cachedQuery(body, cacheKey, companion, caller, at);
+    return "value" in r ? r.value : (parseValue(r.json) as T);
   }
 
   /**
@@ -442,52 +501,131 @@ export class Engine {
     cacheKey?: string,
     companion?: CacheCompanion,
     caller?: Caller,
+    at?: number,
   ): Promise<string> {
-    const r = await this.cachedQuery(body, cacheKey, companion, caller);
-    return "json" in r ? r.json : stringifyValue(r.value);
+    const r = await this.cachedQuery(body, cacheKey, companion, caller, at);
+    return "value" in r ? (r.json ?? stringifyValue(r.value)) : r.json;
   }
 
+  /**
+   * Convex's query cache (`CacheManager::get`, crates/application/src/cache/mod.rs), at snapshot `ts`:
+   * - a result stored at or before `ts` is served if no commit since wrote into its reads (checked now,
+   *   against the write log: Convex's token refresh) and, if it read the clock, it is not older than
+   *   MAX_CACHE_AGE_MS; otherwise it is dropped and the query planned again;
+   * - a run already under way at or before `ts` is waited for, then checked the same way; if it failed or
+   *   stored its result under another key, the waiters plan again (one of them runs, the others wait);
+   * - otherwise this call runs the query, under a waiting entry when nothing newer is cached, and stores
+   *   the result if it succeeded. Errors are never stored.
+   * Keys, most specific first: this caller's, then the one of a run that read no identity (STUDY-27).
+   */
   private async cachedQuery<T>(
     body: TxBody<T>,
-    cacheKey?: string,
-    companion?: CacheCompanion,
+    cacheKey: string | undefined,
+    companion: CacheCompanion | undefined,
     caller: Caller = ANONYMOUS,
-  ): Promise<{ json: string } | { value: T }> {
-    // Two possible entries, most specific first: this caller's, then the one of a run that read no identity.
-    const precise = cacheKey === undefined ? undefined : `${cacheKey}${ID_SEP}${caller.key}`;
-    const shared = cacheKey === undefined ? undefined : `${cacheKey}${ID_SEP}*`;
-    if (precise !== undefined && shared !== undefined) {
-      const hit = this.cache.get(precise) ?? this.cache.get(shared);
-      if (hit) {
-        this.stats.cacheHits++;
-        companion?.replay(hit.extra);
-        return { json: hit.json };
-      }
-      this.stats.cacheMisses++;
+    at?: number,
+  ): Promise<{ json: string } | { value: T; json?: string }> {
+    const visible = this.committer.visibleTs;
+    const ts = at === undefined ? visible : Math.min(at, visible);
+    if (cacheKey === undefined) return { value: (await this.execute("query", ts, body, false, caller)).value };
+    const keys = [`${cacheKey}${ID_SEP}${caller.key}`, `${cacheKey}${ID_SEP}*`] as const;
+    // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
+    // and found invalid is recomputed under the shared key, so callers of other identities wait for it.
+    let hint: string | undefined;
+    for (;;) {
+      const found = this.cache.find(keys);
+      const key = found?.key ?? hint ?? keys[0];
+      hint = key;
+      const e = found?.entry;
+      let r: CachedResult;
+      if (e?.kind === "ready" && e.result.originalTs <= ts) r = e.result;
+      else if (e?.kind === "waiting" && e.ts <= ts) {
+        this.stats.cacheWaits++;
+        const waited = await e.result;
+        if (waited === null) {
+          this.cache.removeWaiting(key, e.id);
+          continue;
+        }
+        r = waited;
+      } else return this.runCached(body, ts, keys, key, e === undefined, companion, caller);
+      if (!this.stillValid(key, r, ts)) continue;
+      this.stats.cacheHits++;
+      companion?.replay(r.extra);
+      return { json: r.json };
     }
-    const snapshot = this.committer.visibleTs;
-    const wrapped = cacheKey !== undefined ? companion?.wrap(body) : undefined;
-    const { tx, value } = await this.execute("query", snapshot, wrapped?.body ?? body, false, caller);
-    // Cache only if nothing committed after the snapshot (it would have been invalidated had it been
-    // cached already — the same rule, checked at insertion). The caller keeps `value`; the cache keeps
-    // its own serialized copy.
-    if (precise !== undefined && this.committer.visibleTs === snapshot) {
-      const max = this.opts.cacheMax ?? 1000;
-      if (this.cache.size >= max) this.dropCached(this.cache.keys().next().value!);
-      const json = stringifyValue(value);
-      // Keyed by the caller only if the run read the identity (STUDY-27 §1.4).
-      const key = tx.identityObserved ? precise! : shared!;
-      this.cache.set(key, { json, extra: wrapped?.capture() });
-      this.cacheReads.set(key, tx.reads);
-      return { json };
-    }
-    return { value };
   }
 
-  /** Drop a cached result and its read-set (invalidation and eviction). */
-  private dropCached(key: string) {
-    this.cache.delete(key);
-    this.cacheReads.delete(key);
+  /**
+   * Run a query for the cache. With `coordinate`, under a waiting entry at `key` that later callers wait
+   * for, and the result is stored; without (a newer result or run is there), the result is only returned.
+   */
+  private async runCached<T>(
+    body: TxBody<T>,
+    ts: number,
+    keys: readonly [precise: string, shared: string],
+    key: string,
+    coordinate: boolean,
+    companion: CacheCompanion | undefined,
+    caller: Caller,
+  ): Promise<{ value: T; json?: string }> {
+    this.stats.cacheMisses++;
+    const waiting = coordinate ? this.cache.putWaiting(key, ts) : undefined;
+    const epoch = this.cacheEpoch;
+    const wrapped = waiting ? companion?.wrap(body) : undefined;
+    let run: Awaited<ReturnType<typeof this.execute<T>>>;
+    try {
+      run = await this.execute("query", ts, wrapped?.body ?? body, false, caller);
+    } catch (error) {
+      // Errors are not cached; whoever waited plans again.
+      if (waiting) {
+        this.cache.removeWaiting(key, waiting.id);
+        waiting.settle(null);
+      }
+      throw error;
+    }
+    if (!waiting) return { value: run.value };
+    const { tx, value, observed, now } = run;
+    this.cache.removeWaiting(key, waiting.id);
+    if (epoch !== this.cacheEpoch) {
+      waiting.settle(null);
+      return { value };
+    }
+    // Keyed by the caller only if the run read the identity (STUDY-27 §1.4). The cache keeps its own
+    // serialized copy; the caller keeps `value`.
+    const stored = tx.identityObserved ? keys[0] : keys[1];
+    const json = stringifyValue(value);
+    const result: CachedResult = {
+      json,
+      extra: wrapped?.capture(),
+      originalTs: ts,
+      tokenTs: ts,
+      reads: tx.reads,
+      observedTime: observed.time,
+      unixMs: Math.floor(now),
+      identityObserved: tx.identityObserved,
+    };
+    this.cache.putReady(stored, result);
+    // Waiters at `key` take this result only if it is stored there; otherwise they look again.
+    waiting.settle(stored === key ? result : null);
+    return { value, json };
+  }
+
+  /**
+   * Whether `r`, cached under `key`, is the query's result at `ts` (Convex's `validate_cache_result`): no
+   * commit in `(tokenTs, ts]` wrote into its reads (a token older than the write log's retention cannot be
+   * checked and counts as changed), and a result that read the clock is not older than MAX_CACHE_AGE_MS.
+   * An invalid result is dropped; a valid one is now known valid up to `ts`.
+   */
+  private stillValid(key: string, r: CachedResult, ts: number): boolean {
+    if (ts < r.originalTs) return false;
+    let valid = !this.committer.changedBetween(r.reads, r.tokenTs, ts);
+    if (valid && r.observedTime) valid = Math.abs((this.opts.cacheClock ?? wallClock)() - r.unixMs) <= MAX_CACHE_AGE_MS;
+    if (!valid) this.cache.removeReady(key, r.originalTs);
+    // A hit moves the entry's token to `ts`, so the next check only walks the commits after it: what
+    // Convex's step 4 says a hit does ("this will bump the cache result's token"), though its guard only
+    // writes back a fresh run's result (STUDY-08 §1.1). Not observable: the result is the same.
+    else if (r.tokenTs < ts) r.tokenTs = ts;
+    return valid;
   }
 
   /**
@@ -513,6 +651,7 @@ export class Engine {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    tx.retention = this.retention;
     tx.instanceSecret = this.instanceSecret;
     tx.identity = caller.identity;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
@@ -668,6 +807,12 @@ export class Engine {
       { table, documentId, writeSource, writeTs: conflict.writeTs },
     );
   }
+}
+
+/** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */
+function cacheMaxBytesFromEnv(): number {
+  const n = Number(process.env.UDF_CACHE_MAX_SIZE);
+  return Number.isFinite(n) && n > 0 ? n : QUERY_CACHE_MAX_BYTES;
 }
 
 async function readCatalog(db: Tx) {

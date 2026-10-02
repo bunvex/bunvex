@@ -44,7 +44,7 @@ export function SnapshotsSettingsScreen() {
   const canImport = typeof source.startSnapshotImport === "function";
   if (!canExport && !canImport) return <NotOffered title="Settings" what="snapshots" />;
   return (
-    <SettingsLayout>
+    <SettingsLayout title="Snapshots" description="Export this deployment's data, or import some">
       <div className="flex max-w-3xl flex-col gap-10">
         {canExport && <ExportSection />}
         {canImport && <ImportSection />}

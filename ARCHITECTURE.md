@@ -45,7 +45,7 @@ bunvex/
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
-│   │   ├── retention                garbage-collect old versions                              M
+│   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
 │   │   ├── search                   text and vector search (or its own package)               D
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
 │   │       ├── memory               memory + append-only log (no dependencies)                ✅
@@ -69,7 +69,7 @@ bunvex/
 │   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (STUDY-31) ✅
 │   │   ├── scheduler                runAfter/runAt/cancel, db.system, crons (STUDY-30)        ✅
-│   │   ├── storage                  ctx.storage: file metadata (a system table)               M
+│   │   ├── storage                  ctx.storage, _storage, upload/download (STUDY-32)         ✅
 │   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·
 │   │   │                            admin keys M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
@@ -77,7 +77,7 @@ bunvex/
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
-│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    🟡
+│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅
 │   │   ├── local                    local disk (STUDY-32)                                      ✅
 │   │   ├── s3                       S3 / R2 / MinIO / compatible, Bun's S3Client (STUDY-32)    ✅
 │   │   └── conformance              the suite every backend passes                             ✅

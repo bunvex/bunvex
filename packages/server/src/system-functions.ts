@@ -16,11 +16,13 @@ import {
   type PaginationOptions,
   type PaginationResult,
   SCHEDULED_FUNCTIONS_TABLE,
+  STORAGE_TABLE,
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
 import { paginationOptsValidator } from "./pagination.ts";
+import type { FileStorage } from "./storage.ts";
 
 /** Convex's paginationLimits.ts. */
 const maximumRowsRead = 10000;
@@ -89,11 +91,23 @@ const cronNextRunDoc = (d: Doc) => ({
   nextTs: ns(d.nextTs as number),
 });
 
-/** A system query: its argument validators (checked as Convex's) and its handler. */
+/** What a system function may use besides its transaction. */
+export type SystemEnv = { files: FileStorage | null };
+/** A system query or mutation: its argument validators (checked as Convex's) and its handler. */
 export type SystemQuery = {
   args: Record<string, GenericValidator>;
-  handler: (db: Tx, args: never) => Promise<unknown>;
+  handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
+export type SystemMutation = SystemQuery;
+
+const noFiles = (): never => {
+  throw new Error("File storage is not configured on this server.");
+};
+/** A `_storage` document with its URL first, as Convex's `FileMetadata`. */
+const withUrl = (files: FileStorage, d: Record<string, unknown>, row: { storageId: string }) => ({
+  url: `${files.origin}/api/storage/${row.storageId}`,
+  ...d,
+});
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
@@ -147,10 +161,85 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         return out;
       }),
   },
+  // Files (Convex's fileStorageV2): count, page by creation time with each file's URL, one file.
+  "_system/frontend/fileStorageV2:numFiles": {
+    args: { componentId },
+    handler: async (db) => (await db.system.query(STORAGE_TABLE).collect()).length,
+  },
+  "_system/frontend/fileStorageV2:fileMetadata": {
+    args: {
+      paginationOpts: paginationOptsValidator,
+      filters: v.optional(
+        v.object({
+          minCreationTime: v.optional(v.number()),
+          maxCreationTime: v.optional(v.number()),
+          order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
+        }),
+      ),
+      componentId,
+    },
+    handler: async (
+      db,
+      {
+        paginationOpts,
+        filters,
+      }: {
+        paginationOpts: PaginationOptions;
+        filters?: { minCreationTime?: number; maxCreationTime?: number; order?: "asc" | "desc" };
+      },
+      { files },
+    ) => {
+      const fs = files ?? noFiles();
+      const q = db.system.query(STORAGE_TABLE);
+      const ranged =
+        filters && (filters.minCreationTime !== undefined || filters.maxCreationTime !== undefined)
+          ? q.withIndex("by_creation_time", (b) => {
+              let r = b;
+              if (filters.minCreationTime !== undefined) r = r.gte("_creationTime", filters.minCreationTime);
+              if (filters.maxCreationTime !== undefined) r = r.lte("_creationTime", filters.maxCreationTime);
+              return r;
+            })
+          : q;
+      const page = await ranged.order(filters?.order ?? "desc").paginate(paginationOpts);
+      const rows = await Promise.all(page.page.map((d) => fs.resolve(db, d._id, "storage.getUrl")));
+      return { ...page, page: page.page.map((d, i) => withUrl(fs, d, rows[i]!)) };
+    },
+  },
+  "_system/frontend/fileStorageV2:getFile": {
+    args: { storageId: v.string(), componentId },
+    handler: async (db, { storageId }: { storageId: string }, { files }) => {
+      const fs = files ?? noFiles();
+      const d = await db.system.get(storageId);
+      if (!d) return null;
+      const row = await fs.resolve(db, d._id, "storage.getUrl");
+      return withUrl(fs, d, row!);
+    },
+  },
   "_system/frontend/listCronJobRuns": {
     args: { componentId },
     handler: async (db) =>
       ((await db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect())) as unknown as Doc[]).map(cronLogDoc),
+  },
+};
+
+/** Convex's file mutations for the dashboard (fileStorageV2). Convex also writes audit-log entries; bunvex has no audit log yet. */
+export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
+  "_system/frontend/fileStorageV2:deleteFile": {
+    args: { storageId: v.id(STORAGE_TABLE), componentId },
+    handler: async (db, { storageId }: { storageId: string }, { files }) => {
+      await (files ?? noFiles()).deleteIn(db, storageId);
+    },
+  },
+  "_system/frontend/fileStorageV2:deleteFiles": {
+    args: { storageIds: v.array(v.id(STORAGE_TABLE)), componentId },
+    handler: async (db, { storageIds }: { storageIds: string[] }, { files }) => {
+      const fs = files ?? noFiles();
+      for (const id of storageIds) await fs.deleteIn(db, id);
+    },
+  },
+  "_system/frontend/fileStorageV2:generateUploadUrl": {
+    args: { componentId },
+    handler: async (_db, _args, { files }) => (files ?? noFiles()).uploadUrl(),
   },
 };
 

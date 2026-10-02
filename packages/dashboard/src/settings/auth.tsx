@@ -1,4 +1,4 @@
-// Settings → Authentication (UI-01 §19.1, STUDY-12 §13.1), as Convex's page (`AuthenticationView.tsx`,
+// The token providers (UI-01 §19.1, §25.3; was Settings → Authentication, STUDY-12 §13.1), as Convex's page (`AuthenticationView.tsx`,
 // `AuthConfig.tsx`): the providers the deployment accepts tokens from — OIDC (domain, application ID) or
 // custom JWT (issuer, JWKS URL, algorithm, application ID) — each value with a copy button; with none, where
 // they are declared (Convex links its docs; bunvex has no docs site yet). Reading them needs `viewData` and `viewEnvironmentVariables`, as in Convex.
@@ -9,8 +9,6 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys, type QueryScope } from "../data/queries.ts";
 import { type AuthProvider, toDataSourceError } from "../data-source.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { NotOffered } from "../shell/not-offered.tsx";
-import { SettingsLayout } from "./layout.tsx";
 
 export const authProvidersQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
@@ -18,17 +16,13 @@ export const authProvidersQuery = ({ source, scope }: QueryScope) =>
     queryFn: ({ signal }) => source.listAuthProviders!({ signal }),
   });
 
-export function AuthenticationSettingsScreen() {
+/** The token providers (Convex's Authentication page), shown in Authentication → Sign in / Providers. */
+export function TokenProviders() {
   const { source } = useQueryScope();
-  if (typeof source.listAuthProviders !== "function") return <NotOffered title="Settings" what="authentication" />;
-  return (
-    <SettingsLayout>
-      <Authentication />
-    </SettingsLayout>
-  );
+  return typeof source.listAuthProviders === "function" ? <Providers /> : null;
 }
 
-function Authentication() {
+function Providers() {
   const scope = useQueryScope();
   const { data: caps } = useQuery(capabilitiesQuery(scope));
   const allowed =
@@ -38,7 +32,7 @@ function Authentication() {
   return (
     <section aria-labelledby="auth-config" className="max-w-3xl">
       <h2 id="auth-config" className="text-base font-medium">
-        Authentication
+        Token providers
       </h2>
       {!allowed ? (
         <p className="mt-2 text-sm text-muted-foreground">

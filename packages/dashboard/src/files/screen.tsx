@@ -21,6 +21,8 @@ import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
+import { SectionColumn, useSectionSheet } from "../shell/section-column.tsx";
+import { FilesSections, filterOf, VIEWS } from "./column.tsx";
 import { fileCountQuery, fileKeys, fileQuery, filesQuery, useFilesLive } from "./queries.ts";
 
 const col = dataTableColumns<StoredFile>();
@@ -45,7 +47,15 @@ function Files() {
     navigate({ search: (s: FilesSearch): FilesSearch => ({ ...s, ...patch }), replace });
   const { data: caps } = useQuery(capabilitiesQuery(scope));
   const canWrite = caps !== undefined && !caps.readOnly && caps.operations.includes("writeData");
-  const filter = { order: search.order ?? "desc", from: dayBound(search.from, false), to: dayBound(search.to, true) };
+  // kind and size are a source's with `fileStats` (they come together, UI-01 §24)
+  const stats = typeof source.fileStats === "function";
+  const f = filterOf(search);
+  const filter = {
+    order: search.order ?? "desc",
+    from: f.from,
+    to: f.to,
+    ...(stats ? { kind: f.kind, minSize: f.minSize, maxSize: f.maxSize } : {}),
+  };
   const list = useInfiniteQuery(filesQuery(scope, filter));
   const { data: count } = useQuery(fileCountQuery(scope));
   const liveError = useFilesLive();
@@ -105,14 +115,48 @@ function Files() {
     }),
   ];
 
+  const view = VIEWS.find((v) => v.value === search.view);
+  const sections = stats ? <FilesSections search={search} setSearch={(patch) => setSearch(patch)} /> : null;
+  const sheet = useSectionSheet({ kind: "files-sections", label: "Views", children: sections });
+  // the primary action, on top of the section column (UI-01 §23)
+  const uploadButton = typeof source.uploadFile === "function" && (
+    <>
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        hidden
+        aria-label="Files to upload"
+        onChange={(e) => {
+          void upload([...(e.target.files ?? [])]);
+          e.target.value = "";
+        }}
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={!canWrite || uploading !== undefined}
+        onClick={() => fileInput.current?.click()}
+      >
+        <Upload aria-hidden="true" />
+        {uploading !== undefined ? `Uploading ${files(uploading)}…` : "Upload"}
+      </Button>
+    </>
+  );
+
   return (
     // full-bleed (UI-01 §22.5): Bar 1 (title, count, actions), Bar 2 (lookup, order, days), the grid to the
     // bottom, the details docked. No filter column: the filters are the source's (order, days, an id), and a
     // content-type facet over one loaded page would mislead
     <div className={SCREEN}>
+      <SectionColumn title="Files" action={uploadButton} widthKey="bunvex-dashboard:files-column-width">
+        {sections}
+      </SectionColumn>
       <div className="@container/files flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
           <h1 className={BAR_TITLE}>Files</h1>
+          {sheet.button}
+          {view && <span className="text-sm text-muted-foreground">{view.label}</span>}
           {count !== undefined && (
             <span className="text-sm text-muted-foreground tabular-nums">{files(count)} stored</span>
           )}
@@ -128,35 +172,6 @@ function Files() {
                 keep="Keep them"
                 action={() => remove(selectedIds)}
               />
-            )}
-            {typeof source.uploadFile === "function" && (
-              <>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  multiple
-                  hidden
-                  aria-label="Files to upload"
-                  onChange={(e) => {
-                    void upload([...(e.target.files ?? [])]);
-                    e.target.value = "";
-                  }}
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!canWrite || uploading !== undefined}
-                  onClick={() => fileInput.current?.click()}
-                >
-                  <Upload aria-hidden="true" />
-                  {uploading !== undefined ? (
-                    `Uploading ${files(uploading)}…`
-                  ) : (
-                    // a narrow bar (beside a docked panel) keeps the icon; the name stays for assistive tech
-                    <span className="sr-only @lg/files:not-sr-only">Upload files</span>
-                  )}
-                </Button>
-              </>
             )}
           </span>
         </div>
@@ -256,6 +271,7 @@ function Files() {
           />
         )}
       </div>
+      {sheet.sheet}
       {search.file !== undefined && (
         <FileDetails
           id={search.file}
@@ -273,7 +289,11 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
   const { data: file, error, isPending } = useQuery(fileQuery(scope, props.id));
   return (
     <Panel kind="files-details" title="File" focusOnOpen={false} onClose={props.onClose}>
-      {error ? (
+      {error && toDataSourceError(error).code === "invalid_request" ? (
+        <p className="text-sm text-muted-foreground">
+          <code className="font-mono text-xs">{props.id}</code> is not a storage ID.
+        </p>
+      ) : error ? (
         <ErrorState error={toDataSourceError(error)} />
       ) : isPending ? (
         <p className="text-sm text-muted-foreground">Loading…</p>

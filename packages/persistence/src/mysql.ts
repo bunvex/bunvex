@@ -12,6 +12,12 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version') and
 // `read_only`, Convex's table names. Open checks both before writing anything and refuses a foreign, future
 // or read-only store; a new store's version record is written under the lease.
+// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (`documents_by_ts`);
+// prunes are Convex's v5 deletes, OR'd `ts <= X` clauses per key in chunks of 128 (MYSQL_CHUNK_SIZE), each
+// key at its highest ts only; globals are `persistence_globals` rows. Each prune or global write first reads
+// the lease row without locking it (a locking read would hold up the next flush) and is refused unless it
+// carries our epoch. A takeover in between can let one batch through, which deletes only versions
+// superseded below a window the old holder had already published.
 // Timeouts (STUDY-25 L3), as Convex's MySQL driver: every database call is bounded on the client side (19 s by
 // default, Convex's MYSQL_TIMEOUT_SECONDS), per round trip, including getting a connection from the pool. The
 // MySQL protocol cannot cancel a statement, so a timed-out call's connection is destroyed, never reused.
@@ -29,9 +35,12 @@ import {
   checkUnversionedTables,
   chunkRows,
   DatabaseTimeoutError,
+  type DocLogRow,
+  type DocPrune,
   type DocWrite,
   decodeLayoutVersion,
   groupLog,
+  type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
   type Lease,
@@ -43,6 +52,7 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
+  type RetentionStore,
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
@@ -127,7 +137,7 @@ export function operational(e: unknown): boolean {
   return /connection is in closed state/.test(message);
 }
 
-export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag {
+export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush: the group's top, recorded as max_ts by the fence. */
@@ -137,6 +147,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   private ttlMs = 0;
   /** The store predates PERSIST-01 C11: its ts index is built once we hold the lease. */
   private needsLogIndex = false;
+  private needsDocLogIndex = false;
   private constructor(
     private pool: mysqlDriver.Pool,
     /** This instance's connections' `bunvex_conn` connect attribute, recorded in the lease row: a successor
@@ -260,6 +271,15 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       )) as any;
       this.needsLogIndex = Number(byTs[0].n) === 0;
     }
+    if (have.has("documents")) {
+      const [byTs] = (await this.read((c) =>
+        c.query(
+          `select count(*) as n from information_schema.statistics
+           where table_schema = database() and table_name = 'documents' and index_name = 'documents_by_ts'`,
+        ),
+      )) as any;
+      this.needsDocLogIndex = Number(byTs[0].n) === 0;
+    }
     // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
     // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock.
     if (have.size >= TABLES.length) return;
@@ -269,7 +289,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         await c.query(`select get_lock('bunvex_bootstrap', 10)`);
         progress();
         await c.query(`create table if not exists documents (table_id int not null, id varchar(64) not null,
-          ts bigint not null, json_value mediumtext, deleted boolean not null, primary key (table_id, id, ts))`);
+          ts bigint not null, json_value mediumtext, deleted boolean not null, primary key (table_id, id, ts),
+          key documents_by_ts (ts))`); // the document log (PERSIST-01 C12)
         progress();
         await c.query(`create table if not exists indexes (index_id int not null, key_prefix varbinary(2500) not null,
           key_suffix longblob, key_suffix_hash varbinary(32) not null, ts bigint not null, deleted boolean not null,
@@ -333,6 +354,12 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         if ((e as { errno?: number }).errno !== 1061) throw e; // 1061: it exists already
       });
       this.needsLogIndex = false;
+    }
+    if ("epoch" in r && this.needsDocLogIndex) {
+      await this.call((c) => c.query(`alter table documents add index documents_by_ts (ts)`)).catch((e) => {
+        if ((e as { errno?: number }).errno !== 1061) throw e;
+      });
+      this.needsDocLogIndex = false;
     }
     return r;
   }
@@ -658,6 +685,108 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       })),
       Number(rows[0].prev ?? 0),
     );
+  }
+
+  /** PERSIST-01 C12: as readLog, over `documents`. */
+  async readDocumentLog(afterTs: number, upToTs: number, limit: number): Promise<DocLogRow[]> {
+    if (limit <= 0) return [];
+    const [rows] = (await this.read((c) =>
+      c.query(
+        `select d.ts, d.table_id, d.id, d.deleted from documents d
+       where d.ts > ? and d.ts <= (select max(c.ts) from (select distinct ts from documents
+         where ts > ? and ts <= least(?, coalesce((select max_ts from bunvex_lease where id = 1), ?))
+         order by ts limit ${Math.floor(limit)}) c)
+       order by d.ts`,
+        [afterTs, afterTs, upToTs, upToTs],
+      ),
+    )) as any;
+    return (rows as any[]).map((r) => ({
+      ts: Number(r.ts),
+      table: r.table_id as number,
+      id: r.id as string,
+      deleted: !!r.deleted,
+    }));
+  }
+
+  /** Refused unless the lease row carries our epoch (a plain read: see the header). */
+  private async assertEpoch() {
+    const [rows] = (await this.read((c) => c.query(`select epoch from bunvex_lease where id = 1`))) as any;
+    if (!this.epoch || !rows.length || Number(rows[0].epoch) !== this.epoch) throw new LeaseLostError();
+  }
+
+  /** PERSIST-01 C13. */
+  async pruneIndexes(entries: IndexPrune[]) {
+    if (!entries.length) return 0;
+    await this.assertEpoch();
+    // We implicitly delete everything below each ts, so only the highest per key matters (Convex's v5).
+    const top = new Map<string, { index: number; prefix: Buffer; hash: Buffer; ts: number }>();
+    for (const e of entries) {
+      const k = splitKey(e.key);
+      const prefix = Buffer.from(k.prefix);
+      const hash = Buffer.from(k.suffixHash);
+      const id = `${e.index}:${prefix.toString("hex")}:${hash.toString("hex")}`;
+      const cur = top.get(id);
+      if (!cur || cur.ts < e.ts) top.set(id, { index: e.index, prefix, hash, ts: e.ts });
+    }
+    return this.deleteChunks(
+      [...top.values()],
+      "indexes",
+      "(index_id = ? and key_prefix = ? and key_suffix_hash = ? and ts <= ?)",
+      (r) => [r.index, r.prefix, r.hash, r.ts],
+    );
+  }
+
+  async pruneDocuments(entries: DocPrune[]) {
+    if (!entries.length) return 0;
+    await this.assertEpoch();
+    const top = new Map<string, DocPrune>();
+    for (const e of entries) {
+      const id = `${e.table}:${e.id}`;
+      const cur = top.get(id);
+      if (!cur || cur.ts < e.ts) top.set(id, e);
+    }
+    return this.deleteChunks([...top.values()], "documents", "(table_id = ? and id = ? and ts <= ?)", (r) => [
+      r.table,
+      r.id,
+      r.ts,
+    ]);
+  }
+
+  private async deleteChunks<T>(rows: T[], table: string, clause: string, params: (r: T) => unknown[]) {
+    let n = 0;
+    for (let i = 0; i < rows.length; i += 128) {
+      const chunk = rows.slice(i, i + 128);
+      const [r] = (await this.read((c) =>
+        c.query(`delete from ${table} where ${chunk.map(() => clause).join(" or ")}`, chunk.flatMap(params)),
+      )) as any;
+      n += Number(r.affectedRows);
+    }
+    return n;
+  }
+
+  /** PERSIST-01 C14. */
+  async getGlobal(key: string): Promise<unknown> {
+    const [rows] = (await this.read((c) =>
+      c.query("select json_value from persistence_globals where `key` = ?", [key]),
+    )) as any;
+    return rows.length ? JSON.parse(String(rows[0].json_value)) : null;
+  }
+
+  async setGlobal(key: string, value: unknown) {
+    await this.assertEpoch();
+    await this.read((c) =>
+      c.query(
+        "insert into persistence_globals (`key`, json_value) values (?, ?) on duplicate key update json_value = values(json_value)",
+        [key, JSON.stringify(value)],
+      ),
+    );
+  }
+
+  async auditRowCount() {
+    const [rows] = (await this.read((c) =>
+      c.query(`select (select count(*) from documents) as docs, (select count(*) from indexes) as idx`),
+    )) as any;
+    return { docs: Number(rows[0].docs), idx: Number(rows[0].idx) };
   }
 
   /** The durable prefix (PERSIST-01 C5/C7): the lease row's max_ts, which every fenced flush sets. A store

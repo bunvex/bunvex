@@ -85,7 +85,7 @@ export function EnvironmentVariablesScreen() {
   if (typeof source.listEnvironmentVariables !== "function")
     return <NotOffered title="Settings" what="environment variables" />;
   return (
-    <SettingsLayout>
+    <SettingsLayout title="Environment variables" description="Values your functions read from process.env">
       <EnvironmentVariables />
     </SettingsLayout>
   );

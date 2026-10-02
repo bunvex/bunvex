@@ -7,6 +7,8 @@ export {
   IndexStagedError,
   type IndexState,
   SCHEDULED_FUNCTIONS_TABLE,
+  STORAGE_DELETIONS_TABLE,
+  STORAGE_TABLE,
 } from "./catalog.ts";
 export {
   Committer,
@@ -54,8 +56,12 @@ export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder }
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
   DatabaseTimeoutError,
+  type DocLogRow,
+  type DocPrune,
   type DocWrite,
   hasLease,
+  hasRetention,
+  type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
   LayoutError,
@@ -68,10 +74,13 @@ export {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
+  type RetentionStore,
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
+export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
+export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
   cancelJob,
   completeJob,
