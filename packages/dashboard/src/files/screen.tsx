@@ -117,7 +117,7 @@ function Files() {
 
   const view = VIEWS.find((v) => v.value === search.view);
   const sections = stats ? <FilesSections search={search} setSearch={(patch) => setSearch(patch)} /> : null;
-  const sheet = useSectionSheet({ kind: "files-sections", label: "Views", children: sections });
+  const sheet = useSectionSheet({ kind: "files-sections", label: "Files", children: sections });
   // the primary action, on top of the section column (UI-01 §23)
   const uploadButton = typeof source.uploadFile === "function" && (
     <>
@@ -164,7 +164,7 @@ function Files() {
             {canWrite && selectedIds.length > 0 && typeof source.deleteFiles === "function" && (
               <ConfirmButton
                 label={`Delete ${formatCount(selectedIds.length)}`}
-                variant="destructive"
+                variant="destructive-outline"
                 title={`Delete ${files(selectedIds.length)}?`}
                 description="They are removed from storage, and their URLs stop working. This cannot be undone."
                 confirm={`Delete ${files(selectedIds.length)}`}
@@ -333,7 +333,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
             </a>
             <ConfirmButton
               label="Delete"
-              variant="destructive"
+              variant="destructive-outline"
               disabled={!props.canDelete}
               title="Delete this file?"
               description="It is removed from storage, and its URL stops working. This cannot be undone."

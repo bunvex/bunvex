@@ -189,6 +189,14 @@ describe("the Feature flags screen (an extension, UI-01 §26, §28)", () => {
     expect(audit.page[0]!.action).toBe("disable_feature_flag");
   });
 
+  test("a flag's state is said as every status is: an icon and a word, not a solid pill (UX2-12)", async () => {
+    mount("/flags");
+    await heading();
+    const badges = within(grid()).getAllByText(/^(On|Off|Archived)$/);
+    expect(badges.length).toBeGreaterThan(0);
+    for (const b of badges) expect(b.closest("[data-slot=status-badge]")).not.toBeNull();
+  });
+
   test("a new flag: checked as it is typed, created, then open", async () => {
     const { src, history } = mount("/flags");
     await heading();

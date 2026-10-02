@@ -736,8 +736,8 @@ describe("the dashboard in a browser", () => {
     const { page, errors, close } = await open("/settings/general", { viewport: { width: 390, height: 844 } });
     await heading(page, "General");
     expect(await page.locator('[data-slot="section-column"]').isVisible()).toBe(false);
-    await page.getByRole("button", { name: "Pages" }).click();
-    await page.getByRole("complementary", { name: "Pages" }).getByRole("link", { name: "Snapshots" }).click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("complementary", { name: "Settings" }).getByRole("link", { name: "Snapshots" }).click();
     await heading(page, "Snapshots");
     expect(errors).toEqual([]);
     await close();
