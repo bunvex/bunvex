@@ -34,24 +34,25 @@ describe("catalog (_tables / _index)", () => {
       defineSchema({ users: defineTable(v.any()), posts: defineTable(v.any()).index("by_author", ["author"]) }),
       async (e) => {
         expect(numbers(e)).toEqual({
+          // Convex's fixed numbers (STUDY-42 X9), bunvex's own at the top of the system range.
           _tables: 513,
           _index: 514,
-          _instance: 515,
-          _session_requests: 516,
-          _index_backfills: 517,
-          _scheduled_functions: 518,
-          _cron_jobs: 519,
-          _cron_next_run: 520,
-          _cron_job_logs: 521,
-          _storage: 522,
-          _storage_deletions: 523,
-          _modules: 524,
-          _source_packages: 525,
-          _udf_config: 526,
-          _schemas: 527,
-          _environment_variables: 528,
-          _exports: 529,
-          _snapshot_imports: 530,
+          _exports: 516,
+          _udf_config: 518,
+          _modules: 521,
+          _source_packages: 524,
+          _environment_variables: 525,
+          _session_requests: 529,
+          _cron_jobs: 531,
+          _schemas: 532,
+          _cron_job_logs: 533,
+          _scheduled_functions: 539,
+          _storage: 540,
+          _snapshot_imports: 541,
+          _cron_next_run: 547,
+          _index_backfills: 548,
+          _storage_deletions: 9998,
+          _instance: 9999,
           users: 10001,
           posts: 10002,
         });
@@ -149,4 +150,22 @@ describe("catalog (_tables / _index)", () => {
       await expect(e.mutation((db) => db.insert("_index", {}))).rejects.toThrow("System table");
     });
   });
+});
+
+test("fixed system numbers: a table created before keeps its number; a system table without one skips the reserved", async () => {
+  const { planCatalog } = await import("../src/catalog.ts");
+  const anyDoc = v.any();
+  // A store numbered in order before (its `_storage` at 522): nothing moves.
+  const before = [{ _id: "x", name: "_storage", number: 522, tablet: 30, state: "active" as const }];
+  expect(planCatalog([{ name: "_storage", indexes: {}, document: anyDoc }], before, []).insertTables).toEqual([]);
+  // A new system table without a fixed number: the first free one that no system table reserves — with
+  // 515 taken, not 516 (`_exports`'s) but 517.
+  const with515 = [{ _id: "z", name: "_old", number: 515, tablet: 32, state: "active" as const }];
+  const planned = planCatalog([{ name: "_new_system", indexes: {}, document: anyDoc }], with515, []).insertTables;
+  expect(planned.map((t) => t.number)).toEqual([517]);
+  // A fixed number already taken (an import moved a table there): the next free unreserved one.
+  const taken = [{ _id: "y", name: "_other", number: 540, tablet: 31, state: "active" as const }];
+  expect(planCatalog([{ name: "_storage", indexes: {}, document: anyDoc }], taken, []).insertTables[0]!.number).toBe(
+    515,
+  );
 });

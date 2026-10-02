@@ -47,6 +47,35 @@ const FIRST_USER_TABLE_NUMBER = 10_001;
 const FIRST_SYSTEM_TABLE_NUMBER = 513;
 
 /**
+ * Each system table's fixed number (STUDY-42 X9): Convex's (`DefaultTableNumber` in crates/model/src/lib.rs,
+ * 512 + n, "to make import/export more likely to work nicely") for the tables Convex has — a virtual table
+ * (`_storage`, `_scheduled_functions`) shares its system table's — and numbers Convex does not use for
+ * bunvex's own, counted down from the top of the system range (below 10 000, as Convex's). A table created before keeps its number.
+ */
+export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
+  _tables: 513,
+  _index: 514,
+  _exports: 516,
+  _udf_config: 518,
+  _modules: 521,
+  _source_packages: 524,
+  _environment_variables: 525,
+  _session_requests: 529,
+  _cron_jobs: 531,
+  _schemas: 532,
+  _cron_job_logs: 533,
+  _scheduled_functions: 539,
+  _storage: 540,
+  _snapshot_imports: 541,
+  _cron_next_run: 547,
+  _index_backfills: 548,
+  // bunvex's own.
+  _instance: 9_999,
+  _storage_deletions: 9_998,
+};
+const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
+
+/**
  * A table's lifecycle (STUDY-42 PR 2), as Convex's `TableState`: `active` (the one table of its name that
  * functions see), `hidden` (being filled — an import's — invisible to functions, possibly sharing an active
  * table's name and number, made active by `activate`), `deleting` (replaced or deleted: invisible, its
@@ -293,9 +322,16 @@ export function planCatalog(
     let tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {
-      // System tables take the first free number above 512, user tables above 10 000 (Convex).
-      let number = d.name.startsWith("_") ? FIRST_SYSTEM_TABLE_NUMBER : FIRST_USER_TABLE_NUMBER;
-      while (usedNumbers.has(number)) number++;
+      // A system table takes its fixed number, else the first free one above 512 that no system table
+      // reserves; a user table the first free one above 10 000 (Convex).
+      const system = d.name.startsWith("_");
+      const fixed = system ? SYSTEM_TABLE_NUMBERS[d.name] : undefined;
+      let number: number;
+      if (fixed !== undefined && !usedNumbers.has(fixed)) number = fixed;
+      else {
+        number = system ? FIRST_SYSTEM_TABLE_NUMBER : FIRST_USER_TABLE_NUMBER;
+        while (usedNumbers.has(number) || (system && RESERVED_SYSTEM_NUMBERS.has(number))) number++;
+      }
       usedNumbers.add(number);
       tablet = nextTablet++;
       changes.insertTables.push({ name: d.name, number, tablet, state: "active" });
