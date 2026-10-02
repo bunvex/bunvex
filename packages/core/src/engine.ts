@@ -20,13 +20,16 @@ import {
   INSTANCE_TABLE,
   type IndexBackfillMeta,
   type IndexMeta,
+  MODULES_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
+  SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
+  UDF_CONFIG_TABLE,
 } from "./catalog.ts";
 import {
   Committer,
@@ -417,6 +420,9 @@ export class Engine {
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
       { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
       { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
+      { name: MODULES_TABLE, indexes: { by_path: ["path"] }, document: v.any() },
+      { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
+      { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }

@@ -6,9 +6,12 @@ export {
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
+  MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
+  SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  UDF_CONFIG_TABLE,
 } from "./catalog.ts";
 export {
   Committer,
