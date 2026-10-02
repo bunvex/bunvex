@@ -1965,3 +1965,82 @@ components may bring screens of their own. Such a screen is an **extension**: on
 - **Not yet** (server work): the client `track()` helper and automatic page views, the server-side GeoIP
   lookup that places a session, retention of analytics events, and a custom tile style setting.
 
+### 26.3 Workflows and work pools (an extension; STUDY-12 §18)
+
+`extensions/workflows/` — a bunvex addition the owner may keep or remove. Sidebar: Functions, after Schedules.
+
+- **Runs** (`/workflows/runs`): every run, newest first — workflow, status (icon and word), current step,
+  start, duration, steps, retries — with Status and Workflow filters in the section column (in the URL).
+- **A run** (`?run=`, opens in place): the run's error on top when it failed; its steps as a **diagram** (React
+  Flow, already the Schema's and Topology's dependency: one row per group of steps run together, side by side,
+  an edge from each step of a group to each of the next; each node shows the kind, the function, the status
+  in words, its tries and duration; a running step pulses, not under reduced motion; fixed, not draggable); a
+  **timeline** (a bar per step on one axis from the run's start, the running one up to now); and the
+  **journal** (each step's start, finish, tries, arguments and result or error, as literals). The selected step
+  (`?step=`) is shared by the three; a node, a timeline row or a journal row selects it.
+- **Actions** (a write-capable credential, behind a confirmation): **Cancel run** (a running one: its running
+  and pending steps become canceled), **Rerun** (a new run with the same arguments, opened), **Restart from step
+  N** (a new run that replays steps before N from this journal and runs again from N, opened). The mock records
+  them in the audit log.
+- **Work pools** (`/workflows/workpools`): per pool, running against `maxParallelism` (a bar; "full" in words
+  when it is), pending, backing off, the last 24 hours, the retry policy in words, and completed / failed per
+  minute over 30 minutes (a line chart with a legend and a table).
+- **Contract** (`extensions/workflows/data-source.ts`): optional `listWorkflowRuns`, `getWorkflowRun`,
+  `listWorkflowNames`, `listWorkpools` (reads, `viewData`) and `cancelWorkflowRun`, `rerunWorkflow`,
+  `restartWorkflowFrom` (writes). The contract part checks runs newest first and filterable, a journal in
+  index order whose groups never go back, statuses that agree (a finished run has no running step; a
+  succeeded one only succeeded steps), pools within their parallelism; with writes on, cancel / rerun /
+  restart (a restart keeps the replayed steps). **Mock**: four workflows (sequential steps, a parallel group,
+  sleeps, an awaited event, a nested workflow) over two days, with retries and every outcome; three pools.
+- Live: runs and pools refresh every 5 s while the screen is open (a source could push later).
+
+## 27. The Overview (the owner's call, 1 Oct 2026; supersedes the Health screen of §9 slice 4 and §18.1's page)
+
+Health becomes the **Overview** at `/` (nav "Overview"; `/health` redirects): the home page, Convex's Health
+reshaped (STUDY-12 §6 item 3). Not an extension — a core screen (`screens/overview.tsx`, derivations in
+`screens/overview-data.ts`, tested apart).
+
+- **Summary**: the deployment (name · version · persistence), the client and HTTP actions URLs with copy, the
+  **last deploy** and by whom (the newest `push_config` in the audit log), the **nodes** (→ Topology).
+- **Now** (indicators with their last hour as sparklines, from the optional metrics methods): calls per minute
+  (every function, summed over the top-k incl. the rest), failure rate (the worst function), latency p95 (the
+  slowest of the 5 busiest), live connections (WebSockets on every node, from the topology; otherwise live
+  subscriptions from the stats), documents (the tables' counts), file storage (`fileStats`). A window with
+  no value reads "—"; a source without the method says so.
+- **Needs attention** (`attention()`), critical first, each linking where to look: the deployment paused
+  (→ Settings › General), a node down or behind the leader (→ Topology with the node), the store at ≥ 80 % of
+  its connections (→ Topology), a function failing in the last 5 minutes (→ Functions › Statistics), scheduled
+  runs ≥ 10 s late (→ Scheduled functions). Severity is said in words too.
+- **Recent activity**: the latest audit events in words (→ History with the event) and the latest failed
+  executions (→ Logs filtered to failures).
+- **Get started**, when there are no tables or no functions: deploy (`bunx bunvex dev`), create a table
+  (→ Database), and a copyable client snippet with the deployment's URL.
+- **Metrics**: the charts of §18.1 (top functions, failure and cache rates, scheduler lag).
+- **Engine**, collapsed: the commit clock with commits/s and the engine counters (`screens/engine.tsx`, the
+  former Health content); they stream only while the section is open.
+
+## 28. Feature flags (an extension, §26; a bunvex addition, STUDY-12 §17; 1 Oct 2026)
+
+`extensions/flags/` — declaration (`/flags`, under Manage, shown when the source has `listFlags`), contract
+types (`FlagsFeatures`), pure logic (`evaluate`, `bucketOf`, `pickFromRollout`, `flagProblem`, `ruleText`), the
+mock part (five flags: a 25 % rollout with a staff rule, an A/B/C test, a JSON config that is off, a targeted
+rule, an archived flag; their history; exposures following each flag's rollout), the contract part (shape;
+writes when on), the screen and the editor.
+
+- **Column**: the views (All flags, On, Off, Archived, with counts) and the Type filter; "New flag" on top.
+- **Grid** (full-bleed): key, name, type, state (On / Off / Archived, in words), what it serves now, rules,
+  updated. Search by key or name in Bar 2. The details follow the current row (click, arrows).
+- **Details** (docked panel): the kill switch ("Turn off" asks first: everyone gets the off variant at once),
+  Edit, Archive / Restore (asks first); tabs **Overview** (serving now — a rollout as a bar with its shares in
+  words —, the variants, "Served, last hour" per variant), **Targeting** (the rules in words, in order; the
+  default and the off variant; **who gets what**: an identity's attributes, `name=value` per line, and the
+  variant it gets with why), **History**, **Code** (`useFlag("x")`, `ctx.flags.get("x")`).
+- **Editor** (the same panel): key (new flags only, `^[a-z][a-z0-9_.-]{0,63}$`), name, description, type
+  (fixed after creation), variants (true/false for boolean; names; names + JavaScript-literal JSON values), the
+  off variant, the default (one variant or a percentage rollout), rules (conditions: attribute, operator,
+  comma-separated values; serve a variant), "Turn it on now" for a new flag. Checked as typed (`flagProblem`),
+  checked again by the source on save.
+- **Who may change**: a credential that can write data and is not read-only (STUDY-12 FF2). Every change is in
+  the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
+  `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
+- URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.

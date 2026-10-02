@@ -27,11 +27,11 @@ async function setup() {
     // Reads, lets two other commits more than 1 ms apart land (the first is then trimmed), then writes.
     slow: mutation(async ({ db }) => {
       runs++;
-      await db.get(id);
+      await db.get(id as never);
       await engine.mutation((d) => d.insert("items", { n: 1 }));
       await Bun.sleep(5);
       await engine.mutation((d) => d.insert("items", { n: 2 }));
-      await db.patch(id, { n: 3 });
+      await db.patch(id as never, { n: 3 });
     }),
     count: query(async ({ db }) => (await db.query("items").collect()).length),
   });

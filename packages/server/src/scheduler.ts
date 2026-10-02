@@ -29,20 +29,42 @@ import {
   type Tx,
   wallClock,
 } from "@bunvex/core";
-import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
-import { isSimpleObject, type Value } from "@bunvex/values";
+import {
+  type AnyFunctionReference,
+  type FunctionReference,
+  getFunctionName,
+  type OptionalRestArgs,
+} from "@bunvex/protocol";
+import { type GenericId, isSimpleObject, type Value } from "@bunvex/values";
 import { describeUncaught } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
 export type SchedulableFunction = AnyFunctionReference | string;
 
-/** `ctx.scheduler`, as Convex's `Scheduler`. */
-export type Scheduler = {
-  runAfter(delayMs: number, fn: SchedulableFunction, args?: Record<string, unknown>): Promise<string>;
-  runAt(timestamp: number | Date, fn: SchedulableFunction, args?: Record<string, unknown>): Promise<string>;
-  cancel(id: string): Promise<void>;
-};
+/** A mutation or action to schedule, as Convex's `SchedulableFunctionReference`. */
+export type SchedulableFunctionReference = FunctionReference<"mutation" | "action", "public" | "internal">;
+type ScheduledId = GenericId<"_scheduled_functions">;
+
+/**
+ * `ctx.scheduler`, as Convex's `Scheduler`: a reference's arguments are typed (none may be left out when
+ * it takes some); a plain name (`"module:fn"`) is untyped.
+ */
+export interface Scheduler {
+  runAfter<F extends SchedulableFunctionReference>(
+    delayMs: number,
+    fn: F,
+    ...args: OptionalRestArgs<F>
+  ): Promise<ScheduledId>;
+  runAfter(delayMs: number, fn: string, args?: Record<string, unknown>): Promise<ScheduledId>;
+  runAt<F extends SchedulableFunctionReference>(
+    timestamp: number | Date,
+    fn: F,
+    ...args: OptionalRestArgs<F>
+  ): Promise<ScheduledId>;
+  runAt(timestamp: number | Date, fn: string, args?: Record<string, unknown>): Promise<ScheduledId>;
+  cancel(id: ScheduledId): Promise<void>;
+}
 
 const FIVE_YEARS_MS = 5 * 366 * 24 * 3600 * 1000;
 
@@ -96,20 +118,20 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
   };
 
   return {
-    async runAfter(delayMs, fn, args) {
+    async runAfter(delayMs: number, fn: SchedulableFunction, args?: Record<string, unknown>) {
       if (typeof delayMs !== "number") throw new Error("`delayMs` must be a number");
       if (!Number.isFinite(delayMs)) throw new Error("`delayMs` must be a finite number");
       if (delayMs < 0) throw new Error("`delayMs` must be non-negative");
       return schedule(Date.now() + delayMs, fn, parseScheduleArgs(args));
     },
-    async runAt(timestamp, fn, args) {
+    async runAt(timestamp: number | Date, fn: SchedulableFunction, args?: Record<string, unknown>) {
       let ms: number;
       if (timestamp instanceof Date) ms = timestamp.valueOf();
       else if (typeof timestamp === "number") ms = timestamp;
       else throw new Error("The invoke time must a Date or a timestamp");
       return schedule(ms, fn, parseScheduleArgs(args));
     },
-    async cancel(id) {
+    async cancel(id: string) {
       if (typeof id !== "string")
         throw new Error(`Invalid argument \`id\` for \`cancel\`, expected string but got '${typeof id}': ${id}`);
       await write(async (db) => {
@@ -119,7 +141,7 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
         await cancelJob(db, id, Date.now());
       });
     },
-  };
+  } as Scheduler;
 }
 
 /** Convex's knobs, from the environment where Convex reads them. */

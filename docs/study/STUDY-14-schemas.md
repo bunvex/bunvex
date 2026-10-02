@@ -42,7 +42,7 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | Existing documents are not re-checked when the schema changes | That check belongs to the deploy/push flow (parity gap) | gap |
+| D1 | Existing documents are not re-checked when the schema changes | That check belongs to the deploy/push flow (parity gap) | **closed** (STUDY-35): a pushed schema's existing documents are walked, and writes while it is pending are checked, as Convex's `SchemaWorker` |
 | D2 | No `searchIndex`, `vectorIndex` or `staged` yet | Search features are phase 4 | gap |
 | D3 | ~~Tables not in the schema can't be written yet~~ Fixed in #33: a write creates the table, as `TableModel::insert_table_metadata` does; reads of a missing table return nothing and depend on `_tables` | — | done |
 

@@ -26,6 +26,8 @@ export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
 export const MODULES_TABLE = "_modules";
 export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
+/** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
+export const SCHEMAS_TABLE = "_schemas";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";

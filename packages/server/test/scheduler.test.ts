@@ -83,11 +83,11 @@ async function setup(opts: { start?: boolean; parallelism?: number; retentionSec
         return (e as Error).message;
       }
     }),
-    cancel: mutation(async ({ scheduler }, { id }: { id: string }) => scheduler.cancel(id)),
+    cancel: mutation(async ({ scheduler }, { id }: { id: string }) => scheduler.cancel(id as never)),
     cancelOtherTable: mutation(async ({ db, scheduler }) => {
       const id = await db.insert("items", {});
       try {
-        await scheduler.cancel(id);
+        await scheduler.cancel(id as never);
         return "ok";
       } catch (e) {
         return (e as Error).message;
@@ -98,19 +98,23 @@ async function setup(opts: { start?: boolean; parallelism?: number; retentionSec
       const mine = (await db.system.query("_scheduled_functions").collect()).find(
         (j) => j.name === "m.js:selfCancel" && (j.state as { kind: string }).kind === "inProgress",
       );
-      await scheduler.cancel(mine!._id as string);
+      await scheduler.cancel(mine!._id);
     }),
     fails: mutation(async ({ db }) => {
       await db.insert("items", { tag: "should vanish" });
       throw new BunvexError("nope");
     }),
     aQuery: query(async () => 1),
-    job: query(async ({ db }, { id }: { id: string }) => db.system.get(id)),
+    job: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
     jobs: query(async ({ db }) => db.system.query("_scheduled_functions").collect()),
     systemQuery: query(async ({ db }, { what }: { what: string }) => {
       try {
-        if (what === "index") await db.system.query("_scheduled_functions").withIndex("by_next_ts").collect();
-        else await db.system.query("_session_requests").collect();
+        if (what === "index")
+          await db.system
+            .query("_scheduled_functions")
+            .withIndex("by_next_ts" as never)
+            .collect();
+        else await db.system.query("_session_requests" as never).collect();
         return "ok";
       } catch (e) {
         return (e as Error).message;
@@ -329,7 +333,7 @@ describe("the executor", () => {
     await executor.stop();
     const id = (await functions.runMutation("m:schedule", { delay: 200 })) as string;
     const other = new Functions(engine).register("m", {
-      job: query(async ({ db }, { id }: { id: string }) => db.system.get(id)),
+      job: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
     });
     const ex = new ScheduledJobExecutor(engine, other, { errorInitialBackoffMs: 5, errorMaxBackoffMs: 20 });
     stops.push(() => ex.stop());

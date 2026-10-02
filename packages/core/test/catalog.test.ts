@@ -48,6 +48,7 @@ describe("catalog (_tables / _index)", () => {
           _modules: 524,
           _source_packages: 525,
           _udf_config: 526,
+          _schemas: 527,
           users: 10001,
           posts: 10002,
         });

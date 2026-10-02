@@ -140,6 +140,23 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | as recommended | owner, 2026-10-02 | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | rule 5 | owner, 2026-10-02 | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | as recommended | owner, 2026-10-02 | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-170 | An app's functions live in `bunvex/` and its config in `bunvex.json` (`"functions"` overrides the directory) | `convex/`, `convex.json` | yes (a migrated app renames its directory or sets `functions`) | rule 5 | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-171 | The CLI targets a self-hosted deployment with `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (and `--url` / `--admin-key`) | `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY` | yes (the names) | rule 5, as `BUNVEX_CLOUD_ORIGIN` (DV-149) | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-172 | A pushed `auth.config.js` sees the server's process environment as `process.env` until deployment environment variables exist (item 9) | the deployment's environment variables | yes (until item 9) | works before `env set` exists; the app does not change when it does | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-173 | `bunvex codegen` writes `_generated/` from the code alone (no running deployment); the static modes are not implemented | a `start_push` against the deployment | no (the same output; works offline) | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-176 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables (item 9) | typed `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and declared variables | yes (types) | accept until item 9 | owner, 2026-10-02 (as recommended) | [STUDY-36 G4](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-177 | The generated `tsconfig.json` adds `"allowImportingTsExtensions": true` | Convex's settings only | no (it lets the app's `tsc` read bunvex's TypeScript sources) | accept, or publish `.d.ts` builds | owner, 2026-10-02 (as recommended) | [STUDY-36 G5](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-178 | `bunvex start` runs the self-hosted server; credentials from the env, else `<data-dir>/credentials`, else generated | a `convex-local-backend` binary plus Docker scripts | operational | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E1](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-179 | Built-in variables `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL` | `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` | yes | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-37 E2](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-180 | Deployment variables reach pushed code only; embedded functions see the host's `process.env` | every function sees the deployment's | yes (embedded servers only) | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E3](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-181 | `run --identity` default issuer `https://bunvex.test` | `https://convex.test` | yes (minor) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-37 E4](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-182 | `@bunvex/cli` may import `@bunvex/client` / `protocol` (`run --watch`, `dev`) | the CLI uses its WebSocket client | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E5](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-183 | `bunvex dev` with no deployment starts one in process (SQLite under `.bunvex/`) | downloads a local backend, or configures a cloud one | operational | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E6](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-184 | `dev --tail-logs` defaults to `disable` until log streaming (item 12) | `pause-on-deploy` | yes, until item 12 | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-185 | `run`'s JSON5 args parsed by bunvex's own reader | the `json5` package | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-37 E8](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
+| DV-186 | Not built: `env default`, declared/required variables (components), `run --component` / `--inline-query`, dev's cloud and `--local-*` flags | all of them | yes | later | owner, 2026-10-02 (as recommended) | [STUDY-37 E9](../study/STUDY-37-cli-and-environment-variables.md#4-divergences) |
 | DV-187 | The image runs `bunvex start` from TypeScript sources on `oven/bun` | compiled binaries on Ubuntu, Node for Node actions | no (operational) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K1](../study/STUDY-38-docker.md#4-divergences) |
 | DV-188 | `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN`, volume at `/bunvex/data` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, `/convex/data` | yes (compose files) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-38 K2](../study/STUDY-38-docker.md#4-divergences) |
 | DV-189 | No `dashboard` service until item 12 | the dashboard on 6791 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K3](../study/STUDY-38-docker.md#4-divergences) |
@@ -234,6 +251,8 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
+DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
+DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
 
 ## Gaps recorded in studies
@@ -244,7 +263,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 
 | Study row | Missing |
 |---|---|
-| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | Existing documents are not re-checked when the schema changes (deploy/push flow) |
+| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | ~~Existing documents are not re-checked when the schema changes~~ — closed by STUDY-35 (pushes walk them; writes while pending are checked) |
 | [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex` (phase 4); staged database indexes are built (STUDY-29) |
 | [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |

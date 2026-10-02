@@ -17,11 +17,11 @@ test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; fro
   // Every execution of m:bump reads the counter, then lets m:other overwrite it before committing.
   let rival: Promise<unknown> = Promise.resolve();
   const functions = new Functions(engine).register("m", {
-    other: mutation(({ db }) => db.patch("counters", id, { n: Math.random() })),
+    other: mutation(({ db }) => db.patch("counters", id as never, { n: Math.random() })),
     bump: mutation(async ({ db }) => {
-      await db.get("counters", id);
+      await db.get("counters", id as never);
       await rival;
-      await db.patch("counters", id, { n: -1 });
+      await db.patch("counters", id as never, { n: -1 });
     }),
     viaAction: action((ctx) => ctx.runMutation("m:bump", {})),
   });

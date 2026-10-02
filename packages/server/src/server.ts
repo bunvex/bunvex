@@ -25,6 +25,7 @@ import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainEr
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
@@ -148,10 +149,13 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
-  const verifier = new TokenVerifier(opts.auth === undefined ? [] : parseAuthConfig(opts.auth), {
-    redactErrors: redact,
-    ...(opts.authFetch ? { fetch: opts.authFetch } : {}),
-  });
+  const makeVerifier = (auth: AuthConfig | undefined) =>
+    new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
+      redactErrors: redact,
+      ...(opts.authFetch ? { fetch: opts.authFetch } : {}),
+    });
+  /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
+  let verifier = makeVerifier(opts.auth);
   /** This deployment's admin keys (STUDY-34): checked against its instance name and secret. */
   const adminKeys = new AdminKeys(engine.instanceName, engine.derivedKey(ADMIN_KEY_PURPOSE));
   /**
@@ -362,6 +366,9 @@ export function createServer(opts: ServerOptions) {
     }
   };
 
+  /** The push routes (set below, once the code store exists). */
+  let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   /** The admin routes; the caller is already identified. */
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
@@ -452,6 +459,12 @@ export function createServer(opts: ServerOptions) {
         srv.timeout(req, 0);
         return serveHttpAction(capped(req), url.pathname.slice(5) || "/", url.search);
       }
+      // Pushes (STUDY-35): Convex's deploy2 protocol, the Deploy operation.
+      if (
+        req.method === "POST" &&
+        (url.pathname === "/api/get_config_hashes" || url.pathname.startsWith("/api/deploy2/"))
+      )
+        return pushRoute(url, req);
       // The admin API (STUDY-34): each route needs an admin key, and its operation.
       if (
         url.pathname === "/stats" ||
@@ -588,14 +601,71 @@ export function createServer(opts: ServerOptions) {
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
-  const installCodeVersion = async (version: CodeVersion) => {
+  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
     httpOptions.router = version.router;
-    const crons = await cronExecutor.push(
-      version.crons ? cronSpecs(version.crons, (id, name) => functions.cronTarget(id, name)) : new Map(),
-    );
+    if (o.auth !== undefined)
+      verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));
+    const crons =
+      o.crons === false
+        ? undefined
+        : await cronExecutor.push(
+            version.crons ? cronSpecs(version.crons, (id, name) => functions.cronTarget(id, name)) : new Map(),
+          );
     sync.invalidateModules(changed);
     return { changed, crons };
+  };
+  /** Pushes over HTTP (Convex's deploy2 protocol), for a deployable server. */
+  const push = new PushService({
+    engine,
+    modulesStore,
+    cronExecutor,
+    install: (version, auth) => installCodeVersion(version, { crons: false, auth }),
+    authEnv: () => ({ ...process.env }) as Record<string, string>,
+  });
+  pushRoute = async (url: URL, req: Request): Promise<Response> => {
+    let body: Record<string, unknown>;
+    try {
+      body = (JSON.parse((await new Response(capped(req).body).text()) || "{}") ?? {}) as Record<string, unknown>;
+    } catch (e) {
+      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+    }
+    // The admin key in the header, or (as Convex's CLI also sends it) in the body.
+    let caller = await callerOfRequest(req);
+    if (caller instanceof Response) return caller;
+    if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
+      try {
+        caller = adminCaller(body.adminKey, false);
+      } catch (e) {
+        const r = accessError(e);
+        if (r) return r;
+        throw e;
+      }
+    }
+    try {
+      functions.requireOperation(caller, "Deploy");
+      if (!opts.deployable)
+        return requestError(400, "NotDeployable", "This deployment's functions are not deployed by pushes.");
+      await codeReady;
+      const step = url.pathname.replace(/^\/api\/(deploy2\/)?/, "");
+      if (step === "get_config_hashes") return json(await push.configHashes());
+      if (step === "start_push") return json(await push.startPush(body));
+      if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
+      if (step === "wait_for_schema") return json(await push.waitForSchema(body));
+      if (step === "finish_push") return json(await push.finishPush(body));
+      if (step === "report_push_completed") return json({});
+      return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    } catch (e) {
+      if (e instanceof PushError)
+        return requestError(
+          e.status,
+          e.code,
+          e.code === "RaceDetected" ? e.message : `Hit an error while pushing:\n${e.message}`,
+        );
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
+    }
   };
 
   return {

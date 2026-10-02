@@ -33,6 +33,9 @@ test("events in words", () => {
   expect(e("add_documents", { table: "tasks", count: 3 })).toBe("Added 3 documents to tasks");
   expect(e("add_documents", { table: "tasks", count: 1452 })).toBe("Added 1,452 documents to tasks");
   expect(e("pause_deployment", {})).toBe("Paused the deployment");
+  // an action no screen knows: its words, and what it was about
+  expect(e("disable_feature_flag", { flag: "new-dashboard" })).toBe("Disable feature flag new-dashboard");
+  expect(e("rotate_keys", {})).toBe("Rotate keys");
   expect(e("request_export", { format: "zip", include_storage: true })).toBe(
     "Requested a snapshot export, with the stored files",
   );
@@ -48,7 +51,7 @@ test("events in words", () => {
   expect(e("cancel_all_scheduled_functions", { function: "tasks:toggle", count: 2 })).toBe(
     "Canceled 2 scheduled runs of tasks:toggle",
   );
-  expect(e("something_new", {})).toBe("something_new");
+  expect(e("something_new", {})).toBe("Something new");
 });
 
 describe("the History screen", () => {
