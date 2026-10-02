@@ -81,6 +81,10 @@ describe("the Authentication screen", () => {
     await waitFor(() => expect(params(history)).toEqual({ status: "banned" }));
     await waitFor(() => expect(rows().length).toBe(banned.length));
     expect(rows().every((r) => r.textContent?.includes("Banned"))).toBe(true);
+    // said as every status is (UX2-12): the shared badge, with its state
+    expect(
+      rows().every((r) => r.querySelector('[data-slot="status-badge"]')?.getAttribute("data-status") === "banned"),
+    ).toBe(true);
   });
 
   test("Add user: create one (it opens), or invite by email from the split button", async () => {
