@@ -12,6 +12,7 @@ import { BAR_TITLE } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { SchemaDiagram } from "./diagram.tsx";
 import { buildSchemaGraph } from "./graph.ts";
+import { SchemaValidationStatus } from "./validation.tsx";
 
 const Heading = () => <h1 className="text-xl font-semibold tracking-tight">Schema</h1>;
 
@@ -97,5 +98,11 @@ export function SchemaScreen() {
         </Empty>
       </>
     );
-  return <SchemaDiagram graph={graph} heading={<h1 className={BAR_TITLE}>Schema</h1>} />;
+  return (
+    <SchemaDiagram
+      graph={graph}
+      heading={<h1 className={BAR_TITLE}>Schema</h1>}
+      status={schema.data?.validation && <SchemaValidationStatus validation={schema.data.validation} compact />}
+    />
+  );
 }

@@ -1582,6 +1582,23 @@ a table), lazy like the other screens.
   from the URL, an undeclared table, search, a union, Enter on a node, the empty and permission states, the
   grouping choice); e2e in Chromium in both themes with axe (contrast included). Each behaviour was sabotaged once.
 
+### 21.4 Groups renamed and dragged; schema validation (2 Oct 2026, STUDY-12 §14.7)
+
+- **Groups**: the group's header is its drag handle (a grip; xyflow `dragHandle`), and its tables are its children
+  (`parentId`, positions relative to the box), so the whole group moves. **Rename** (a pencil button) turns the
+  name into a box: Enter or leaving saves, Escape keeps the old name, an empty name restores the computed one.
+  Names and dropped positions (tables and groups) are kept per deployment (`schema/saved-layout.ts`,
+  `bunvex:schema-layout:<scope>`); a saved position applies only while the table sits in the same group.
+  **Reset layout** forgets the positions, keeps the names. Renaming does not lay the diagram out again.
+- **Validation**: `SchemaInfo.validation` (optional) — while validating, "Validating the schema against the
+  stored documents…" with a progress bar capped at 99 % (a spinner while the total is unknown), on the Schema
+  bar and in the Database schema panel; the schema query polls every 2 s meanwhile. Failed: an alert, "Schema
+  validation failed: N documents do not match.", and in the Database panel a few of them, each opening its
+  document. Mock: `simulateSchemaValidation`; dev host: `?validate=pass|fail`.
+- Tested: the saved layout and the 99 % cap (unit); rename, Escape, empty name, validation on both screens and a
+  failing document opening (happy-dom, axe); dragging a group, kept after a reload, Reset layout (e2e in
+  Chromium). Each behaviour was sabotaged once (two of them in the e2e).
+
 ## 22. Amendment — Topology (1 Oct 2026)
 
 A **bunvex addition** (STUDY-12 §15): who is running and how it connects, after STUDY-24's roles. Reworked twice
