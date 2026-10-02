@@ -1,5 +1,4 @@
 import { Button } from "@bunvex/ui/components/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@bunvex/ui/components/tooltip";
 import { type Theme, useTheme } from "@bunvex/ui/theme";
 import { Monitor, Moon, Sun } from "lucide-react";
 
@@ -12,15 +11,12 @@ function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const Icon = ICON[theme];
   const label = `${LABEL[theme]} (switch to ${LABEL[NEXT[theme]].toLowerCase()})`;
+  // a native title, not a Tooltip: the toggle sits in every page's header, and Base UI's tooltip brings the
+  // whole floating-positioning engine into the dashboard's first load (~83 kB, UI-01 §14.1)
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<Button variant="ghost" size="icon" aria-label={label} onClick={() => setTheme(NEXT[theme])} />}
-      >
-        <Icon aria-hidden="true" />
-      </TooltipTrigger>
-      <TooltipContent>{LABEL[theme]}</TooltipContent>
-    </Tooltip>
+    <Button variant="ghost" size="icon" aria-label={label} title={LABEL[theme]} onClick={() => setTheme(NEXT[theme])}>
+      <Icon aria-hidden="true" />
+    </Button>
   );
 }
 
