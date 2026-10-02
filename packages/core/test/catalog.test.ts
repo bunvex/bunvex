@@ -45,6 +45,9 @@ describe("catalog (_tables / _index)", () => {
           _cron_job_logs: 521,
           _storage: 522,
           _storage_deletions: 523,
+          _modules: 524,
+          _source_packages: 525,
+          _udf_config: 526,
           users: 10001,
           posts: 10002,
         });

@@ -22,6 +22,10 @@ export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
  */
 export const STORAGE_TABLE = "_storage";
 export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
+/** Pushed code (STUDY-35), as Convex's: each module's metadata, the packages they live in, the import phase. */
+export const MODULES_TABLE = "_modules";
+export const SOURCE_PACKAGES_TABLE = "_source_packages";
+export const UDF_CONFIG_TABLE = "_udf_config";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";
