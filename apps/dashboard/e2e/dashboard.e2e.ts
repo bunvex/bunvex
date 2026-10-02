@@ -542,6 +542,18 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Feature flags (an extension): the list and a flag's details with its chart, in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/flags?flag=new-dashboard", { colorScheme });
+      await heading(page, "Feature flags");
+      await page.getByRole("grid", { name: "Feature flags" }).getByText("checkout-flow").waitFor();
+      const panel = page.getByRole("complementary", { name: /new-dashboard/ });
+      await panel.getByRole("figure", { name: /Evaluations of new-dashboard/ }).waitFor();
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test("Functions: a function's page, then its query subscribed in the runner", async () => {
     const { page, errors, close } = await open("/functions?function=tasks:list");
     await page.getByRole("heading", { level: 1, name: "list" }).waitFor();
@@ -839,6 +851,7 @@ describe("the dashboard in a browser", () => {
         ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
+        ["/flags?flag=new-dashboard", "Feature flags"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);
