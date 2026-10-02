@@ -763,7 +763,7 @@ search, minimap, controls and side panel. The open table is in the URL (`?table=
 | SC1 | ~~Groups cannot be renamed or dragged as a whole~~ — built 2 Oct 2026 (§14.7): a group is renamed in place and dragged by its header with its tables; both kept per deployment; Reset layout forgets the positions | — | done |
 | SC2 | The type labels quote table names (`Id<"users">`), as TypeScript writes them; Convex shows `Id<users>` | the same text the code has | decided (30 Sep 2026, part of building it as Convex) |
 | SC3 | ~~No schema-validation progress~~ — built 2 Oct 2026 (§14.7), as Convex's `getSchemas.schemaValidationProgress` | — | done |
-| SC4 | A failed validation says how many documents do not match and lists a few, each opening in Database; Convex's push fails with the first one | seeing the scale helps fix the data | decided (owner, 2 Oct 2026; DV-204) |
+| SC4 | A failed validation says how many documents do not match and lists a few, each opening in Database; Convex's push fails with the first one | seeing the scale helps fix the data | decided (owner, 2 Oct 2026; DV-211) |
 
 ### 14.5 Indexes on the cards and going to a relation (added 1 Oct 2026)
 

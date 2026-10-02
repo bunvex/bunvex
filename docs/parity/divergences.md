@@ -174,7 +174,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-201 | `BUNVEX_LOCAL_BACKEND_BINARY` overrides the download | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L5](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-202 | No local dashboard until item 12 | a local dashboard on 6790 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L6](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-203 | `bunvex` reserved on npm with a placeholder now; the real package later; the CLI runs on Bun (`bunx bunvex`) | `convex` on npm, `npx convex` on Node | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L7](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
-| DV-204 | Dashboard: a failed schema validation says how many stored documents do not match and lists a few, each opening in Database | the push fails with the first document that does not match | no (dashboard) | Seeing the scale and the documents helps fix the data | owner, 2026-10-02 (follow-up SC3) | [STUDY-12 SC4](../study/STUDY-12-dashboard.md#144-divergences) |
+| DV-211 | Dashboard: a failed schema validation says how many stored documents do not match and lists a few, each opening in Database | the push fails with the first document that does not match | no (dashboard) | Seeing the scale and the documents helps fix the data | owner, 2026-10-02 (follow-up SC3) | [STUDY-12 SC4](../study/STUDY-12-dashboard.md#144-divergences) |
 
 ## Resolved to match Convex
 
