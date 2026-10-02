@@ -44,7 +44,7 @@ describe("the section column", () => {
       within(pages)
         .getAllByRole("heading")
         .map((h) => h.textContent),
-    ).toEqual(["Configuration", "Data"]);
+    ).toEqual(["Configuration", "Data", "Extensions"]); // pages an extension adds: Analytics → Map style
     expect(within(pages).getByRole("link", { name: "Environment variables" }).getAttribute("aria-current")).toBe(
       "page",
     );
