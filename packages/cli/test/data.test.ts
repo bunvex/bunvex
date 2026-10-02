@@ -69,7 +69,7 @@ test("Convex's stringify", () => {
 });
 
 test("the documents table: _id, _creationTime, then the fields sorted, padded; cut to a terminal's width", () => {
-  const rows = [
+  const rows: Record<string, string>[] = [
     { _id: '"a"', _creationTime: "1", name: '"Ada"' },
     { _id: '"bb"', _creationTime: "2", age: "36" },
   ];
@@ -95,7 +95,7 @@ test("bunvex data: tables, documents in each format, the limit warning, _storage
     ids.push(await t.engine.mutation((db) => db.insert(i === 2 ? "beta" : "alpha", doc)));
   }
   expect((await t.run([])).out).toBe("alpha\nbeta\nzeta");
-  const docs = (await t.engine.query((db) => db.query("alpha").order("desc").collect())) as Record<string, never>[];
+  const docs = (await t.engine.query((db) => db.query("alpha").order("desc").collect())) as unknown as Record<string, never>[];
   const lines = docs.map((d) => stringify(d));
   expect((await t.run(["alpha", "--format", "jsonl"])).out).toBe(lines.join("\n"));
   expect((await t.run(["alpha", "--format", "json"])).out).toBe(`[\n${lines.join(",\n")}\n]`);
