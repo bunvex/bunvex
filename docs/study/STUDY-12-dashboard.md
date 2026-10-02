@@ -836,3 +836,29 @@ removed later.
   A2 — the tile and the feed sit beside the map, not floating over it (MapLibre ignored the fit padding in
   headless Chrome, so the overlay hid the Americas).
 
+## 17. Feature flags (a bunvex addition, added 1 Oct 2026)
+
+**Convex** has no feature-flag screen or API; apps use a third-party service (LaunchDarkly, PostHog, Unleash,
+Statsig…) or roll their own table. The owner wants bunvex to offer more than Convex (an addition, decided
+1 Oct 2026), built as an **extension** (UI-01 §26) so it can be removed if it does not prove itself.
+
+**The concepts**, as those services share them (used conceptually; no code or wording copied): a flag has
+**variants** (boolean on/off, named variants, or JSON values); a **kill switch** (off serves the off variant
+to everyone); **targeting rules** on the caller's identity attributes, in order, the first match serving a
+variant; a **default** for everyone else — one variant or a **percentage rollout**, where an identity's bucket
+is a stable hash of the flag and the identity, so the same person always gets the same variant; a change
+history; and **exposures** (how often each variant was served).
+
+**bunvex**: the dashboard's part is the contract area `FlagsFeatures` (all optional: `listFlags`, `watchFlags`,
+`getFlagHistory`, `flagExposures`, `saveFlag`, `setFlagEnabled`, `archiveFlag`), the evaluation logic
+(`extensions/flags/logic.ts`, pure: what a source and the screen's "who gets what" preview both use), the
+mock and the screen (UI-01 §28). Bunvex's own angle, for when a server implements it: **flags are reactive**
+— read like a query (`useFlag("x")`, `ctx.flags.get("x")`), so a change reaches every client at once with no
+polling. Not decided yet (questions for the owner when a server implements it): where flags live (a system
+table), which identity attributes rules may use, whether exposures are counted on read.
+
+| # | What | Status |
+|---|---|---|
+| FF1 | Feature flags as a dashboard extension, contract and mock first | **decided (1 Oct 2026, the owner)**: a bunvex addition |
+| FF2 | Who may change flags: a credential that can write data (no new operation yet) | the screen's choice; the owner can ask for a dedicated operation |
+| FF3 | Rules serve one variant in the editor (rollouts only in the default); the contract allows a rollout per rule | the editor's simplification; the screen shows a rule's rollout when a source sends one |

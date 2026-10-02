@@ -31,7 +31,8 @@ describe("the Authentication screen", () => {
     await screen.findByRole("heading", { level: 1, name: "Users" });
     expect(history.location.pathname).toBe("/auth/users");
     const sidebar = screen.getByRole("navigation", { name: "Dashboard" });
-    expect(within(within(sidebar).getByRole("list", { name: "Manage" })).getByRole("link").textContent).toBe(
+    // Authentication first; extensions that join Manage (Feature flags, UI-01 §28) come after it
+    expect(within(within(sidebar).getByRole("list", { name: "Manage" })).getAllByRole("link")[0]!.textContent).toBe(
       "Authentication",
     );
     const pages = screen.getByRole("navigation", { name: "Authentication" });
