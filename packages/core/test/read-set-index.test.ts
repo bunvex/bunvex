@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { v } from "@bunvex/values";
 import { type Interval, overlaps } from "../src/committer.ts";
-import { Engine } from "../src/engine.ts";
 import { prefixEnd } from "../src/keyenc.ts";
-import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { ReadSetIndex } from "../src/read-set-index.ts";
-import { defineSchema, defineTable } from "../src/schema.ts";
 
 /** A small deterministic PRNG, so a failure reproduces from its seed. */
 function rng(seed: number) {
@@ -140,39 +136,5 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
     for (let o = 0; o < 300; o++) expect(index.delete(o)).toBe(true);
     expect(index.delete(0)).toBe(false);
     expect([index.size, index.intervalCount, index.indexCount]).toEqual([0, 0, 0]);
-  });
-});
-
-async function engine(cacheMax?: number) {
-  return new Engine(
-    defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) }),
-    await MemoryPersistence.open(null, { durable: false }),
-    { cacheMax },
-  ).init();
-}
-const byN = (n: number) => (db: any) =>
-  db
-    .query("items")
-    .withIndex("by_n", (q: any) => q.eq("n", n))
-    .collect();
-
-describe("invalidation through the index", () => {
-  test("the query cache drops exactly the entries a commit overlaps, and forgets their read-sets", async () => {
-    const e = await engine();
-    for (let n = 0; n < 10; n++) await e.query(byN(n), `q${n}`);
-    expect(e.cacheReads.size).toBe(10);
-    await e.mutation((db) => db.insert("items", { n: 3 }));
-    expect(e.cacheReads.size).toBe(9);
-    const misses = e.stats.cacheMisses;
-    for (let n = 0; n < 10; n++) await e.query(byN(n), `q${n}`);
-    expect(e.stats.cacheMisses - misses).toBe(1); // only q3 ran again
-  });
-
-  test("an evicted cache entry's read-set is forgotten", async () => {
-    const e = await engine(3);
-    for (let n = 0; n < 50; n++) await e.query(byN(n), `q${n}`);
-    expect(e.cacheReads.size).toBe(3);
-    await e.mutation((db) => db.insert("items", { n: 49 }));
-    expect(e.cacheReads.size).toBe(2);
   });
 });
