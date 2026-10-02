@@ -140,6 +140,12 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | as recommended | owner, 2026-10-02 | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | rule 5 | owner, 2026-10-02 | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | as recommended | owner, 2026-10-02 | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-187 | The image runs `bunvex start` from TypeScript sources on `oven/bun` | compiled binaries on Ubuntu, Node for Node actions | no (operational) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K1](../study/STUDY-38-docker.md#4-divergences) |
+| DV-188 | `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN`, volume at `/bunvex/data` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, `/convex/data` | yes (compose files) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-38 K2](../study/STUDY-38-docker.md#4-divergences) |
+| DV-189 | No `dashboard` service until item 12 | the dashboard on 6791 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K3](../study/STUDY-38-docker.md#4-divergences) |
+| DV-190 | S3 per use case (its bucket set), not all-or-nothing on five buckets | all five or local | yes (config) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K4](../study/STUDY-38-docker.md#4-divergences) |
+| DV-191 | Image published to `ghcr.io/bunvex/bunvex-backend` from `main` | `ghcr.io/get-convex/convex-backend` | — | owner turns it on | owner, 2026-10-02 (as recommended) | [STUDY-38 K5](../study/STUDY-38-docker.md#4-divergences) |
+| DV-192 | Convex knobs with no bunvex counterpart left out of the compose file | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K6](../study/STUDY-38-docker.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -228,17 +234,7 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
-
-STUDY-38 (the Docker image), awaiting the owner:
-
-| ID | bunvex | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-187 | The image runs `bunvex start` from TypeScript sources on `oven/bun` | compiled binaries on Ubuntu, Node for Node actions | no (operational) | accept | [STUDY-38 K1](../study/STUDY-38-docker.md#4-divergences) |
-| DV-188 | `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN`, volume at `/bunvex/data` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, `/convex/data` | yes (compose files) | rule 5 | [STUDY-38 K2](../study/STUDY-38-docker.md#4-divergences) |
-| DV-189 | No `dashboard` service until item 12 | the dashboard on 6791 | yes | accept | [STUDY-38 K3](../study/STUDY-38-docker.md#4-divergences) |
-| DV-190 | S3 per use case (its bucket set), not all-or-nothing on five buckets | all five or local | yes (config) | accept | [STUDY-38 K4](../study/STUDY-38-docker.md#4-divergences) |
-| DV-191 | Image published to `ghcr.io/bunvex/bunvex-backend` from `main` | `ghcr.io/get-convex/convex-backend` | — | owner turns it on | [STUDY-38 K5](../study/STUDY-38-docker.md#4-divergences) |
-| DV-192 | Convex knobs with no bunvex counterpart left out of the compose file | — | no | accept | [STUDY-38 K6](../study/STUDY-38-docker.md#4-divergences) |
+DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
 
 ## Gaps recorded in studies
 

@@ -1,6 +1,6 @@
 # STUDY-38 — The Docker image and docker-compose
 
-- **Status:** draft (K1–K6 await the owner)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`self-hosted/`)
 - **Related:**
   - roadmap item 10 ([parity README](../parity/README.md));
@@ -78,12 +78,12 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| K1 | The image runs `bunvex start` from the workspace's TypeScript sources on `oven/bun`. Convex ships compiled binaries on Ubuntu, with Node for Node actions | bunvex is a Bun program and has no compile step; `"use node"` actions run in the same process (DV-169) | pending |
-| K2 | The origins are `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` (already the server's names), not `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`. Paths are `/bunvex/data` rather than `/convex/data` | rule 5 | pending |
-| K3 | No `dashboard` service until the dashboard runs on a real deployment (item 12) | the dashboard app today shows mock data | pending |
-| K4 | Storage: S3 per use case, when that use case's bucket is set (STUDY-32), rather than Convex's all-or-nothing on five buckets. The entry script warns when `AWS_REGION` is missing while a bucket is set | bunvex uses two buckets (files, modules); requiring five, three of them unused, would block S3 | pending |
-| K5 | The image is published to `ghcr.io/bunvex/bunvex-backend` (`:latest` and `:<sha>`) by a workflow on `main` | Convex's compose file pulls `ghcr.io/get-convex/convex-backend`; the compose file needs an image to pull. Publishing is outward-facing, so the owner decides when to turn it on | pending |
-| K6 | The knobs bunvex has no counterpart for are left out of the compose file: `DISABLE_METRICS_ENDPOINT`, `RUST_LOG` / `RUST_BACKTRACE`, `CONVEX_RELEASE_VERSION_DEV`, the Node action limits | there is nothing for them to set | pending |
+| K1 | The image runs `bunvex start` from the workspace's TypeScript sources on `oven/bun`. Convex ships compiled binaries on Ubuntu, with Node for Node actions | bunvex is a Bun program and has no compile step; `"use node"` actions run in the same process (DV-169) | accepted (owner, 2026-10-02) |
+| K2 | The origins are `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` (already the server's names), not `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`. Paths are `/bunvex/data` rather than `/convex/data` | rule 5 | accepted (owner, 2026-10-02) |
+| K3 | No `dashboard` service until the dashboard runs on a real deployment (item 12) | the dashboard app today shows mock data | accepted (owner, 2026-10-02) |
+| K4 | Storage: S3 per use case, when that use case's bucket is set (STUDY-32), rather than Convex's all-or-nothing on five buckets. The entry script warns when `AWS_REGION` is missing while a bucket is set | bunvex uses two buckets (files, modules); requiring five, three of them unused, would block S3 | accepted (owner, 2026-10-02) |
+| K5 | The image is published to `ghcr.io/bunvex/bunvex-backend` (`:latest` and `:<sha>`) by a workflow on `main` | Convex's compose file pulls `ghcr.io/get-convex/convex-backend`; the compose file needs an image to pull. Publishing is outward-facing, so the owner decides when to turn it on | accepted (owner, 2026-10-02) |
+| K6 | The knobs bunvex has no counterpart for are left out of the compose file: `DISABLE_METRICS_ENDPOINT`, `RUST_LOG` / `RUST_BACKTRACE`, `CONVEX_RELEASE_VERSION_DEV`, the Node action limits | there is nothing for them to set | accepted (owner, 2026-10-02) |
 
 ## 5. Tests
 
