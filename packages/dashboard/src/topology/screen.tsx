@@ -4,10 +4,12 @@
 // the events feed below lights a node when one is picked. A deployment of one node (bunvex today) shows that
 // node and its store. Live from watchTopology.
 
+import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronUp } from "lucide-react";
-import { lazy, Suspense, useId, useState } from "react";
+import { lazy, Suspense, useId, useMemo, useState } from "react";
+import { type ClientsBy, groupClients } from "../clients/words.tsx";
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
@@ -17,6 +19,7 @@ import { formatCount } from "../screens/stats.ts";
 import { BAR_TITLE } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
+import { ClientsPanel } from "./clients-panel.tsx";
 import { NodePanel } from "./node-panel.tsx";
 import { eventText, summary } from "./words.ts";
 
@@ -43,14 +46,43 @@ export function TopologyScreen() {
   );
   const search = topologyRoute.useSearch();
   const navigate = topologyRoute.useNavigate();
+  // a node or a client group: one panel at a time
   const open = (node: string | undefined) =>
-    navigate({ search: (s: TopologySearch): TopologySearch => ({ ...s, node }), replace: true });
+    navigate({ search: (s: TopologySearch): TopologySearch => ({ ...s, node, clients: undefined }), replace: true });
+  const openGroup = (clients: string | undefined) =>
+    navigate({ search: (s: TopologySearch): TopologySearch => ({ ...s, clients, node: undefined }), replace: true });
+  const by: ClientsBy = search.clientsBy === "app" ? "app" : "platform";
+  const setBy = (b: ClientsBy) =>
+    navigate({
+      search: (s: TopologySearch): TopologySearch => ({
+        ...s,
+        clientsBy: b === "app" ? "app" : undefined,
+        clients: undefined,
+      }),
+      replace: true,
+    });
+  // who the clients are (UI-01 §33), when the source says: the registry names them by app, the policy grades SDKs
+  const apps = useQuery({
+    queryKey: [...dashboardKeys.all(scope.scope), "client-apps"],
+    queryFn: ({ signal }) => source.listClientApps!({ signal }),
+    enabled: typeof source.listClientApps === "function" && canView,
+  });
+  const summaryQuery = useQuery({
+    queryKey: [...dashboardKeys.all(scope.scope), "client-summary"],
+    queryFn: ({ signal }) => source.getClientSummary!({ signal }),
+    enabled: typeof source.getClientSummary === "function" && canView && search.clients !== undefined,
+  });
   /** A node lit from the events feed. */
   const [highlight, setHighlight] = useState<string>();
 
-  if (!offered) return <NotOffered title="Topology" what="its topology" />;
   const t = topology.data;
+  const groups = useMemo(
+    () => (t?.nodes.some((n) => n.clients) ? groupClients(t.nodes, by, apps.data ?? []) : undefined),
+    [t, by, apps.data],
+  );
+  if (!offered) return <NotOffered title="Topology" what="its topology" />;
   const opened = t?.nodes.find((n) => n.id === search.node);
+  const openedGroup = groups?.find((g) => g.key === search.clients);
 
   return (
     // as the Schema screen: full-bleed inside <main>, a slim bar on top, the canvas taking the rest, the
@@ -69,6 +101,25 @@ export function TopologyScreen() {
             <span className="text-xs text-muted-foreground">
               One node runs everything; followers appear when bunvex runs more than one.
             </span>
+          )}
+          {groups && (
+            <fieldset className="ml-auto flex items-center gap-1 border-0 p-0 text-xs">
+              <legend className="sr-only">Group clients by</legend>
+              <span aria-hidden="true" className="text-muted-foreground">
+                Clients by
+              </span>
+              {(["platform", "app"] as const).map((b) => (
+                <Button
+                  key={b}
+                  variant={by === b ? "secondary" : "ghost"}
+                  size="xs"
+                  aria-pressed={by === b}
+                  onClick={() => setBy(b)}
+                >
+                  {b === "platform" ? "Platform" : "App"}
+                </Button>
+              ))}
+            </fieldset>
           )}
         </div>
         {caps.data && !canView ? (
@@ -91,13 +142,24 @@ export function TopologyScreen() {
             <Suspense
               fallback={<p className="flex-1 p-4 text-sm text-muted-foreground md:px-6">Loading the diagram…</p>}
             >
-              <TopologyDiagram topology={t} opened={search.node} highlight={highlight} onOpen={open} />
+              <TopologyDiagram
+                topology={t}
+                opened={search.node}
+                highlight={highlight}
+                onOpen={open}
+                groups={groups}
+                openedGroup={search.clients}
+                onOpenGroup={openGroup}
+              />
             </Suspense>
             <Events t={t} highlight={highlight} onPick={(n) => setHighlight((h) => (h === n ? undefined : n))} />
           </>
         )}
       </div>
       {t && opened && <NodePanel node={opened} topology={t} onClose={() => open(undefined)} />}
+      {openedGroup && (
+        <ClientsPanel group={openedGroup} policy={summaryQuery.data?.policy} onClose={() => openGroup(undefined)} />
+      )}
     </div>
   );
 }

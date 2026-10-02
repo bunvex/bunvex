@@ -2,6 +2,7 @@
 // followers (`nodes`), one of which drifts behind the commit stream and catches up again, so the view has a
 // lagging state and events to show. Vitals wander a little on every tick. Not part of the contract: the
 // source wraps it.
+import type { ClientBucket } from "../data-source-clients.ts";
 import type {
   NodeSample,
   StoreDriver,
@@ -31,6 +32,8 @@ export type MockTopologyOptions = {
   version: string;
   /** The deployment's persistence: memory or SQLite keep one node; more nodes use Postgres. */
   persistence: string;
+  /** Who a node's connections are (UI-01 §33), from its connection count and a per-node salt. */
+  clients?: (connections: number, salt: number) => ClientBucket[];
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -44,10 +47,13 @@ export class MockTopology {
   private leaseExpiresAt: number;
   private sizeBytes = 2.1 * GiB;
 
+  private readonly clientsOf?: MockTopologyOptions["clients"];
+
   constructor(
     private readonly rnd: Random,
     opts: MockTopologyOptions,
   ) {
+    this.clientsOf = opts.clients;
     const count = clamp(Math.round(opts.nodes), 1, NAMES.length);
     this.now = opts.now;
     const p = opts.persistence.toLowerCase();
@@ -180,6 +186,7 @@ export class MockTopology {
       time: this.now,
       nodes: [leader, ...followers].map((n) => ({
         ...n,
+        ...(this.clientsOf && n.connections > 0 && { clients: this.clientsOf(n.connections, this.nodes.indexOf(n)) }),
         ...(n.lag && { lag: { ...n.lag } }),
         ...(n.cache && { cache: { ...n.cache, topQueries: n.cache.topQueries?.map((q) => ({ ...q })) } }),
         history: n.history.map((h) => ({ ...h })),
