@@ -381,6 +381,8 @@ export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
 export * from "./data-source-topology.ts";
 
+import type { ExtensionFeatures } from "./extensions/index.ts";
+
 export interface DashboardDataSource
   extends DeploymentFeatures,
     DeploymentStateFeatures,
@@ -388,7 +390,8 @@ export interface DashboardDataSource
     AuthFeatures,
     AuthAdminFeatures,
     SnapshotFeatures,
-    TopologyFeatures {
+    TopologyFeatures,
+    ExtensionFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;
   getStats(opts?: CallOptions): Promise<DeploymentStats>;

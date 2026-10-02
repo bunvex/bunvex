@@ -6,6 +6,9 @@ import { createBrowserHistory, type RouterHistory, RouterProvider } from "@tanst
 import { lazy, type ReactNode, Suspense, useState } from "react";
 import { QueryScopeContext } from "./context.tsx";
 import { type DashboardDataSource, toDataSourceError } from "./data-source.ts";
+import { ExtensionsContext } from "./extensions/context.ts";
+import { extensions as registeredExtensions } from "./extensions/index.ts";
+import type { DashboardExtension } from "./extensions/types.ts";
 import { createDashboardRouter } from "./router.tsx";
 import { HeaderActionsContext } from "./shell/shell.tsx";
 
@@ -24,6 +27,8 @@ export type DashboardProps = {
   headerActions?: ReactNode;
   /** Shows the TanStack Router and Query devtools (loaded on demand). */
   devtools?: boolean;
+  /** The extensions' screens (UI-01 §26). Default: the registry's (`src/extensions/index.ts`). */
+  extensions?: readonly DashboardExtension[];
 };
 
 const Devtools = lazy(() => import("./devtools.tsx"));
@@ -47,6 +52,7 @@ export function Dashboard({
   scope = "default",
   headerActions,
   devtools = false,
+  extensions = registeredExtensions,
 }: DashboardProps) {
   const [queryClient] = useState(() => hostClient ?? createDashboardQueryClient());
   const [queryScope] = useState(() => ({ source: dataSource, scope }));
@@ -55,6 +61,7 @@ export function Dashboard({
       context: { queryClient, scope: queryScope },
       history: history ?? createBrowserHistory(),
       basepath,
+      extensions,
     }),
   );
   return (
@@ -62,7 +69,9 @@ export function Dashboard({
       <QueryScopeContext.Provider value={queryScope}>
         <HeaderActionsContext.Provider value={headerActions}>
           <TooltipProvider>
-            <RouterProvider router={router} />
+            <ExtensionsContext.Provider value={extensions}>
+              <RouterProvider router={router} />
+            </ExtensionsContext.Provider>
             {devtools && (
               <Suspense>
                 <Devtools router={router} />

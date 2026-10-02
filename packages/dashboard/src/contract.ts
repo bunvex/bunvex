@@ -27,6 +27,8 @@ import {
   type Page,
   type Value,
 } from "./data-source.ts";
+import { contractParts } from "./extensions/contract.ts";
+import type { ContractExtensionPart } from "./extensions/contract-types.ts";
 import { compareValues, DEFAULT_INDEX, fieldValue, matchesFilter } from "./filters.ts";
 import { isValidatorJson, validateValue } from "./validators.ts";
 
@@ -38,6 +40,8 @@ export type ContractOptions = DeploymentContractOptions &
     /** Per test. Default 30 000 ms: a live server walks many pages. */
     timeoutMs?: number;
     /** Enables the write tests on this table; `clear: true` also lets the suite empty it. */
+    /** The extensions' contract parts (UI-01 §26). Default: the registry's (`src/extensions/contract.ts`). */
+    extensions?: readonly ContractExtensionPart[];
     writes?: { table: string; clear?: boolean };
     /**
      * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
@@ -565,6 +569,9 @@ export function describeDataSourceContract(
     describeAuthContract({ make, test });
     describeAuthAdminContract({ make, test });
     describeSnapshotContract({ make, test, opts });
+    // each extension's part (UI-01 §26); a part tests only what the source offers
+    for (const part of opts.extensions ?? contractParts)
+      part.describe({ make, test, watchTimeoutMs, writes: !!opts.writes });
 
     // -------------------------------------------------------------- writes (opt-in)
     const writes = opts.writes;

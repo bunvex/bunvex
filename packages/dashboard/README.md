@@ -42,6 +42,19 @@ import { ThemeProvider } from "@bunvex/ui/theme";
   topology) is optional, detected with `typeof`, and a screen or action without its method says so or
   hides itself (UI-01 §0).
 
+## Extensions
+
+Experimental screens live in `src/extensions/<id>/` and are listed in three registries (UI-01 §26):
+`src/extensions/index.ts` (the screen's declaration and its contract features), `src/extensions/mock.ts` (its mock
+part) and `src/extensions/contract.ts` (its contract-suite part). An extension's sidebar entry shows only when the
+data source has the contract methods it `requires`.
+
+- **Remove one**: delete its folder and its line in each of the three registries — TypeScript points at any left.
+- **Add one**: a folder with its declaration (`DashboardExtension`), its lazy screen(s), its optional contract
+  methods, its `MockExtensionPart` and its `ContractExtensionPart`, then one line in each registry.
+- A host can pass its own: `<Dashboard extensions={[...]} />`, `new MockDataSource({ extensions })`,
+  `describeDataSourceContract(name, make, { extensions })`.
+
 ## Accessibility
 
 Every screen is checked with axe in its tests (`test/a11y.test.tsx` walks each screen state); colour
