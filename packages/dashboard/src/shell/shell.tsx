@@ -276,8 +276,10 @@ export function Shell() {
                 }}
               >
                 <Search aria-hidden="true" />
-                <span className="sr-only sm:not-sr-only">Search</span>
-                <kbd className="hidden font-sans text-[11px] text-muted-foreground sm:inline">
+                {/* an icon below xl, so the header stays one 48 px row beside the deployment summary and the
+                    account entry; its name stays for assistive tech */}
+                <span className="sr-only xl:not-sr-only">Search</span>
+                <kbd className="hidden font-sans text-[11px] text-muted-foreground xl:inline">
                   {isMac ? "⌘K" : "Ctrl K"}
                 </kbd>
               </Button>
