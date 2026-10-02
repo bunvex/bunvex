@@ -88,6 +88,17 @@ export class CronJobExecutor {
     return diff;
   }
 
+  /** The same diff inside a transaction of the caller's (a push's commit, STUDY-35); `wake()` once it commits. */
+  applyIn(db: Tx, specs: Map<string, CronSpec>) {
+    this.specs = specs;
+    return applyCrons(db, specs, Date.now(), this.o);
+  }
+
+  /** Look at the stored crons again (after a commit that changed them). */
+  refresh() {
+    this.poke();
+  }
+
   /** A new code version's crons (STUDY-35): the same diff as at start, against what is stored. */
   async push(specs: Map<string, CronSpec>) {
     this.specs = specs;
