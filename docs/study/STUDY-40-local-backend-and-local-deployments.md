@@ -1,6 +1,6 @@
 # STUDY-40 — The local backend executable, local deployments in `bunvex dev`, and the npm package
 
-- **Status:** draft (L1–L7 await the owner)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`convex` 1.46.0)
 - **Related:**
   - [STUDY-39](STUDY-39-standalone-binary.md): the executable and its release. The owner answered B1 on 2026-10-02: the backend alone, `bunvex-local-backend-<target>.zip`, as Convex. On B4: make `bunvex dev` work as Convex's now that there is an executable.
@@ -128,13 +128,13 @@ The binary never generates a secret. The Docker scripts do that (`read_credentia
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | `bunvex-local-backend`'s flags are Convex's, but with `--cloud-origin` / `--site-origin` (Convex: `--convex-origin` / `--convex-site`). `--db` takes `sqlite`, `postgres`, `mysql`, `mongodb` (Convex: `postgres-v5`, `mysql-v5`). The default instance name is `bunvex-self-hosted` (Convex: `carnitas`) | rule 5; bunvex's driver names; the store's default name | pending |
-| L2 | `bunvex start` is removed. The Docker image runs `bunvex-local-backend` through Convex's scripts (`read_credentials.sh`, `run_backend.sh`, `generate_admin_key.sh`) | the executable is now the backend, as in Convex; one way to run it | pending |
-| L3 | A local deployment is named `local-<basename(cwd)>`, and `dev` needs no account or prompt to create one (Convex: anonymous mode, `anonymous-<basename>`) | bunvex has no accounts | pending |
-| L4 | The latest executable comes from GitHub's releases API (the newest `precompiled-*` marked latest). Convex asks a version service | there is no version service | pending |
-| L5 | `BUNVEX_LOCAL_BACKEND_BINARY` uses a given executable instead of downloading one | tests, offline work, and running this repository's own build | pending |
-| L6 | No local dashboard until item 12 | as STUDY-38 K3 | pending |
-| L7 | Reserve `bunvex` on npm now with a placeholder `0.0.1`; publish the real package later as its own item. The CLI runs on Bun (`bunx bunvex`); Convex's runs on Node (`npx convex`) | the server inside the CLI is a Bun program | pending |
+| L1 | `bunvex-local-backend`'s flags are Convex's, but with `--cloud-origin` / `--site-origin` (Convex: `--convex-origin` / `--convex-site`). `--db` takes `sqlite`, `postgres`, `mysql`, `mongodb` (Convex: `postgres-v5`, `mysql-v5`). The default instance name is `bunvex-self-hosted` (Convex: `carnitas`) | rule 5; bunvex's driver names; the store's default name | accepted (owner, 2026-10-02) |
+| L2 | `bunvex start` is removed. The Docker image runs `bunvex-local-backend` through Convex's scripts (`read_credentials.sh`, `run_backend.sh`, `generate_admin_key.sh`) | the executable is now the backend, as in Convex; one way to run it | accepted (owner, 2026-10-02) |
+| L3 | A local deployment is named `local-<basename(cwd)>`, and `dev` needs no account or prompt to create one (Convex: anonymous mode, `anonymous-<basename>`) | bunvex has no accounts | accepted (owner, 2026-10-02) |
+| L4 | The latest executable comes from GitHub's releases API (the newest `precompiled-*` marked latest). Convex asks a version service | there is no version service | accepted (owner, 2026-10-02) |
+| L5 | `BUNVEX_LOCAL_BACKEND_BINARY` uses a given executable instead of downloading one | tests, offline work, and running this repository's own build | accepted (owner, 2026-10-02) |
+| L6 | No local dashboard until item 12 | as STUDY-38 K3 | accepted (owner, 2026-10-02) |
+| L7 | Reserve `bunvex` on npm now with a placeholder `0.0.1`; publish the real package later as its own item. The CLI runs on Bun (`bunx bunvex`); Convex's runs on Node (`npx convex`) | the server inside the CLI is a Bun program | accepted (owner, 2026-10-02) |
 
 ## 5. Tests
 
