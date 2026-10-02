@@ -12,6 +12,7 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
+  EXPORTS_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -443,6 +444,11 @@ export class Engine {
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
       { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
       { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
+      {
+        name: EXPORTS_TABLE,
+        indexes: { by_state_and_ts: ["state", "start_ts"], by_requestor: ["requestor", "_creationTime"] },
+        document: v.any(),
+      },
     ];
     return [...systemTables, ...schema.tables.values()];
   }

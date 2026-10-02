@@ -50,6 +50,7 @@ describe("catalog (_tables / _index)", () => {
           _udf_config: 526,
           _schemas: 527,
           _environment_variables: 528,
+          _exports: 529,
           users: 10001,
           posts: 10002,
         });
