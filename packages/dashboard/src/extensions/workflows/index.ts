@@ -2,7 +2,7 @@
 // removed later): durable workflow runs (a journal of steps, drawn as a diagram and a timeline) and work pools.
 import { Workflow } from "lucide-react";
 import type { DashboardExtension } from "../types.ts";
-import { RUN_STATUSES, type RunStatus } from "./data-source.ts";
+import type { RunStatus } from "./data-source.ts";
 
 export const WORKFLOW_SECTIONS = ["runs", "workpools"] as const;
 export type WorkflowSection = (typeof WORKFLOW_SECTIONS)[number];
@@ -13,7 +13,10 @@ export type WorkflowSearch = { run?: string; step?: number; status?: RunStatus; 
 export const validateWorkflowSearch = (input: Record<string, unknown>): WorkflowSearch => ({
   run: typeof input.run === "string" && /^[\w-]{1,64}$/.test(input.run) ? input.run : undefined,
   step: typeof input.step === "number" && Number.isInteger(input.step) && input.step >= 0 ? input.step : undefined,
-  status: RUN_STATUSES.includes(input.status as RunStatus) ? (input.status as RunStatus) : undefined,
+  // the statuses inline: this module is in the shell's chunk (the registry), the contract module is not
+  status: ["running", "success", "failed", "canceled"].includes(input.status as string)
+    ? (input.status as RunStatus)
+    : undefined,
   workflow: typeof input.workflow === "string" && /^[\w/:.-]{1,128}$/.test(input.workflow) ? input.workflow : undefined,
 });
 

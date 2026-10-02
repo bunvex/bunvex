@@ -133,7 +133,10 @@ describe("the dashboard in a browser", () => {
     expect(
       ["Documents in ", "Log lines", "Search functions", "Run a function"].filter((t) => code.includes(t)),
     ).toEqual([]);
-    // what Health's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB after
+    // what Health's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB after;
+    // ~600 kB on 2 Oct 2026, with the metrics charts on Health (#92) and the extension registry's declarations
+    // in the shell (Analytics, Workflows: titles, icons, routes — the screens stay lazy). The guard keeps ~7 %
+    // headroom: a screen imported eagerly again adds far more than that.
     const { page, close } = await open("/");
     await heading(page, "Health");
     const kb = await page.evaluate(
@@ -143,7 +146,7 @@ describe("the dashboard in a browser", () => {
           .filter((e) => e.name.endsWith(".js"))
           .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
     );
-    expect(kb).toBeLessThan(600);
+    expect(kb).toBeLessThan(640);
     await close();
   });
 
