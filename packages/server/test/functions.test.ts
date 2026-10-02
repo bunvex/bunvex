@@ -15,7 +15,7 @@ async function setup() {
       returns: v.string(),
       handler: (_ctx, { name, times }) => `hi ${name}`.repeat(times ?? 1),
     }),
-    wrongReturn: query({ args: {}, returns: v.number(), handler: () => "not a number" }),
+    wrongReturn: query({ args: {}, returns: v.number(), handler: () => "not a number" as unknown as number }),
     addUser: mutation({
       args: v.object({ name: v.string() }),
       handler: ({ db }, { name }) => db.insert("users", { name }),

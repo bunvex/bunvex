@@ -140,6 +140,9 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | as recommended | owner, 2026-10-02 | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | rule 5 | owner, 2026-10-02 | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | as recommended | owner, 2026-10-02 | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-170 | An app's functions live in `bunvex/` and its config in `bunvex.json` (`"functions"` overrides the directory) | `convex/`, `convex.json` | yes (a migrated app renames its directory or sets `functions`) | rule 5 | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-171 | The CLI targets a self-hosted deployment with `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (and `--url` / `--admin-key`) | `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY` | yes (the names) | rule 5, as `BUNVEX_CLOUD_ORIGIN` (DV-149) | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-172 | A pushed `auth.config.js` sees the server's process environment as `process.env` until deployment environment variables exist (item 9) | the deployment's environment variables | yes (until item 9) | works before `env set` exists; the app does not change when it does | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
 | DV-173 | `bunvex codegen` writes `_generated/` from the code alone (no running deployment); the static modes are not implemented | a `start_push` against the deployment | no (the same output; works offline) | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
 | DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
 | DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
@@ -253,7 +256,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 
 | Study row | Missing |
 |---|---|
-| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | Existing documents are not re-checked when the schema changes (deploy/push flow) |
+| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | ~~Existing documents are not re-checked when the schema changes~~ — closed by STUDY-35 (pushes walk them; writes while pending are checked) |
 | [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex` (phase 4); staged database indexes are built (STUDY-29) |
 | [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |

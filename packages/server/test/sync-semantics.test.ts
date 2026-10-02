@@ -236,10 +236,10 @@ test("a mutation that exhausts its OCC budget closes the connection with 1013 an
   let rival: Promise<unknown> = Promise.resolve();
   functions.register("m", {
     bump: mutation(async ({ db }) => {
-      await db.get("items", id);
+      await db.get("items", id as never);
       rival = engine.mutation((d) => d.patch("items", id, { n: Math.random() }), "m:other");
       await rival;
-      await db.patch("items", id, { n: -1 });
+      await db.patch("items", id as never, { n: -1 });
     }),
   });
   const c = await v1Client(url);

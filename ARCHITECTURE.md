@@ -124,7 +124,7 @@ bunvex/
 │   │   ├── admin-key                print an admin key (STUDY-34)                             ✅
 │   │   ├── dev                      watch files and push                                      M
 │   │   ├── codegen                  API types (or inferred types — open decision)             M
-│   │   ├── deploy                   publish functions (restart or hot swap — open decision)   M
+│   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
 │   │   ├── run, env, logs, data                                                                D
 │   │   ├── import, export                                                                      D
 │   │   └── mcp                      for AI agents                                              D

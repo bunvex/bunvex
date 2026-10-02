@@ -33,6 +33,14 @@ import {
 } from "./admin-keys.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
+import type {
+  ActionBuilder,
+  GenericActionCtx,
+  GenericMutationCtx,
+  GenericQueryCtx,
+  MutationBuilder,
+  QueryBuilder,
+} from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
@@ -66,18 +74,15 @@ const noStorage = new Proxy(
 
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
 export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
-export type QueryCtx = { db: Tx; auth: Auth; storage: StorageReader };
-export type MutationCtx = { db: Tx; auth: Auth; scheduler: Scheduler; storage: StorageWriter };
+/** The contexts of functions without a data model (`query`, `queryGeneric`, …): any table, any document. */
+// biome-ignore lint/suspicious/noExplicitAny: Convex's builders without a data model take `any`
+export type QueryCtx = GenericQueryCtx<any>;
+// biome-ignore lint/suspicious/noExplicitAny: as above
+export type MutationCtx = GenericMutationCtx<any>;
+// biome-ignore lint/suspicious/noExplicitAny: as above
+export type ActionCtx = GenericActionCtx<any>;
 /** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
 export type FunctionRef = AnyFunctionReference | string;
-export type ActionCtx = {
-  auth: Auth;
-  runQuery: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
-  runMutation: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
-  runAction: (fn: FunctionRef, args?: unknown) => Promise<unknown>;
-  scheduler: Scheduler;
-  storage: StorageActionWriter;
-};
 
 /** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
 export const callerOf = (identity: UserIdentity | null): Caller =>
@@ -153,15 +158,23 @@ const asObjectValidator = (a: ArgsValidator): GenericValidator =>
 const DEFINED = new WeakSet<object>();
 export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
 
+const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
+
 function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
   const f = defineUnmarked(kind, visibility, def);
+  // Convex's markers: what the function is (`ApiFromModules` reads them as types).
+  Object.assign(f, {
+    isBunvexFunction: true,
+    [KIND_MARKER[kind]]: true,
+    [visibility === "public" ? "isPublic" : "isInternal"]: true,
+  });
   DEFINED.add(f);
   return f;
 }
 
 function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
   if (typeof def === "function") return { kind, visibility, handler: def } as FunctionDef;
-  const d = def as { args?: ArgsValidator; returns?: GenericValidator; handler: unknown };
+  const d = def as { args?: ArgsValidator; returns?: ArgsValidator; handler: unknown };
   if (typeof d?.handler !== "function")
     throw new Error(`${kind}(): expected a function or { args?, returns?, handler }`);
   return {
@@ -169,28 +182,30 @@ function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visi
     visibility,
     handler: d.handler,
     args: d.args === undefined ? undefined : asObjectValidator(d.args),
-    returns: d.returns,
+    // An object of field validators is `v.object` of them, for `returns` as for `args` (Convex's
+    // `asObjectValidator`).
+    returns: d.returns === undefined ? undefined : asObjectValidator(d.returns),
   } as FunctionDef;
 }
 
-/** A builder, as Convex's: `{ args, returns, handler }` (types from the validators) or a bare handler. */
-export type Builder<Ctx> = {
-  <A extends ArgsValidator = AnyArgs, R = unknown>(def: {
-    args?: A;
-    returns?: GenericValidator;
-    handler: (ctx: Ctx, args: ArgsOf<A>) => R;
-  }): FunctionDef;
-  <Args extends AnyArgs = AnyArgs, R = unknown>(handler: (ctx: Ctx, args: Args) => R): FunctionDef;
-};
-const builder = <Ctx>(kind: FunctionDef["kind"], visibility: Visibility) =>
-  ((def: unknown) => define(kind, visibility, def)) as Builder<Ctx>;
+// The builders without a data model, as Convex's `queryGeneric` …; `_generated/server` re-exports them
+// typed with the app's data model. `query` … are the same builders, for apps without codegen.
+const builder = (kind: FunctionDef["kind"], visibility: Visibility) => (def: unknown) => define(kind, visibility, def);
 
-export const query = builder<QueryCtx>("query", "public");
-export const internalQuery = builder<QueryCtx>("query", "internal");
-export const mutation = builder<MutationCtx>("mutation", "public");
-export const internalMutation = builder<MutationCtx>("mutation", "internal");
-export const action = builder<ActionCtx>("action", "public");
-export const internalAction = builder<ActionCtx>("action", "internal");
+// biome-ignore lint/suspicious/noExplicitAny: no data model
+type AnyDM = any;
+export const queryGeneric = builder("query", "public") as unknown as QueryBuilder<AnyDM, "public">;
+export const internalQueryGeneric = builder("query", "internal") as unknown as QueryBuilder<AnyDM, "internal">;
+export const mutationGeneric = builder("mutation", "public") as unknown as MutationBuilder<AnyDM, "public">;
+export const internalMutationGeneric = builder("mutation", "internal") as unknown as MutationBuilder<AnyDM, "internal">;
+export const actionGeneric = builder("action", "public") as unknown as ActionBuilder<AnyDM, "public">;
+export const internalActionGeneric = builder("action", "internal") as unknown as ActionBuilder<AnyDM, "internal">;
+export const query = queryGeneric;
+export const internalQuery = internalQueryGeneric;
+export const mutation = mutationGeneric;
+export const internalMutation = internalMutationGeneric;
+export const action = actionGeneric;
+export const internalAction = internalActionGeneric;
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
@@ -316,7 +331,7 @@ export class Functions {
       this.checkReturns(
         f,
         await f.handler(
-          { db, auth: txAuth(db), storage: this.fileStorage?.reader(db) ?? noStorage },
+          { db: db as unknown as QueryCtx["db"], auth: txAuth(db), storage: this.fileStorage?.reader(db) ?? noStorage },
           this.checkArgs(f, args),
         ),
       );
@@ -332,7 +347,7 @@ export class Functions {
         f,
         await f.handler(
           {
-            db,
+            db: db as unknown as MutationCtx["db"],
             auth: txAuth(db),
             scheduler: makeScheduler(this, { db, job }),
             storage: this.fileStorage?.writer(db) ?? noStorage,
@@ -559,12 +574,12 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: (n, a) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
-      runMutation: (n, a) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
-      runAction: (n, a) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      runQuery: (n: FunctionRef, a?: unknown) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
+      runMutation: (n: FunctionRef, a?: unknown) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
+      runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
-    };
+    } as ActionCtx;
   }
 
   /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */

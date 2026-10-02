@@ -23,7 +23,7 @@ export type PublicHttpAction = ((ctx: HttpActionCtx, request: Request) => Promis
 };
 
 /** `httpAction(async (ctx, request) => new Response(...))`. It takes no args validator. */
-export function httpAction(handler: HttpActionHandler): PublicHttpAction {
+export function httpActionGeneric(handler: HttpActionHandler): PublicHttpAction {
   const f = ((ctx: HttpActionCtx, request: Request) => {
     console.warn(
       "bunvex functions should not directly call other bunvex functions. Consider calling a helper function instead. " +
@@ -35,6 +35,8 @@ export function httpAction(handler: HttpActionHandler): PublicHttpAction {
   f._handler = handler;
   return f;
 }
+/** The same builder, for apps without codegen (`_generated/server` re-exports it as `httpAction`). */
+export const httpAction = httpActionGeneric;
 
 export type RouteSpec =
   | { path: string; method: RoutableMethod; handler: PublicHttpAction }

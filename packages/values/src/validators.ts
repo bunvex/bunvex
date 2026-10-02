@@ -1,9 +1,15 @@
 // Validators (STUDY-13): `v.string()`, `v.id("tasks")`, `v.object({…})`… — the shapes an argument, a return
 // value or a document must have, with the same builders, parts, JSON form and checking rules as Convex's
 // (npm-packages/convex/src/values/validators.ts builds them; crates/common/src/schemas/validator.rs checks).
-import { type JSONValue, toJsonValue, type Value } from "./value.ts";
+import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "./value.ts";
 
 export type OptionalProperty = "required" | "optional";
+
+/**
+ * A document's id in a table, as Convex's `GenericId`: a string branded with its table name, so ids of
+ * different tables do not mix (STUDY-36). `_generated/dataModel` names it `Id<TableName>`.
+ */
+export type GenericId<TableName extends string> = string & { __tableName: TableName };
 
 export type ValidatorJSON =
   | { type: "null" | "number" | "bigint" | "boolean" | "string" | "bytes" | "any" }
@@ -307,8 +313,7 @@ type Required<V extends GenericValidator> = V extends { isOptional: "optional" }
 
 /** The validator builders. */
 export const v = {
-  id: <TableName extends string>(tableName: TableName) =>
-    new VId<string & { __tableName: TableName }>("required", tableName),
+  id: <TableName extends string>(tableName: TableName) => new VId<GenericId<TableName>>("required", tableName),
   null: () => new VNull("required"),
   number: () => new VFloat64("required"),
   float64: () => new VFloat64("required"),
@@ -327,3 +332,45 @@ export const v = {
   optional: <V extends GenericValidator>(x: V) => optionalOf(x) as ReturnType<typeof optionalOf<V>>,
   nullable: <V extends GenericValidator>(x: V) => v.union(x, v.null()),
 };
+
+/**
+ * A validator from its JSON form (the inverse of `.json`): how a pushed schema, stored as Convex stores
+ * it, becomes validators again (STUDY-35).
+ */
+export function validatorFromJson(j: ValidatorJSON): GenericValidator {
+  switch (j.type) {
+    case "null":
+      return v.null();
+    case "number":
+      return v.number();
+    case "bigint":
+      return v.int64();
+    case "boolean":
+      return v.boolean();
+    case "string":
+      return v.string();
+    case "bytes":
+      return v.bytes();
+    case "any":
+      return v.any();
+    case "id":
+      return v.id(j.tableName);
+    case "literal":
+      return v.literal(fromJsonValue(j.value) as string | number | bigint | boolean);
+    case "array":
+      return v.array(validatorFromJson(j.value) as never);
+    case "object":
+      return v.object(
+        Object.fromEntries(
+          Object.entries(j.value).map(([k, f]) => {
+            const x = validatorFromJson(f.fieldType);
+            return [k, f.optional ? v.optional(x) : x];
+          }),
+        ) as never,
+      );
+    case "record":
+      return v.record(validatorFromJson(j.keys), validatorFromJson(j.values.fieldType));
+    case "union":
+      return v.union(...j.value.map(validatorFromJson));
+  }
+}

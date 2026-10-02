@@ -3,10 +3,19 @@
 // persistence stores are assigned once and kept in the `_tables` / `_index` system tables, and each Engine
 // resolves them into its own catalog (catalog.ts, STUDY-04). Every table also gets Convex's two system
 // indexes, `by_id` and `by_creation_time`.
-import { type GenericValidator, isBytes, type PropertyValidators, v } from "@bunvex/values";
+import {
+  type GenericValidator,
+  isBytes,
+  type ObjectType,
+  type PropertyValidators,
+  type VObject,
+  v,
+} from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
 export type FieldValue = null | boolean | number | string;
+/** Flatten an intersection for display (Convex's `Expand`). */
+export type Expand<T> = T extends object ? { [K in keyof T]: T[K] } : T;
 export type Doc = { _id: string; _creationTime: number; [k: string]: unknown };
 
 /**
@@ -58,8 +67,19 @@ export function checkIdentifier(kind: string, s: string) {
     );
 }
 
-/** A table of a schema: its document validator and its indexes (Convex's `defineTable(...).index(...)`). */
-export class TableDefinition {
+/** A table's indexes as types: name → its fields, `_creationTime` appended (Convex's). */
+export type GenericTableIndexes = Record<string, string[]>;
+
+/**
+ * A table of a schema: its document validator and its indexes (Convex's `defineTable(...).index(...)`).
+ * The type parameters keep the validator and the indexes for `DataModelFromSchemaDefinition` (STUDY-36).
+ */
+export class TableDefinition<
+  // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
+  DocumentType extends GenericValidator = GenericValidator,
+  // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
+  Indexes extends GenericTableIndexes = {},
+> {
   readonly indexes: Record<string, string[]> = {};
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly staged: string[] = [];
@@ -80,6 +100,11 @@ export class TableDefinition {
    * argument may also be `{ fields, staged }`: a staged index is backfilled but not enabled (queries on it
    * fail) until a later schema declares it without `staged`.
    */
+  index<IndexName extends string, const Fields extends [string, ...string[]]>(
+    name: IndexName,
+    config: Fields | { fields: Fields; staged?: boolean },
+  ): TableDefinition<DocumentType, Expand<Indexes & Record<IndexName, [...Fields, "_creationTime"]>>>;
+  index(name: string, config: string[] | { fields: string[]; staged?: boolean }): this;
   index(name: string, config: string[] | { fields: string[]; staged?: boolean }) {
     const fields = Array.isArray(config) ? config : config?.fields;
     if (!Array.isArray(fields)) throw new Error(`Index "${name}" must be declared with an array of fields.`);
@@ -102,7 +127,11 @@ export class TableDefinition {
 }
 
 /** Convex's `defineTable`: a document validator (or an object of field validators). */
-export const defineTable = (document: GenericValidator | PropertyValidators) => new TableDefinition(document);
+export function defineTable<D extends GenericValidator>(document: D): TableDefinition<D>;
+export function defineTable<F extends PropertyValidators>(fields: F): TableDefinition<VObject<ObjectType<F>, F>>;
+export function defineTable(document: GenericValidator | PropertyValidators): TableDefinition {
+  return new TableDefinition(document);
+}
 
 export type DeclaredTable = {
   name: string;
@@ -111,16 +140,31 @@ export type DeclaredTable = {
   /** Names of `indexes` declared staged. */
   staged?: string[];
 };
-export type SchemaDefinition = { tables: Map<string, DeclaredTable>; schemaValidation: boolean };
+/** A schema's tables as types (Convex's `GenericSchema`). */
+export type GenericSchema = Record<string, TableDefinition<GenericValidator, GenericTableIndexes>>;
+/**
+ * A schema: its tables at run time, and (as types only) the definitions they came from and whether table
+ * names are strict, for `DataModelFromSchemaDefinition` (STUDY-36).
+ */
+export type SchemaDefinition<
+  Schema extends GenericSchema = GenericSchema,
+  StrictTableTypes extends boolean = boolean,
+> = {
+  tables: Map<string, DeclaredTable>;
+  schemaValidation: boolean;
+  /** Types only: never set at run time. */
+  readonly __tables?: Schema;
+  readonly __strictTableNameTypes?: StrictTableTypes;
+};
 
 /**
  * Convex's `defineSchema`. With `schemaValidation` (the default), every document written to a declared
  * table must match its validator (with `_id` and `_creationTime` added); tables not declared accept anything.
  */
-export function defineSchema(
-  tables: Record<string, TableDefinition>,
-  options: { schemaValidation?: boolean; strictTableNameTypes?: boolean } = {},
-): SchemaDefinition {
+export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes extends boolean = true>(
+  tables: Schema,
+  options: { schemaValidation?: boolean; strictTableNameTypes?: StrictTableNameTypes } = {},
+): SchemaDefinition<Schema, StrictTableNameTypes> {
   const out = new Map<string, DeclaredTable>();
   for (const [name, t] of Object.entries(tables)) {
     checkIdentifier("table", name);

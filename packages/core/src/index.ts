@@ -8,6 +8,7 @@ export {
   type IndexState,
   MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMAS_TABLE,
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
@@ -38,6 +39,47 @@ export {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+export type {
+  AnyDataModel,
+  BetterOmit,
+  DataModelFromSchemaDefinition,
+  DocumentByInfo,
+  DocumentByName,
+  FieldPaths,
+  GenericDataModel,
+  GenericDocument,
+  GenericFieldPaths,
+  GenericTableInfo,
+  IdField,
+  Indexes,
+  IndexNames,
+  NamedIndex,
+  NamedTableInfo,
+  SystemFields,
+  SystemIndexes,
+  SystemTableNames,
+  TableNamesInDataModel,
+  WithOptionalSystemFields,
+  WithoutSystemFields,
+} from "./data-model.ts";
+export type {
+  BaseDatabaseReader,
+  ExpressionOrValueOf,
+  FieldTypeFromFieldPath,
+  FilterBuilder,
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+  IndexRange,
+  IndexRangeBuilder,
+  LowerBoundIndexRangeBuilder,
+  OrderedQuery,
+  PaginationResultOf,
+  PatchValue,
+  Query,
+  QueryInitializer,
+  SystemDataModel,
+  UpperBoundIndexRangeBuilder,
+} from "./database-types.ts";
 export { type ExecutionKind, installDeterminismIn, runImportPhase, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
@@ -54,10 +96,12 @@ export {
   parseValue,
   type QueryJournal,
   readInstanceRecord,
+  readSystemRows,
+  SchemaPushError,
   stringifyValue,
   type TxBody,
 } from "./engine.ts";
-export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
@@ -109,13 +153,17 @@ export {
   type Doc,
   defineSchema,
   defineTable,
+  type Expand,
   type FieldValue,
+  type GenericSchema,
+  type GenericTableIndexes,
   type IndexDef,
   indexKey,
   type SchemaDefinition,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
+export { type SchemaJson, schemaFromJson, schemaToJson, type TableJson } from "./schema-json.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
@@ -124,4 +172,4 @@ export {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 export { SystemReader } from "./system-reader.ts";
-export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";
+export { type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";

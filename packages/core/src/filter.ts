@@ -7,7 +7,9 @@ import { fieldValue } from "./schema.ts";
 
 type MaybeValue = Value | undefined;
 
-export class Expression {
+/** An expression of a filter; `T` is its value's type (types only, STUDY-36). */
+// biome-ignore lint/correctness/noUnusedVariables: T is only for the typed filter builder
+export class Expression<T = unknown> {
   constructor(readonly evaluate: (doc: Doc) => MaybeValue) {}
 }
 export type ExpressionOrValue<T = unknown> = Expression | (T & Value) | undefined;

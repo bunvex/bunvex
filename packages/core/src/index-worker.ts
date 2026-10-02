@@ -101,8 +101,12 @@ export class IndexWorker {
     this.limiter = this.opts.chunkRate === null ? null : new RateLimiter(this.opts.chunkRate * this.opts.chunkSize);
   }
 
+  /** Start, or start again after it finished (a push added indexes, STUDY-35). */
   start() {
-    this.running ??= this.loop();
+    this.stopped = false;
+    this.running ??= this.loop().finally(() => {
+      this.running = null;
+    });
   }
 
   /** Stop after the chunk in flight; resolves once the worker has stopped writing. */

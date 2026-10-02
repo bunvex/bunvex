@@ -35,7 +35,7 @@ async function setup(opts: { maxRequestBodySize?: number } = {}) {
       (storage.getUrl as (x?: string) => Promise<unknown>)().catch((e: Error) => e.message),
     ),
     meta: query(async ({ storage }, { id }: { id: string }) => storage.getMetadata(id)),
-    doc: query(async ({ db }, { id }: { id: string }) => db.system.get(id)),
+    doc: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
     docs: query(async ({ db }) => db.system.query("_storage").collect()),
     otherId: mutation(async ({ db }) => db.insert("items", {})),
     uploadUrl: mutation(async ({ storage }) => storage.generateUploadUrl()),

@@ -29,6 +29,7 @@ Key bunvex facts behind the statuses:
 | `db.system.get` / `db.system.query` / `db.system.normalizeId` for system tables (read-only) | impl/database_impl.ts | done (STUDY-30, STUDY-32) | `_scheduled_functions` and `_storage`, in their public shapes with `by_id` / `by_creation_time`. |
 | User vs system table separation: `_`-prefixed tables only via `db.system`, and system tables are read-only | impl/database_impl.ts | partial (STUDY-30) | `ctx.db` refuses `_`-prefixed tables ("System table … is not accessible here."); `db.system` reads the public ones. Convex's exact message is not checked yet. |
 | `db.table(name)` scoped reader (`.get(id)`, `.query()`), the newer "WithTable" API | server/database.ts (`GenericDatabaseReaderWithTable`) | missing | |
+| Typed database interfaces: `GenericDatabaseReader<DataModel>` / `GenericDatabaseWriter`, `QueryInitializer`, `IndexRangeBuilder` (index fields in order), `FilterBuilder` (field paths, typed `eq`/`lt`/arithmetic) | server/database.ts, server/query.ts, server/index_range_builder.ts, server/filter_builder.ts | done (STUDY-36) | In `@bunvex/core` (`database-types.ts`), types over the runtime transaction; `db.system` typed with `_scheduled_functions` / `_storage`. The contexts take them in the typed-functions PR. |
 | Queries see a consistent snapshot (serializable reads) | crates/database | done | MVCC snapshot at `visibleTs`. |
 | A mutation's queries see its own writes (merged in index order) | crates/database/src/transaction_index.rs | done | Pending-entry B-tree merge per index. |
 | Read-set tracking for reactivity/OCC ends at the last key actually read | crates/database/src/reads.rs, crates/database/src/query/index_range.rs | done | As Convex since #134 (DV-57): up to the last key read, inclusive (desc: from it), the whole range once a scan runs out ([STUDY-06 §9](../study/STUDY-06-transactions-and-occ.md#9-d3-as-built-the-read-set-ends-at-the-last-key-read)). |
@@ -110,13 +111,13 @@ Key bunvex facts behind the statuses:
 | `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
 | Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
 | `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | An object of validators is `v.object` of them, as for `args` (STUDY-36). |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | partial | Manual `register(module, fns)` builds `module:fn`. There is no default-export rule and no file-based discovery. |
 | `api` / `internal` function references (`anyApi`, codegen), `makeFunctionReference`, `getFunctionName`, `filterApi` | server/api.ts | missing | Callers use strings. Codegen vs inference is an open decision. |
-| `FunctionReference_future` / typed `FunctionArgs` / `FunctionReturnType` | server/api.ts | missing | |
-| Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | missing | Contexts are untyped. |
+| Typed `FunctionArgs` / `FunctionReturnType`, `ApiFromModules`, `FilterApi`, `FunctionReferenceFromExport` | server/api.ts | done (STUDY-36) | `_generated/api.d.ts` (codegen PR) builds `api` / `internal` with them; `FunctionReference_future` is missing. |
+| Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | partial (STUDY-36) | `queryGeneric` … `httpActionGeneric`, `QueryBuilder<DataModel, Visibility>` …, `GenericQueryCtx` / `GenericMutationCtx` / `GenericActionCtx`, `RegisteredQuery` … with arguments and results typed from the validators (Convex's `ReturnValueForOptionalValidator`). `query` … are the same builders without a data model. Convex's markers at run time (`isQuery`, `isPublic`, …), with `isBunvexFunction` for `isConvexFunction` (rule 5). `_generated/server` comes with codegen. |
 | Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | missing | Minor. |
 | Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | missing | Minor. |
 | `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | missing | |
@@ -194,7 +195,7 @@ Key bunvex facts behind the statuses:
 | `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | missing | |
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
-| `Id<T>` / `GenericId` branded string type | values/value.ts | missing | |
+| `Id<T>` / `GenericId` branded string type | values/value.ts | done (STUDY-36) | `GenericId<T>` in `@bunvex/values`; `v.id(t)` infers it; `_generated/dataModel` names it `Id<T>` (codegen PR). |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | missing | |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
@@ -216,7 +217,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | `_id` on every document | server/system_fields.ts | done (#7) | A Convex-format id. |
 | `_creationTime` (float64 ms since epoch) | system_fields.ts; common/src/document.rs | done | |
-| Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | missing | |
+| Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | done (STUDY-36) | In `@bunvex/core` (`data-model.ts`); `Doc<T>` comes with `_generated/dataModel`. |
 | Top-level user fields can't start with `_` | crates/common/src/document.rs (validate) | missing | |
 | Field names: ≤1024 chars, non-control ASCII, no leading `$` | crates/convex/sync_types/src/identifier.rs; values/value.ts | done (#21) | `validateObjectField`, with the same messages. |
 | Documents must be objects | common/src/document.rs | partial | Implicit through the TS signature only. |
@@ -233,7 +234,7 @@ Key bunvex facts behind the statuses:
 | `.vectorIndex(name, { vectorField, dimensions, filterFields, staged })` | server/schema.ts | missing | |
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
 | `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
-| `strictTableNameTypes` option (type-level) | server/schema.ts | missing | |
+| `strictTableNameTypes` option (type-level) | server/schema.ts | done (STUDY-36) | `false` adds `AnyDataModel` to the data model: any other table name is allowed. |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | missing | |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | partial (#6) | Backfilled synchronously at startup, before serving; Convex backfills in the background (STUDY-04 D3). |
@@ -243,7 +244,7 @@ Key bunvex facts behind the statuses:
 | No two indexes with identical fields on a table | index_validation_error.rs | missing | |
 | ≤64 indexes per table (`MAX_INDEXES_PER_TABLE`) and ≤10,000 tables | common/src/schemas/mod.rs; database/src/bootstrap_model/table.rs | missing | |
 | Vector dimensions between 2 and 4096; ≤16 filter fields for search and vector indexes | common/src/bootstrap_model/index | missing | |
-| `DataModelFromSchemaDefinition` typed data model | server/schema.ts | missing | |
+| `DataModelFromSchemaDefinition` typed data model | server/schema.ts | done (STUDY-36) | Each table's document (system fields on every union branch; `v.any()` tables are `any`), field paths (nested object fields dotted, not into arrays or records) and indexes (`_creationTime` appended, plus `by_id` / `by_creation_time`); `defineTable` / `.index` / `defineSchema` keep their types. The typed database is `database-types.ts`. |
 
 ### 12. Auth (`ctx.auth`)
 
@@ -271,7 +272,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | done (STUDY-30) | |
+| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | done (STUDY-30) | Typed since STUDY-36: a reference's arguments, and the id. |
 | `scheduler.runAt(timestamp \| Date, fnRef, args)` | server/scheduler.ts | done (STUDY-30) | |
 | `scheduler.cancel(id)` | server/scheduler.ts | done (STUDY-30) | |
 | Scheduling from a mutation is transactional (only if the mutation commits); from an action it isn't | docs; crates/model scheduled_jobs | done (STUDY-30) | |
