@@ -34,7 +34,10 @@ const cells = (r: HTMLElement) =>
   within(r)
     .getAllByRole("gridcell")
     .map((c) => c.textContent ?? "");
-const COL = { time: 0, request: 1, outcome: 2, level: 3, function: 4, message: 5 };
+const COL = { time: 0, level: 1, function: 2, outcome: 3, request: 4, message: 5 };
+const box = (name: string) => screen.getByRole("checkbox", { name });
+const isChecked = (name: string) => box(name).getAttribute("aria-checked") === "true";
+const checkedTypes = () => ["success", "failure", "debug", "info", "warn", "error"].filter(isChecked);
 const opened = async () => {
   await screen.findByRole("heading", { level: 1, name: "Logs" });
   await waitFor(() => expect(rows().length).toBeGreaterThan(3));
@@ -80,18 +83,33 @@ describe("which lines a view keeps", () => {
   });
 
   test("a saved view is read back; a damaged one falls back to every line", () => {
-    writeLogView("k", { functions: ["a:b"], types: ["warn"], text: "x" });
-    expect(readLogView("k")).toEqual({ functions: ["a:b"], types: ["warn"], text: "x" });
+    writeLogView("k", { ...ALL_LOGS, functions: ["a:b"], types: ["warn"], kinds: ["action"], text: "x", range: "5m" });
+    expect(readLogView("k")).toEqual({
+      ...ALL_LOGS,
+      functions: ["a:b"],
+      types: ["warn"],
+      kinds: ["action"],
+      text: "x",
+      range: "5m",
+    });
+    // a brushed window is the URL's only
+    writeLogView("k", { ...ALL_LOGS, window: { from: 1, to: 2 } });
+    expect(localStorage.getItem("k")).toBeNull();
     localStorage.setItem("k", "{not json");
     expect(readLogView("k")).toEqual(ALL_LOGS);
     localStorage.setItem("k", JSON.stringify({ functions: 3, types: ["loud", "error"] }));
-    expect(readLogView("k")).toEqual({ functions: "all", types: ["error"], text: "" });
+    expect(readLogView("k")).toEqual({ ...ALL_LOGS, types: ["error"] });
     writeLogView("k", ALL_LOGS); // the default is not stored
     expect(localStorage.getItem("k")).toBeNull();
   });
 
   test("a view in the URL: comma lists, `none` for an empty choice, unknown types dropped", () => {
-    const v = { functions: ["tasks:list", "tasks:create"], types: ["failure" as const, "error" as const], text: "x" };
+    const v = {
+      ...ALL_LOGS,
+      functions: ["tasks:list", "tasks:create"],
+      types: ["failure" as const, "error" as const],
+      text: "x",
+    };
     expect(searchFromView(v)).toEqual({ function: "tasks:list,tasks:create", type: "failure,error", q: "x" });
     expect(viewFromSearch(validateLogsSearch(searchFromView(v)))).toEqual(v);
     expect(searchFromView({ ...ALL_LOGS, types: [] })).toEqual({ type: "none" });
@@ -125,7 +143,7 @@ describe("the Logs screen", () => {
       fresh = source.logSomething();
     });
     await waitFor(() => expect(cells(rows()[0]!)[COL.message]).toBe(fresh.at(-1)!.message));
-    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await user.click(screen.getByRole("button", { name: /^Live\b/ }));
     const top = cells(rows()[0]!);
     act(() => {
       fresh = source.logSomething();
@@ -134,25 +152,25 @@ describe("the Logs screen", () => {
     expect(cells(rows()[0]!)).toEqual(top);
     await user.click(resume);
     await waitFor(() => expect(cells(rows()[0]!)[COL.message]).toBe(fresh.at(-1)!.message));
-    expect(screen.getByRole("button", { name: "Pause" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: /^Live\b/ })).toBeDefined();
   });
 
   test("a link with filters opens filtered, and becomes the view this browser keeps", async () => {
     const source = mockSource();
     mount(source, "/logs?type=failure");
     await screen.findByRole("heading", { level: 1, name: "Logs" });
-    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
+    expect(checkedTypes()).toEqual(["failure"]);
     cleanup();
     mount(source);
     await screen.findByRole("heading", { level: 1, name: "Logs" });
-    expect(screen.getByRole("button", { name: "Types: failure" })).toBeDefined();
+    expect(checkedTypes()).toEqual(["failure"]);
     await waitFor(() => expect(params()).toEqual({ type: "failure" })); // the kept view goes into the address
   });
 
   test("an unknown type in the URL is dropped, from the screen and the address", async () => {
     mount(mockSource(), "/logs?type=loud");
     await opened();
-    expect(screen.getByRole("button", { name: "Types: All types" })).toBeDefined();
+    expect(checkedTypes()).toHaveLength(6);
     expect(params()).toEqual({});
   });
 
@@ -160,39 +178,37 @@ describe("the Logs screen", () => {
     mount();
     await opened();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Types: All types" }));
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "failure" }));
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(params()).toEqual({ type: "failure" }));
+    await user.click(box("debug"));
+    const rest = "success,failure,info,warn,error";
+    await waitFor(() => expect(params()).toEqual({ type: rest }));
+    await user.click(box("info"));
+    await waitFor(() => expect(params()).toEqual({ type: "success,failure,warn,error" }));
     const steps = lastHistory.length;
-    await user.type(screen.getByRole("searchbox", { name: "Filter logs" }), "tasks");
-    await waitFor(() => expect(params()).toEqual({ type: "failure", q: "tasks" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search logs" }), "tasks");
+    await waitFor(() => expect(params()).toEqual({ type: "success,failure,warn,error", q: "tasks" }));
     expect(lastHistory.length).toBe(steps);
     act(() => lastHistory.back());
-    await waitFor(() => expect(params()).toEqual({ type: "none" }));
-    await screen.findByRole("button", { name: "Types: 0 types" }); // the screen follows the address back
+    await waitFor(() => expect(params()).toEqual({ type: rest }));
+    await waitFor(() => expect(isChecked("info")).toBe(true)); // the screen follows the address back
+    expect(isChecked("debug")).toBe(false);
   });
 
   test("filters: types and text apply to the loaded lines and are kept in this browser", async () => {
     const source = mount();
     await opened();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Types: All types" }));
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: "All types" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "success" }));
-    await user.keyboard("{Escape}");
+    act(() => lastHistory.push("/logs?type=success"));
     await waitFor(() => expect(rows().every((r) => cells(r)[COL.outcome]!.startsWith("Success"))).toBe(true));
-    expect(screen.getByRole("button", { name: "Types: success" })).toBeDefined();
+    expect(checkedTypes()).toEqual(["success"]);
     const fn = cells(rows()[0]!)[COL.function]!.slice(1); // after the kind's letter
-    await user.type(screen.getByRole("searchbox", { name: "Filter logs" }), fn);
+    await user.type(screen.getByRole("searchbox", { name: "Search logs" }), fn);
     await waitFor(() => expect(rows().every((r) => cells(r)[COL.function]!.endsWith(fn))).toBe(true));
-    expect(screen.getByText(/of \d+ loaded lines match/)).toBeDefined();
+    expect(screen.getByText(new RegExp(`^${rows().length} of \\d+ lines$`))).toBeDefined();
     cleanup();
     mount(source);
     await screen.findByRole("heading", { level: 1, name: "Logs" });
-    expect((screen.getByRole("searchbox", { name: "Filter logs" }) as HTMLInputElement).value).toBe(fn);
-    expect(screen.getByRole("button", { name: "Types: success" })).toBeDefined();
+    expect((screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement).value).toBe(fn);
+    expect(checkedTypes()).toEqual(["success"]);
   });
 
   test("Enter opens a line's details with its request; the details follow the arrows; Escape closes", async () => {
@@ -209,7 +225,7 @@ describe("the Logs screen", () => {
     const second = cells(rows()[1]!);
     await waitFor(() => expect(within(panel).getByText(second[COL.message]!, { selector: "pre" })).toBeDefined());
     await user.click(within(panel).getByRole("button", { name: "Filter by this request" }));
-    const box = screen.getByRole("searchbox", { name: "Filter logs" }) as HTMLInputElement;
+    const box = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
     expect(box.value).toHaveLength(16);
     await waitFor(() =>
       expect(new Set(rows().map((r) => cells(r)[COL.request]))).toEqual(new Set([box.value.slice(0, 4)])),

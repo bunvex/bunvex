@@ -1,6 +1,6 @@
 # STUDY-09 — Persistence layout and drivers
 
-- **Status:** decided — D1, D2 fixed (#8); D3 an open bug (Phase 0 B4); D7, D8 kept (DV-67, DV-68); D5, D6, D9 to match Convex, gaps tracked in docs/parity (DV-62, DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
+- **Status:** decided — D1, D2 fixed (#8); D3 fixed (#17, Phase 0 B4); D7, D8 kept (DV-67, DV-68); D9 built to match Convex (DV-62, STUDY-06 §10; one batch at a time, DV-152, decided); D5, D6 to match Convex, gaps tracked in docs/parity (DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **bunvex code read:** `main` at `f60e934`
 - **Related:**
@@ -153,13 +153,13 @@ Common to all drivers:
 |---|---|---|---|---|
 | D1 | SQLite, MySQL and MongoDB fetch a fixed `limit * 4` rows and do not page; versions and tombstones consume it (`sqlite.ts:56`, `mysql.ts:59`, `mongodb.ts:79`) | BUG | `take`/`first`/`collect` return short or `null` results after ordinary patches and deletes. Every patch rewrites the `by_id`/`by_creation_time` entry, so a document patched a few times is enough | **fixed in #8** |
 | D2 | Postgres uses `LIMIT limit * 2` after `DISTINCT ON`, without paging; tombstones consume it (`postgres.ts:64`, `:98`) | BUG | Short or `null` results after deletes, e.g. a queue whose head was consumed | **fixed in #8** |
-| D3 | MySQL `key varbinary(512)`; Postgres full key in the primary key (about 2.7 KB max); no prefix/sha256 split | BUG | Indexing a long string makes the flush fail, and with STUDY-06 D1 the failed commit even becomes visible. Convex splits keys at 2 500 bytes plus a SHA-256 | open bug, to fix as Convex ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B4) |
+| D3 | MySQL `key varbinary(512)`; Postgres full key in the primary key (about 2.7 KB max); no prefix/sha256 split | BUG | Indexing a long string makes the flush fail, and with STUDY-06 D1 the failed commit even becomes visible. Convex splits keys at 2 500 bytes plus a SHA-256 | fixed in #17 as Convex: `key_prefix` + `key_suffix` + sha256 ([Phase 0](../parity/README.md#phase-0--correctness-bugs-in-what-already-exists) B4; conformance K9) |
 | D4 | The conformance suite does not exercise small limits with many versions and tombstones | BUG (test gap) | D1/D2 pass K1–K7. The suite should include them | owner |
 | D5 | No retention of old versions or tombstones | INTERNAL | Storage and memory grow without bound; scans slow down as tombstones accumulate. Not observable in results. Convex keeps index versions 4 min and documents 14 days | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-65) |
 | D6 | No `prev_ts`, and no by-ts index or log read (`load_documents`) | INTERNAL | Needed for retention, backfill (STUDY-05 D11), export and write-log rebuild | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-66). **Partially built:** the by-ts log read on `indexes`, with a ts index on every driver (PERSIST-01 C11; the log is `indexes` by ts, STUDY-24 H11, owner 2026-10-01). Its `prevTs` is per commit, for gap detection, not Convex's per-document `prev_ts` (§1.5). Still missing: `prev_ts` and documents by ts (retention, export) |
 | D7 | Documents are joined by "newest ≤ ts" per id, not by exact `ts` from the index entry | INTERNAL | Same answer, one extra ordered lookup per row | Decided (owner, 2026-10-01): keep bunvex's (DV-67) |
 | D8 | Column types: `id text`/`varchar(64)`, `table_id int`, JSON as text, vs Convex's `BYTEA` ids and binary JSON | INTERNAL | Follows from STUDY-01. `varchar(64)` must fit the final id format | Decided (owner, 2026-10-01): keep bunvex's (DV-68) |
-| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | Decided (owner, 2026-10-01): match Convex (gap, to be built) (DV-62) |
+| D9 | Unbounded group size per flush, vs Convex's batcher (≤64 docs / 64 KiB) | INTERNAL | A large group can exceed a remote store's packet or statement limits (MySQL chunks at 2 000 rows, Postgres sends one jsonb parameter) | Decided (owner, 2026-10-01): match Convex (DV-62). **Built:** write batches of whole commits (64 documents / 64 KiB), Postgres statements of ≤1 024 rows, MySQL `INSERT`s of ≤10 MiB ([STUDY-06 §10](STUDY-06-transactions-and-occ.md#10-d12-bounded-flushes-convexs-write-batcher)); batches one at a time, decided by the owner (DV-152) |
 
 ## 5. Tests
 

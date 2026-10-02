@@ -15,6 +15,7 @@ import { type StoredFile, toDataSourceError } from "../data-source.ts";
 import { formatTime } from "../database/values.ts";
 import { type FilesSearch, filesRoute } from "../router.tsx";
 import { formatBytes, formatCount } from "../screens/stats.ts";
+import { BAR_TITLE, BAR1, BAR2, SCREEN } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { DayInput, dayBound } from "../shell/day-input.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -105,13 +106,17 @@ function Files() {
   ];
 
   return (
-    // full-bleed inside <main>: the details panel runs to its edges
-    <div className="-m-4 flex min-h-[calc(100svh-3rem)] md:-m-6">
-      <div className="flex min-w-0 flex-1 flex-col gap-3 p-4 md:p-6">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="text-xl font-semibold tracking-tight">Files</h1>
-          {count !== undefined && <span className="text-sm text-muted-foreground">{files(count)} stored</span>}
-          <span className="ml-auto flex items-center gap-2">
+    // full-bleed (UI-01 §22.5): Bar 1 (title, count, actions), Bar 2 (lookup, order, days), the grid to the
+    // bottom, the details docked. No filter column: the filters are the source's (order, days, an id), and a
+    // content-type facet over one loaded page would mislead
+    <div className={SCREEN}>
+      <div className="@container/files flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className={BAR1}>
+          <h1 className={BAR_TITLE}>Files</h1>
+          {count !== undefined && (
+            <span className="text-sm text-muted-foreground tabular-nums">{files(count)} stored</span>
+          )}
+          <span className="ml-auto flex items-center gap-1">
             {canWrite && selectedIds.length > 0 && typeof source.deleteFiles === "function" && (
               <ConfirmButton
                 label={`Delete ${formatCount(selectedIds.length)}`}
@@ -144,13 +149,18 @@ function Files() {
                   onClick={() => fileInput.current?.click()}
                 >
                   <Upload aria-hidden="true" />
-                  {uploading !== undefined ? `Uploading ${files(uploading)}…` : "Upload files"}
+                  {uploading !== undefined ? (
+                    `Uploading ${files(uploading)}…`
+                  ) : (
+                    // a narrow bar (beside a docked panel) keeps the icon; the name stays for assistive tech
+                    <span className="sr-only @lg/files:not-sr-only">Upload files</span>
+                  )}
                 </Button>
               </>
             )}
           </span>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className={BAR2}>
           <form
             className="flex items-end gap-2"
             onSubmit={(e) => {
@@ -162,7 +172,7 @@ function Files() {
               Look up by storage ID
               <Input
                 id={lookupId}
-                className="h-8 w-72 font-mono text-xs"
+                className="h-8 w-56 font-mono text-xs @3xl/files:w-72"
                 value={lookup}
                 onChange={(e) => setLookup(e.target.value)}
               />
@@ -202,8 +212,11 @@ function Files() {
             />
           ))}
         </div>
-        {/* no reserved line when there is nothing to say: one gap between the filters and the table (UX-17) */}
-        <p role={outcome && !outcome.ok ? "alert" : "status"} className="text-sm empty:-mt-3">
+        {/* no reserved line when there is nothing to say (UX-17) */}
+        <p
+          role={outcome && !outcome.ok ? "alert" : "status"}
+          className="border-b px-4 py-1.5 text-sm empty:hidden md:px-6"
+        >
           {outcome?.message && (
             <span className={outcome.ok === false ? "text-destructive" : "text-muted-foreground"}>
               {outcome.message}
@@ -216,7 +229,7 @@ function Files() {
         ) : (
           <DataTable
             label="Files"
-            className="max-h-[calc(100svh-18rem)]"
+            fill
             columns={columns}
             data={rows}
             getRowId={(f) => f.id}
@@ -225,7 +238,12 @@ function Files() {
             selection={
               canWrite && typeof source.deleteFiles === "function" ? { selected, onChange: setSelected } : undefined
             }
-            grid={{ activateOnClick: true, onCellActivate: (f) => setSearch({ file: f.id }) }}
+            grid={{
+              activateOnClick: true,
+              onCellActivate: (f) => setSearch({ file: f.id }),
+              // open details follow the current row, as on Database and Logs
+              onCellFocus: (f) => search.file !== undefined && f.id !== search.file && setSearch({ file: f.id }, true),
+            }}
             empty={
               list.isPending
                 ? "Loading…"
@@ -254,7 +272,7 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
   const scope = useQueryScope();
   const { data: file, error, isPending } = useQuery(fileQuery(scope, props.id));
   return (
-    <Panel kind="files-details" title="File" onClose={props.onClose}>
+    <Panel kind="files-details" title="File" focusOnOpen={false} onClose={props.onClose}>
       {error && toDataSourceError(error).code === "invalid_request" ? (
         <p className="text-sm text-muted-foreground">
           <code className="font-mono text-xs">{props.id}</code> is not a storage ID.

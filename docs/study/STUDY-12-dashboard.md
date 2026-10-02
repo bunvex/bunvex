@@ -357,6 +357,38 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 | L7 | Log filters live in the URL (`?function=&type=&q=`) **and** in this browser per deployment (on the Functions screen, `?type=&q=` next to the open function, kept per function); Convex keeps them in the browser only | a link carries the filters; opened without them, the screen starts from the last view, as Convex's does | **decided** (30 Sep 2026) by the owner |
 | L6 | Not yet: deployment events in the list, usage and identity in the details, custom test queries, "act as a user", run history, live (subscribed) query results | the contract has no events, usage, identity or live function results yet | follow-up; live query results in the runner: **decided** (30 Sep 2026), built (§10.1); the call tree added 30 Sep 2026 (Convex's "Functions Called", `features/logs/components/FunctionCallTree.tsx`, from `executionId` / `parentExecutionId`); continued in §10: live query results, run history, acting as a user, deployment events, usage and identity all built |
 
+### 7.4 The Logs redesign (added 1 Oct 2026, UI-01 §22.4)
+
+Convex's Logs (`logs/components/Logs.tsx`, `LogToolbar`-style filters above `LogList.tsx`) put the function
+and type filters in **a toolbar of multi-selects** above the list, have **no time range and no histogram**,
+no function-kind filter and no export, and show the drilldown as a panel over the list. What differs in
+bunvex, all **the owner's calls / bunvex additions** (1 Oct 2026):
+
+| # | Divergence | Decision |
+|---|---|---|
+| L10 | The filters are a resizable column on the left (as the Database tables list), with each choice's count among the loaded lines; on a phone, a Filters sheet | owner's call |
+| L11 | A time range (presets) and a brushed window, in the URL (`range`, `from`/`to`); a function-kind filter (`kind`) | owner's call (an addition) |
+| L12 | A log-volume histogram above the list, stacked by outcome, brushable; counted on the client over the loaded lines (L2) | owner's call (an addition) |
+| L13 | Export of the shown lines as JSON Lines | owner's call (an addition) |
+| L14 | The details show the time as ISO, local and relative, and the line's raw JSON | owner's call |
+
+The function kinds are query, mutation and action: the contract's `FunctionKind` has no HTTP action yet
+(Convex's list shows H for them); the Kind section gains it with the contract. Nothing here reaches the
+server or the contract: every number is computed from the lines already loaded.
+
+### 7.5 The other grid screens (added 1 Oct 2026, UI-01 §22.5)
+
+Convex's History (`features/history`), Schedules (`features/schedules`: `ScheduledFunctionsView`,
+`CronsView`) and Files (`features/files`) put their filters in a toolbar above a list with a page-level
+heading, and open details in a side panel; none has a filter column or per-choice counts. bunvex lays them
+out as Database and Logs (owner's call, 1 Oct 2026):
+
+| # | Divergence | Decision |
+|---|---|---|
+| L15 | History and Scheduled functions get a filter column with counts (History: day presets, day range, actions — several, where Convex picks one; Scheduled: state and function) | owner's call |
+| L16 | A run's, a job's, an event's and a file's details follow the current row while open | owner's call (as Database's, §14.6) |
+| L17 | The Functions screen's validators move into its Statistics tab (bunvex shows validators at all only by the owner's call, V1) | owner's call |
+
 ## 8. Validators and the declared schema (added 30 Sep 2026)
 
 ### 8.1 How Convex does it

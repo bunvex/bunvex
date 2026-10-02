@@ -357,7 +357,8 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
   return (
     <div className="-m-4 flex h-[calc(100svh-3rem)] min-h-[28rem] md:-m-6">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3 md:px-6">
+        {/* Bar 1 (UI-01 §22.5): 44 px, on the docked panel header's line */}
+        <div className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-1 md:px-6">
           {heading}
           <span className="text-sm text-muted-foreground tabular-nums">
             {formatCount(graph.nodes.length)} tables · {formatCount(graph.edges.length)} references
@@ -370,6 +371,7 @@ function Diagram({ graph, heading }: { graph: SchemaGraph; heading: ReactNode })
               Search groups, tables, fields and indexes
             </label>
             <Input
+              className="h-7"
               id={searchId}
               type="search"
               placeholder="Search tables, fields, indexes…"
