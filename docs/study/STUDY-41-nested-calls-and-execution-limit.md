@@ -1,6 +1,6 @@
 # STUDY-41 — `ctx.runQuery` / `ctx.runMutation` in queries and mutations, and the 1 s execution limit
 
-- **Status:** draft (N1–N6 await the owner)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 11 ([parity README](../parity/README.md));
@@ -121,12 +121,21 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| N1 | The nested call runs in the parent's `Tx` in the same JS context, as Convex's `SUBFUNCTIONS_IN_SAME_ISOLATE` mode, but **with its own 1 s budget, the parent's clock paused** during it, as Convex's default mode | there is one process and no isolates; the budgets follow Convex's default | pending |
-| N2 | A nested error reaches the parent with its message and `BunvexError` data, without Convex's appended stack-frame text | the stack is a JS stack here; the message and data are what apps match on | pending |
-| N3 | `transactionLimits` applies to documents and bytes read and written. `databaseQueries`, `functionsScheduled`, `scheduledFunctionArgsBytes` and the file limits are accepted and ignored | bunvex does not count those yet | pending |
-| N4 | Concurrent nested calls (`Promise.all([ctx.runQuery(a), ctx.runQuery(b)])`) are serialized by a queue on the transaction, as Convex serializes `runUdf` | the same order and results as Convex | pending |
-| N5 | The 1 s limit is cooperative: checked at database calls and at the end. A synchronous infinite loop is not interrupted and blocks the process | one Bun process cannot interrupt running JS; a worker per call would cost far more than the limit protects | pending |
-| N6 | Store errors (persistence failures, OCC) inside a nested call propagate as they are, rather than being turned into a non-catchable internal error | they already end the transaction on the next store call | pending |
+| N1 | The nested call runs in the parent's `Tx` in the same JS context, as Convex's `SUBFUNCTIONS_IN_SAME_ISOLATE` mode, but **with its own 1 s budget, the parent's clock paused** during it, as Convex's default mode | there is one process and no isolates; the budgets follow Convex's default | accepted (owner, 2026-10-02) |
+| N2 | A nested error reaches the parent with its message and `BunvexError` data, without Convex's appended stack-frame text | the stack is a JS stack here; the message and data are what apps match on | accepted (owner, 2026-10-02) |
+| N3 | `transactionLimits` applies to documents and bytes read and written. `databaseQueries`, `functionsScheduled`, `scheduledFunctionArgsBytes` and the file limits are accepted and ignored | bunvex does not count those yet | accepted (owner, 2026-10-02) |
+| N4 | Concurrent nested calls (`Promise.all([ctx.runQuery(a), ctx.runQuery(b)])`) are serialized by a queue on the transaction, as Convex serializes `runUdf` | the same order and results as Convex | accepted (owner, 2026-10-02) |
+| N5 | The 1 s limit is cooperative: checked at database calls and at the end. A synchronous infinite loop is not interrupted and blocks the process | one Bun process cannot interrupt running JS; a worker per call would cost far more than the limit protects | accepted (owner, 2026-10-02) |
+| N6 | Store errors (persistence failures, OCC) inside a nested call propagate as they are, rather than being turned into a non-catchable internal error | they already end the transaction on the next store call | accepted (owner, 2026-10-02) |
+
+### To build later (owner, 2026-10-02)
+
+Accepted for now, to close later (ledger, "Decided: match Convex (to be built)"):
+- **N2:** the nested function's stack text appended to the error message, as Convex.
+- **N3:** count database queries, scheduled functions, their argument bytes and file reads and writes per transaction, and apply `transactionLimits` to them.
+- **N6:** a store error inside a nested call marks the transaction failed and reaches the parent as the non-catchable internal error.
+
+N1 and N4 are the same as Convex. N5 cannot be the same in one Bun process (no way to interrupt running JS).
 
 ## 5. Tests
 
