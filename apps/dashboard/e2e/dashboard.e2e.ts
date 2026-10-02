@@ -2,7 +2,7 @@
 // keys), layout (the object editor's popover), colour contrast, reduced motion. Against the built app
 // (`vite preview`), in Chromium: the system Chrome locally, Playwright's Chromium in CI
 // (`E2E_BROWSER=chromium`). Run with `bun run e2e`.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { type Browser, chromium, type Page } from "playwright-core";
@@ -15,13 +15,32 @@ const url = (path: string) => `${ORIGIN}${path}${path.includes("?") ? "&" : "?"}
 const AXE = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
 let server: ReturnType<typeof Bun.spawn>;
+/** `vite preview`'s output, kept so a crash in CI comes with its own stack trace (it died with a bare "write after end"). */
+const serverLog: string[] = [];
+let serverExit: number | null = null;
+async function keep(stream: ReadableStream<Uint8Array>, name: string) {
+  const decoder = new TextDecoder();
+  const reader = stream.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    const text = decoder.decode(value);
+    serverLog.push(`[${new Date().toISOString()} ${name}] ${text}`);
+    process.stderr.write(text);
+  }
+}
 let browser: Browser;
 
 beforeAll(async () => {
   server = Bun.spawn(["bun", "--bun", "vite", "preview", "--port", String(PORT), "--strictPort"], {
     cwd: `${import.meta.dir}/..`,
-    stdout: "ignore",
-    stderr: "inherit",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  void keep(server.stdout as ReadableStream<Uint8Array>, "stdout");
+  void keep(server.stderr as ReadableStream<Uint8Array>, "stderr");
+  void server.exited.then((code) => {
+    serverExit = code;
   });
   for (let i = 0; ; i++) {
     if (
@@ -35,6 +54,12 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
   browser = await chromium.launch(process.env.E2E_BROWSER === "chromium" ? {} : { channel: "chrome" });
+});
+
+// A crashed server would fail every later test with "connection refused" after a 30 s wait: say what happened
+beforeEach(() => {
+  if (serverExit !== null)
+    throw new Error(`vite preview exited with code ${serverExit}; its output:\n${serverLog.slice(-40).join("")}`);
 });
 
 afterAll(async () => {
