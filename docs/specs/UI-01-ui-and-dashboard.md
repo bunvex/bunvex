@@ -2044,3 +2044,14 @@ writes when on), the screen and the editor.
   the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
+
+## 32. The command palette (STUDY-12 §20; 2 Oct 2026)
+
+- `packages/dashboard/src/palette/`: `model.ts` (items, `fuzzyScore`, `searchItems`, `rememberPick`, pure)
+  and `palette.tsx` (the dialog), loaded on first use: the shell holds only the shortcut listener and the
+  header's **Search** button (Ctrl+K / Cmd+K, `aria-keyshortcuts`).
+- `@bunvex/ui` gains `components/dialog.tsx` (Base UI Dialog) and `useOptionalTheme()` (the theme action
+  shows only inside a `ThemeProvider`).
+- Tests: the model (unit), the palette (happy-dom: open, search, pick, recent, arrows, Escape, a read-only
+  key's actions) and e2e (from the Database screen: pick, reopen, axe in both themes, Escape, the grid still
+  answers).

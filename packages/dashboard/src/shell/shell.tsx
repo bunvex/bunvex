@@ -17,6 +17,7 @@ import {
   Network,
   Play,
   ScrollText,
+  Search,
   Settings,
   Waypoints,
 } from "lucide-react";
@@ -44,6 +45,10 @@ import { type Runner, RunnerContext } from "../runner/context.tsx";
 import { PausedBanner } from "./paused-banner.tsx";
 
 // the runner is fetched when it first opens (it brings the code editor and the result views)
+// the command palette (UI-01 §32), fetched on its first use
+const CommandPalette = lazy(() => import("../palette/palette.tsx").then((m) => ({ default: m.CommandPalette })));
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
 const FunctionRunner = lazy(() => import("../runner/runner.tsx").then((m) => ({ default: m.FunctionRunner })));
 
 /** What the host renders at the end of the header (`<Dashboard headerActions>`). */
@@ -131,6 +136,20 @@ export function Shell() {
   // below md the screens' list is a menu (UI-01 §17.4): a disclosure that closes on a pick or on Escape
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
+  // Ctrl+K or Cmd+K opens the command palette from anywhere (the hint shows the platform's)
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteUsed, setPaletteUsed] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        setPaletteUsed(true);
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(
     () =>
@@ -246,6 +265,21 @@ export function Shell() {
               <DeploymentSummary />
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}
+                onClick={() => {
+                  setPaletteUsed(true);
+                  setPaletteOpen(true);
+                }}
+              >
+                <Search aria-hidden="true" />
+                <span className="sr-only sm:not-sr-only">Search</span>
+                <kbd className="hidden font-sans text-[11px] text-muted-foreground sm:inline">
+                  {isMac ? "⌘K" : "Ctrl K"}
+                </kbd>
+              </Button>
               {runner.context.available && (
                 <Button
                   variant="outline"
@@ -273,6 +307,11 @@ export function Shell() {
             <Outlet />
           </main>
         </div>
+        {paletteUsed && (
+          <Suspense fallback={null}>
+            <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+          </Suspense>
+        )}
         {runner.context.shown && (
           <Suspense fallback={null}>
             <FunctionRunner

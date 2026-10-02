@@ -883,3 +883,25 @@ for it, built as an extension (UI-01 §26) that may be removed later.
   permissions); W2 — a run opens in place of the list (`?run=`), not in the side panel (a diagram needs the
   room); W3 — Restart is offered on finished runs only (cancel a running one first).
 
+
+## 20. The command palette (a bunvex addition, added 2 Oct 2026)
+
+Convex's dashboard has no command palette (its header search only finds tables and documents inside the
+Data page). bunvex adds one, as the owner asked (2 Oct 2026): Ctrl+K or Cmd+K anywhere, or the header's
+**Search** button.
+
+- **What it finds:**
+  - every screen, including registered extensions and their sub-screens (UI-01 §26);
+  - the Settings pages and the Authentication pages;
+  - the deployment's tables and functions;
+  - a document by its id, when the source can say which table holds it (`tableOfId`);
+  - actions: switch the theme, run a function (the runner), add documents to the open table, pause or resume
+    (it opens Settings → General, where the confirmation lives).
+- **Gated** like the screens: an extension only when the source offers it, the runner only with
+  `runFunctions`, writes only for a credential that can write.
+- **Search:** a fuzzy subsequence match on the title, hint and keywords; substrings at the start rank first.
+  With an empty search, the five most recent picks (kept per deployment in this browser) come first.
+- **Keyboard:** a combobox over a listbox with `aria-activedescendant` (the focus stays in the input),
+  ↑/↓ to move, Enter to pick, Escape to close (a Base UI dialog: the focus is trapped and returns).
+- **Not yet:** "Create table" as an action (the table list's inline name box has no URL to open it by), and
+  running destructive actions from the palette itself.
