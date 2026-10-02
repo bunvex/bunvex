@@ -11,7 +11,8 @@ import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/
 import { deployCommand, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 import { parseJson5 } from "./json5.ts";
-import { adminRequest, NO_DEPLOYMENT, resolveTarget, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
+import { acquireTarget } from "./local-deployment.ts";
+import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 
 export const RUN_USAGE = `Usage: bunvex run [options] <functionName> [args]
 
@@ -209,11 +210,18 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     io.err(`bunvex run: expected <functionName> [args]\n\n${RUN_USAGE}`);
     return 2;
   }
-  const target = resolveTarget(taken.flags, io);
-  if (!target) {
+  let acquired: Awaited<ReturnType<typeof acquireTarget>>;
+  try {
+    acquired = await acquireTarget(taken.flags, io);
+  } catch (e) {
+    io.err(`bunvex run: ${(e as Error).message}`);
+    return 1;
+  }
+  if (!acquired) {
     io.err(`bunvex run: ${NO_DEPLOYMENT}`);
     return 1;
   }
+  const target = acquired.target;
   const [rawName, argsText = "{}"] = positional as [string, string?];
   try {
     let fnArgs: unknown;
@@ -274,5 +282,7 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
   } catch (e) {
     io.err(e instanceof RunFailure ? e.message : `✖ ${(e as Error).message}`);
     return 1;
+  } finally {
+    await acquired.release();
   }
 }

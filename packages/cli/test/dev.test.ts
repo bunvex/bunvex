@@ -1,6 +1,6 @@
 // `bunvex dev` (STUDY-37 PR 5): push, watch, push again; Convex's error handling (an app error waits for
 // the next change, an unreachable deployment backs off), `--once`, `--until-success`, `--run`, `--start`,
-// and a local deployment in process when none is configured.
+// (local deployments: local-deployment.test.ts).
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -152,19 +152,6 @@ describe("bunvex dev", () => {
     expect(await dev(app, closed, "--once").done).toBe(1);
     const w = dev(app, closed);
     await w.until(() => w.err.filter((l) => l.startsWith("Failed due to network error, retrying in")).length >= 2);
-    w.stop();
-    expect(await w.done).toBe(0);
-  });
-
-  test("no deployment configured: a local one in process, its data in .bunvex/", async () => {
-    const app = tmp();
-    write(app, { "bunvex/hello.ts": hello("local") });
-    const w = dev(app, null, "--local-port", "0", "--run", "hello:hi");
-    await w.until(() => w.ready() === 1 && w.out.length > 0);
-    expect(
-      w.err.some((l) => l.startsWith("bunvex: no deployment configured; running a local one at http://127.0.0.1:")),
-    ).toBe(true);
-    expect(w.out).toEqual(['"local"']);
     w.stop();
     expect(await w.done).toBe(0);
   });

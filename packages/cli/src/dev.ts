@@ -9,22 +9,28 @@
 // - a failed push waits for the next change (an app error) or retries with Convex's backoff (an unreachable
 //   deployment, a push race): 500 ms, doubling to 16 s, ±50%;
 // - `--once` pushes once; `--until-success` until one succeeds;
-// - without a configured deployment, a local one runs in this process, its data in `.bunvex/` (E6).
+// - without a configured deployment, the project's local deployment: `bunvex-local-backend` downloaded and
+//   run as a child, its state in `.bunvex/local/default/`, `.env.local` naming it (STUDY-40, as Convex).
 // Log tailing needs log streaming (item 12): `--tail-logs` is accepted and off until then (E7).
-import { type FSWatcher, watch } from "node:fs";
-import { sep } from "node:path";
-import { adminKeyCipherKey, issueAdminKey } from "@bunvex/server";
+import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
+import { join, sep } from "node:path";
 import type { TypecheckMode } from "./codegen.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
+import {
+  configuredDeployment,
+  type LocalOptions,
+  startLocalDeployment,
+  urlVariables,
+  writeEnvLocal,
+} from "./local-deployment.ts";
 import { runCommand } from "./run.ts";
-import { readCredentials, startServer } from "./start.ts";
 import { resolveTarget, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 
 export const DEV_USAGE = `Usage: bunvex dev [options]
 
 Push the functions to the deployment, then push again whenever they change. Without a configured
-deployment, run a local one in this process (its data in .bunvex/).
+deployment, run the project's local deployment (bunvex-local-backend; its state in .bunvex/local/default/).
 
 Options:
 ${TARGET_OPTIONS}
@@ -35,7 +41,10 @@ ${TARGET_OPTIONS}
   --typecheck <mode>   enable, try (default) or disable
   --codegen <mode>     enable (default) or disable
   --tail-logs <mode>   always, pause-on-deploy or disable (logs come with log streaming; off until then)
-  --local-port <n>     the local deployment's port (default 3210)`;
+  --local-cloud-port <n>       the local deployment's API port (default: its saved one, else the first free from 3210)
+  --local-site-port <n>        its HTTP actions' port (default: its saved one, else the next free)
+  --local-backend-version <v>  run this bunvex-local-backend release (a precompiled-… tag) instead of the latest
+  --local-force-upgrade        upgrade the local deployment's backend without asking`;
 
 type Flags = {
   once: boolean;
@@ -45,7 +54,7 @@ type Flags = {
   typecheck: TypecheckMode;
   codegen: boolean;
   tailLogs: string;
-  localPort: number;
+  local: LocalOptions;
 };
 
 function parseFlags(args: string[]): Flags | string {
@@ -55,14 +64,26 @@ function parseFlags(args: string[]): Flags | string {
     typecheck: "try",
     codegen: true,
     tailLogs: "disable",
-    localPort: 3210,
+    local: {},
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--once") f.once = true;
     else if (name === "--until-success") f.untilSuccess = true;
-    else if (["--run", "--start", "--typecheck", "--codegen", "--tail-logs", "--local-port"].includes(name)) {
+    else if (name === "--local-force-upgrade") f.local.forceUpgrade = true;
+    else if (
+      [
+        "--run",
+        "--start",
+        "--typecheck",
+        "--codegen",
+        "--tail-logs",
+        "--local-cloud-port",
+        "--local-site-port",
+        "--local-backend-version",
+      ].includes(name)
+    ) {
       const v = inline ?? args[++i];
       if (v === undefined) return `${name} needs a value`;
       if (name === "--run") f.run = v;
@@ -77,15 +98,44 @@ function parseFlags(args: string[]): Flags | string {
         if (!["always", "pause-on-deploy", "disable"].includes(v))
           return "--tail-logs must be always, pause-on-deploy or disable";
         f.tailLogs = v;
-      } else {
+      } else if (name === "--local-backend-version") f.local.backendVersion = v;
+      else {
         const n = Number(v);
-        if (!Number.isInteger(n) || n < 0 || n > 65535) return `--local-port must be a port number, got '${v}'`;
-        f.localPort = n;
+        if (!Number.isInteger(n) || n < 1 || n > 65535) return `${name} must be a port number, got '${v}'`;
+        if (name === "--local-cloud-port") f.local.cloudPort = n;
+        else f.local.sitePort = n;
       }
     } else return `unknown option ${a}`;
   }
   if (f.run !== undefined && f.start !== undefined) return "--run and --start cannot be used together";
   return f;
+}
+
+/** Every file's mtime under `dir` (`_generated/`, dotfiles and node_modules aside), by relative path. */
+function mtimes(dir: string): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  const walk = (d: string, rel: string) => {
+    let names: string[];
+    try {
+      names = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      if (n.startsWith(".") || n === "node_modules" || (rel === "" && n === "_generated")) continue;
+      const full = join(d, n);
+      const r = rel ? `${rel}${sep}${n}` : n;
+      try {
+        const st = statSync(full);
+        if (st.isDirectory()) walk(full, r);
+        else out.set(r, st.mtimeMs);
+      } catch {
+        // raced with a deletion
+      }
+    }
+  };
+  walk(dir, "");
+  return out;
 }
 
 /** The functions directory, watched: dirty when a file that matters changed, `quiet()` once it settles. */
@@ -95,13 +145,23 @@ class DirWatcher {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private waiting: (() => void) | null = null;
   constructor(
-    dir: string,
+    private readonly dir: string,
     private quietMs = 500,
   ) {
+    this.snapshot = mtimes(dir);
     this.watcher = watch(dir, { recursive: true }, (_event, file) => {
       if (!file) return;
       const parts = String(file).split(sep);
       if (parts[0] === "_generated" || parts.some((p) => p.startsWith(".") || p === "node_modules")) return;
+      // macOS can deliver, late, the events of writes made before: only a file that differs from what the
+      // last push saw is a change.
+      let mtime: number | null = null;
+      try {
+        mtime = statSync(join(dir, String(file))).mtimeMs;
+      } catch {
+        // gone: a deletion is a change (unless it was gone already)
+      }
+      if (this.snapshot.get(String(file)) === mtime) return;
       this.dirty = true;
       clearTimeout(this.timer);
       this.timer = setTimeout(() => {
@@ -126,8 +186,12 @@ class DirWatcher {
       this.waiting = finish;
     });
   }
-  /** Start a push: forget what came before. */
+  /** Each file's mtime when the last push began (null: absent). */
+  private snapshot = new Map<string, number | null>();
+
+  /** Start a push: forget what came before, and remember the files as the push sees them. */
   reset() {
+    this.snapshot = mtimes(this.dir);
     this.dirty = false;
     clearTimeout(this.timer);
     this.timer = undefined;
@@ -153,15 +217,6 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 const clock = () => new Date().toTimeString().slice(0, 8);
 
-/** A local deployment in this process (E6): `bunvex start` with its data in `.bunvex/`, and its admin key. */
-async function localDeployment(io: Io, port: number) {
-  const started = await startServer(["--port", String(port), "--data-dir", ".bunvex"], io);
-  if (typeof started === "number") return null;
-  const { name, secret } = readCredentials(`${io.cwd}/.bunvex`);
-  const adminKey = issueAdminKey({ instanceName: name!, cipherKey: adminKeyCipherKey(secret!) });
-  return { target: { url: started.url, adminKey } satisfies Target, stop: started.stop };
-}
-
 export async function devCommand(args: string[], io: Io, opts: { signal?: AbortSignal } = {}): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     io.out(DEV_USAGE);
@@ -181,12 +236,36 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
   let exitCode = 0;
   try {
     let target = resolveTarget(taken.flags, io);
+    const localFlags =
+      flags.local.backendVersion !== undefined ||
+      flags.local.forceUpgrade ||
+      flags.local.cloudPort !== undefined ||
+      flags.local.sitePort !== undefined;
+    if (target && localFlags) {
+      io.err("bunvex dev: the --local-* options are only for a local deployment");
+      return 2;
+    }
     if (!target) {
-      const local = await localDeployment(io, flags.localPort);
-      if (!local) return 1;
+      const configured = configuredDeployment(io);
+      if (configured && configured.type !== "local") {
+        io.err(`bunvex dev: BUNVEX_DEPLOYMENT=${configured.type}:${configured.name} is not a deployment bunvex knows`);
+        return 1;
+      }
+      // Convex's local deployment: the project's own, created on first use (L3).
+      let local: Awaited<ReturnType<typeof startLocalDeployment>>;
+      try {
+        local = await startLocalDeployment(io, flags.local);
+      } catch (e) {
+        io.err(`bunvex dev: ${(e as Error).message}`);
+        return 1;
+      }
       cleanup.push(local.stop);
       target = local.target;
-      io.err(`bunvex: no deployment configured; running a local one at ${target.url} (data in .bunvex/)`);
+      const vars = urlVariables(io.cwd);
+      writeEnvLocal(io.cwd, local.config.deploymentName, local.config.ports.cloud, local.config.ports.site);
+      io.err(
+        `✔ Started running a deployment locally at ${target.url} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as ${vars.url} and ${vars.site} to .env.local`,
+      );
     }
     io.err(`Developing against deployment: ${target.url}`);
     if (flags.tailLogs !== "disable") io.err("Log tailing comes with log streaming; --tail-logs is off for now.");

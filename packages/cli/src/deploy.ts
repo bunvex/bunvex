@@ -11,14 +11,8 @@ import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
 import type { Io } from "./io.ts";
-import {
-  NO_DEPLOYMENT,
-  resolveTarget,
-  TARGET_OPTIONS,
-  type Target,
-  type TargetFlags,
-  takeTargetFlags,
-} from "./target.ts";
+import { acquireTarget } from "./local-deployment.ts";
+import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
 
 export { parseEnvFile } from "./target.ts";
 
@@ -121,12 +115,22 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     io.err(`bunvex deploy: ${flags}\n\n${DEPLOY_USAGE}`);
     return 2;
   }
-  const target = resolveTarget(flags, io);
-  if (!target) {
+  let acquired: Awaited<ReturnType<typeof acquireTarget>>;
+  try {
+    acquired = await acquireTarget(flags, io);
+  } catch (e) {
+    io.err(`bunvex deploy: ${(e as Error).message}`);
+    return 1;
+  }
+  if (!acquired) {
     io.err(`bunvex deploy: ${NO_DEPLOYMENT}`);
     return 1;
   }
-  return (await deploy(target, flags, io)).code;
+  try {
+    return (await deploy(acquired.target, flags, io)).code;
+  } finally {
+    await acquired.release();
+  }
 }
 
 export type DeployOptions = { dryRun: boolean; codegen: boolean; typecheck: TypecheckMode };

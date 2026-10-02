@@ -1,7 +1,7 @@
 // `bunvex admin-key` (STUDY-34, DV-160): a key that the running server accepts, read from its own store
 // (no lease taken), or from INSTANCE_NAME / INSTANCE_SECRET / flags.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
@@ -114,5 +114,21 @@ describe("bunvex admin-key", () => {
     ]);
     expect([code, err.trim()]).toEqual([0, "Admin key:"]);
     expect(checkAdminKey(out.trim(), "bin", adminKeyCipherKey(secret)).kind).toBe("admin");
+  });
+
+  test("--data-dir reads the credentials the Docker scripts keep (read_credentials.sh's files)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-ak-creds-"));
+    try {
+      const secret = "cd".repeat(32);
+      mkdirSync(join(dir, "credentials"));
+      writeFileSync(join(dir, "credentials/instance_name"), "from-files\n");
+      writeFileSync(join(dir, "credentials/instance_secret"), `${secret}\n`);
+      const out: string[] = [];
+      const it: Io = { env: {}, cwd: dir, out: (l) => out.push(l), err: () => {} };
+      expect(await main(["admin-key", "--data-dir", "."], it)).toBe(0);
+      expect(checkAdminKey(out[0]!, "from-files", adminKeyCipherKey(secret)).kind).toBe("admin");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

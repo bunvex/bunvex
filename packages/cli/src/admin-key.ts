@@ -1,16 +1,26 @@
 // `bunvex admin-key` (STUDY-34, DV-160): print an admin key for this deployment, as Convex's self-hosted
 // `generate_key` / `generate_admin_key.sh` do. The instance name and secret come from the flags, else
 // INSTANCE_NAME / INSTANCE_SECRET, else the store itself (`_instance`, read at its latest commit without the
-// lease, so it works while the server runs) — the secret may live only there (DV-07). A data directory that
-// `bunvex start` used holds them in `credentials/` (STUDY-37 E1), and its SQLite store when the
-// environment names no database.
+// lease, so it works while the server runs) — the secret may live only there (DV-07). A data directory holds
+// them in `credentials/` as Convex's Docker scripts keep them (`read_credentials.sh`, STUDY-40 L2).
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, readInstanceRecord } from "@bunvex/core";
 import { adminKeyCipherKey, issueAdminKey, openPersistence, persistenceConfigFromEnv } from "@bunvex/server";
 import type { Io } from "./io.ts";
-import { dataDirOf, readCredentials, startPersistence } from "./start.ts";
+
+/** The data directory: `--data-dir`, else DATA, else ./.data. */
+const dataDirOf = (io: Io, flag?: string) => resolve(io.cwd, flag ?? io.env.DATA ?? "./.data");
+
+/** The credentials files Convex's Docker scripts keep in the data directory (`read_credentials.sh`). */
+function readCredentials(dataDir: string): { name?: string; secret?: string } {
+  const read = (f: string) => {
+    const p = join(dataDir, "credentials", f);
+    return existsSync(p) ? readFileSync(p, "utf8").trim() || undefined : undefined;
+  };
+  return { name: read("instance_name"), secret: read("instance_secret") };
+}
 
 export const ADMIN_KEY_USAGE = `Usage: bunvex admin-key [options]
 
@@ -21,7 +31,7 @@ Options:
   --system                 a system key (every operation; cannot act as a user)
   --instance-name <name>   default: INSTANCE_NAME, else the one stored with the data
   --instance-secret <hex>  default: INSTANCE_SECRET, else the one stored with the data
-  --data-dir <dir>         the data directory \`bunvex start\` used (default: DATA, else ./.data)
+  --data-dir <dir>         a data directory with credentials/ (as the Docker volume; default: DATA, else ./.data)
 
 The store is the server's: PERSISTENCE, PERSISTENCE_URL (or POSTGRES_URL, MYSQL_URL), DATA.`;
 
@@ -63,11 +73,7 @@ export async function adminKeyCommand(args: string[], io: Io): Promise<number> {
   if (name === undefined || secret === undefined) {
     let stored: Record<string, unknown> | null;
     try {
-      // `bunvex start`'s SQLite store, when it is there and the environment names no other.
-      const config = existsSync(join(dataDir, "bunvex.sqlite"))
-        ? startPersistence(io.env, dataDir)
-        : persistenceConfigFromEnv(io.env, () => {});
-      const store = await openPersistence(config);
+      const store = await openPersistence(persistenceConfigFromEnv(io.env, () => {}));
       try {
         stored = await readInstanceRecord(store);
       } finally {
