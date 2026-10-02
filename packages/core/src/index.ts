@@ -50,6 +50,7 @@ export {
   occBackoffMs,
   parseValue,
   type QueryJournal,
+  readInstanceRecord,
   stringifyValue,
   type TxBody,
 } from "./engine.ts";

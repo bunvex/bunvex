@@ -8,6 +8,19 @@ export {
   getFunctionName,
   makeFunctionReference,
 } from "@bunvex/protocol";
+// Admin keys (STUDY-34): byte for byte Convex's.
+export {
+  ADMIN_KEY_PURPOSE,
+  type AdminKeyIdentity,
+  AdminKeys,
+  adminKeyCipherKey,
+  BadAdminKeyError,
+  checkAdminKey,
+  DEPLOYMENT_OPS,
+  type DeploymentOp,
+  issueAdminKey,
+  READ_ONLY_OPERATIONS,
+} from "./admin-keys.ts";
 export { type CronJob, Crons, cronJobs, type DayOfWeek, type Schedule } from "./cron.ts";
 export {
   type ActionCtx,

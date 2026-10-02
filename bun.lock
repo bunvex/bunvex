@@ -80,7 +80,11 @@
     "packages/bunvex": {
       "name": "bunvex",
       "version": "0.0.0",
+      "bin": {
+        "bunvex": "./bin/bunvex.ts",
+      },
       "dependencies": {
+        "@bunvex/cli": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
@@ -88,6 +92,13 @@
     "packages/cli": {
       "name": "@bunvex/cli",
       "version": "0.0.0",
+      "bin": {
+        "bunvex": "./bin/bunvex.ts",
+      },
+      "dependencies": {
+        "@bunvex/core": "workspace:*",
+        "@bunvex/server": "workspace:*",
+      },
     },
     "packages/client": {
       "name": "@bunvex/client",
