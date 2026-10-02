@@ -7,6 +7,8 @@ export {
   IndexStagedError,
   type IndexState,
   SCHEDULED_FUNCTIONS_TABLE,
+  STORAGE_DELETIONS_TABLE,
+  STORAGE_TABLE,
 } from "./catalog.ts";
 export {
   Committer,

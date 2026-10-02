@@ -15,6 +15,13 @@ export const INSTANCE_TABLE = "_instance";
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
 export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
+/**
+ * Stored files (STUDY-32 F1): `_storage` holds Convex's public fields plus hidden ones (the URL's UUID and
+ * the blob's key); apps read it through `db.system`. `_storage_deletions` queues the blobs of deleted
+ * files, removed once the delete commits (F3).
+ */
+export const STORAGE_TABLE = "_storage";
+export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";

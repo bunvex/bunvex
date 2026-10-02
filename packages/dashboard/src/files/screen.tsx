@@ -289,7 +289,11 @@ function FileDetails(props: { id: string; canDelete: boolean; onDelete: () => Pr
   const { data: file, error, isPending } = useQuery(fileQuery(scope, props.id));
   return (
     <Panel kind="files-details" title="File" focusOnOpen={false} onClose={props.onClose}>
-      {error ? (
+      {error && toDataSourceError(error).code === "invalid_request" ? (
+        <p className="text-sm text-muted-foreground">
+          <code className="font-mono text-xs">{props.id}</code> is not a storage ID.
+        </p>
+      ) : error ? (
         <ErrorState error={toDataSourceError(error)} />
       ) : isPending ? (
         <p className="text-sm text-muted-foreground">Loading…</p>

@@ -1,8 +1,8 @@
 // `db.system` (Convex's `DatabaseReader.system`): read access to the system tables an app may see. They
-// come back in their public shape. Today `_scheduled_functions` (STUDY-30 S2); `_storage` comes with file
-// storage. Only the `by_id` and `by_creation_time` indexes are public, as on Convex's virtual tables; the
+// come back in their public shape: `_scheduled_functions` (STUDY-30 S2) and `_storage` (STUDY-32 F1). Only the `by_id` and `by_creation_time` indexes are public, as on Convex's virtual tables; the
 // other system tables are not visible.
-import { SCHEDULED_FUNCTIONS_TABLE } from "./catalog.ts";
+import { decodeId } from "@bunvex/values";
+import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "./catalog.ts";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
 import { type JobDoc, publicJob } from "./scheduled-jobs.ts";
 import type { Doc } from "./schema.ts";
@@ -11,6 +11,15 @@ import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuer
 const PUBLIC_INDEXES = new Set(["by_id", "by_creation_time"]);
 const VISIBLE: Record<string, (d: Doc) => Doc> = {
   [SCHEDULED_FUNCTIONS_TABLE]: (d) => publicJob(d as unknown as JobDoc) as unknown as Doc,
+  // Convex's `_storage` document: base64 sha256, size, and `contentType` null when there is none.
+  [STORAGE_TABLE]: (d) =>
+    ({
+      _id: d._id,
+      _creationTime: d._creationTime,
+      sha256: d.sha256,
+      size: d.size,
+      contentType: d.contentType ?? null,
+    }) as unknown as Doc,
 };
 
 function visible(table: string): (d: Doc) => Doc {
@@ -28,7 +37,15 @@ export class SystemReader {
       id === undefined
         ? [Object.keys(VISIBLE).find((t) => this.normalizeId(t, tableOrId) !== null), tableOrId]
         : [tableOrId, id];
-    if (table === undefined) return null;
+    if (table === undefined) {
+      // An id that does not decode at all is refused with `db.get`'s message, as Convex's `db.system.get`.
+      try {
+        decodeId(tableOrId);
+      } catch {
+        await this.tx.get(tableOrId);
+      }
+      return null;
+    }
     const project = visible(table);
     const d = await this.tx.asSystem(() => this.tx.get(table, docId));
     return d && project(d);

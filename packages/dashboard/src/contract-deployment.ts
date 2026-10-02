@@ -194,7 +194,7 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
     if (first && src.getFile) {
       const got = await src.getFile(first.id);
       expect({ ...got, url: undefined }).toEqual({ ...first, url: undefined });
-      expect(await src.getFile("no-such-file")).toBeNull();
+      await expectCode(src.getFile("no-such-file"), "invalid_request");
     }
     for (const f of newest) {
       expect(f.size).toBeGreaterThanOrEqual(0);
@@ -220,8 +220,12 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
       expect(f!.contentType).toBe("text/plain");
       expect(f!.sha256).toBe(await sha256(blob));
       expect((await src.listFiles({ numItems: 1, cursor: null })).page[0]?.id).toBe(id);
-      await src.deleteFiles([id, "no-such-file"]);
+      // All or nothing (Convex's deleteFiles): one bad id and nothing is deleted.
+      await expectCode(src.deleteFiles([id, "no-such-file"]), "invalid_request");
+      expect(await src.getFile(id)).not.toBeNull();
+      await src.deleteFiles([id]);
       expect(await src.getFile(id)).toBeNull();
+      await expectCode(src.deleteFiles([id]), "not_found");
       if (off) {
         const deadline = performance.now() + watchTimeoutMs;
         while (heard === 0 && performance.now() < deadline) await sleep(5);

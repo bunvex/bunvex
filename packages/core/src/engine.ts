@@ -23,6 +23,8 @@ import {
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SESSION_REQUESTS_TABLE,
+  STORAGE_DELETIONS_TABLE,
+  STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
@@ -308,6 +310,28 @@ export class Engine {
     }, true);
   }
 
+  /**
+   * A key for one purpose, derived from the instance secret (HMAC-SHA256(secret, purpose)), as Convex's
+   * keybroker derives one per use ("store file authorization", …). The secret itself never leaves.
+   */
+  secretKey(purpose: string): Uint8Array {
+    if (!this.instanceSecret) throw new Error("secretKey: the engine is not initialized");
+    return new Uint8Array(new Bun.CryptoHasher("sha256", this.instanceSecret).update(purpose).digest());
+  }
+
+  /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
+  async instanceSetting(name: string, make: () => string): Promise<string> {
+    return this.runMutation(async (db) => {
+      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
+      const have = doc?.[name];
+      if (typeof have === "string") return have;
+      const value = make();
+      if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { [name]: value });
+      else await db.insert(INSTANCE_TABLE, { [name]: value });
+      return value;
+    }, true);
+  }
+
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
@@ -326,6 +350,8 @@ export class Engine {
         document: v.any(),
       },
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
+      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
+      { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
     ];
     return [...systemTables, ...this.schema.tables.values()];
   }

@@ -14,8 +14,8 @@ export type S3Options = {
   accessKeyId?: string;
   secretAccessKey?: string;
   sessionToken?: string;
-  /** Prepended to every key (the deployment's `<instance>-<uuid>/`). */
-  prefix?: string;
+  /** Prepended to every key (the deployment's `<instance>-<uuid>/`); may be read from the database first. */
+  prefix?: string | (() => Promise<string>);
   /** Multipart part size in bytes (Convex: parts of 5 MiB and more). Default 8 MiB. */
   partSize?: number;
 };
@@ -37,7 +37,7 @@ export function s3OptionsFromEnv(env = process.env): Omit<S3Options, "prefix"> |
 
 export class S3BlobStore implements BlobStore {
   private readonly client: S3Client;
-  private readonly prefix: string;
+  private readonly prefixOf: () => Promise<string>;
   private readonly partSize: number;
 
   constructor(o: S3Options) {
@@ -50,13 +50,18 @@ export class S3BlobStore implements BlobStore {
       secretAccessKey: o.secretAccessKey,
       sessionToken: o.sessionToken,
     });
-    this.prefix = o.prefix ?? "";
+    const p = o.prefix ?? "";
+    let resolved: Promise<string> | null = null;
+    this.prefixOf = () => {
+      if (resolved === null) resolved = typeof p === "string" ? Promise.resolve(p) : p();
+      return resolved;
+    };
     this.partSize = o.partSize ?? 8 << 20;
   }
 
   async put(body: ReadableStream<Uint8Array> | Blob | Uint8Array): Promise<Written> {
     const key = crypto.randomUUID();
-    const file = this.client.file(this.prefix + key);
+    const file = this.client.file((await this.prefixOf()) + key);
     const writer = file.writer({ partSize: this.partSize, retry: 3 });
     try {
       const { size, sha256 } = await pumpHashing(body, (chunk) => writer.write(chunk));
@@ -70,23 +75,24 @@ export class S3BlobStore implements BlobStore {
   }
 
   async get(key: string, range?: ByteRange): Promise<ReadableStream<Uint8Array> | null> {
-    const file = this.client.file(this.prefix + key);
+    const file = this.client.file((await this.prefixOf()) + key);
     if (!(await file.exists())) return null;
     return (range ? file.slice(range.start, range.end + 1) : file).stream();
   }
 
   async delete(key: string): Promise<void> {
-    await this.client.file(this.prefix + key).delete();
+    await this.client.file((await this.prefixOf()) + key).delete();
   }
 
   async *list(): AsyncIterable<Listed> {
     let token: string | undefined;
+    const prefix = await this.prefixOf();
     for (;;) {
-      const page = await this.client.list({ prefix: this.prefix, continuationToken: token });
+      const page = await this.client.list({ prefix, continuationToken: token });
       for (const o of page.contents ?? [])
         if (o.key)
           yield {
-            key: o.key.slice(this.prefix.length),
+            key: o.key.slice(prefix.length),
             lastModified: o.lastModified ? Date.parse(String(o.lastModified)) : 0,
           };
       if (!page.isTruncated || !page.nextContinuationToken) return;

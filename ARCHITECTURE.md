@@ -69,7 +69,7 @@ bunvex/
 │   │   │                            one connection's mutations in order (STUDY-22) ✅ ·
 │   │   │                            read-your-writes N · HTTP actions (STUDY-31) ✅
 │   │   ├── scheduler                runAfter/runAt/cancel, db.system, crons (STUDY-30)        ✅
-│   │   ├── storage                  ctx.storage: file metadata (a system table)               M
+│   │   ├── storage                  ctx.storage, _storage, upload/download (STUDY-32)         ✅
 │   │   ├── auth                     ctx.auth over HTTP and sync, TokenExpired (STUDY-27) ✅ ·
 │   │   │                            admin keys M
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
@@ -77,7 +77,7 @@ bunvex/
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
 │   │   └── metrics                  Prometheus                                                D
 │   │
-│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    🟡
+│   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅
 │   │   ├── local                    local disk (STUDY-32)                                      ✅
 │   │   ├── s3                       S3 / R2 / MinIO / compatible, Bun's S3Client (STUDY-32)    ✅
 │   │   └── conformance              the suite every backend passes                             ✅

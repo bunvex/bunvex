@@ -165,11 +165,17 @@ export interface DeploymentFeatures {
   countFiles?(opts?: CallOptions): Promise<number>;
   /** The files matching `filter` (every file without one), counted in all and per kind; see `FileQuery`. */
   fileStats?(filter?: FileFilter, opts?: CallOptions): Promise<FileStats>;
-  /** `null` when there is no such file. */
+  /**
+   * `null` when there is no such file; an id that is not a storage id at all is `invalid_request` (Convex's
+   * `getFile` reads `db.system.get`, which refuses an id it cannot decode).
+   */
   getFile?(id: string, opts?: CallOptions): Promise<StoredFile | null>;
   /** Stores the contents (the content type is the blob's); returns the new storage id. */
   uploadFile?(file: Blob, opts?: CallOptions): Promise<string>;
-  /** Ids that do not exist are ignored. */
+  /**
+   * All or nothing, as Convex's `deleteFiles` (one mutation): an id that is not a storage id is
+   * `invalid_request`, one with no file is `not_found`, and then nothing is deleted.
+   */
   deleteFiles?(ids: string[], opts?: CallOptions): Promise<void>;
   /** Tells the caller the stored files changed. Never synchronously. */
   watchFiles?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;

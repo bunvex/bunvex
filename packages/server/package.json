@@ -10,6 +10,7 @@
   "dependencies": {
     "@bunvex/auth": "workspace:*",
     "@bunvex/core": "workspace:*",
+    "@bunvex/file-storage": "workspace:*",
     "@bunvex/protocol": "workspace:*",
     "@bunvex/values": "workspace:*",
     "object-inspect": "^1.13.4"
