@@ -53,3 +53,19 @@ export function formatBytes(n: number): string {
   }
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
+
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["day", 86_400_000],
+  ["hour", 3_600_000],
+  ["minute", 60_000],
+  ["second", 1_000],
+];
+const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+/** "58 seconds ago", "3 minutes ago", "now". */
+export function timeAgo(ms: number, now: number): string {
+  const d = ms - now;
+  for (const [unit, size] of UNITS)
+    if (Math.abs(d) >= size || unit === "second") return relative.format(Math.trunc(d / size), unit);
+  return "now";
+}

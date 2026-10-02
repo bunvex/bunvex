@@ -174,6 +174,15 @@ export const healthRoute = createRoute({
 });
 
 /** `/database` opens the first table, alphabetically; with no table yet, it says so. */
+/** The old address of the Overview (it was "Health", UI-01 §27). */
+export const healthRedirectRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "health",
+  beforeLoad: () => {
+    throw redirect({ to: "/", replace: true });
+  },
+});
+
 export const databaseRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "database",
@@ -378,6 +387,7 @@ function extensionRoutesOf(list: readonly DashboardExtension[]) {
 
 const builtInRoutes = [
   healthRoute,
+  healthRedirectRoute,
   topologyRoute,
   databaseRoute,
   tableRoute,

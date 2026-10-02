@@ -30,7 +30,7 @@ async function tabTo(user: ReturnType<typeof userEvent.setup>, match: (el: HTMLE
 
 describe("every screen state passes axe", () => {
   const states: [string, string, string][] = [
-    ["the overview", "/", "Health"],
+    ["the overview", "/", "Overview"],
     ["a table", "/database/users", "users"],
     ["the schema panel", "/database/users?panel=schema", "users"],
     ["the indexes panel", "/database/users?panel=indexes", "users"],
@@ -52,7 +52,7 @@ describe("every screen state passes axe", () => {
 describe("the Database screen from the keyboard alone", () => {
   test("skip link, navigation, table list, grid, a document and back", async () => {
     const history = mount("/");
-    await screen.findByRole("heading", { level: 1, name: "Health" });
+    await screen.findByRole("heading", { level: 1, name: "Overview" });
     const user = userEvent.setup();
 
     // the first stop skips the navigation

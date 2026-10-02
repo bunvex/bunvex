@@ -1931,3 +1931,28 @@ components may bring screens of their own. Such a screen is an **extension**: on
   part and contract part) and add one line in each of `extensions/index.ts` (the declaration, and its features
   in `ExtensionFeatures`), `extensions/mock.ts` and `extensions/contract.ts`.
 - **Removing one**: delete the folder and those lines; TypeScript points at any line left behind.
+
+## 27. The Overview (the owner's call, 1 Oct 2026; supersedes the Health screen of §9 slice 4 and §18.1's page)
+
+Health becomes the **Overview** at `/` (nav "Overview"; `/health` redirects): the home page, Convex's Health
+reshaped (STUDY-12 §6 item 3). Not an extension — a core screen (`screens/overview.tsx`, derivations in
+`screens/overview-data.ts`, tested apart).
+
+- **Summary**: the deployment (name · version · persistence), the client and HTTP actions URLs with copy, the
+  **last deploy** and by whom (the newest `push_config` in the audit log), the **nodes** (→ Topology).
+- **Now** (indicators with their last hour as sparklines, from the optional metrics methods): calls per minute
+  (every function, summed over the top-k incl. the rest), failure rate (the worst function), latency p95 (the
+  slowest of the 5 busiest), live connections (WebSockets on every node, from the topology; otherwise live
+  subscriptions from the stats), documents (the tables' counts), file storage (`fileStats`). A window with
+  no value reads "—"; a source without the method says so.
+- **Needs attention** (`attention()`), critical first, each linking where to look: the deployment paused
+  (→ Settings › General), a node down or behind the leader (→ Topology with the node), the store at ≥ 80 % of
+  its connections (→ Topology), a function failing in the last 5 minutes (→ Functions › Statistics), scheduled
+  runs ≥ 10 s late (→ Scheduled functions). Severity is said in words too.
+- **Recent activity**: the latest audit events in words (→ History with the event) and the latest failed
+  executions (→ Logs filtered to failures).
+- **Get started**, when there are no tables or no functions: deploy (`bunx bunvex dev`), create a table
+  (→ Database), and a copyable client snippet with the deployment's URL.
+- **Metrics**: the charts of §18.1 (top functions, failure and cache rates, scheduler lag).
+- **Engine**, collapsed: the commit clock with commits/s and the engine counters (`screens/engine.tsx`, the
+  former Health content); they stream only while the section is open.

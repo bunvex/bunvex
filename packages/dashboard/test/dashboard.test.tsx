@@ -40,15 +40,15 @@ const heading = (name: string) => screen.findByRole("heading", { level: 1, name 
 describe("navigation", () => {
   test("links navigate in place and mark the current page", async () => {
     mount();
-    await heading("Health");
+    await heading("Overview");
     const nav = screen.getByRole("navigation", { name: "Dashboard" });
-    expect(within(nav).getByRole("link", { name: "Health" }).getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
     const logs = within(nav).getByRole("link", { name: "Logs" });
     expect(logs.getAttribute("href")).toBe("/logs");
     await userEvent.setup().click(logs);
     await heading("Logs");
     expect(logs.getAttribute("aria-current")).toBe("page");
-    expect(within(nav).getByRole("link", { name: "Health" }).getAttribute("aria-current")).toBeNull();
+    expect(within(nav).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBeNull();
   });
 
   test("/database opens the first table, and keeps Database current", async () => {
@@ -72,7 +72,7 @@ describe("navigation", () => {
 
   test("a navigation moves focus to the main region; a search-only change does not", async () => {
     const { history } = mount();
-    await heading("Health");
+    await heading("Overview");
     const main = screen.getByRole("main");
     expect(document.activeElement).not.toBe(main); // not on the first load
     await userEvent.setup().click(screen.getByRole("link", { name: "Logs" }));
@@ -129,7 +129,13 @@ describe("data", () => {
   });
 });
 
-describe("overview", () => {
+describe("the Overview's Engine section (UI-01 §27)", () => {
+  /** The counters sit in a collapsed section: open it. */
+  const openEngine = async () => {
+    const summary = await screen.findByText("Engine", { selector: "summary, summary *" });
+    await userEvent.setup().click(summary);
+  };
+  const engine = () => screen.getByText("Engine", { selector: "summary, summary *" }).closest("details")!;
   const clockValue = () =>
     within(screen.getByRole("region", { name: "Commit timestamp" })).getByRole("heading", {
       name: "Commit timestamp",
@@ -137,6 +143,7 @@ describe("overview", () => {
 
   test("shows the live counters, updating from watchStats", async () => {
     mount();
+    await openEngine();
     await screen.findByRole("region", { name: "Commit timestamp" });
     const first = clockValue();
     expect(first).toMatch(/^[\d,]+$/);
@@ -147,14 +154,19 @@ describe("overview", () => {
 
   test("the history survives leaving the overview and coming back", async () => {
     mount();
+    await openEngine();
     await screen.findByRole("region", { name: "Commit timestamp" });
-    await waitFor(() => expect(screen.getByRole("img").textContent).toMatch(/now/));
+    const pulse = () => within(screen.getByRole("region", { name: "Commit timestamp" })).getByRole("img");
+    await waitFor(() => expect(pulse().textContent).toMatch(/now/));
     const user = userEvent.setup();
     await user.click(screen.getByRole("link", { name: "Functions" }));
     await heading("Functions");
-    await user.click(screen.getByRole("link", { name: "Health" }));
+    await user.click(screen.getByRole("link", { name: "Overview" }));
+    await openEngine();
     // back at once with the samples kept, not "waiting for a second sample"
-    expect((await screen.findByRole("img")).textContent).toMatch(/now/);
+    await screen.findByRole("region", { name: "Commit timestamp" });
+    expect(pulse().textContent).toMatch(/now/);
+    expect(engine().open).toBe(true);
   });
 
   test("a failing watcher shows what went wrong, and recovers when data comes back", async () => {
@@ -168,6 +180,7 @@ describe("overview", () => {
       },
     });
     render(<Dashboard dataSource={source} history={createMemoryHistory({ initialEntries: ["/"] })} />);
+    await openEngine();
     await screen.findByLabelText("Loading the deployment's counters");
     act(() => fail!(new DataSourceError("unauthorized", "bad admin key")));
     expect(screen.getByRole("alert").textContent).toContain("Check the admin key");
