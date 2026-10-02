@@ -44,6 +44,8 @@ export type TableDef = {
   id: number;
   number: number;
   name: string;
+  /** Its `_tables` document's id: a transaction that uses the table reads it (STUDY-42 PR 2). */
+  metaId?: string;
   indexes: Map<string, IndexDef>;
   pending: IndexDef[];
   byId: IndexDef;

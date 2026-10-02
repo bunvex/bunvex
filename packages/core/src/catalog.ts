@@ -44,7 +44,16 @@ export const INDEX_BACKFILLS_INDEX = "by_index_id";
 const FIRST_USER_TABLE_NUMBER = 10_001;
 const FIRST_SYSTEM_TABLE_NUMBER = 513;
 
-export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: "active" };
+/**
+ * A table's lifecycle (STUDY-42 PR 2), as Convex's `TableState`: `active` (the one table of its name that
+ * functions see), `hidden` (being filled — an import's — invisible to functions, possibly sharing an active
+ * table's name and number, made active by `activate`), `deleting` (replaced or deleted: invisible, its
+ * documents removed in the background, then its metadata).
+ */
+export type TableState = "active" | "hidden" | "deleting";
+export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: TableState };
+/** The active tables of a `_tables` listing (old rows have no state: active). */
+export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.state ?? "active") === "active");
 /**
  * An index's lifecycle, as Convex's `DatabaseIndexState` (STUDY-29): `backfilling` (the worker is copying
  * the table into it; every write already maintains it), `backfilled` (complete, not yet enabled: the
@@ -105,9 +114,21 @@ export type CatalogIndex = {
 export class Catalog {
   readonly tables = new Map<string, TableDef>();
   private readonly numbers = new Map<number, TableDef>();
+  /** Hidden tables (an import's), by tablet: invisible to functions. */
+  readonly hidden = new Map<number, TableDef>();
+  /** Tables being deleted, by tablet: invisible; the deletion worker empties them. */
+  readonly deleting = new Map<number, TableDef>();
 
-  add(name: string, tablet: number, number: number, indexes: CatalogIndex[]) {
+  add(
+    name: string,
+    tablet: number,
+    number: number,
+    indexes: CatalogIndex[],
+    state: TableState = "active",
+    metaId?: string,
+  ) {
     const t: TableDef = { id: tablet, number, name, indexes: new Map(), pending: [], byId: undefined as never };
+    if (metaId !== undefined) t.metaId = metaId;
     for (const ix of indexes) {
       const def: IndexDef = { id: ix.id, table: name, name: ix.name, fields: ix.fields };
       if (ix.metaId !== undefined) def.metaId = ix.metaId;
@@ -118,15 +139,50 @@ export class Catalog {
       }
     }
     t.byId = t.indexes.get("by_id")!;
-    this.tables.set(name, t);
-    this.numbers.set(number, t);
+    if (state === "hidden") this.hidden.set(tablet, t);
+    else if (state === "deleting") this.deleting.set(tablet, t);
+    else {
+      this.tables.set(name, t);
+      this.numbers.set(number, t);
+    }
     return t;
+  }
+
+  /**
+   * A copy with tables moved between states (a committed activation or deletion): `delete` moves active
+   * tables to `deleting` (an activation lists the tables it replaces there), `activate` makes hidden tables
+   * active, `gone` drops a deleted table entirely.
+   */
+  withTableStates(c: { activate?: number[]; delete?: number[]; gone?: number[] }): Catalog {
+    const out = new Catalog();
+    for (const t of this.tables.values()) {
+      out.tables.set(t.name, t);
+      out.numbers.set(t.number, t);
+    }
+    for (const [k, t] of this.hidden) out.hidden.set(k, t);
+    for (const [k, t] of this.deleting) out.deleting.set(k, t);
+    for (const tablet of c.delete ?? []) {
+      const t = [...out.tables.values()].find((x) => x.id === tablet);
+      if (!t) continue;
+      out.tables.delete(t.name);
+      if (out.numbers.get(t.number) === t) out.numbers.delete(t.number);
+      out.deleting.set(tablet, t);
+    }
+    for (const tablet of c.activate ?? []) {
+      const t = out.hidden.get(tablet);
+      if (!t) continue;
+      out.hidden.delete(tablet);
+      out.tables.set(t.name, t);
+      out.numbers.set(t.number, t);
+    }
+    for (const tablet of c.gone ?? []) out.deleting.delete(tablet);
+    return out;
   }
 
   /** The table whose persistence id is `tablet`, if any. */
   byTablet(tablet: number): TableDef | undefined {
     for (const t of this.tables.values()) if (t.id === tablet) return t;
-    return undefined;
+    return this.hidden.get(tablet) ?? this.deleting.get(tablet);
   }
 
   /**
@@ -153,6 +209,8 @@ export class Catalog {
       c.tables.set(nt.name, nt);
       c.numbers.set(nt.number, nt);
     }
+    for (const [k, t] of this.hidden) c.hidden.set(k, t);
+    for (const [k, t] of this.deleting) c.deleting.set(k, t);
     return c;
   }
 
@@ -222,8 +280,9 @@ export function planCatalog(
   let nextIndexId = Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
   const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
+  const active = activeTables(tables);
   for (const d of declared) {
-    let tablet = tables.find((t) => t.name === d.name)?.tablet;
+    let tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {
       // System tables take the first free number above 512, user tables above 10 000 (Convex).
@@ -279,7 +338,7 @@ export type FinishChanges = {
 export function finishCatalog(declared: Iterable<DeclaredTable>, tables: TableMeta[], indexes: IndexMeta[]) {
   const out: FinishChanges = { enable: [], disable: [], drop: [] };
   for (const d of declared) {
-    const tablet = tables.find((t) => t.name === d.name)?.tablet;
+    const tablet = activeTables(tables).find((t) => t.name === d.name)?.tablet;
     if (tablet === undefined) continue;
     const stored = indexes.filter((i) => i.tablet === tablet);
     const wanted = wantedIndexes(d);
@@ -321,6 +380,8 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
           staged: i.staged,
           metaId: i._id,
         })),
+      t.state ?? "active",
+      t._id,
     );
   return c;
 }

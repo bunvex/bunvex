@@ -200,6 +200,7 @@ export {
 } from "./session-requests.ts";
 export { SystemReader } from "./system-reader.ts";
 export {
+  ImportIdError,
   type PaginationOptions,
   type PaginationResult,
   type Savepoint,

@@ -5,6 +5,7 @@
 import { hostname } from "node:os";
 import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
 import {
+  activeTables,
   bootstrapCatalog,
   buildCatalog,
   type Catalog,
@@ -66,7 +67,13 @@ import {
 import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
-import { type DeclaredTable, documentValidator, type SchemaDefinition, SYSTEM_INDEXES } from "./schema.ts";
+import {
+  type DeclaredTable,
+  documentValidator,
+  type SchemaDefinition,
+  SYSTEM_INDEXES,
+  type TableDef,
+} from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
 import {
   deleteSessionRequestsBefore,
@@ -142,6 +149,9 @@ export type CacheCompanion = {
   /** On a hit: hand back what was stored. */
   replay(extra: unknown): void;
 };
+
+/** Documents a deletion-worker transaction removes (Convex deletes tables in batches too). */
+export const TABLE_DELETION_BATCH = 1000;
 
 export class Engine {
   readonly committer: Committer;
@@ -255,6 +265,8 @@ export class Engine {
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
+    // Tables left being deleted by an earlier run (STUDY-42).
+    this.startTableDeletion();
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
     if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
       this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
@@ -330,7 +342,11 @@ export class Engine {
   }
 
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
+  private closed = false;
+
   async close() {
+    this.closed = true;
+    await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
@@ -752,6 +768,156 @@ export class Engine {
     return r;
   }
 
+  // ---------------------------------------------------------------- hidden and deleted tables (STUDY-42)
+
+  /**
+   * Create a hidden table (an import's, as Convex's `create_empty_table`): invisible to functions, with
+   * `number` (else the first free one) and the indexes of the active table `copyIndexesOf` (empty, so
+   * enabled at once; writes maintain them). Its definition, once committed.
+   */
+  async createHiddenTable(name: string, opts: { number?: number; copyIndexesOf?: string } = {}): Promise<TableDef> {
+    const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
+    const indexes: Record<string, string[]> = {};
+    for (const ix of [...(source?.indexes.values() ?? []), ...(source?.pending ?? [])])
+      if (!(ix.name in SYSTEM_INDEXES))
+        indexes[ix.name] = ix.fields[ix.fields.length - 1] === "_creationTime" ? ix.fields.slice(0, -1) : ix.fields;
+    let def: TableDef | undefined;
+    await this.runMutation(
+      async (db) => {
+        const { tables, indexes: stored } = await readCatalog(db);
+        // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
+        const plan = planCatalog([{ name: `\u0000hidden`, indexes, document: v.any() }], tables, stored);
+        const meta = plan.insertTables[0]!;
+        if (opts.number !== undefined) {
+          const holder = tables.find(
+            (t) =>
+              t.number === opts.number &&
+              (t.state ?? "active") !== "deleting" &&
+              !(t.name === name && (t.state ?? "active") === "active"),
+          );
+          if (holder) throw new Error(`Table number ${opts.number} is already used by table "${holder.name}".`);
+          meta.number = opts.number;
+        }
+        meta.name = name;
+        meta.state = "hidden";
+        const metaId = await db.insert(TABLES_TABLE, meta);
+        for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
+        db.onCommitVisible = () => {
+          const c = this.catalog.withTableStates({});
+          def = c.add(
+            name,
+            meta.tablet,
+            meta.number,
+            plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+            "hidden",
+            metaId,
+          );
+          this.catalog = c;
+        };
+      },
+      true,
+      "_system/create_hidden_table",
+    );
+    return def!;
+  }
+
+  /**
+   * Make hidden tables active and delete active ones, in ONE commit (Convex's `activate_tables`): a hidden
+   * table replaces the active table of its name, which is deleted. Every transaction that used a replaced
+   * or deleted table conflicts (it read the table's `_tables` document) and every query that read one is
+   * invalidated. `body` runs in the same transaction (an import's last checks).
+   */
+  async activateTables(
+    tablets: number[],
+    deleteNames: string[] = [],
+    body?: (db: Tx) => Promise<void>,
+  ): Promise<{ deleted: TableDef[] }> {
+    let deleted: TableDef[] = [];
+    await this.runMutation(
+      async (db) => {
+        const { tables } = await readCatalog(db);
+        const toDelete = new Set<number>();
+        for (const tablet of tablets) {
+          const t = tables.find((x) => x.tablet === tablet);
+          if (!t || t.state !== "hidden") throw new Error(`Table ${tablet} is not a hidden table.`);
+          const old = activeTables(tables).find((x) => x.name === t.name);
+          if (old) toDelete.add(old.tablet);
+          await db.patch(TABLES_TABLE, t._id, { state: "active" });
+        }
+        for (const name of deleteNames) {
+          const old = activeTables(tables).find((x) => x.name === name);
+          if (old) toDelete.add(old.tablet);
+        }
+        for (const tablet of toDelete) {
+          const t = tables.find((x) => x.tablet === tablet)!;
+          await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+        }
+        if (body) await body(db);
+        const deleteList = [...toDelete];
+        db.onCommitVisible = () => {
+          deleted = deleteList.map((tb) => this.catalog.byTablet(tb)!).filter(Boolean);
+          this.catalog = this.catalog.withTableStates({ activate: tablets, delete: deleteList });
+          this.cache.clear();
+          this.cacheEpoch++;
+        };
+      },
+      true,
+      "_system/activate_tables",
+    );
+    this.startTableDeletion();
+    return { deleted };
+  }
+
+  /** Delete an active table: invisible at once, its documents removed in the background. */
+  async deleteTable(name: string) {
+    await this.activateTables([], [name]);
+  }
+
+  private deleting: Promise<void> | null = null;
+  /**
+   * The deletion worker (Convex's table deletion): empties each `deleting` table in batches of ordinary
+   * deletes (retention then removes their history), then removes its `_index` and `_tables` documents.
+   */
+  startTableDeletion() {
+    if (this.deleting || !this.catalog.deleting.size) return;
+    this.deleting = (async () => {
+      try {
+        while (!this.closed && this.catalog.deleting.size) {
+          // A background worker: let the server's own work run between batches.
+          await new Promise((r) => setImmediate(r));
+          const t = [...this.catalog.deleting.values()][0]!;
+          const done = await this.runMutation(
+            async (db) => {
+              const docs = await db.queryDef(t).take(TABLE_DELETION_BATCH);
+              for (const d of docs) await db.deleteFrom(t, d);
+              if (docs.length) return false;
+              const { tables, indexes } = await readCatalog(db);
+              for (const i of indexes) if (i.tablet === t.id) await db.delete(INDEX_TABLE, i._id);
+              const meta = tables.find((x) => x.tablet === t.id);
+              if (meta) await db.delete(TABLES_TABLE, meta._id);
+              db.onCommitVisible = () => {
+                this.catalog = this.catalog.withTableStates({ gone: [t.id] });
+              };
+              return true;
+            },
+            true,
+            "_system/delete_table",
+          );
+          void done;
+        }
+      } catch (e) {
+        if (!this.closed) console.error(`bunvex: table deletion failed: ${(e as Error).message}`);
+      } finally {
+        this.deleting = null;
+      }
+    })();
+  }
+
+  /** Wait until no table is being deleted (tests). */
+  async tablesDeleted() {
+    while (this.deleting) await this.deleting;
+  }
+
   /**
    * Install a committed `_index` change: a new catalog object (transactions already running keep theirs,
    * as Convex's index registry belongs to a snapshot), and an empty query cache — a cached result may have
@@ -1095,6 +1261,8 @@ export class Engine {
               c.meta.tablet,
               c.meta.number,
               c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+              "active",
+              c.def.metaId,
             );
         return withTs ? { value, ts } : value;
       } catch (e) {
