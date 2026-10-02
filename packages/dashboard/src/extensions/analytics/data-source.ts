@@ -4,6 +4,7 @@
 // views by default). Both are future server work: today only the mock feeds this. Every method is optional — a
 // source offers Analytics by having them (detected with `typeof`) — and needs the `viewMetrics` operation.
 import type { CallOptions, DataSourceError, Page, Unsubscribe, Value } from "../../data-source.ts";
+import type { ClientInfo } from "../../data-source-clients.ts";
 
 export type Device = "desktop" | "mobile" | "tablet";
 export const DEVICES: readonly Device[] = ["desktop", "mobile", "tablet"];
@@ -78,6 +79,8 @@ export type AnalyticsSession = Place & {
   device: Device;
   browser: string;
   os: string;
+  /** What the session's client said when it connected (UI-01 §33); its device, browser and os come from it. */
+  client?: ClientInfo;
   referrer: string | null;
   entryPath: string;
   exitPath: string;

@@ -14,8 +14,22 @@ export type FlagVariant = {
   description?: string;
 };
 
-/** Compares an identity attribute ("email", "tokenIdentifier", "org", a custom claim) with values. */
-export type FlagOperator = "equals" | "notEquals" | "in" | "notIn" | "contains" | "startsWith" | "endsWith" | "exists";
+/**
+ * Compares an identity attribute ("email", "tokenIdentifier", "org", a custom claim) — or the client's
+ * `platform` and `appVersion` (UI-01 §33) — with values. `versionAtLeast` / `versionBelow` compare versions
+ * by number ("2.10.0" is above "2.9.3").
+ */
+export type FlagOperator =
+  | "equals"
+  | "notEquals"
+  | "in"
+  | "notIn"
+  | "contains"
+  | "startsWith"
+  | "endsWith"
+  | "exists"
+  | "versionAtLeast"
+  | "versionBelow";
 export const FLAG_OPERATORS: readonly FlagOperator[] = [
   "equals",
   "notEquals",
@@ -25,7 +39,12 @@ export const FLAG_OPERATORS: readonly FlagOperator[] = [
   "startsWith",
   "endsWith",
   "exists",
+  "versionAtLeast",
+  "versionBelow",
 ];
+
+/** Attributes every evaluation has: the identity's, then what the client said when it connected (UI-01 §33). */
+export const FLAG_ATTRIBUTES = ["email", "tokenIdentifier", "org", "platform", "appVersion"] as const;
 
 export type FlagCondition = { attribute: string; operator: FlagOperator; values: string[] };
 

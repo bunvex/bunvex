@@ -4,8 +4,10 @@ import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/co
 import { Input } from "@bunvex/ui/components/input";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
+import { useClientApps } from "../clients/queries.ts";
+import { clientLine, PlatformIcon } from "../clients/words.tsx";
 import { useQueryScope } from "../context.tsx";
-import { type AuthOrganization, type AuthSession, toDataSourceError } from "../data-source.ts";
+import { type AuthOrganization, type AuthSession, type ClientApp, toDataSourceError } from "../data-source.ts";
 import { formatTime } from "../database/values.ts";
 import { type AuthSearch, authRoute, DashLink } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
@@ -14,6 +16,11 @@ import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { OrgPanel } from "./org-panel.tsx";
 import { organizationsQuery, sessionsQuery, useRefreshAuth, usersQuery } from "./queries.ts";
+
+/** A session's device: what its client said ("iPhone 16 · iOS 19.1 · Shop iOS 2.3.1", UI-01 §33), else its agent. */
+export function sessionDevice(s: Pick<AuthSession, "client" | "userAgent">, apps: ClientApp[] = []): string {
+  return s.client ? clientLine(s.client, apps) : describeAgent(s.userAgent);
+}
 
 /** A session's device, in a few words: "Safari on macOS". */
 export function describeAgent(agent: string | null): string {
@@ -53,10 +60,11 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
   // a search over who and where (UX2-19)
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
+  const apps = useClientApps().data ?? [];
   const all = sessions.data ?? [];
   const rows = q
     ? all.filter((s) =>
-        [emailOf(s.userId), describeAgent(s.userAgent), s.ipAddress ?? ""].some((t) => t.toLowerCase().includes(q)),
+        [emailOf(s.userId), sessionDevice(s, apps), s.ipAddress ?? ""].some((t) => t.toLowerCase().includes(q)),
       )
     : all;
   // a column nobody has a value in says nothing: shown only when a session was impersonated
@@ -84,7 +92,21 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
       header: "Expires",
       cell: (c) => <span className="font-mono text-xs tabular-nums">{formatTime(c.getValue())}</span>,
     }),
-    sessionCol.accessor((s) => describeAgent(s.userAgent), { id: "device", header: "Device" }),
+    sessionCol.accessor((s) => sessionDevice(s, apps), {
+      id: "device",
+      header: "Device",
+      cell: (c) => (
+        <span className="flex min-w-0 items-center gap-1.5">
+          {c.row.original.client && (
+            <PlatformIcon
+              platform={c.row.original.client.platform}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+          )}
+          <span className="truncate">{c.getValue()}</span>
+        </span>
+      ),
+    }),
     sessionCol.accessor((s) => s.ipAddress ?? "", {
       id: "ip",
       header: "IP address",
@@ -106,7 +128,8 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
       : []),
     sessionCol.display({
       id: "revoke",
-      header: "",
+      // a header with no words is empty to a screen reader (axe: empty-table-header)
+      header: () => <span className="sr-only">Actions</span>,
       cell: (c) =>
         canRevoke && (
           <ConfirmButton
@@ -114,7 +137,7 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
             size="sm"
             variant="destructive-outline"
             title="Revoke this session?"
-            description={`${emailOf(c.row.original.userId)} is signed out on ${describeAgent(c.row.original.userAgent)}.`}
+            description={`${emailOf(c.row.original.userId)} is signed out on ${sessionDevice(c.row.original, apps)}.`}
             confirm="Revoke"
             busy="Revoking…"
             keep="Keep it"

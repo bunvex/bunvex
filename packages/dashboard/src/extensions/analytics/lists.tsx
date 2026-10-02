@@ -5,6 +5,7 @@ import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/co
 import { Input } from "@bunvex/ui/components/input";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
+import { clientLine } from "../../clients/words.tsx";
 import { useQueryScope } from "../../context.tsx";
 import { toDataSourceError, type Value } from "../../data-source.ts";
 import { LiteralView } from "../../database/literal-view.tsx";
@@ -38,7 +39,8 @@ const SESSION_COLUMNS: DataTableColumn<AnalyticsSession>[] = [
     cell: (c) => (c.getValue() ? <span className="text-xs text-success">● live</span> : null),
   }),
   se.accessor((s) => [s.city, s.country].filter(Boolean).join(", "), { id: "place", header: "Place" }),
-  se.accessor((s) => `${s.browser} on ${s.os}`, { id: "device", header: "Device" }),
+  // what the client said, when it did (UI-01 §33): "iPhone 16 · iOS 19.1 · com.acme.shop 2.3.1"
+  se.accessor((s) => (s.client ? clientLine(s.client) : `${s.browser} on ${s.os}`), { id: "device", header: "Device" }),
   se.accessor((s) => s.pageViews, { id: "views", header: "Page views", cell: (c) => mono(c.getValue()) }),
   se.accessor((s) => s.entryPath, { id: "entry", header: "Entry", cell: (c) => mono(c.getValue()) }),
   se.accessor((s) => s.referrer ?? "(direct)", { id: "referrer", header: "Referrer" }),
