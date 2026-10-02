@@ -21,6 +21,7 @@ import {
   type Tx,
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
+import type { DeploymentOp } from "./admin-keys.ts";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { FileStorage } from "./storage.ts";
 
@@ -96,6 +97,9 @@ export type SystemEnv = { files: FileStorage | null };
 /** A system query or mutation: its argument validators (checked as Convex's) and its handler. */
 export type SystemQuery = {
   args: Record<string, GenericValidator>;
+  /** The operation a key needs (Convex's `queryPrivateSystem(op)` / `mutationGeneric(op)`); default
+   *  `ViewData` for a query, `WriteData` for a mutation. */
+  op?: DeploymentOp;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
 export type SystemMutation = SystemQuery;

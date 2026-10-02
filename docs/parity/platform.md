@@ -35,11 +35,11 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | done (STUDY-27) |  |
 | Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | done (STUDY-27) | `Token identity expired`, `authUpdateAttempted: false`. |
 | Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
-| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | done (STUDY-27) | `User` tokens; `Admin` waits for admin keys. |
-| HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is refused until admin keys exist. |
+| WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | done (STUDY-27, STUDY-34) | `User` tokens and `Admin` keys (`impersonating` or `actingAs`); a bad admin key gets `AuthError` with `authUpdateAttempted: false`. |
+| HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is an admin (STUDY-34). |
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | done (STUDY-27) | `@bunvex/client`; see client-sync.md. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |
-| Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | missing | Needs the `ActAsUser` operation. Used by `npx convex run --identity` and the dashboard runner. |
+| Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | done (STUDY-34) | `Bunvex <key>:<b64 identity>` (DV-97) and sync's `impersonating`; needs `ActAsUser`; `tokenIdentifier`, or `issuer|subject`; a malformed identity is 400 `HeaderParseFailure`; never with a system key. |
 | Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | missing | ARCHITECTURE lists clerk and auth0 as D. They are only OIDC configurations plus client glue. |
 
 ### 2. Deployment auth, admin keys, operations
@@ -48,12 +48,12 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | Instance secret (32-byte hex), required at startup | `crates/keybroker/secret.rs`; `crates/local_backend/config.rs` | missing | Convex has no fallback: `--instance-secret` is required. Docker generates one and persists it. |
 | Admin key format `instance_name\|encrypted proto` (AES-GCM-SIV, KBKDF) | `crates/keybroker/broker.rs` `issue_key`, `encryptor.rs` | done (STUDY-34) | Byte for byte Convex's: `issueAdminKey` / `checkAdminKey` in `@bunvex/server` (AES-128-GCM-SIV from RFC 8452, KBKDF-CTR-HMAC-SHA256 "admin key", the `AdminKey` proto), checked against aws-lc-rs fixtures; keys never expire; type prefixes stripped. Legacy secretbox keys are refused (DV-158). |
-| Generating an admin key (`generate_key`, `keygen admin-key`, `generate_admin_key.sh`) | `crates/keybroker/bin/generate_key.rs`; `self-hosted/docker-build/generate_admin_key.sh` | missing | |
-| System keys (`Identity::System`) | `broker.rs` `issue_system_key` | missing | |
-| Read-only admin keys and the `DeploymentOp` permission set | `crates/keybroker/operations.rs` | missing | Operations include Deploy, View/WriteEnvironmentVariables, ViewLogs, ViewData/WriteData, ActAsUser, RunInternal*, Backups*, UsageLimits*, and more. |
-| Admin-only access to internal functions | `crates/udf/validation.rs` `check_visibility_access` | partial | bunvex has internal functions, callable only from actions. No caller can authenticate as admin to run them over HTTP. |
-| `Authorization: Convex <adminKey>` header, `?adminKey=` | `crates/local_backend/authentication.rs` | missing | |
-| `GET /api/check_admin_key` | `crates/local_backend/dashboard.rs` | missing | Returns `{success, allowedOps, isReadOnly}`. |
+| Generating an admin key (`generate_key`, `keygen admin-key`, `generate_admin_key.sh`) | `crates/keybroker/bin/generate_key.rs`; `self-hosted/docker-build/generate_admin_key.sh` | done (STUDY-34) | `bunvex admin-key [--read-only] [--system]` (DV-160, DV-161): the name and secret from the flags, `INSTANCE_NAME` / `INSTANCE_SECRET`, else the store's `_instance` read without the lease (works while the server runs). "Admin key:" on stderr, the key on stdout, as `generate_key`. |
+| System keys (`Identity::System`) | `broker.rs` `issue_system_key` | done (STUDY-34) | Issued with `system: true`; every operation allowed; not an admin for `check_admin_key`. |
+| Read-only admin keys and the `DeploymentOp` permission set | `crates/keybroker/operations.rs` | done (STUDY-34) | Convex's 26 operations and read-only set; `OperationNotPermitted` with Convex's action names. Read-only keys can be issued (DV-161). |
+| Admin-only access to internal functions | `crates/udf/validation.rs` `check_visibility_access` | done (STUDY-34) | An admin (or system key) runs internal queries, mutations and actions with `RunInternal*`; to anyone else they do not exist. `_system/*` functions likewise, each with its operation; sync checks access before reusing another session's run. |
+| `Authorization: Convex <adminKey>` header, `?adminKey=` | `crates/local_backend/authentication.rs` | done (STUDY-34) | `Bunvex <adminKey>` (DV-97), type prefixes stripped; `?adminKey=` without a header. Errors: 401 `BadAdminKey`, 403 `BadDeployKey`, 403 `OperationNotPermitted`. |
+| `GET /api/check_admin_key` | `crates/local_backend/dashboard.rs` | done (STUDY-34) | `{success, allowedOps, isReadOnly}` (`[]` is every operation); 403 `BadDeployKey` without an admin. |
 | Deploy and preview keys, team/OAuth tokens | `crates/authentication/application_auth.rs` (`AccessTokenAuth`) | missing | Self-hosted Convex uses `NullAccessTokenAuth`, so only admin keys work. The cloud-only token types can be skipped. |
 | Action callback token (`Convex-Action-Callback-Token`) | `crates/local_backend/node_action_callbacks.rs` | missing | Only needed with an out-of-process Node executor. |
 | Other signed tokens (upload, export download, cursor, data-sync cursor) | `crates/keybroker/encryptor.rs` purposes | missing | One key derivation per purpose from the instance secret. |
@@ -77,7 +77,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | done (STUDY-32) | Not enforced in Convex either. |
 | Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | partial (STUDY-32) | `@bunvex/file-storage`: local (`<dir>/files/<key>.blob`, synced; `STORAGE_DIR`, else `<DATA>/storage`), S3 through Bun's S3Client with Convex's variable names (files bucket), memory for tests; a conformance suite (S3 in CI on RustFS). Other use cases' buckets come with their features. |
 | Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | partial (STUDY-32) | The S3 key prefix is kept in `_instance` (`bunvex-<uuid>/`); switching local↔S3 is not checked yet. |
-| Dashboard: file system functions (`numFiles`, `fileMetadata`, `getFile`, `deleteFile`, `deleteFiles`, `generateUploadUrl`) | `system-udfs/convex/_system/frontend/fileStorageV2.ts` | partial (STUDY-32) | Convex's names, arguments and shapes (each file with its `url` first); `deleteFiles` is one transaction. No audit-log entries (bunvex has no audit log, row in §2); reachable once admin keys exist. |
+| Dashboard: file system functions (`numFiles`, `fileMetadata`, `getFile`, `deleteFile`, `deleteFiles`, `generateUploadUrl`) | `system-udfs/convex/_system/frontend/fileStorageV2.ts` | partial (STUDY-32) | Convex's names, arguments and shapes (each file with its `url` first); `deleteFiles` is one transaction. No audit-log entries (bunvex has no audit log, row in §2); reachable by admins (STUDY-34). |
 | Total file-storage size gauge | `FileStorageSizeTracker` | missing | Used for usage reporting. |
 
 ### 4. Scheduler
@@ -95,7 +95,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | done (STUDY-30) | |
 | Executor parallelism 8; pauses when the deployment is paused | knob `SCHEDULED_JOB_EXECUTION_PARALLELISM` | partial (STUDY-30) | Parallelism 8 (env as Convex); pausing waits for the deployment state. Woken by commits, no polling. |
 | GC of finished jobs after 7 days | `SCHEDULED_JOB_RETENTION`; `crates/application/system_table_cleanup` | done (STUDY-30) | `SCHEDULED_JOB_RETENTION` (seconds), as Convex. |
-| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | partial (STUDY-30) | `_system/frontend/paginatedScheduledJobs` and `scheduler:getArgs` in Convex's shapes; cancel one / cancel all (batches of 1000, by function and `nextTs` range) as server operations. The HTTP routes come with admin keys; deleting the table is not done. |
+| Dashboard / API: cancel one job, cancel all, delete the scheduled-functions table | `/api/cancel_job`, `/api/cancel_all_jobs`, `/api/delete_scheduled_functions_table` | partial (STUDY-30, STUDY-34) | `_system/frontend/paginatedScheduledJobs` and `scheduler:getArgs` in Convex's shapes, for admins; `POST /api/cancel_job` and `/api/cancel_all_jobs` with `WriteData` (batches of 1000, by function and `nextTs` range). Deleting the table is not done. |
 | Per-component scheduling | `crates/model/scheduled_jobs` (per namespace) | missing | Depends on components. |
 
 ### 5. Cron jobs
@@ -108,7 +108,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
 | Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
 | No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
-| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | partial (STUDY-30) | Both system functions, in Convex's document shapes; reachable once admin keys exist. |
+| Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | done (STUDY-30, STUDY-34) | Both system functions, in Convex's document shapes, for admins with `ViewData`. |
 
 ### 6. Full-text search
 

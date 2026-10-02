@@ -11,11 +11,15 @@
   },
   "dependencies": {
     "@bunvex/server": "workspace:*",
-    "@bunvex/values": "workspace:*"
+    "@bunvex/values": "workspace:*",
+    "@bunvex/cli": "workspace:*"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/bunvex"
+  },
+  "bin": {
+    "bunvex": "./bin/bunvex.ts"
   }
 }

@@ -143,7 +143,7 @@ Kept so the history is in one place.
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
 | DV-65 | No retention: every version and tombstone was kept forever | As Convex: index versions are pruned 4 min behind the newest commit, document versions 14 days behind (STUDY-33); reads below the window fail with `OutOfRetention` | yes (a transaction reading 4 min after its snapshot fails) | owner, 2026-10-01 (STUDY-33) | [STUDY-09 D5](../study/STUDY-09-persistence-layout.md#4-divergences), [STUDY-33](../study/STUDY-33-retention.md) |
-| DV-11 | Sync: only `tokenType: "None"` was accepted; other tokens got an `AuthError` | As Convex: `User` tokens are verified by `@bunvex/auth`; a bad one gets `AuthError` (`authUpdateAttempted: true`) and an expired identity `Token identity expired` (`false`). `Admin` tokens wait for admin keys (Phase 3 item 6) | yes | owner, 2026-09-30 (STUDY-27) | [STUDY-23 P9](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30), [STUDY-27](../study/STUDY-27-auth.md) |
+| DV-11 | Sync: only `tokenType: "None"` was accepted; other tokens got an `AuthError` | As Convex: `User` tokens are verified by `@bunvex/auth`; a bad one gets `AuthError` (`authUpdateAttempted: true`) and an expired identity `Token identity expired` (`false`). `Admin` tokens are checked as admin keys (STUDY-34) | yes | owner, 2026-09-30 (STUDY-27) | [STUDY-23 P9](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30), [STUDY-27](../study/STUDY-27-auth.md) |
 | DV-12 | Sync: identity was part of every shared execution's key | As Convex (`observed_identity`, `stored_key_hint`): a run that read no identity is shared by every caller; one that did is the caller's | no | owner, 2026-09-30 (STUDY-27) | [STUDY-23 P10](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30), [STUDY-27](../study/STUDY-27-auth.md) |
 | DV-30 | Commit timestamps were a counter (1, 2, 3…) | As Convex: `ts = max(last + 1, wall clock)`. Unit note: bunvex counts **microseconds** internally (a JS number is exact only to 2^53) and sends × 1000, so clients see Convex's wall-clock nanoseconds at µs resolution | yes (sync protocol ts) | owner, 2026-09-30 (#64) | [STUDY-06 D9](../study/STUDY-06-transactions-and-occ.md#4-divergences) |
 | DV-31 | No mutation idempotency: no session or request id, a re-sent mutation ran twice | Decided as Convex: `_session_requests` system table, transactional, 2 weeks' retention. Built in #63 (`Engine.sessionMutation`, cleanup by `_creationTime`) | yes | owner, 2026-09-30 | [STUDY-03 D4](../study/STUDY-03-deterministic-execution.md#4-divergences), [STUDY-06 D7](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-11 D8](../study/STUDY-11-function-results-and-errors.md#4-divergences), [STUDY-23 P5, P6](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
@@ -216,6 +216,15 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
+
+| # | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-164 | Functions run in-process, one `vm` context per code version (hot swap, no restart; not a security sandbox) | a fresh V8 context per request in pooled isolates | partly (P2) | accept: frees old versions, per-version deterministic globals, ~0.4 µs per call | [STUDY-35 P1](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-165 | Module-level state lives as long as its code version | fresh per request (`experimental_reuseContext` keeps it) | yes | accept | [STUDY-35 P2](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-166 | A pushed package is one gzip JSON blob in the file-storage backend | a zip in module storage | no | accept | [STUDY-35 P3](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | accept | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | accept (rule 5) | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | accept | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to

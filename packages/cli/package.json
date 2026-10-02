@@ -12,5 +12,12 @@
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/cli"
+  },
+  "bin": {
+    "bunvex": "./bin/bunvex.ts"
+  },
+  "dependencies": {
+    "@bunvex/core": "workspace:*",
+    "@bunvex/server": "workspace:*"
   }
 }
