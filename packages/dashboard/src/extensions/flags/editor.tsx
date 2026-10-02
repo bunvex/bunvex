@@ -18,6 +18,7 @@ import { flagProblem } from "./logic.ts";
 import { flagsKey } from "./screen.tsx";
 import {
   type FeatureFlag,
+  FLAG_ATTRIBUTES,
   FLAG_OPERATORS,
   type FlagInput,
   type FlagOperator,
@@ -162,6 +163,8 @@ export function FlagEditor(props: {
     problem: useId(),
     enabled: useId(),
   };
+  // the attributes every evaluation has, offered as the attribute box's suggestions
+  const attributesId = useId();
   const isNew = !props.flag;
   const built = inputOf(d);
   const problem = "error" in built ? built.error : flagProblem(built.flag, isNew ? props.existingKeys : []);
@@ -197,6 +200,11 @@ export function FlagEditor(props: {
         void save();
       }}
     >
+      <datalist id={attributesId}>
+        {FLAG_ATTRIBUTES.map((a) => (
+          <option key={a} value={a} />
+        ))}
+      </datalist>
       {isNew && (
         <div className={field}>
           <label htmlFor={ids.key} className={label}>
@@ -403,6 +411,7 @@ export function FlagEditor(props: {
                     aria-label={`Rule ${ri + 1} condition ${ci + 1} attribute`}
                     className="w-28 font-mono"
                     placeholder="email"
+                    list={attributesId}
                     value={c.attribute}
                     onChange={(e) => set({ attribute: e.target.value })}
                   />
@@ -416,7 +425,13 @@ export function FlagEditor(props: {
                     <Input
                       aria-label={`Rule ${ri + 1} condition ${ci + 1} values`}
                       className="min-w-0 flex-1"
-                      placeholder="@acme.com, @globex.com"
+                      placeholder={
+                        c.attribute === "platform"
+                          ? "ios, android, web"
+                          : c.operator.startsWith("version") || c.attribute === "appVersion"
+                            ? "2.3.0"
+                            : "@acme.com, @globex.com"
+                      }
                       value={c.values}
                       onChange={(e) => set({ values: e.target.value })}
                     />

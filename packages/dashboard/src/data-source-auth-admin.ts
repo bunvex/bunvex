@@ -5,6 +5,7 @@
 // its code. Every method is optional: a source offers the screen by having `listAuthUsers` (detected with
 // `typeof`); the rest light up the actions they back. Re-exported by `data-source.ts`.
 import type { CallOptions, Json, Page, PageRequest } from "./data-source.ts";
+import type { ClientInfo } from "./data-source-clients.ts";
 
 /** A way to sign in (better-auth's account `providerId`). */
 export type AuthProviderId =
@@ -58,6 +59,8 @@ export type AuthSession = {
   ipAddress: string | null;
   userAgent: string | null;
   impersonatedBy: string | null;
+  /** The client the session signed in from, as it said when it connected (UI-01 §33), when known. */
+  client?: ClientInfo;
 };
 
 /** An organization (better-auth's organization plugin), with its member and pending invitation counts. */

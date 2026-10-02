@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useId, useState } from "react";
+import { useClientApps } from "../clients/queries.ts";
+import { PlatformIcon } from "../clients/words.tsx";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery } from "../data/queries.ts";
 import { type AuthEmailAction, type AuthUser, toDataSourceError } from "../data-source.ts";
@@ -19,7 +21,7 @@ import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { AuthEventsTable } from "./config.tsx";
-import { describeAgent } from "./manage.tsx";
+import { sessionDevice } from "./manage.tsx";
 import { eventsQuery, sessionsQuery, useRefreshAuth, userQuery } from "./queries.ts";
 import { Avatar, providerLabel, UserStatusBadge } from "./users.tsx";
 
@@ -93,6 +95,7 @@ function Overview({ user: u, onRemoved }: { user: AuthUser; onRemoved: () => voi
   const { data: caps } = useQuery(capabilitiesQuery(scope));
   const canWrite = caps !== undefined && !caps.readOnly && caps.operations.includes("writeData");
   const sessions = useQuery(sessionsQuery(scope, u.id));
+  const apps = useClientApps().data ?? [];
   const refresh = useRefreshAuth();
   const [said, setSaid] = useState<{ ok: boolean; message: string }>();
   const [banFor, setBanFor] = useState<number>(86_400);
@@ -210,8 +213,11 @@ function Overview({ user: u, onRemoved }: { user: AuthUser; onRemoved: () => voi
             {sessions.data.map((s) => (
               <li key={s.id} className="flex items-center gap-2 border-b px-2 py-1.5 last:border-b-0">
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">
-                    {describeAgent(s.userAgent)}
+                  <span className="flex min-w-0 items-center gap-1.5" data-testid="session-device">
+                    {s.client && (
+                      <PlatformIcon platform={s.client.platform} className="size-3.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="truncate">{sessionDevice(s, apps)}</span>
                     {s.impersonatedBy && <span className="text-warning"> · impersonated by {s.impersonatedBy}</span>}
                   </span>
                   <span className="block font-mono text-xs text-muted-foreground">
@@ -225,7 +231,7 @@ function Overview({ user: u, onRemoved }: { user: AuthUser; onRemoved: () => voi
                     variant="destructive-outline"
                     disabled={!canWrite}
                     title="Revoke this session?"
-                    description={`${u.email} is signed out on ${describeAgent(s.userAgent)}.`}
+                    description={`${u.email} is signed out on ${sessionDevice(s, apps)}.`}
                     confirm="Revoke"
                     busy="Revoking…"
                     keep="Keep it"
