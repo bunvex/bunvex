@@ -132,7 +132,8 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
   skipped, Rust's `f64` grammar, NaN/±inf becoming null as serde_json writes them, an empty file importing
   nothing as Convex's), JSON Lines (blank lines are rows, BOM refused), JSON arrays (16 MiB), ZIPs read by byte
   ranges from the blob store (`zip-reader.ts`: stored and deflated entries, ZIP64, CRC checked; Info-ZIP's
-  archives too). Convex's messages, prefixed "Hit an error while importing:".
+  archives too). Convex's messages, prefixed "Hit an error while importing:" ("Row N wasn't a valid value: …"
+  without the product name, rule 5 / DV-216; code `InvalidValue`).
 - **Running** (`imports.ts`): Convex's states and transitions, checkpoints and summary; numbers from
   `_tables`, then the first `_id`, then the existing table's (Convex's `assign_table_numbers`, its conflict
   checks and messages); every table into a new hidden table (`Engine.createHiddenTable`), in batches of

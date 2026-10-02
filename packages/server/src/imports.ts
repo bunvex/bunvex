@@ -407,7 +407,7 @@ export class ImportService {
       if (!o || typeof o !== "object" || Array.isArray(o))
         throw new ImportError("NotAnObject", `Row ${n} wasn't an object`);
       if (typeof o.name !== "string")
-        throw new ImportError("InvalidConvexValue", `Row ${n} wasn't a valid Convex value: table requires name`);
+        throw new ImportError("InvalidValue", `Row ${n} wasn't a valid value: table requires name`);
       if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(o.name))
         throw new ImportError(
           "InvalidName",
@@ -416,8 +416,8 @@ export class ImportService {
       const id = o.id;
       if (typeof id !== "number" || !Number.isInteger(id) || id <= 0 || id > 0xffffffff)
         throw new ImportError(
-          "InvalidConvexValue",
-          `Row ${n} wasn't a valid Convex value: table requires id (received ${JSON.stringify(id) ?? "nothing"})`,
+          "InvalidValue",
+          `Row ${n} wasn't a valid value: table requires id (received ${JSON.stringify(id) ?? "nothing"})`,
         );
       yield { name: o.name, number: id };
     }
@@ -780,7 +780,7 @@ export class ImportService {
     for await (const r of t.rows()) {
       n++;
       const bad = (msg: string) =>
-        new ImportError("InvalidConvexValue", `Row ${n} wasn't a valid Convex value: ${msg}`);
+        new ImportError("InvalidValue", `Row ${n} wasn't a valid value: ${msg}`);
       const m = r.json as Record<string, unknown>;
       if (!m || typeof m !== "object" || typeof m._id !== "string") throw bad("missing field `_id`");
       let number: number;

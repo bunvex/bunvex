@@ -239,7 +239,7 @@ function inferValue(json: unknown): Value {
  * `"uniform"` table, else as plain JSON. `n` counts rows from 1, for the messages.
  */
 export function rowToDocument(row: RawRow, uniform: boolean, n: number): Record<string, Value> {
-  const bad = (msg: string) => new ImportError("InvalidConvexValue", `Row ${n} wasn't a valid Convex value: ${msg}`);
+  const bad = (msg: string) => new ImportError("InvalidValue", `Row ${n} wasn't a valid value: ${msg}`);
   if (!isSimpleObject(row.json)) throw bad(`expected object, received ${truncate(row.json)}`);
   try {
     const v = uniform && row.text !== undefined ? fromExportJson(row.text) : inferValue(row.json);

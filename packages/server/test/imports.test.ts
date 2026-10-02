@@ -172,10 +172,10 @@ describe("formats and values", () => {
     const fail = async (body: string, query: string) =>
       ((await t.importNow(body, query)).body.message as string).split("\n")[1];
     expect(await fail('{"$bytes":"AQI="}\n', "format=jsonLines&tableName=b")).toBe(
-      "Row 1 wasn't a valid Convex value: Field name $bytes starts with a '$', which is reserved.",
+      "Row 1 wasn't a valid value: Field name $bytes starts with a '$', which is reserved.",
     );
     expect(await fail('{"a":1}\n5\n', "format=jsonLines&tableName=c")).toBe(
-      "Row 2 wasn't a valid Convex value: expected object, received 5",
+      "Row 2 wasn't a valid value: expected object, received 5",
     );
     expect(await fail('{"a":1}\n{oops\n', "format=jsonLines&tableName=d")).toStartWith("Row 2 wasn't valid JSON: ");
     expect(await fail('﻿{"a":1}\n', "format=jsonLines&tableName=e")).toBe(
