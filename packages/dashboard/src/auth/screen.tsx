@@ -1,7 +1,7 @@
 // The Authentication screen (UI-01 §25, STUDY-12 §7.8), a bunvex addition: the app's users, sessions and
 // organizations, and the auth configuration, page by page, in better-auth's terms — on the section column
 // (§23): MANAGE (Users, Sessions, Organizations), CONFIGURATION (Sign in / Providers, Multi-factor, Passkeys,
-// Sessions, Rate limits, URL configuration, Emails, Audit). Offered when the source has `listAuthUsers`.
+// Session lifetime, Rate limits, URL configuration, Emails, Audit). Offered when the source has `listAuthUsers`.
 import { useQueryScope } from "../context.tsx";
 import { type AuthSection, authRoute, DashLink } from "../router.tsx";
 import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
@@ -18,7 +18,8 @@ export const SECTION: Record<AuthSection, { title: string; description: string }
   providers: { title: "Sign in / Providers", description: "How users sign in, and the token providers" },
   "multi-factor": { title: "Multi-factor", description: "Second factors and who must use one" },
   passkeys: { title: "Passkeys", description: "WebAuthn sign-in" },
-  "session-lifetime": { title: "Sessions", description: "How long a session lasts and refreshes" },
+  // not "Sessions" again: that is the list of who is signed in (UX2-18)
+  "session-lifetime": { title: "Session lifetime", description: "How long a session lasts and refreshes" },
   "rate-limits": { title: "Rate limits", description: "How many auth requests a client may make" },
   urls: { title: "URL configuration", description: "The site URL and where sign-in may redirect" },
   emails: { title: "Emails", description: "The templates the auth flows send" },

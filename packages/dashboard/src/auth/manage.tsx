@@ -1,14 +1,15 @@
 // Authentication → Sessions and Organizations (UI-01 §25.2): every signed-in session (who, since when, until
 // when, from where; Revoke), and the organizations with their members and pending invitations.
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
+import { Input } from "@bunvex/ui/components/input";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { type AuthOrganization, type AuthSession, toDataSourceError } from "../data-source.ts";
 import { formatTime } from "../database/values.ts";
 import { DashLink } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
-import { BAR1 } from "../shell/bars.ts";
+import { BAR1, BAR2 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { organizationsQuery, sessionsQuery, useRefreshAuth, usersQuery } from "./queries.ts";
@@ -48,7 +49,17 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
   const emailOf = (id: string) => users.data?.pages.flatMap((p) => p.page).find((u) => u.id === id)?.email ?? id;
   const refresh = useRefreshAuth();
   const canRevoke = typeof scope.source.revokeAuthSession === "function";
-  const rows = sessions.data ?? [];
+  // a search over who and where (UX2-19)
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const all = sessions.data ?? [];
+  const rows = q
+    ? all.filter((s) =>
+        [emailOf(s.userId), describeAgent(s.userAgent), s.ipAddress ?? ""].some((t) => t.toLowerCase().includes(q)),
+      )
+    : all;
+  // a column nobody has a value in says nothing: shown only when a session was impersonated
+  const impersonations = all.some((s) => s.impersonatedBy);
   const columns: DataTableColumn<AuthSession>[] = [
     sessionCol.accessor((s) => s.userId, {
       id: "user",
@@ -78,11 +89,20 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
       header: "IP address",
       cell: (c) => <span className="font-mono text-xs">{c.getValue()}</span>,
     }),
-    sessionCol.accessor((s) => s.impersonatedBy, {
-      id: "impersonated",
-      header: "Impersonated",
-      cell: (c) => (c.getValue() ? <span className="text-xs text-warning">by {c.getValue()}</span> : null),
-    }),
+    ...(impersonations
+      ? [
+          sessionCol.accessor((s) => s.impersonatedBy, {
+            id: "impersonated",
+            header: "Impersonated",
+            cell: (c) =>
+              c.getValue() ? (
+                <span className="text-xs text-warning">by {c.getValue()}</span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              ),
+          }),
+        ]
+      : []),
     sessionCol.display({
       id: "revoke",
       header: "",
@@ -115,6 +135,16 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
           </span>
         )}
       </div>
+      <div className={BAR2}>
+        <Input
+          type="search"
+          aria-label="Search sessions"
+          placeholder="Search by email, device or IP…"
+          className="h-8 w-72"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
       {sessions.error ? (
         <ErrorState error={toDataSourceError(sessions.error)} />
       ) : (
@@ -127,7 +157,7 @@ export function SessionsPage({ heading }: { heading: ReactNode }) {
           defaultColumnWidth={(id) =>
             ({ user: 260, created: 180, expires: 180, device: 160, ip: 130, impersonated: 130, revoke: 110 })[id] ?? 160
           }
-          empty={sessions.isPending ? "Loading…" : "Nobody is signed in."}
+          empty={sessions.isPending ? "Loading…" : q ? "No session matches." : "Nobody is signed in."}
         />
       )}
     </div>

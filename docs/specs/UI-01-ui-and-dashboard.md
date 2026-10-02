@@ -2044,3 +2044,18 @@ writes when on), the screen and the editor.
   the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
+
+## UX review 2 (the owner approved all 28 findings, 2 Oct 2026)
+
+The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
+every one. They land in five pull requests, one subsection each.
+
+### UX review 2 — Authentication (UX2-18, UX2-19, and the Authentication parts of UX2-3)
+
+- **One "Sessions"** (UX2-18): the configuration page is "Session lifetime"; "Sessions" is the list of who is
+  signed in.
+- **Sessions do what the page is for** (UX2-19): a search by email, device or IP in Bar 2 (Revoke per row
+  was already there); the Impersonated column only when some session was impersonated, "—" otherwise. The
+  Organizations detail panel (members, invitations) is the Authentication follow-up pull request (#188).
+- **No browser selects** (UX2-3): Multi-factor's "Required for" and the user panel's "Ban for" use the design
+  system's Select.

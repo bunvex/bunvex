@@ -1,10 +1,12 @@
 // Authentication → Configuration (UI-01 §25.3): one page per part of the auth configuration — sign-in methods
 // (and the token providers that were Settings → Authentication), multi-factor, passkeys, session lifetime, rate
 // limits, URLs, email templates — each a form that saves its part (`updateAuthConfig`); and the audit log.
+
 import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Input } from "@bunvex/ui/components/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { Textarea } from "@bunvex/ui/components/textarea";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useState } from "react";
@@ -17,6 +19,12 @@ import { TokenProviders } from "../settings/auth.tsx";
 import { BAR1 } from "../shell/bars.ts";
 import { ErrorState } from "../shell/error-state.tsx";
 import { configQuery, eventsQuery, useRefreshAuth } from "./queries.ts";
+
+const MFA_REQUIRED = [
+  { value: "never", label: "Nobody (optional)" },
+  { value: "admins", label: "Admins" },
+  { value: "everyone", label: "Everyone" },
+];
 
 /** The configuration key each page edits. */
 const KEY: Partial<Record<AuthSection, keyof AuthConfig>> = {
@@ -117,16 +125,23 @@ function Form<K extends keyof AuthConfig>(props: {
         <Toggle label="Backup codes" checked={v.backupCodes} onChange={(backupCodes) => set({ ...v, backupCodes })} />
         <Field label="Required for">
           {(id) => (
-            <select
-              id={id}
-              className="h-8 w-48 border bg-background px-2 text-sm"
+            // the design system's Select, not the browser's (UX2-3)
+            <Select
+              items={MFA_REQUIRED}
               value={v.required}
-              onChange={(e) => set({ ...v, required: e.target.value as typeof v.required })}
+              onValueChange={(required) => set({ ...v, required: required as typeof v.required })}
             >
-              <option value="never">Nobody (optional)</option>
-              <option value="admins">Admins</option>
-              <option value="everyone">Everyone</option>
-            </select>
+              <SelectTrigger id={id} className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MFA_REQUIRED.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
         </Field>
       </div>
