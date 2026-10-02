@@ -2111,6 +2111,17 @@ writes when on), the screen and the editor.
 - An embedding page can hand credentials over (`embedded.ts`, Convex's message shapes).
 - Next: the real verifier (`GET /api/check_admin_key`) and a real data source.
 
+## 32. The command palette (STUDY-12 §20; 2 Oct 2026)
+
+- `packages/dashboard/src/palette/`: `model.ts` (items, `fuzzyScore`, `searchItems`, `rememberPick`, pure)
+  and `palette.tsx` (the dialog), loaded on first use: the shell holds only the shortcut listener and the
+  header's **Search** button (Ctrl+K / Cmd+K, `aria-keyshortcuts`).
+- `@bunvex/ui` gains `components/dialog.tsx` (Base UI Dialog) and `useOptionalTheme()` (the theme action
+  shows only inside a `ThemeProvider`).
+- Tests: the model (unit), the palette (happy-dom: open, search, pick, recent, arrows, Escape, a read-only
+  key's actions) and e2e (from the Database screen: pick, reopen, axe in both themes, Escape, the grid still
+  answers).
+
 ## UX review 2 (the owner approved all 28 findings, 2 Oct 2026)
 
 The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved

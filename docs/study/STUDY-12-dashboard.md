@@ -980,3 +980,25 @@ an injected data source):
 | LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | pending (DV-210) |
 | LG3 | Embedded credentials accepted from any origin, as Convex | match Convex; an allow-list of parent origins would be safer | matches Convex (no divergence); a question for the owner in the PR |
 | LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |
+
+## 20. The command palette (a bunvex addition, added 2 Oct 2026)
+
+Convex's dashboard has no command palette (its header search only finds tables and documents inside the
+Data page). bunvex adds one, as the owner asked (2 Oct 2026): Ctrl+K or Cmd+K anywhere, or the header's
+**Search** button.
+
+- **What it finds:**
+  - every screen, including registered extensions and their sub-screens (UI-01 §26);
+  - the Settings pages and the Authentication pages;
+  - the deployment's tables and functions;
+  - a document by its id, when the source can say which table holds it (`tableOfId`);
+  - actions: switch the theme, run a function (the runner), add documents to the open table, pause or resume
+    (it opens Settings → General, where the confirmation lives).
+- **Gated** like the screens: an extension only when the source offers it, the runner only with
+  `runFunctions`, writes only for a credential that can write.
+- **Search:** a fuzzy subsequence match on the title, hint and keywords; substrings at the start rank first.
+  With an empty search, the five most recent picks (kept per deployment in this browser) come first.
+- **Keyboard:** a combobox over a listbox with `aria-activedescendant` (the focus stays in the input),
+  ↑/↓ to move, Enter to pick, Escape to close (a Base UI dialog: the focus is trapped and returns).
+- **Not yet:** "Create table" as an action (the table list's inline name box has no URL to open it by), and
+  running destructive actions from the palette itself.

@@ -1111,3 +1111,48 @@ describe("the sign-in page (STUDY-12 §19)", () => {
     await close();
   });
 });
+
+describe("the command palette (UI-01 §32)", () => {
+  test("Ctrl+K from the Database screen: find a table, go, reopen, theme action, Escape; no freeze; axe in both themes", async () => {
+    const { page, errors, close } = await open("/database/users");
+    await heading(page, "users");
+    await page.keyboard.press("Control+k");
+    const box = page.getByRole("combobox", { name: "Search screens, tables, functions and actions" });
+    await box.waitFor();
+    expect(await box.evaluate((el) => el === document.activeElement)).toBe(true);
+    await box.fill("tasks");
+    await page.getByRole("option").first().waitFor();
+    await page.keyboard.press("Enter");
+    await heading(page, "tasks");
+    await box.waitFor({ state: "detached" });
+    // reopened: the pick is recent; the header's button opens it too
+    await page.getByRole("button", { name: /^Search/ }).click();
+    await page.getByText("Recent").waitFor();
+    expect(await axeOf(page)).toEqual([]);
+    await box.fill("dark theme");
+    await page.getByRole("option", { name: /theme/ }).first().waitFor();
+    await page.keyboard.press("Escape");
+    await box.waitFor({ state: "detached" });
+    // the grid still answers (no focus fight with the dialog)
+    await page.getByRole("gridcell").first().click();
+    expect(errors).toEqual([]);
+    await close();
+    // the dark theme, opened fresh (not switched mid-page, where colours are still transitioning)
+    const dark = await open("/database/users", { colorScheme: "dark" });
+    await heading(dark.page, "users");
+    await dark.page.keyboard.press("Control+k");
+    await dark.page.getByRole("combobox", { name: "Search screens, tables, functions and actions" }).waitFor();
+    await dark.page.getByRole("option").first().waitFor();
+    expect(await axeOf(dark.page)).toEqual([]);
+    await dark.close();
+  });
+});
+
+async function axeOf(page: Page) {
+  await page.addScriptTag({ content: AXE });
+  return page.evaluate(async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+    const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
+    return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+  });
+}
