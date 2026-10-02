@@ -88,6 +88,7 @@ export type {
 export {
   checkUserTime,
   type ExecutionKind,
+  failExecution,
   formatDuration,
   installDeterminismIn,
   newUserTimer,

@@ -175,11 +175,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-202 | No local dashboard until item 12 | a local dashboard on 6790 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L6](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-203 | `bunvex` reserved on npm with a placeholder now; the real package later; the CLI runs on Bun (`bunx bunvex`) | `convex` on npm, `npx convex` on Node | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L7](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-204 | Nested calls in the parent's `Tx`, own 1 s budget, parent's clock paused | separate isolate (default), own budget | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N1](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
-| DV-205 | Nested errors without Convex's appended stack-frame text | message plus stack text | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
-| DV-206 | `transactionLimits`: reads and writes only; the rest ignored | every limit | yes (rare) | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-207 | Concurrent nested calls serialized | serialized | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N4](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-208 | The 1 s limit is cooperative (checked at database calls and the end); a synchronous infinite loop is not interrupted | V8 terminates the isolate | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N5](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
-| DV-209 | Store errors in a nested call propagate as they are | upgraded to a non-catchable internal error | minor | accept | owner, 2026-10-02 (as recommended) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-211 | Dashboard: a failed schema validation says how many stored documents do not match and lists a few, each opening in Database | the push fails with the first document that does not match | no (dashboard) | Seeing the scale and the documents helps fix the data | owner, 2026-10-02 (follow-up SC3) | [STUDY-12 SC4](../study/STUDY-12-dashboard.md#144-divergences) |
 | DV-215 | Export has only the root; a ZIP with `_components/…` is refused on import | creates the components | yes (components only) | accept until components | owner, 2026-10-02 (as recommended) | [STUDY-42 X1](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-216 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
@@ -187,6 +184,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one (a legacy table with no documents imports) | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -195,6 +193,9 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-205 | A nested error reached the caller with its message alone | As Convex's `JsError` display: "Uncaught Error: <message>" and the nested stack frames, each "    at …", ending with a newline; a timeout as its message and a newline; a `BunvexError` keeps its data | yes (the caught message) | owner, 2026-10-02 (#213) | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-206 | `transactionLimits` applied to documents and bytes read and written only | As Convex: also `databaseQueries` (read-set intervals), `functionsScheduled` and `scheduledFunctionArgsBytes`, with Convex's messages printing the lowered limit; the file limits are accepted and, as in Convex (which never counts them), never reached | yes (rare) | owner, 2026-10-02 (#213) | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
+| DV-209 | A store error in a nested call propagated as a catchable error | As Convex: a system error (`isSystemError`: the committer stopped, out of retention) fails the whole call; caught or not, it is thrown at the caller's next store call and when it ends | yes (only on a store failure) | owner, 2026-10-02 (#213) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-223 | System tables were numbered in order from 513 (`_storage` 522) | As Convex: each system table takes Convex's fixed number (`DefaultTableNumber`: `_storage` 540, `_scheduled_functions` 539, `_exports` 516, …), bunvex's own take 9998 and 9999; a table created before keeps its number | yes (the ids of files and scheduled functions) | owner, 2026-10-02 (#216) | [STUDY-42 X9](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-220 | A failed import step failed the import at once | As Convex: a system error (storage, server, an exhausted conflict) is retried with a backoff from 30 s to 5 minutes, and fails the import with "Your request couldn't be completed. Try again later." after 5 retries; an error of the import's own fails it at once | yes | owner, 2026-10-02 (#210) | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-221 | An interrupted import started over | As Convex: a retried or restarted import resumes into the hidden tables it created, skipping the documents (and files) already written; an append into a new table cannot resume ("can't resume append import") | no (only the time) | owner, 2026-10-02 (#210) | [STUDY-42 X7](../study/STUDY-42-import-export.md#4-divergences) |
@@ -268,9 +269,6 @@ classed as bugs by their study; they are listed here because they change what op
 | DV-84 | Storage ids: only document ids | `Id<"_storage">` and legacy UUIDs | [platform §3](platform.md#3-file-storage) |
 | DV-85 | Crons: no splay | runs without `minuteUTC` get a stable random offset in the hour | [platform §5](platform.md#5-cron-jobs) |
 | DV-86 | HTTP actions: not served yet | `/http/*` and a separate site origin (port 3211) | [platform §8](platform.md#8-http-actions) |
-| DV-205 | A nested error reaches the parent without Convex's appended stack-frame text. To build: append the nested function's formatted stack to the message, as Convex's `JsError` Debug form | message plus stack text | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
-| DV-206 | `transactionLimits` covers documents and bytes read and written only. To build: count database queries, scheduled functions, scheduled-function argument bytes and file reads and writes per transaction, then apply their budgets | every limit | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
-| DV-209 | Store errors in a nested call propagate as they are. To build: mark the transaction failed and turn them into the non-catchable internal error ("Internal Server Error") | upgraded to a non-catchable internal error | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 
 ## Pending owner decisions
 
@@ -286,11 +284,12 @@ DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-
 DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
 DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
-DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
+DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 were built later (#213) and are in [Resolved to match Convex](#resolved-to-match-convex).
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
 DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-02): DV-222 is in
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).
+DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
@@ -304,9 +303,9 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 |---|---|---|
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Log streaming** (item 12) | DV-77, DV-141, DV-184 | stop printing captured log lines to stdout; scheduled and cron runs' lines in the log stream; `dev --tail-logs` on by default (`pause-on-deploy`) |
-| **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import |
+| **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
 | **An audit log** | DV-218 | audit-log entries for exports and imports (and Convex's other events) |
-| **Nothing (can be built any time)** | DV-205, DV-206, DV-209 (STUDY-41), DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-10 (transition chunks) | see each row |
+| **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |
 |---|---|---|---|---|---|---|

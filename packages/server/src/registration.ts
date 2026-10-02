@@ -19,7 +19,7 @@ import type { Scheduler } from "./scheduler.ts";
 
 type Callable<Kind extends "query" | "mutation" | "action"> = FunctionReference<Kind, "public" | "internal">;
 
-/** Convex's `TransactionLimits`: lower a nested call's limits (bunvex applies the read and write ones, STUDY-41). */
+/** Convex's `TransactionLimits`: lower a nested call's limits (STUDY-41). */
 export type TransactionLimits = {
   bytesRead?: number;
   bytesWritten?: number;

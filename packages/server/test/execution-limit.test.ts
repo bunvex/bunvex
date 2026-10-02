@@ -120,7 +120,8 @@ test("a nested call has its own budget; its timeout is catchable by the caller",
   // The caller 20 + 20 ms, the nested call 40 ms: 80 ms in all, but neither over its own 50 ms.
   expect(await fns.runQuery("m:parent", { mine: 20, theirs: 40 })).toBe("both done");
   expect(await fns.runQuery("m:parent", { mine: 0, theirs: 80 })).toBe(
-    "Function execution timed out (maximum duration: 50ms)",
+    // Convex's `JsError::from_message` display: the message and a newline, no frames.
+    "Function execution timed out (maximum duration: 50ms)\n",
   );
   await engine.close();
 });
