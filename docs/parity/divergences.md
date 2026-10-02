@@ -163,6 +163,13 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-190 | S3 per use case (its bucket set), not all-or-nothing on five buckets | all five or local | yes (config) | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K4](../study/STUDY-38-docker.md#4-divergences) |
 | DV-191 | Image published to `ghcr.io/bunvex/bunvex-backend` from `main` | `ghcr.io/get-convex/convex-backend` | — | owner turns it on | owner, 2026-10-02 (as recommended) | [STUDY-38 K5](../study/STUDY-38-docker.md#4-divergences) |
 | DV-192 | Convex knobs with no bunvex counterpart left out of the compose file | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-38 K6](../study/STUDY-38-docker.md#4-divergences) |
+| DV-197 | `bunvex-local-backend` flags: `--cloud-origin`/`--site-origin`, `--db sqlite\|postgres\|mysql\|mongodb`, default name `bunvex-self-hosted` | `--convex-origin`/`--convex-site`, `postgres-v5`/`mysql-v5`, `carnitas` | yes | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-40 L1](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-198 | `bunvex start` removed; the image runs `bunvex-local-backend` through Convex's scripts | the same scripts | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L2](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-199 | Local deployments `local-<basename(cwd)>`, no account or prompt | anonymous mode, `anonymous-<basename>` | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L3](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-200 | The latest executable from GitHub's releases API | a version service | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L4](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-201 | `BUNVEX_LOCAL_BACKEND_BINARY` overrides the download | — | no | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L5](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-202 | No local dashboard until item 12 | a local dashboard on 6790 | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L6](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-203 | `bunvex` reserved on npm with a placeholder now; the real package later; the CLI runs on Bun (`bunx bunvex`) | `convex` on npm, `npx convex` on Node | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-40 L7](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -254,6 +261,7 @@ DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and a
 DV-173–DV-177 (STUDY-36 G1–G5) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-178–DV-186 (STUDY-37 E1–E9) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences); publishing (K5) starts once the repository variable PUBLISH_IMAGE is set.
+DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
 ## Gaps recorded in studies
 
