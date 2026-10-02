@@ -5,8 +5,23 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version', as
 // Convex's SQLite store names its globals table) and `read_only` (Convex's name; its SQLite store has none).
 // They are checked before the file is changed in any way (even the WAL pragma rewrites its header).
+//
+// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (`documents_by_ts`,
+// built when missing, as `indexes_by_ts`); prunes are `ts <= X` per key, Convex's SQLite statements;
+// globals are `persistence_globals` rows.
 import { Database } from "bun:sqlite";
-import type { DocWrite, IndexWrite, Lease, LeaseAcquire, LogCommit, Persistence } from "./index.ts";
+import type {
+  DocLogRow,
+  DocPrune,
+  DocWrite,
+  IndexPrune,
+  IndexWrite,
+  Lease,
+  LeaseAcquire,
+  LogCommit,
+  Persistence,
+  RetentionStore,
+} from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
   checkLayoutVersion,
@@ -28,7 +43,7 @@ const COLUMNS = {
   indexes: ["index_id integer", "key blob", "ts integer", "deleted integer", "document_id text"],
 };
 
-export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
+export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   /** PERSIST-01 C7 as an OS lock on the file, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The store's single-writer lock: taken at open when free, else by acquireLease once it is. */
@@ -41,6 +56,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
   private getDoc;
   private logRows;
   private logPrev;
+  private docLogRows;
+  private pruneIdx;
+  private pruneDoc;
   private inTx = false;
   /** The highest ts applied since the last flush. */
   private top = 0;
@@ -90,12 +108,20 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
         order by ts`);
     this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`);
+    this.docLogRows = this.db.prepare(`select ts, table_id, id, deleted from documents
+        where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
+                                 where ts > ?1 and ts <= ?2 order by ts limit ?3))
+        order by ts`);
+    this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and key = ? and ts <= ?`);
+    this.pruneDoc = this.db.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
   }
 
-  /** The ts index, only when missing (STUDY-25 L1): a store written before PERSIST-01 C11 gets it here. */
+  /** The ts indexes, only when missing (STUDY-25 L1): a store written before PERSIST-01 C11 (indexes) or
+   *  C12 (documents) gets them here. */
   private ensureLogIndex() {
-    if (!this.db.query(`select 1 from sqlite_master where type = 'index' and name = 'indexes_by_ts'`).get())
-      this.db.exec(`create index if not exists indexes_by_ts on indexes (ts)`);
+    for (const t of ["indexes", "documents"])
+      if (!this.db.query(`select 1 from sqlite_master where type = 'index' and name = '${t}_by_ts'`).get())
+        this.db.exec(`create index if not exists ${t}_by_ts on ${t} (ts)`);
   }
 
   private get inMemory() {
@@ -222,6 +248,58 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag {
       rows.map((r) => ({ ts: r.ts, index: r.index_id, key: r.key, id: r.document_id })),
       Number(prev.m ?? 0),
     );
+  }
+
+  /** PERSIST-01 C12, as readLog over `documents`. */
+  readDocumentLog(afterTs: number, upToTs: number, limit: number): DocLogRow[] {
+    if (limit <= 0) return [];
+    const hi = this.inTx ? Math.min(upToTs, this.durableTs ?? 0) : upToTs;
+    return (
+      this.docLogRows.all(afterTs, hi, limit) as { ts: number; table_id: number; id: string; deleted: number }[]
+    ).map((r) => ({ ts: r.ts, table: r.table_id, id: r.id, deleted: !!r.deleted }));
+  }
+
+  /** PERSIST-01 C13. Inside a group still being applied, the deletes join its transaction. */
+  pruneIndexes(entries: IndexPrune[]) {
+    this.assertWriter();
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const e of entries) n += this.pruneIdx.run(e.index, e.key, e.ts).changes;
+      return n;
+    })();
+  }
+
+  pruneDocuments(entries: DocPrune[]) {
+    this.assertWriter();
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const e of entries) n += this.pruneDoc.run(e.table, e.id, e.ts).changes;
+      return n;
+    })();
+  }
+
+  /** PERSIST-01 C14. */
+  getGlobal(key: string): unknown {
+    const r = this.db.query(`select json_value from persistence_globals where key = ?`).get(key) as {
+      json_value: string;
+    } | null;
+    return r ? JSON.parse(r.json_value) : null;
+  }
+
+  setGlobal(key: string, value: unknown) {
+    this.assertWriter();
+    this.db.run(
+      `insert into persistence_globals (key, json_value) values (?, ?)
+       on conflict (key) do update set json_value = excluded.json_value`,
+      [key, JSON.stringify(value)],
+    );
+  }
+
+  auditRowCount() {
+    const r = this.db
+      .query(`select (select count(*) from documents) as docs, (select count(*) from indexes) as idx`)
+      .get() as { docs: number; idx: number };
+    return { docs: Number(r.docs), idx: Number(r.idx) };
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {

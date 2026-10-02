@@ -47,8 +47,16 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
-import { hasLease, type Lease, LeaseHeldError, LeaseLostError, type Persistence } from "./persistence/index.ts";
+import {
+  hasLease,
+  hasRetention,
+  type Lease,
+  LeaseHeldError,
+  LeaseLostError,
+  type Persistence,
+} from "./persistence/index.ts";
 import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import { type DeclaredTable, documentValidator, type SchemaDefinition } from "./schema.ts";
 import {
@@ -164,6 +172,8 @@ export class Engine {
       lease?: { ttlMs?: number; waitMs?: number };
       /** The committer's write-log retention (default: Convex's 30 s / 300 s / 50 MiB; STUDY-06 D10). */
       writeLogRetention?: Partial<WriteLogRetention>;
+      /** Retention's knobs (Convex's INDEX_RETENTION_DELAY, DOCUMENT_RETENTION_DELAY, …; STUDY-33). */
+      retention?: RetentionOptions;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -211,8 +221,16 @@ export class Engine {
       this.indexWorker = new IndexWorker(this.workerHost(), this.opts.indexBackfill);
       this.indexWorker.start();
     }
+    // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
+    if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
+      this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
+      await this.retention.start();
+    }
     return this;
   }
+
+  /** Retention, on a store that has it (its windows and `stats` are for tests and measurements). */
+  retention: Retention | null = null;
 
   /** The background index backfill, while there is one (its `stats` are for tests and measurements). */
   indexWorker: IndexWorker | null = null;
@@ -280,6 +298,7 @@ export class Engine {
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
   async close() {
     await this.indexWorker?.stop();
+    await this.retention?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
     if (this.lease) {
@@ -449,6 +468,7 @@ export class Engine {
   ) {
     const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.instanceSecret = this.instanceSecret;
     if (kind === "mutation") tx.docValidators = this.docValidators;
@@ -631,6 +651,7 @@ export class Engine {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    tx.retention = this.retention;
     tx.instanceSecret = this.instanceSecret;
     tx.identity = caller.identity;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).

@@ -5,11 +5,26 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): the log's first record is a header,
 // `{"layout":N}`, written when the log is created (a log written before C10 gets it appended on its next
 // open, under the lock). The read-only flag is a file next to the log, `<log>.read-only`.
+//
+// Retention (PERSIST-01 C12–C14, STUDY-33): pruning drops old versions from RAM; the log file is not
+// compacted (DV-156), so a reopen replays them and retention prunes them again. A global is a log record,
+// `{"global":key,"value":…}`, written and synced when it is set.
 import { closeSync, existsSync, fdatasyncSync, openSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import BTree from "sorted-btree";
 import { compareKeys } from "../keyenc.ts";
-import type { DocWrite, IndexWrite, Lease, LeaseAcquire, LogCommit, Persistence } from "./index.ts";
+import type {
+  DocLogRow,
+  DocPrune,
+  DocWrite,
+  IndexPrune,
+  IndexWrite,
+  Lease,
+  LeaseAcquire,
+  LogCommit,
+  Persistence,
+  RetentionStore,
+} from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
   checkLayoutVersion,
@@ -50,6 +65,25 @@ function firstRecord(line: string, complete: boolean, store: string): "header" |
   throw foreign();
 }
 
+/** The first position in `xs` (sorted by ts) whose ts is above `ts`. */
+function firstAbove(xs: { ts: number }[], ts: number, from = 0) {
+  let lo = from;
+  let hi = xs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (xs[mid].ts <= ts) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Drop the versions at or below ts; how many went. */
+function pruneVersions(vs: { ts: number }[], ts: number) {
+  const n = firstAbove(vs, ts);
+  if (n) vs.splice(0, n);
+  return n;
+}
+
 /** Newest version at or before ts (versions are appended in ts order). */
 function visible<T>(vs: Version<T>[] | undefined, ts: number): Version<T> | undefined {
   if (!vs) return undefined;
@@ -57,7 +91,7 @@ function visible<T>(vs: Version<T>[] | undefined, ts: number): Version<T> | unde
   return undefined;
 }
 
-export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
+export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   /** PERSIST-01 C7 as an OS lock next to the log, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The log's single-writer lock. Replaying (and truncating a torn tail) happens only under it: another
@@ -68,6 +102,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
   private indexes = new Map<number, BTree<Uint8Array, Version<string | null>[]>>();
   private fh: FileHandle | null = null;
   private pending: Buffer[] = [];
+  /** A flush's write in flight (setGlobal appends after it). */
+  private writing: Promise<void> | null = null;
   private durable: boolean;
 
   private constructor(opts: { durable: boolean }) {
@@ -80,6 +116,15 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
   /** The log by ts (C11): every commit that wrote index entries, in ts order (apply is called in ts order).
    *  The write arrays are the ones `apply` received, shared with the B-trees' keys: no copy. */
   private commits: { ts: number; writes: IndexWrite[] }[] = [];
+  /** The document log (C12): every commit that wrote documents, in ts order. */
+  private docCommits: { ts: number; docs: DocWrite[] }[] = [];
+  /** Where each log starts once retention has forgotten its head (compacted when it gets long). */
+  private commitsHead = 0;
+  private docCommitsHead = 0;
+  /** The ts of the last index commit retention forgot: the prevTs of the first one left. */
+  private forgottenTs = 0;
+  /** Persistence globals (C14), replayed from the log. */
+  private globals = new Map<string, string>();
 
   static async open(logPath: string | null, opts: { durable: boolean } & OpenOptions) {
     const m = new MemoryPersistence(opts);
@@ -181,7 +226,14 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
         stamped = true;
       if (nl === -1) break; // torn: no terminator
       const line = text.slice(pos, nl);
-      let rec: { ts: number; docs: DocWrite[]; idx: [number, string, string | null][]; layout?: unknown };
+      let rec: {
+        ts: number;
+        docs: DocWrite[];
+        idx: [number, string, string | null][];
+        layout?: unknown;
+        global?: string;
+        value?: unknown;
+      };
       try {
         rec = JSON.parse(line);
       } catch {
@@ -191,6 +243,12 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
         // The header (first line), or the one appended to a log written before C10.
         checkLayoutVersion(rec.layout, this.store);
         stamped = true;
+        good += enc.encode(line).length + 1;
+        pos = nl + 1;
+        continue;
+      }
+      if (rec.global !== undefined) {
+        this.globals.set(rec.global, JSON.stringify(rec.value));
         good += enc.encode(line).length + 1;
         pos = nl + 1;
         continue;
@@ -221,6 +279,14 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
     return n;
   }
 
+  auditRowCount() {
+    let docs = 0;
+    let idx = 0;
+    for (const vs of this.docs.values()) docs += vs.length;
+    for (const t of this.indexes.values()) for (const vs of t.values()) idx += vs.length;
+    return { docs, idx };
+  }
+
   private tree(index: number) {
     let t = this.indexes.get(index);
     if (!t) {
@@ -231,7 +297,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
   }
 
   apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
-    if (this.logPath && !this.lock) throw new LeaseLostError("another process holds this memory store's log");
+    this.assertWriter();
     this.applyMemory(ts, docs, idx);
     if (this.fh !== null) {
       // The log record: ts + the writes. JSON keeps the prototype honest about bytes written; a real
@@ -247,6 +313,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
   private applyMemory(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
     this.lastTs = ts;
     if (idx.length) this.commits.push({ ts, writes: idx });
+    if (docs.length) this.docCommits.push({ ts, docs });
     for (const d of docs) {
       const k = `${d.table}:${d.id}`;
       const vs = this.docs.get(k);
@@ -276,8 +343,17 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
       writeSync(this.fh.fd, buf);
       if (this.durable) fdatasyncSync(this.fh.fd);
     } else {
-      await this.fh.write(buf);
-      if (this.durable) await this.fh.datasync();
+      const fh = this.fh;
+      const w = (async () => {
+        await fh.write(buf);
+        if (this.durable) await fh.datasync();
+      })();
+      this.writing = w;
+      try {
+        await w;
+      } finally {
+        if (this.writing === w) this.writing = null;
+      }
     }
     this.durableTs = top;
   }
@@ -289,19 +365,87 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag {
     if (limit <= 0) return out;
     const hi = Math.min(upToTs, this.durableTs);
     const cs = this.commits;
-    let lo = 0;
-    let n = cs.length;
-    while (lo < n) {
-      const mid = (lo + n) >>> 1;
-      if (cs[mid].ts <= afterTs) lo = mid + 1;
-      else n = mid;
-    }
-    let prevTs = lo > 0 ? cs[lo - 1].ts : 0;
+    const lo = firstAbove(cs, afterTs, this.commitsHead);
+    let prevTs = lo > this.commitsHead ? cs[lo - 1].ts : this.forgottenTs;
     for (let i = lo; i < cs.length && cs[i].ts <= hi && out.length < limit; i++) {
       out.push({ ts: cs[i].ts, prevTs, writes: cs[i].writes.slice() });
       prevTs = cs[i].ts;
     }
     return out;
+  }
+
+  /** PERSIST-01 C12, as readLog over the document commits. */
+  readDocumentLog(afterTs: number, upToTs: number, limit: number): DocLogRow[] {
+    const out: DocLogRow[] = [];
+    if (limit <= 0) return out;
+    const hi = Math.min(upToTs, this.durableTs);
+    const cs = this.docCommits;
+    for (
+      let i = firstAbove(cs, afterTs, this.docCommitsHead), n = 0;
+      i < cs.length && cs[i].ts <= hi && n < limit;
+      i++, n++
+    )
+      for (const d of cs[i].docs) out.push({ ts: cs[i].ts, table: d.table, id: d.id, deleted: d.json === null });
+    return out;
+  }
+
+  private assertWriter() {
+    if (this.logPath && !this.lock) throw new LeaseLostError("another process holds this memory store's log");
+  }
+
+  /** PERSIST-01 C13: drop the versions from RAM, and forget the log up to `through`. */
+  pruneIndexes(entries: IndexPrune[], through: number) {
+    this.assertWriter();
+    let n = 0;
+    for (const e of entries) {
+      const t = this.indexes.get(e.index);
+      const vs = t?.get(e.key);
+      if (!vs) continue;
+      n += pruneVersions(vs, e.ts);
+      if (!vs.length) t!.delete(e.key);
+    }
+    this.commitsHead = firstAbove(this.commits, Math.min(through, this.durableTs), this.commitsHead);
+    if (this.commitsHead > 0) this.forgottenTs = this.commits[this.commitsHead - 1].ts;
+    if (this.commitsHead > 1024 && this.commitsHead * 2 > this.commits.length) {
+      this.commits = this.commits.slice(this.commitsHead);
+      this.commitsHead = 0;
+    }
+    return n;
+  }
+
+  pruneDocuments(entries: DocPrune[], through: number) {
+    this.assertWriter();
+    let n = 0;
+    for (const e of entries) {
+      const k = `${e.table}:${e.id}`;
+      const vs = this.docs.get(k);
+      if (!vs) continue;
+      n += pruneVersions(vs, e.ts);
+      if (!vs.length) this.docs.delete(k);
+    }
+    this.docCommitsHead = firstAbove(this.docCommits, Math.min(through, this.durableTs), this.docCommitsHead);
+    if (this.docCommitsHead > 1024 && this.docCommitsHead * 2 > this.docCommits.length) {
+      this.docCommits = this.docCommits.slice(this.docCommitsHead);
+      this.docCommitsHead = 0;
+    }
+    return n;
+  }
+
+  /** PERSIST-01 C14: a log record of its own, durable when this returns. */
+  getGlobal(key: string): unknown {
+    const v = this.globals.get(key);
+    return v === undefined ? null : JSON.parse(v);
+  }
+
+  async setGlobal(key: string, value: unknown) {
+    this.assertWriter();
+    this.globals.set(key, JSON.stringify(value));
+    // After a group's write in flight, never inside it: records stay whole lines.
+    while (this.writing) await this.writing.catch(() => {});
+    if (this.fh !== null) {
+      writeSync(this.fh.fd, `${JSON.stringify({ global: key, value })}\n`);
+      if (this.durable) fdatasyncSync(this.fh.fd);
+    }
   }
 
   scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
