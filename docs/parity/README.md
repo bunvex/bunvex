@@ -100,9 +100,10 @@ In this order:
    too — swapped with HTTP actions by the owner, 2026-10-01) — done;
 5. retention and garbage collection of old versions (STUDY-33) — done;
 6. admin keys (STUDY-34);
-7. pushing and deploying functions: module loading, restart or hot swap, sandboxing (ARCH-01 open decisions
-   2–3), the pushed code kept in the store;
-8. codegen (`_generated/api`, `server`, `dataModel`; ARCH-01 open decision 1);
+7. pushing and deploying functions (STUDY-35): module loading, hot swap in `vm` contexts, the pushed code
+   kept in the store, the deploy2 protocol, `bunvex deploy` — done;
+8. codegen (`_generated/api`, `server`, `dataModel`; ARCH-01 open decision 1, decided: generate like Convex;
+   STUDY-36);
 9. the CLI, part 1: `start`, `deploy`, `dev`, `run`, `admin-key`, and environment variables (`process.env`,
    `env set|get|list|remove`);
 10. the Docker image and docker-compose (credentials bootstrap), so a self-hosted app can be brought up as
