@@ -487,9 +487,11 @@ describe("the dashboard in a browser", () => {
     for (const colorScheme of ["light", "dark"] as const) {
       const { page, errors, close } = await open("/", { colorScheme });
       await heading(page, "Overview");
-      const card = page.getByRole("region", { name: "Cache hit rate" });
-      await card.scrollIntoViewIfNeeded().catch(() => {});
-      await page.locator('[data-slot="heatmap"] td[data-step]').first().waitFor();
+      // the charts mount when the Metrics section scrolls into view (they are lazy)
+      await page.getByRole("heading", { level: 2, name: "Metrics" }).scrollIntoViewIfNeeded();
+      await page.mouse.wheel(0, 400);
+      await page.getByRole("region", { name: "Cache hit rate" }).waitFor({ timeout: 20_000 });
+      await page.locator('[data-slot="heatmap"] td[data-step]').first().waitFor({ timeout: 20_000 });
       await page.addScriptTag({ content: AXE });
       const violations = await page.evaluate(async () => {
         // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
