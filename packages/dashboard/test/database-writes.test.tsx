@@ -228,6 +228,9 @@ describe("adding, deleting, clearing", () => {
     const { history, src } = mount("/database", source({ tables: false }));
     await screen.findByRole("heading", { level: 1, name: "Database" });
     const empty = screen.getByRole("region", { name: "There are no tables here yet." });
+    // the same frame as a table (UX2-4): the section column with an empty Tables list, and Bar 1
+    expect(within(screen.getByRole("navigation", { name: "Tables" })).getByText("No tables yet.")).toBeDefined();
+    expect(screen.getByRole("heading", { level: 1, name: "Database" })).toBeDefined();
     await within(empty).findByText("Create a table to start storing data.");
     await expectAccessible();
     const user = userEvent.setup();
