@@ -2,10 +2,12 @@
 // (npm-packages/convex/src/cli/run.ts, lib/run.ts): any kind, internal ones included (an admin key), through
 // `POST /api/function`; JSON5 arguments; `--identity` to act as a user; the function's log lines on stderr,
 // its result on stdout; the deployment's functions listed when the name is not one of them; `--push` deploys
-// first.
+// first; `--watch` subscribes to a query over a WebSocket and prints each new result.
 import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fromJsonValue, type JSONValue } from "@bunvex/values";
+import { BunvexClient, type Logger } from "@bunvex/client";
+import { makeFunctionReference } from "@bunvex/protocol";
+import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import { deployCommand, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 import { parseJson5 } from "./json5.ts";
@@ -21,6 +23,7 @@ Run a function (query, mutation or action) on the deployment. Internal functions
 Options:
 ${TARGET_OPTIONS}
   --identity <json5>   act as this user (e.g. '{ name: "Ada", email: "ada@example.com" }')
+  -w, --watch          a query: print its result, and again each time it changes (Ctrl-C to stop)
   --push               deploy the functions first (with --typecheck / --codegen as \`bunvex deploy\`)
   --typecheck <mode>   for --push: enable, try (default) or disable
   --codegen <mode>     for --push: enable (default) or disable`;
@@ -105,7 +108,70 @@ async function availableFunctions(target: Target): Promise<string> {
   return names.length ? `Available functions:\n${names.join("\n")}` : "No functions found.";
 }
 
-export async function runCommand(args: string[], io: Io): Promise<number> {
+/**
+ * `--watch` (Convex's `subscribeAndLog`): the query over a WebSocket, each new result printed, until stopped
+ * (Ctrl-C, or `signal`).
+ */
+async function watchQuery(
+  io: Io,
+  target: Target,
+  path: string,
+  rawName: string,
+  args: Record<string, Value>,
+  identity: Record<string, unknown> | undefined,
+  signal?: AbortSignal,
+): Promise<number> {
+  const logger: Logger = {
+    logVerbose: () => {},
+    // The client prints a function's log lines as `%c[BUNVEX Q(path)] [LEVEL]`, the style, then the text.
+    log: (...a) =>
+      io.err(
+        a
+          .filter((x, i) => !(i === 1 && typeof a[0] === "string" && a[0].includes("%c")))
+          .map(String)
+          .join(" ")
+          .replace("%c", ""),
+      ),
+    warn: (...a) => io.err(a.map(String).join(" ")),
+    error: (...a) => io.err(a.map(String).join(" ")),
+  };
+  const client = new BunvexClient(target.url, { logger });
+  client.client.setAdminAuth(target.adminKey, identity as never);
+  io.err(`✔ Watching query ${rawName} on ${target.url}...`);
+  const stop = new AbortController();
+  const onSigint = () => stop.abort();
+  if (signal) signal.addEventListener("abort", onSigint, { once: true });
+  else process.once("SIGINT", onSigint);
+  let code = 0;
+  const sub = client.onUpdate(
+    makeFunctionReference<"query">(path),
+    args,
+    (value) => io.out(printValue(io, value as Value)),
+    (e) => {
+      io.err(`Failed to run function "${rawName}":\n${e.message.trim()}`);
+      code = 1;
+      stop.abort();
+    },
+  );
+  await new Promise<void>((done) => {
+    if (stop.signal.aborted) return done();
+    stop.signal.addEventListener("abort", () => done(), { once: true });
+  });
+  if (!signal) process.off("SIGINT", onSigint);
+  if (code === 0) io.err(`Closing connection to ${target.url}...`);
+  sub.unsubscribe();
+  await client.close();
+  return code;
+}
+
+/** A result, for people on a terminal, else as JSON. */
+function printValue(io: Io, value: Value) {
+  return io.isTTY
+    ? Bun.inspect(value, { colors: true, depth: Number.POSITIVE_INFINITY })
+    : JSON.stringify(toJsonValue(value), null, 2);
+}
+
+export async function runCommand(args: string[], io: Io, opts: { signal?: AbortSignal } = {}): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     io.out(RUN_USAGE);
     return 0;
@@ -117,6 +183,7 @@ export async function runCommand(args: string[], io: Io): Promise<number> {
   }
   let identity: string | undefined;
   let push = false;
+  let watch = false;
   const pushFlags: string[] = [];
   const positional: string[] = [];
   const r = taken.rest;
@@ -132,10 +199,8 @@ export async function runCommand(args: string[], io: Io): Promise<number> {
       }
       if (name === "--identity") identity = v;
       else pushFlags.push(`${name}=${v}`);
-    } else if (name === "--watch" || name === "-w") {
-      io.err("bunvex run: --watch is not supported yet (STUDY-37 E5)");
-      return 2;
-    } else if (a.startsWith("-") && a !== "-") {
+    } else if (name === "--watch" || name === "-w") watch = true;
+    else if (a.startsWith("-") && a !== "-") {
       io.err(`bunvex run: unknown option ${a}\n\n${RUN_USAGE}`);
       return 2;
     } else positional.push(a);
@@ -166,6 +231,16 @@ export async function runCommand(args: string[], io: Io): Promise<number> {
       const code = await deployCommand(["--url", target.url, "--admin-key", target.adminKey, ...pushFlags], io);
       if (code !== 0) return 1;
     }
+    if (watch)
+      return await watchQuery(
+        io,
+        target,
+        path,
+        rawName,
+        fromJsonValue(fnArgs as JSONValue) as Record<string, Value>,
+        identity ? fakeIdentity(identity) : undefined,
+        opts.signal,
+      );
     let res: Response;
     try {
       res = await fetch(`${target.url}/api/function`, {

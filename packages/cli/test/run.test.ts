@@ -10,7 +10,7 @@ import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
 import { type Io, main } from "../src/index.ts";
 import { parseJson5 } from "../src/json5.ts";
-import { fakeIdentity, parseFunctionName } from "../src/run.ts";
+import { fakeIdentity, parseFunctionName, runCommand } from "../src/run.ts";
 import { memoryStore } from "./memory-store.ts";
 
 const SECRET = "12".repeat(32);
@@ -130,7 +130,50 @@ describe("bunvex run", () => {
     expect(badArgs.err[0]).toStartWith('Failed to parse arguments as JSON: "{ n: "');
     expect((await run(dir, url, "api.items")).err).toEqual(['Function name has too few parts: "api.items"']);
     expect((await run(dir, url)).code).toBe(2);
-    expect((await run(dir, url, "items:list", "--watch")).code).toBe(2);
+  });
+
+  test("--watch: the result, then each change, until stopped; a missing function fails", async () => {
+    const url = await deployment();
+    const dir = tmp();
+    const out: string[] = [];
+    const err: string[] = [];
+    const it: Io = {
+      env: { BUNVEX_SELF_HOSTED_URL: url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY },
+      cwd: dir,
+      out: (l) => out.push(l),
+      err: (l) => err.push(l),
+    };
+    const until = async (pred: () => boolean) => {
+      for (let i = 0; i < 200 && !pred(); i++) await Bun.sleep(25);
+      expect(pred()).toBe(true);
+    };
+    const stop = new AbortController();
+    const watching = runCommand(["items:list", "--watch"], it, { signal: stop.signal });
+    await until(() => out.length === 1);
+    expect(err[0]).toBe(`✔ Watching query items:list on ${url}...`);
+    expect(out).toEqual(["[]"]);
+    await run(dir, url, "items:add", "{ n: 5 }");
+    await until(() => out.length === 2);
+    expect(out[1]).toBe("[\n  5\n]");
+    stop.abort();
+    expect(await watching).toBe(0);
+    expect(err.at(-1)).toBe(`Closing connection to ${url}...`);
+    // Acting as a user, over the socket too.
+    const who: string[] = [];
+    const stop2 = new AbortController();
+    const asAda = runCommand(
+      ["items:whoami", "{}", "--watch", "--identity", "{ name: 'Ada' }"],
+      { ...it, out: (l) => who.push(l) },
+      { signal: stop2.signal },
+    );
+    await until(() => who.length === 1);
+    expect(JSON.parse(who[0]!)).toMatchObject({ name: "Ada", issuer: "https://bunvex.test" });
+    stop2.abort();
+    await asAda;
+    const missing: string[] = [];
+    const code = await runCommand(["items:nope", "--watch"], { ...it, err: (l) => missing.push(l) });
+    expect(code).toBe(1);
+    expect(missing.at(-1)).toContain('Failed to run function "items:nope":');
   });
 
   test("--push deploys the functions directory first", async () => {

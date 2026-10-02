@@ -17,7 +17,9 @@
     "bunvex": "./bin/bunvex.ts"
   },
   "dependencies": {
+    "@bunvex/client": "workspace:*",
     "@bunvex/core": "workspace:*",
+    "@bunvex/protocol": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*"
   }

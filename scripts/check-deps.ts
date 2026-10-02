@@ -29,7 +29,8 @@ const ALLOWED: Record<string, string[]> = {
   nextjs: ["react", "client", "values"],
   auth: ["values"],
   "file-storage": [],
-  cli: ["server", "core", "values"],
+  // STUDY-37 E5 (owner, 2026-10-02): the CLI subscribes as Convex's does (`run --watch`).
+  cli: ["server", "core", "values", "client", "protocol"],
   testing: ["server", "core", "values"],
   // Test-only, never published: end-to-end sync tests (a server and clients in one process, STUDY-26).
   "sync-e2e": ["client", "react", "server", "core", "protocol", "values"],
