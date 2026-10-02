@@ -26,8 +26,12 @@ describe("LineChart", () => {
         <LineChart label="Calls per minute" series={two} formatTime={fmtTime} />
       </main>,
     );
-    const paths = [...container.querySelectorAll("path")].map((p) => p.getAttribute("d") ?? "");
+    const paths = [...container.querySelectorAll("path:not([data-gaps])")].map((p) => p.getAttribute("d") ?? "");
     expect(paths).toHaveLength(2);
+    // the gap is bridged, lighter and dashed, so the line does not read as fragments (UX2-25)
+    const gaps = [...container.querySelectorAll("path[data-gaps]")].map((p) => p.getAttribute("d") ?? "");
+    expect(gaps[0]!.match(/M/g)).toHaveLength(1);
+    expect(gaps[1]).toBe("");
     expect(paths[0]!.match(/M/g)).toHaveLength(2); // the gap starts a new stroke
     expect(paths[1]!.match(/M/g)).toHaveLength(1);
     const legend = screen.getByRole("list", { name: "Calls per minute: legend" });
@@ -86,6 +90,20 @@ describe("LineChart", () => {
     expect(ys).toHaveLength(3);
     expect(ys[1]! - ys[0]!).toBeGreaterThanOrEqual(12);
     expect(ys[2]! - ys[1]!).toBeGreaterThanOrEqual(12);
+  });
+
+  test("direct labels stay inside the plot when the lines end at the bottom (UX2-25)", () => {
+    const low = (id: string) => ({ id, label: id, points: pts(9, 0), color: "series-1" });
+    const { container } = render(
+      <LineChart label="Latency" height={180} series={[low("p50"), low("p90"), low("p95"), low("p99")]} directLabels />,
+    );
+    const ys = [...container.querySelectorAll("svg text")]
+      .filter((t) => /^p\d+$/.test(t.textContent ?? ""))
+      .map((t) => Number(t.getAttribute("y")))
+      .sort((a, b) => a - b);
+    expect(ys).toHaveLength(4);
+    expect(Math.max(...ys)).toBeLessThanOrEqual(180 - 22); // the plot's bottom
+    for (let i = 1; i < ys.length; i++) expect(ys[i]! - ys[i - 1]!).toBeGreaterThanOrEqual(12);
   });
 
   test("direct labels at the lines' ends", () => {

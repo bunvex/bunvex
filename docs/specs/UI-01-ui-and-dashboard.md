@@ -2044,3 +2044,22 @@ writes when on), the screen and the editor.
   the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
+
+## UX review 2 (the owner approved all 28 findings, 2 Oct 2026)
+
+The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
+every one. They land in five pull requests, one subsection each.
+
+### UX review 2 — canvases and charts (UX2-14, UX2-15, UX2-25, UX2-27)
+
+- **Readable canvases** (UX2-14): `fitOptions` (shell/flow-controls) fits a small graph (up to six nodes) at
+  85–125 % and a big one never past 100 % — Schema and Workflows use it; a workflow without parallel steps runs
+  left to right. Topology keeps "never past 100 %" (the owner found bigger cards too big, §22), and its cards'
+  text goes from 11 to 12 px (labels 11 px).
+- **The workflow timeline** (UX2-15): a long idle gap — no step running, over a fifth of the run and over a
+  minute — is drawn short with a ⫽ marker saying how long it was ("Compress waits", on by default, can be
+  turned off); each bar says its duration; bars are at least 4 px.
+- **Charts** (UX2-25): `LineChart` bridges a missing stretch with a lighter dashed line instead of leaving
+  fragments, and its direct labels stay inside the plot (pushed up from the bottom, still a line apart).
+- **Analytics on a phone** (UX2-27): the visitors card, then the map (260 px), the breakdowns, and the live
+  feed last — five items until "Show N more".

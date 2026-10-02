@@ -4,10 +4,11 @@
 // journal before it). The selected step is in the URL (`?step=`), shared by the diagram, the timeline and the
 // journal.
 import { Button } from "@bunvex/ui/components/button";
+import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { lazy, type ReactNode, Suspense, useEffect, useRef } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../../context.tsx";
 import { capabilitiesQuery } from "../../data/queries.ts";
 import { toDataSourceError } from "../../data-source.ts";
@@ -32,6 +33,48 @@ export function StatusWord({ status }: { status: keyof typeof STATUS }) {
   );
 }
 
+/**
+ * The timeline's time axis (UX2-15): linear, except that a long idle gap — no step running, over a fifth of the
+ * run and over a minute — is drawn short (a ⫽ marker says how long it was), so one long wait (an event, a
+ * sleep) does not squeeze every step into a tick. `at(t)` is a position in 0…1; `breaks` are the cut gaps.
+ */
+export function timelineScale(
+  run: { startedAt: number },
+  steps: { startedAt: number | null; finishedAt: number | null }[],
+  end: number,
+  compress = true,
+) {
+  const start = run.startedAt;
+  const span = Math.max(1, end - start);
+  const busy = steps
+    .filter((s): s is { startedAt: number; finishedAt: number | null } => s.startedAt !== null)
+    .map((s) => [s.startedAt, s.finishedAt ?? end] as const)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of busy) {
+    const last = merged.at(-1);
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  // the gaps between busy stretches (and before the first, after the last)
+  const edges = [start, ...merged.flat(), end];
+  const gaps: [number, number][] = [];
+  for (let i = 0; i < edges.length; i += 2) if (edges[i + 1]! > edges[i]!) gaps.push([edges[i]!, edges[i + 1]!]);
+  const long = compress ? gaps.filter(([a, b]) => b - a > span / 5 && b - a > 60_000) : [];
+  // a long gap's drawn length, in the run's time: a fifth of what the rest of the run takes
+  const cut = 0.2 * Math.max(1, span - long.reduce((n, [a, b]) => n + (b - a), 0));
+  const length = span - long.reduce((n, [a, b]) => n + (b - a), 0) + long.length * cut;
+  const at = (t: number) => {
+    let x = t - start;
+    for (const [a, b] of long) {
+      if (t >= b) x -= b - a - cut;
+      else if (t > a) x -= ((t - a) / (b - a)) * (b - a - cut);
+    }
+    return Math.min(1, Math.max(0, x / length));
+  };
+  return { at, breaks: long.map(([a, b]) => ({ at: (at(a) + at(b)) / 2, ms: b - a })) };
+}
+
 /** When each step ran, on one time axis from the run's start: a bar per step, the running one up to now. */
 export function Timeline(props: {
   journal: WorkflowStep[];
@@ -43,16 +86,46 @@ export function Timeline(props: {
   const start = props.run.startedAt;
   const end = Math.max(props.run.finishedAt ?? props.now, ...props.journal.map((s) => s.finishedAt ?? 0), start + 1);
   const span = end - start;
+  const [compress, setCompress] = useState(true);
+  const compressId = useId();
+  const linear = timelineScale(props.run, props.journal, end, false);
+  const scale = timelineScale(props.run, props.journal, end, compress);
+  const canCompress = timelineScale(props.run, props.journal, end, true).breaks.length > 0;
   return (
     <section aria-label="Timeline" className="border-b px-4 py-3 md:px-6">
-      <h2 className="mb-2 text-xs font-medium text-muted-foreground">
-        Timeline · {formatTime(start)} → {props.run.finishedAt ? formatTime(props.run.finishedAt) : "now"} (
-        {duration(span)})
-      </h2>
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <h2 className="text-xs font-medium text-muted-foreground">
+          Timeline · {formatTime(start)} → {props.run.finishedAt ? formatTime(props.run.finishedAt) : "now"} (
+          {duration(span)})
+        </h2>
+        {canCompress && (
+          <span className="flex items-center gap-1.5 text-xs">
+            <Checkbox id={compressId} checked={compress} onCheckedChange={(on) => setCompress(on === true)} />
+            <label htmlFor={compressId}>Compress waits</label>
+          </span>
+        )}
+      </div>
+      {compress && scale.breaks.length > 0 && (
+        <div aria-hidden="true" className="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)] gap-3">
+          <span />
+          <span className="relative h-4">
+            {scale.breaks.map((b) => (
+              <span
+                key={b.at}
+                className="absolute -translate-x-1/2 text-[11px] whitespace-nowrap text-muted-foreground"
+                style={{ left: `${b.at * 100}%` }}
+              >
+                ⫽ {duration(b.ms)}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
       <ol className="flex flex-col gap-1">
         {props.journal.map((s) => {
-          const from = s.startedAt === null ? null : (s.startedAt - start) / span;
-          const to = s.startedAt === null ? null : ((s.finishedAt ?? props.now) - start) / span;
+          const from = s.startedAt === null ? null : (compress ? scale : linear).at(s.startedAt);
+          const to = s.startedAt === null ? null : (compress ? scale : linear).at(s.finishedAt ?? props.now);
+          const took = elapsed(s.startedAt, s.finishedAt, props.now);
           return (
             <li key={s.index}>
               <button
@@ -66,19 +139,33 @@ export function Timeline(props: {
                 </span>
                 <span className="relative h-4">
                   {from !== null && to !== null ? (
-                    <span
-                      className={cn(
-                        "absolute inset-y-0.5 rounded-sm",
-                        s.status === "failed"
-                          ? "bg-destructive/70"
-                          : s.status === "success"
-                            ? "bg-foreground/60"
-                            : s.status === "canceled"
-                              ? "bg-muted-foreground/40"
-                              : "bg-info/70",
+                    <>
+                      <span
+                        className={cn(
+                          "absolute inset-y-0.5 rounded-sm",
+                          s.status === "failed"
+                            ? "bg-destructive/70"
+                            : s.status === "success"
+                              ? "bg-foreground/60"
+                              : s.status === "canceled"
+                                ? "bg-muted-foreground/40"
+                                : "bg-info/70",
+                        )}
+                        style={{ left: `${from * 100}%`, width: `max(4px, ${(to - from) * 100}%)` }}
+                      />
+                      {/* each bar says how long it took, beside it */}
+                      {took !== null && (
+                        <span
+                          className={cn(
+                            "absolute top-0 text-[11px] leading-4 whitespace-nowrap text-muted-foreground tabular-nums",
+                            to > 0.85 ? "-translate-x-full pr-1" : "pl-1",
+                          )}
+                          style={{ left: to > 0.85 ? `${from * 100}%` : `calc(${to * 100}% + 4px)` }}
+                        >
+                          {duration(took)}
+                        </span>
                       )}
-                      style={{ left: `${from * 100}%`, width: `max(2px, ${(to - from) * 100}%)` }}
-                    />
+                    </>
                   ) : (
                     <span className="text-xs text-muted-foreground">not started</span>
                   )}
