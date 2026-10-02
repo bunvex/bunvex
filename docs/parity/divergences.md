@@ -225,6 +225,9 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 | DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | accept | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | accept (rule 5) | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 | DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | accept | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-170 | An app's functions live in `bunvex/` and its config in `bunvex.json` (`"functions"` overrides the directory) | `convex/`, `convex.json` | yes (a migrated app renames its directory or sets `functions`) | rule 5 | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-171 | The CLI targets a self-hosted deployment with `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (and `--url` / `--admin-key`) | `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY` | yes (the names) | rule 5, as `BUNVEX_CLOUD_ORIGIN` (DV-149) | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
+| DV-172 | A pushed `auth.config.js` sees the server's process environment as `process.env` until deployment environment variables exist (item 9) | the deployment's environment variables | yes (until item 9) | works before `env set` exists; the app does not change when it does | owner, 2026-10-02 | [STUDY-35](../study/STUDY-35-push-and-deploy.md) |
 
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to

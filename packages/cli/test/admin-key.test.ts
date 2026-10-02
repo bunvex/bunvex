@@ -19,7 +19,7 @@ afterEach(async () => {
 function io(env: Record<string, string | undefined>) {
   const out: string[] = [];
   const err: string[] = [];
-  const it: Io = { env, out: (l) => out.push(l), err: (l) => err.push(l) };
+  const it: Io = { env, cwd: process.cwd(), out: (l) => out.push(l), err: (l) => err.push(l) };
   return { it, out, err };
 }
 
@@ -93,8 +93,8 @@ describe("bunvex admin-key", () => {
     const both = io({});
     expect(await main(["admin-key", "--read-only", "--system"], both.it)).toBe(2);
     const unknown = io({});
-    expect(await main(["deploy"], unknown.it)).toBe(2);
-    expect(unknown.err[0]).toMatch(/unknown command deploy/);
+    expect(await main(["nope"], unknown.it)).toBe(2);
+    expect(unknown.err[0]).toMatch(/unknown command nope/);
     const help = io({});
     expect(await main(["admin-key", "--help"], help.it)).toBe(0);
     expect(help.out[0]).toMatch(/^Usage: bunvex admin-key/);
