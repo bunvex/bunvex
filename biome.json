@@ -13,5 +13,11 @@
       "style": { "noNonNullAssertion": "off" }
     }
   },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "overrides": [
+    {
+      "includes": ["packages/ui/src/components/map.tsx"],
+      "linter": { "enabled": false }
+    }
+  ]
 }

@@ -1932,6 +1932,39 @@ components may bring screens of their own. Such a screen is an **extension**: on
   in `ExtensionFeatures`), `extensions/mock.ts` and `extensions/contract.ts`.
 - **Removing one**: delete the folder and those lines; TypeScript points at any line left behind.
 
+### 26.2 Analytics (an extension; STUDY-12 §16)
+
+`extensions/analytics/` — a bunvex addition the owner may keep or remove. Sidebar: Observe, after History.
+
+- **Realtime** (`/analytics/realtime`): the open WebSocket sessions are the live visitors. A world map shows
+  one bubble per city, its area growing with the count, with a tooltip naming the city and how many. Beside
+  it (above it on a phone): the distinct visitors of the last 30 minutes with a per-minute sparkline, the
+  device split as a bar with the percentages in text, and the live events feed (a focusable scrolling list).
+  Below: Pages, Referrers, Countries and Browsers, each a table with a bar behind the name (the bar is never
+  the only number). Live through `watchAnalyticsRealtime`.
+- **The map**: mapcn's `Map` (MIT, added with the shadcn CLI into `@bunvex/ui/components/map`) on MapLibre
+  GL 6.11, with two changes so the dashboard stays offline and tells no third party it was opened: MapLibre's
+  worker is bundled (Vite `?url`, never unpkg) and the default style is the tile-less blank one (never
+  CARTO's hosted basemaps). The basemap is Natural Earth's 1:110m countries (public domain, via
+  `world-atlas`, ISC), bundled, drawn in mapcn's theme-aware neutrals; rings crossing the antimeridian are
+  unwrapped so they don't streak across the map; Antarctica is left out. Without WebGL 2 (tests, some VMs)
+  the page says so and the Countries table stands in. The vendored `map.tsx` is formatted but not linted
+  (`biome.json` override). A richer, online tile style could be a setting later.
+- **Events, Sessions, Profiles**: full-bleed grids, newest first, paged as they scroll, a search in Bar 2,
+  and the docked panel with the row's fields and its raw form (a literal) — it follows the current row once
+  open. Events can be narrowed to one event name from the column (`?name=`).
+- **Contract** (`extensions/analytics/data-source.ts`): optional `getAnalyticsRealtime`,
+  `watchAnalyticsRealtime`, `listAnalyticsEvents`, `listAnalyticsSessions`, `listAnalyticsProfiles`, gated on
+  `viewMetrics`; the contract part checks a consistent picture (30 per-minute values, device counts adding up
+  to the visitors, sorted breakdowns, coordinates in range), newest-first lists that page, and a watch that
+  never delivers synchronously. **Mock**: sessions over 30 days from weighted cities, with page views and a
+  few custom events; `step` brings visitors, lets some go quiet and adds events (`analyticsIntervalMs`).
+- **Chunks**: the Analytics screen and the map (MapLibre, the countries) load with the route only; the shell's
+  entry never holds MapLibre (e2e). The map chunk is about 1.16 MB (≈ 320 kB gzip), MapLibre's worker a
+  separate file.
+- **Not yet** (server work): the client `track()` helper and automatic page views, the server-side GeoIP
+  lookup that places a session, retention of analytics events, and a custom tile style setting.
+
 ## 27. The Overview (the owner's call, 1 Oct 2026; supersedes the Health screen of §9 slice 4 and §18.1's page)
 
 Health becomes the **Overview** at `/` (nav "Overview"; `/health` redirects): the home page, Convex's Health

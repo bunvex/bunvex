@@ -816,3 +816,23 @@ the List view.
 
 Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
 own clock for the lease; per-node logs.
+
+## 16. Analytics (a bunvex addition, added 1 Oct 2026)
+
+Convex has no analytics screen; apps send events to a third party. The owner asked for one (reference:
+OpenPanel's "Realtime" page and mapcn's analytics-map block), built as an extension (UI-01 §26) that may be
+removed later.
+
+- **Why bunvex can**: every client holds a WebSocket to the deployment, so the deployment knows who is here
+  now — the live visitors are its open sessions, placed by a server-side GeoIP lookup (future work).
+- **What it shows** (UI-01 §26.2): the live map, visitors in the last 30 minutes, devices, the live event
+  feed, top pages / referrers / countries / browsers; Events, Sessions, Profiles.
+- **Events** would come from a client `track()` helper (page views automatically) — future work, like the
+  GeoIP lookup and the retention of events. Only the mock feeds the screen today.
+- **Map without third parties**: mapcn's default (CARTO tiles, a worker from unpkg) was replaced by a bundled
+  Natural Earth basemap and a bundled worker (UI-01 §26.2) — a self-hosted dashboard works offline and no
+  request leaves it.
+- **Decided by the agent, the owner can veto**: A1 — the screen needs `viewMetrics` (no new permission);
+  A2 — the tile and the feed sit beside the map, not floating over it (MapLibre ignored the fit padding in
+  headless Chrome, so the overlay hid the Americas).
+

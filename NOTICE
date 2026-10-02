@@ -9,3 +9,11 @@ included.
 
 bunvex is not affiliated with or endorsed by Convex, Inc. "Convex" is a trademark of Convex, Inc., used
 only to describe compatibility.
+
+Third-party material bundled with the dashboard (@bunvex/ui, @bunvex/dashboard):
+
+- mapcn (https://github.com/AnmolSaini16/mapcn), MIT License — the map component
+  (packages/ui/src/components/map.tsx), modified to bundle MapLibre's worker and use no hosted basemap.
+- Natural Earth (https://www.naturalearthdata.com), public domain — the countries of the analytics map,
+  through world-atlas (https://github.com/topojson/world-atlas), ISC License.
+
