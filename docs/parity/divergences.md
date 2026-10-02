@@ -186,6 +186,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-217 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | owner, 2026-10-02 (as recommended) | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one (a legacy table with no documents imports) | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
 
 ## Resolved to match Convex
@@ -195,6 +196,8 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-220 | A failed import step failed the import at once | As Convex: a system error (storage, server, an exhausted conflict) is retried with a backoff from 30 s to 5 minutes, and fails the import with "Your request couldn't be completed. Try again later." after 5 retries; an error of the import's own fails it at once | yes | owner, 2026-10-02 (#210) | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-221 | An interrupted import started over | As Convex: a retried or restarted import resumes into the hidden tables it created, skipping the documents (and files) already written; an append into a new table cannot resume ("can't resume append import") | no (only the time) | owner, 2026-10-02 (#210) | [STUDY-42 X7](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-65 | No retention: every version and tombstone was kept forever | As Convex: index versions are pruned 4 min behind the newest commit, document versions 14 days behind (STUDY-33); reads below the window fail with `OutOfRetention` | yes (a transaction reading 4 min after its snapshot fails) | owner, 2026-10-01 (STUDY-33) | [STUDY-09 D5](../study/STUDY-09-persistence-layout.md#4-divergences), [STUDY-33](../study/STUDY-33-retention.md) |
 | DV-11 | Sync: only `tokenType: "None"` was accepted; other tokens got an `AuthError` | As Convex: `User` tokens are verified by `@bunvex/auth`; a bad one gets `AuthError` (`authUpdateAttempted: true`) and an expired identity `Token identity expired` (`false`). `Admin` tokens are checked as admin keys (STUDY-34) | yes | owner, 2026-09-30 (STUDY-27) | [STUDY-23 P9](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30), [STUDY-27](../study/STUDY-27-auth.md) |
 | DV-12 | Sync: identity was part of every shared execution's key | As Convex (`observed_identity`, `stored_key_hint`): a run that read no identity is shared by every caller; one that did is the caller's | no | owner, 2026-09-30 (STUDY-27) | [STUDY-23 P10](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30), [STUDY-27](../study/STUDY-27-auth.md) |
@@ -285,13 +288,10 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
+DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-02): DV-222 is in
+[Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
+[Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
-
-| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
-|---|---|---|---|---|---|
-| DV-220 | A failed import step fails the import at once | retries errors that are not the import's own up to 5 times (30 s → 5 min) | yes (an import a transient error would not fail) | accept for now; build the retries later | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-221 | An import interrupted by a restart starts over | resumes from its checkpoints | no (only the time) | accept for now; build resuming later | [STUDY-42 X7](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-222 | The JSON parser's detail in import messages is JavaScript's; a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | accept | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 
 ## Waiting on a dependency
 

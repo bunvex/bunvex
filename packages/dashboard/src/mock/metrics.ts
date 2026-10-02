@@ -15,8 +15,17 @@ import {
   type TopKMeasure,
   type TopKSeries,
 } from "../data-source.ts";
+import type { ClientPlatform, FunctionClients } from "../data-source-clients.ts";
 
-type Execution = { fn: string; kind: string; time: number; failed: boolean; durationMs: number; id: string };
+type Execution = {
+  fn: string;
+  kind: string;
+  time: number;
+  failed: boolean;
+  durationMs: number;
+  id: string;
+  platform?: ClientPlatform;
+};
 
 /** A stable number from an id, for what the log does not record. */
 function hash(id: string): number {
@@ -36,6 +45,7 @@ export const executionsOf = (logs: readonly LogEntry[]): Execution[] =>
             failed: e.execution.status === "failure",
             durationMs: e.execution.durationMs,
             id: e.executionId ?? e.id,
+            ...(e.client && { platform: e.client.platform }),
           },
         ]
       : [],
@@ -69,6 +79,22 @@ export function functionRate(logs: readonly LogEntry[], fn: string, metric: Func
     cacheMisses: (x) => (x.kind === "query" && !cached(x) ? 1 : 0),
   };
   return counts(w, xs, pick[metric]);
+}
+
+/** A function's calls and errors in the window, by the platform of the client that made them, most calls first. */
+export function functionClients(logs: readonly LogEntry[], fn: string, w: MetricsWindow): FunctionClients {
+  const by = new Map<ClientPlatform, { calls: number; errors: number }>();
+  const withoutClient = { calls: 0, errors: 0 };
+  for (const x of executionsOf(logs)) {
+    if (x.fn !== fn || x.time < w.start || x.time >= w.end) continue;
+    const c = x.platform
+      ? (by.get(x.platform) ?? by.set(x.platform, { calls: 0, errors: 0 }).get(x.platform)!)
+      : withoutClient;
+    c.calls++;
+    if (x.failed) c.errors++;
+  }
+  const byPlatform = [...by].map(([platform, c]) => ({ platform, ...c })).sort((a, b) => b.calls - a.calls);
+  return { byPlatform, withoutClient };
 }
 
 export const cacheHitPercentage = (logs: readonly LogEntry[], fn: string, w: MetricsWindow) =>

@@ -110,6 +110,14 @@ function useItems(query: string): PaletteItem[] {
 
     for (const [title, to] of SETTINGS)
       items.push({ id: `setting:${to}`, kind: "setting", title, hint: "Settings", go: { to } });
+    if (typeof qs.source.listClientApps === "function")
+      items.push({
+        id: "setting:/settings/apps",
+        kind: "setting",
+        title: "Apps",
+        hint: "Settings",
+        go: { to: "/settings/apps" },
+      });
     for (const [title, section] of AUTH_PAGES)
       items.push({
         id: `setting:auth:${section}`,

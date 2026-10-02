@@ -96,10 +96,10 @@ const cronNextRunDoc = (d: Doc) => ({
   nextTs: ns(d.nextTs as number),
 });
 
-/** An import's row as Convex's: without bunvex's own `object_size`. */
+/** An import's row as Convex's: without bunvex's own `object_size` and `hidden_tables`. */
 const importDoc = (d: Record<string, unknown> | null) => {
   if (!d) return null;
-  const { object_size: _, ...rest } = d;
+  const { object_size: _, hidden_tables: __, ...rest } = d;
   return rest;
 };
 
