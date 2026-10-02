@@ -134,6 +134,12 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-161 | Read-only admin keys can be issued (`--read-only`) | supported by the format, issued only by the cloud | operational | as recommended | owner, 2026-10-01 | [STUDY-34 AK4](../study/STUDY-34-admin-keys.md#4-divergences) |
 | DV-162 | `/stats` (bunvex-only) requires an admin key with `ViewMetrics` | (no such endpoint; metrics need `ViewMetrics`) | yes (it is open today) | as recommended | owner, 2026-10-01 | [STUDY-34 AK5](../study/STUDY-34-admin-keys.md#4-divergences) |
 | DV-163 | An admin identity on a WebSocket does not expire | revalidated after 2000 s | no | as recommended | owner, 2026-10-01 | [STUDY-34 AK6](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-164 | Functions run in-process, one `vm` context per code version (hot swap, no restart; not a security sandbox) | a fresh V8 context per request in pooled isolates | partly (P2) | frees old versions, per-version deterministic globals, ~0.4 µs per call | owner, 2026-10-02 | [STUDY-35 P1](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-165 | Module-level state lives as long as its code version | fresh per request (`experimental_reuseContext` keeps it) | yes | as recommended | owner, 2026-10-02 | [STUDY-35 P2](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-166 | A pushed package is one gzip JSON blob in the file-storage backend | a zip in module storage | no | as recommended | owner, 2026-10-02 | [STUDY-35 P3](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | as recommended | owner, 2026-10-02 | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | rule 5 | owner, 2026-10-02 | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
+| DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | as recommended | owner, 2026-10-02 | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -216,15 +222,6 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
-
-| # | Divergence | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-164 | Functions run in-process, one `vm` context per code version (hot swap, no restart; not a security sandbox) | a fresh V8 context per request in pooled isolates | partly (P2) | accept: frees old versions, per-version deterministic globals, ~0.4 µs per call | [STUDY-35 P1](../study/STUDY-35-push-and-deploy.md#4-divergences) |
-| DV-165 | Module-level state lives as long as its code version | fresh per request (`experimental_reuseContext` keeps it) | yes | accept | [STUDY-35 P2](../study/STUDY-35-push-and-deploy.md#4-divergences) |
-| DV-166 | A pushed package is one gzip JSON blob in the file-storage backend | a zip in module storage | no | accept | [STUDY-35 P3](../study/STUDY-35-push-and-deploy.md#4-divergences) |
-| DV-167 | Embedded servers (`createServer({functions, …})`) stay beside deployable ones | push only | no | accept | [STUDY-35 P4](../study/STUDY-35-push-and-deploy.md#4-divergences) |
-| DV-168 | Apps import `bunvex/*`; no `convex/*` alias, no Convex syscall layer (`npx convex deploy` cannot target bunvex) | — | yes (migration edits imports) | accept (rule 5) | [STUDY-35 P5](../study/STUDY-35-push-and-deploy.md#4-divergences) |
-| DV-169 | `"use node"` modules run in the same process, with Node/Bun builtins; Convex's rules for them enforced | a separate Node process | no | accept | [STUDY-35 P6](../study/STUDY-35-push-and-deploy.md#4-divergences) |
 
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
