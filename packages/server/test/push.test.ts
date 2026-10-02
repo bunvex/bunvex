@@ -219,6 +219,11 @@ describe("deploy2 over HTTP", () => {
       "Schema was overwritten by another push.",
     ]);
     expect((await d.post("/api/deploy2/finish_push", { startPush: b.body })).status).toBe(200);
+    // A finish for a push this server never started (or lost on a restart) is refused the same way.
+    const unknown = await d.post("/api/deploy2/finish_push", {
+      startPush: { schemaChange: { schemaIds: { "": "nope" } } },
+    });
+    expect([unknown.status, unknown.body.code]).toEqual([400, "RaceDetected"]);
   });
 
   test("auth.config from the push, evaluated with the server's environment: its tokens are accepted", async () => {
