@@ -98,6 +98,7 @@
       "dependencies": {
         "@bunvex/core": "workspace:*",
         "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
     },
     "packages/client": {

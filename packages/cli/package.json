@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@bunvex/core": "workspace:*",
-    "@bunvex/server": "workspace:*"
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
   }
 }

@@ -29,7 +29,14 @@ import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePack
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
-import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
+import {
+  clientError,
+  FunctionPathError,
+  INTERNAL_SERVER_ERROR_MESSAGE,
+  isSystemError,
+  isTryAgainError,
+  withRequestId,
+} from "./errors.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -498,7 +505,7 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts)$/.exec(url.pathname);
+      const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
       if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       let body: { path: string; args: unknown; ts?: unknown };
       try {
@@ -507,9 +514,26 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
       }
       if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
-      const kind = route[1];
+      let kind = route[1]!;
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
+      // Convex's `/api/function` (`execute_any_function`): the function's own kind; an admin may run an
+      // internal one (its key's operation is checked as for any call), others only public ones.
+      if (kind === "function") {
+        const found = functions.kindOf(body.path);
+        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+          return udfResponse(
+            {
+              ok: false,
+              error: new FunctionPathError(
+                `Could not find function for '${body.path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
+              ),
+              logLines: [],
+            } as never,
+            kind,
+          );
+        kind = found;
+      }
       // A query at a ts `query_ts` gave (Convex's `/api/query_at_ts`): every such query reads one snapshot.
       let at: number | undefined;
       if (kind === "query_at_ts") {

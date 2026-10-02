@@ -334,6 +334,38 @@ export class Functions {
     return f as Extract<FunctionDef, { kind: K }>;
   }
 
+  /**
+   * A function's kind for Convex's `/api/function` (`execute_any_function`): what it runs as, or null when
+   * it does not exist. System functions too.
+   */
+  kindOf(name: string): FunctionDef["kind"] | null {
+    if (isSystemPath(name)) {
+      const n = name.replace(/:default$/, "");
+      return SYSTEM_QUERIES[n] ? "query" : SYSTEM_MUTATIONS[n] ? "mutation" : null;
+    }
+    return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.kind ?? null;
+  }
+
+  /** Whether a function is internal (false when it does not exist). */
+  isInternal(name: string): boolean {
+    return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.visibility === "internal";
+  }
+
+  /** Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators. */
+  apiSpec() {
+    const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
+    return [...this.fns].map(([key, f]) => {
+      const i = key.lastIndexOf(":");
+      return {
+        identifier: `${key.slice(0, i)}.js:${key.slice(i + 1)}`,
+        functionType: kind[f.kind],
+        visibility: { kind: f.visibility },
+        args: (f.args?.json ?? { type: "any" }) as unknown as Value,
+        returns: (f.returns?.json ?? { type: "any" }) as unknown as Value,
+      };
+    });
+  }
+
   /** An id's table, for `v.id` (the engine's catalog). */
   private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
 
@@ -449,7 +481,7 @@ export class Functions {
     if (fromClient) this.systemAccess(n, q, "ViewData", caller);
     else if (!q) throw notFound(n);
     const a = this.systemArgs(args, q!.args);
-    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage });
+    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage, functions: this });
   }
 
   private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
@@ -458,7 +490,7 @@ export class Functions {
     if (fromClient) this.systemAccess(n, m, "WriteData", caller);
     else if (!m) throw notFound(n);
     const a = this.systemArgs(args, m!.args);
-    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage });
+    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage, functions: this });
   }
 
   /** A dashboard system query, in process (as the system: no key involved). */

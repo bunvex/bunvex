@@ -192,7 +192,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 |---|---|---|---|
 | `dev` (watch, push, typecheck, codegen, `--once`, `--until-success`, `--run`, `--tail-logs`, local backend) | `npm/convex/cli/dev.ts`; `lib/localDeployment/*` | missing | Downloads and runs `convex-local-backend`. bunvex would run its own server in-process. |
 | `deploy` (`--dry-run`, `-y`, `--cmd`, `--preview-*`, `--skip-large-indexes-check`, `--message`) | `cli/deploy.ts`; `lib/deploy2.ts` | partial (STUDY-35) | `bunvex deploy [--url] [--admin-key] [--dry-run] [--env-file]`: bundles `bunvex/` (or `bunvex.json`'s `functions`, DV-170) and pushes over deploy2 with the diff of module hashes; target from `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171), the environment, `.env.local`, `.env`. Codegen before bundling and after `start_push`, then the typecheck (`--codegen enable|disable`, `--typecheck enable|try|disable`, default `try`; STUDY-36); `-y`, `--cmd`, previews and the large-index check are missing. |
-| `run <fn> [args]` (`--watch`, `--push`, `--identity`, `--component`, `--inline-query`) | `cli/run.ts` | missing | Needs admin-key auth and acting-as-user. |
+| `run <fn> [args]` (`--watch`, `--push`, `--identity`, `--component`, `--inline-query`) | `cli/run.ts` | partial (STUDY-37) | `bunvex run`: Convex's name forms, JSON5 args (bunvex's own reader, DV-185), `--identity` with Convex's defaults (issuer `https://bunvex.test`, DV-181), log lines on stderr, the result on stdout (inspected on a terminal, else JSON), the deployment's functions listed for a missing one (`_system/cli/modules:apiSpec`, without HTTP routes), `--push`. `--watch` waits on E5; `--component` and `--inline-query` are not built (DV-186). |
 | `import` (`--table`, `--replace`, `--append`, `--replace-all`, `--format csv\|jsonLines\|jsonArray\|zip`) | `cli/convexImport.ts` | missing | |
 | `export --path [--include-file-storage]` | `cli/convexExport.ts` | missing | |
 | `data [table] --limit --order --format --component` | `cli/data.ts` | missing | |
@@ -369,7 +369,7 @@ better-auth's concepts; §25). All on the mock.
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
 | `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
-| `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; the others missing. |
+| `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; `POST /api/function` done (STUDY-37: any kind; internal ones for an admin; Convex's "Could not find function for …" otherwise); the others missing. |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
 
