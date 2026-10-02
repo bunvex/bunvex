@@ -111,7 +111,7 @@ These are the types and values the generated files rely on:
    - `runQuery` / `runMutation` / `runAction` / `scheduler` typed by reference.
 
    `query` and friends stay `queryGeneric` over `AnyDataModel`.
-4. **`@bunvex/protocol`:** `ApiFromModules`, `FilterApi`, `AnyApi`.
+4. **`@bunvex/server`:** `ApiFromModules`, `FilterApi` (as built: they read the registered-function types, so they live beside them); `AnyApi` stays in `@bunvex/protocol`.
 
 **Codegen** lives in `@bunvex/cli` (`codegen.ts`). The generated files carry the same content as Convex's, importing from `bunvex/server` and `bunvex/values`:
 - **The files:** `api.js` / `api.d.ts`, `server.js` / `server.d.ts`, `dataModel.d.ts`, and with `bunvex.json` `codegen.fileType: "ts"` the `.ts` variants.
@@ -141,10 +141,11 @@ These are the types and values the generated files rely on:
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| G1 | `bunvex codegen` needs no running deployment: it analyzes the modules locally with the server's loader. Convex runs a `start_push` against the deployment | the loader is in `@bunvex/server`, which the CLI depends on; codegen works offline, and in CI before a deployment exists | pending |
+| G1 | `bunvex codegen` needs no running deployment. Convex's `codegen` runs a `start_push` against the deployment and refuses without one. Its dynamic modes (the default) need only the list of modules and whether `schema.ts` exists, so bunvex writes them from the code alone. The static modes, which need the analysis, are not implemented yet | codegen works offline, and in CI before a deployment exists; the output is the same | pending |
 | G2 | `components` is `{}` in `api` while bunvex has no components (Convex: `componentsGeneric()`) | there is nothing to reference; components are Phase 4 | pending |
 | G3 | The generated files are laid out by the generator itself, not by prettier | no prettier dependency; the layout matches prettier's for these files, but a user's prettier config is not applied | pending |
 | G4 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables exist; Convex types `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and the declared ones | the names come with item 9 (environment variables); rule 5 rules out Convex's names | pending |
+| G5 | The generated `tsconfig.json` (`codegen --init`) adds `"allowImportingTsExtensions": true` to Convex's settings | bunvex's packages are TypeScript sources whose files import each other by `.ts` paths, and an app's `tsc` checks them too. Without the setting, every bunvex import fails and the app's types silently become `any`. The alternative is to publish built `.d.ts` files for every package (a build step), after which the setting is no longer needed | pending |
 
 ## 5. Tests
 

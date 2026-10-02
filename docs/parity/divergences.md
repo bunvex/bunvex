@@ -225,10 +225,11 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 
 | # | Divergence | Convex | Observable | Recommendation | Source |
 |---|---|---|---|---|---|
-| DV-173 | `bunvex codegen` analyzes the modules locally (no running deployment) | a `start_push` against the deployment | no (works offline) | accept | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-173 | `bunvex codegen` writes `_generated/` from the code alone (no running deployment); the static modes are not implemented | a `start_push` against the deployment | no (the same output; works offline) | accept | [STUDY-36 G1](../study/STUDY-36-codegen.md#4-divergences) |
 | DV-174 | `components` is `{}` in `_generated/api` while bunvex has no components | `componentsGeneric()` | no | accept | [STUDY-36 G2](../study/STUDY-36-codegen.md#4-divergences) |
 | DV-175 | Generated files are laid out by the generator, not prettier | prettier with the default config | no | accept | [STUDY-36 G3](../study/STUDY-36-codegen.md#4-divergences) |
 | DV-176 | `env` in `_generated/server` is `Record<string, string \| undefined>` until deployment environment variables (item 9) | typed `CONVEX_CLOUD_URL`, `CONVEX_SITE_URL` and declared variables | yes (types) | accept until item 9 | [STUDY-36 G4](../study/STUDY-36-codegen.md#4-divergences) |
+| DV-177 | The generated `tsconfig.json` adds `"allowImportingTsExtensions": true` | Convex's settings only | no (it lets the app's `tsc` read bunvex's TypeScript sources) | accept, or publish `.d.ts` builds | [STUDY-36 G5](../study/STUDY-36-codegen.md#4-divergences) |
 
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
