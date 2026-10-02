@@ -55,6 +55,20 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
 
+## Without Docker: the executable
+
+Each release on GitHub has `bunvex-<target>.zip` for macOS (arm64, x64), Linux (arm64, x64) and Windows (x64):
+one file that needs nothing installed, as Convex's precompiled `convex-local-backend`
+([STUDY-39](../docs/study/STUDY-39-standalone-binary.md)). In an empty directory:
+
+```sh
+./bunvex start                 # SQLite and credentials in ./.data (POSTGRES_URL=… for Postgres)
+./bunvex admin-key             # an admin key for the CLI
+```
+
+The same file is the CLI: `./bunvex deploy`, `./bunvex dev`, `./bunvex run …`. To build one yourself:
+`bun scripts/build-binary.ts --host` (into `dist/bin/`).
+
 ## Build the image
 
 The compose file builds it from this repository. To build it alone, from the repository root:

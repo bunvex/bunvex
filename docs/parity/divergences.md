@@ -235,6 +235,15 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
 
+STUDY-39 (the standalone executable), awaiting the owner:
+
+| ID | bunvex | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-193 | The executable is the whole `bunvex` CLI (`start`, `deploy`, …), released as `bunvex-<target>.zip` | the backend alone, `convex-local-backend-<target>.zip` | yes (asset names) | accept | [STUDY-39 B1](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-194 | No `dashboard.zip` until item 12 | `dashboard.zip` in every release | yes | accept | [STUDY-39 B2](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-195 | The Windows executable is built but not run in CI yet | — | no | accept, smoke it later | [STUDY-39 B3](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-196 | `bunvex dev` runs a local deployment in process; it never downloads the executable | the CLI downloads the latest release | no | accept | [STUDY-39 B4](../study/STUDY-39-standalone-binary.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not

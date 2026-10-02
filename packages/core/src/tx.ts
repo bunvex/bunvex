@@ -20,7 +20,7 @@ import {
   valueNesting,
   valueSize,
 } from "@bunvex/values";
-import BTree from "sorted-btree";
+import { BTree } from "./btree.ts";
 import {
   Catalog,
   INDEX_TABLE,

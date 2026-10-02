@@ -1,4 +1,6 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
+
+export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,

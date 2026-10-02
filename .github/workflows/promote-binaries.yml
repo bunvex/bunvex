@@ -1,0 +1,36 @@
+name: Promote binaries
+
+# Make a precompiled release the latest (STUDY-39), as Convex's promote_local_backend.yml: it must be a
+# published (not draft) `precompiled-*` release with every target's zip uploaded.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Precompiled release tag to promote (precompiled-YYYY-MM-DD-sha)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: validate and promote
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate the release and its assets
+        run: |
+          [[ "$TAG" =~ ^precompiled-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7}$ ]] || { echo "::error::Invalid precompiled release tag: $TAG"; exit 1; }
+          release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
+          missing=$(jq -r '
+            ["bunvex-aarch64-apple-darwin.zip", "bunvex-aarch64-unknown-linux-gnu.zip", "bunvex-x86_64-apple-darwin.zip",
+             "bunvex-x86_64-pc-windows-msvc.zip", "bunvex-x86_64-unknown-linux-gnu.zip"] as $required
+            | [.assets[] | select(.state == "uploaded" and .size > 0) | .name] as $uploaded
+            | ($required - $uploaded)[]?' <<< "$release")
+          [ -z "$missing" ] || { echo "::error::Release $TAG is missing assets: $missing"; exit 1; }
+          [ "$(jq -r .isDraft <<< "$release")" != true ] || { echo "::error::Release $TAG is a draft"; exit 1; }
+      - name: Promote
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest

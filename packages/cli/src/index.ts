@@ -22,7 +22,7 @@ Commands:
   run         run a function (query, mutation or action) on the deployment
   start       run the self-hosted server
 
-Run \`bunvex <command> --help\` for a command's options.`;
+Run \`bunvex <command> --help\` for a command's options, \`bunvex --version\` for the version.`;
 
 const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   "admin-key": adminKeyCommand,
@@ -34,9 +34,18 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   start: startCommand,
 };
 
+// The version: the standalone executable's (set at build, STUDY-39), else the package's.
+declare const BUNVEX_BUILD_VERSION: string | undefined;
+export const VERSION: string =
+  typeof BUNVEX_BUILD_VERSION === "string" ? BUNVEX_BUILD_VERSION : (await import("../package.json")).version;
+
 /** Run the command line; resolves to the exit code. */
 export async function main(argv: string[], io: Io = processIo()): Promise<number> {
   const [command, ...args] = argv;
+  if (command === "--version" || command === "-V" || command === "version") {
+    io.out(`bunvex ${VERSION}`);
+    return 0;
+  }
   if (command === undefined || command === "--help" || command === "-h" || command === "help") {
     io.out(USAGE);
     return command === undefined ? 2 : 0;

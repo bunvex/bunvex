@@ -218,7 +218,8 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
           }
           if (flags.start !== undefined) {
             const cmd = flags.start;
-            const child = Bun.spawn(["sh", "-c", cmd], { cwd: io.cwd, stdio: ["inherit", "inherit", "inherit"] });
+            const shell = process.platform === "win32" ? ["cmd", "/c", cmd] : ["sh", "-c", cmd];
+            const child = Bun.spawn(shell, { cwd: io.cwd, stdio: ["inherit", "inherit", "inherit"] });
             cleanup.push(() => child.kill());
             void child.exited.then((code) => {
               if (code !== 0 && !stop.signal.aborted) {

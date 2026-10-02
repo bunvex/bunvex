@@ -11,7 +11,7 @@
 // `{"global":key,"value":…}`, written and synced when it is set.
 import { closeSync, existsSync, fdatasyncSync, openSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
-import BTree from "sorted-btree";
+import { BTree } from "../btree.ts";
 import { compareKeys } from "../keyenc.ts";
 import type {
   DocLogRow,
