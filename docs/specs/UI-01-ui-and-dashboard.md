@@ -2104,3 +2104,25 @@ every one. They land in five pull requests, one subsection each.
   or one picked); radios stay for exclusive ranges (days, size). A facet's "All" is named "All: <facet>".
 - **History's actions** (UX2-24): short words ("Env var added", "Run canceled") grouped by area — Data, Files,
   Environment variables, Schedules, Deploys, Other — as labelled groups.
+
+### UX review 2 — consistency components (UX2-6, UX2-7, UX2-8, UX2-11, UX2-12, UX2-13, UX2-20, UX2-22)
+
+- **One tab pattern** (UX2-6): `TabsList` is underlined (`variant="line"`, 13 px) by default — Functions, the
+  flag panel, the Topology node panel, the Database schema panel and the Authentication user panel alike.
+- **One destructive trigger** (UX2-8): a delete or cancel on a row, a panel or a bar is `destructive-outline`
+  (Files' Delete, env vars' Delete, Delete selected, Cancel run, Cancel all, Pause, Turn off); only the confirm
+  button inside a confirmation dialog is the filled `destructive`.
+- **Status badges** (UX2-12): `StatusBadge` gains state words — on, off, archived, verified, unverified,
+  banned, active, revoked — so a flag's state is an icon and a word, never a solid pill (Authentication uses
+  them in its pull request).
+- **One time rule** (UX2-20, `shell/time.tsx`): grids show `YYYY-MM-DD HH:mm:ss`; log lines add milliseconds
+  and drop the date for today; summaries show a relative time with the absolute one in the tooltip
+  (`RelativeTime`); no `toLocaleString`.
+- **Section column nav** (UX2-22): headings only when the column has more than one group or filters below
+  (`SectionNav withFilters`); Analytics' pages are one group.
+- **The phone button** (UX2-13): named after what the column holds — the screen's name with a chevron
+  ("Settings ▾", "Files ▾", "Analytics ▾") when it holds navigation, "Filters" when only filters.
+- **Logs' Export and Clear** (UX2-11): already one rule on `main` — labelled when the logs area is at least
+  42 rem wide, icons when narrower, the same on the Logs screen and the Functions → Logs tab (checked at 1440:
+  labelled in both); unchanged.
+- **Copy buttons** (UX2-7) are only on Authentication's Sign in / Providers: its pull request.

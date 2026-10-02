@@ -175,6 +175,7 @@ export function ScheduledView() {
             {typeof source.cancelAllScheduledFunctions === "function" && (!picked || one) && (
               <ConfirmButton
                 label={one ? `Cancel all runs of ${one}` : "Cancel all"}
+                variant="destructive-outline"
                 disabled={!canCancel || !loaded.some((r) => r.state === "pending")}
                 title={one ? `Cancel every pending run of ${one}?` : "Cancel every pending run?"}
                 description="Runs that have started finish. This cannot be undone."
@@ -287,7 +288,7 @@ function RunDetails(props: {
             <div>
               <ConfirmButton
                 label="Cancel run"
-                variant="destructive"
+                variant="destructive-outline"
                 disabled={!props.canCancel || run.state !== "pending"}
                 title="Cancel this run?"
                 description={`The run of ${run.function} scheduled for ${formatTime(run.scheduledTime)} will not happen. This cannot be undone.`}

@@ -13,6 +13,7 @@ import { useId } from "react";
 import type { LogEntry } from "../data-source.ts";
 import { formatBytes, timeAgo } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
+import { formatTime } from "../shell/time.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
 import { formatDuration, formatLogTime, isFailure, KIND_LETTER } from "./log-list.tsx";
 import { IDENTITY_TEXT, sumUsage } from "./usage.ts";
@@ -91,7 +92,7 @@ export function LogDetails(props: {
             {new Date(line.time).toISOString()}
           </time>
           <span className="block text-xs text-muted-foreground">
-            {new Date(line.time).toLocaleString()} · {timeAgo(line.time, props.now ?? Date.now())}
+            {formatTime(line.time)} · {timeAgo(line.time, props.now ?? Date.now())}
           </span>
         </dd>
         <dt className="text-muted-foreground">Level</dt>
