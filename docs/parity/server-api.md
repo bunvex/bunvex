@@ -111,13 +111,13 @@ Key bunvex facts behind the statuses:
 | `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
 | Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
 | `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | An object of validators is `v.object` of them, as for `args` (STUDY-36). |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | partial | Manual `register(module, fns)` builds `module:fn`. There is no default-export rule and no file-based discovery. |
 | `api` / `internal` function references (`anyApi`, codegen), `makeFunctionReference`, `getFunctionName`, `filterApi` | server/api.ts | missing | Callers use strings. Codegen vs inference is an open decision. |
-| `FunctionReference_future` / typed `FunctionArgs` / `FunctionReturnType` | server/api.ts | missing | |
-| Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | missing | Contexts are untyped. |
+| Typed `FunctionArgs` / `FunctionReturnType`, `ApiFromModules`, `FilterApi`, `FunctionReferenceFromExport` | server/api.ts | done (STUDY-36) | `_generated/api.d.ts` (codegen PR) builds `api` / `internal` with them; `FunctionReference_future` is missing. |
+| Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | partial (STUDY-36) | `queryGeneric` … `httpActionGeneric`, `QueryBuilder<DataModel, Visibility>` …, `GenericQueryCtx` / `GenericMutationCtx` / `GenericActionCtx`, `RegisteredQuery` … with arguments and results typed from the validators (Convex's `ReturnValueForOptionalValidator`). `query` … are the same builders without a data model. Convex's markers at run time (`isQuery`, `isPublic`, …), with `isBunvexFunction` for `isConvexFunction` (rule 5). `_generated/server` comes with codegen. |
 | Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | missing | Minor. |
 | Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | missing | Minor. |
 | `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | missing | |
@@ -272,7 +272,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | done (STUDY-30) | |
+| `scheduler.runAfter(ms, fnRef, args)` returns `Id<"_scheduled_functions">` | server/scheduler.ts | done (STUDY-30) | Typed since STUDY-36: a reference's arguments, and the id. |
 | `scheduler.runAt(timestamp \| Date, fnRef, args)` | server/scheduler.ts | done (STUDY-30) | |
 | `scheduler.cancel(id)` | server/scheduler.ts | done (STUDY-30) | |
 | Scheduling from a mutation is transactional (only if the mutation commits); from an action it isn't | docs; crates/model scheduled_jobs | done (STUDY-30) | |
