@@ -2,6 +2,7 @@
 // them: the host picks the history (the browser's, under a basepath, or memory in tests). The package does
 // NOT declare TanStack Router's global `Register` — a host with its own router would collide with it —
 // so links are typed against `DashboardRouter` explicitly (`DashLink`).
+
 import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
@@ -16,10 +17,13 @@ import {
   useRouter,
   type ValidateLinkOptions,
 } from "@tanstack/react-router";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, ComponentType, ReactNode } from "react";
 import { documentsQuery, functionsQuery, logsQuery, type QueryScope, tablesQuery } from "./data/queries.ts";
 import { type DataSourceError, toDataSourceError } from "./data-source.ts";
 import { decodeFilter } from "./database/filter-url.ts";
+import { guarded } from "./extensions/guard.tsx";
+import { extensions as registeredExtensions } from "./extensions/index.ts";
+import type { DashboardExtension } from "./extensions/types.ts";
 import { type LogsSearch, validateLogsSearch } from "./logs/log-filter.ts";
 import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
@@ -353,7 +357,26 @@ export const cronsRoute = createRoute({
   component: CronJobsScreen,
 });
 
-export const routeTree = rootRoute.addChildren([
+/** The extensions' routes (UI-01 §26): lazy like the screens above, behind a guard for a source that lacks them. */
+function extensionRoutesOf(list: readonly DashboardExtension[]) {
+  return list.flatMap((ext) =>
+    ext.routes.map((r) =>
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: r.path,
+        validateSearch: r.validateSearch,
+        // the guard wraps the loaded screen, inside the lazy chunk (wrapping the lazy component would suspend
+        // inside another component's render)
+        component: lazyRouteComponent(
+          () => r.load().then((m) => ({ Guarded: guarded(ext, m[r.component] as ComponentType) })),
+          "Guarded",
+        ),
+      }),
+    ),
+  );
+}
+
+const builtInRoutes = [
   healthRoute,
   topologyRoute,
   databaseRoute,
@@ -373,7 +396,15 @@ export const routeTree = rootRoute.addChildren([
   snapshotsSettingsRoute,
   authIndexRoute,
   authRoute,
-]);
+] as const;
+
+/** The route tree with these extensions' routes. They are added at run time but hidden from the router's types:
+ * their paths are plain strings, which would widen every typed link to `string` (extensions use `ExtensionLink`). */
+function routeTreeWith(list: readonly DashboardExtension[]) {
+  return rootRoute.addChildren([...(extensionRoutesOf(list) as unknown as []), ...builtInRoutes]);
+}
+
+export const routeTree = routeTreeWith(registeredExtensions);
 
 // ------------------------------------------------------------------ the router
 
@@ -382,11 +413,13 @@ export type DashboardRouterOptions = {
   history: RouterHistory;
   /** Where the dashboard is mounted in the host's URL space, e.g. "/projects/abc/dashboard". */
   basepath?: string;
+  /** The extensions' screens (UI-01 §26). Default: the registry's. */
+  extensions?: readonly DashboardExtension[];
 };
 
-export function createDashboardRouter({ context, history, basepath }: DashboardRouterOptions) {
+export function createDashboardRouter({ context, history, basepath, extensions }: DashboardRouterOptions) {
   return createRouter({
-    routeTree,
+    routeTree: extensions ? (routeTreeWith(extensions) as typeof routeTree) : routeTree,
     context,
     history,
     basepath,

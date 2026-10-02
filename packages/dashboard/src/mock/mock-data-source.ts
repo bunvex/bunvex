@@ -61,6 +61,8 @@ import {
   type Value,
 } from "../data-source.ts";
 import { tableNameProblem } from "../database/table-name.ts";
+import { mockParts } from "../extensions/mock.ts";
+import type { MockContext, MockExtensionPart } from "../extensions/mock-types.ts";
 import { canonicalFilter, compareValues, fieldValue, matchesFilter, validateFilter } from "../filters.ts";
 import { validateValue } from "../validators.ts";
 import { MockAudit } from "./audit.ts";
@@ -78,6 +80,8 @@ import { MockSnapshots } from "./snapshots.ts";
 import { MockTopology } from "./topology.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
+  /** The extensions' mock parts (UI-01 §26). Default: the registry's (`src/extensions/mock.ts`). */
+  extensions?: readonly MockExtensionPart[];
   /** Delay before every call resolves. Default 0. */
   latencyMs?: number;
   /** Probability that a call fails with `unavailable`. Default 0. */
@@ -287,6 +291,19 @@ export class MockDataSource implements DashboardDataSource {
       subscriptionReruns: 9_400,
       subscriptionUpdates: 21_700,
     };
+    // each extension's part (UI-01 §26) adds its methods, sharing the mock's clock, knobs, credentials, audit
+    const ctx: MockContext = {
+      rnd: this.rnd,
+      now: () => this.scheduler.now(),
+      call: (signal, fn) => this.call(signal, fn),
+      can: (op) => {
+        const c = this.opts.capabilities;
+        return op === "write" ? !c.readOnly && c.operations.includes("writeData") : c.operations.includes(op);
+      },
+      record: (action, metadata) => this.record(action, metadata as Parameters<MockAudit["record"]>[1]),
+      options: opts as Record<string, unknown>,
+    };
+    for (const part of opts.extensions ?? mockParts) Object.assign(this, part.create(ctx));
   }
 
   // ---------------------------------------------------------------- plumbing

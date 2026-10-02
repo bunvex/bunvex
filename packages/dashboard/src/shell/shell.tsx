@@ -36,6 +36,9 @@ import {
 } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, deploymentQuery } from "../data/queries.ts";
+import { useExtensions } from "../extensions/context.ts";
+import { ExtensionLink } from "../extensions/link.tsx";
+import { type NavGroupId, offers } from "../extensions/types.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
 import { PausedBanner } from "./paused-banner.tsx";
@@ -87,6 +90,36 @@ function NavItem(props: {
         {props.children}
       </DashLink>
     </li>
+  );
+}
+
+/** The extensions' entries of one sidebar group (UI-01 §26): only those the source offers, in their order. */
+function ExtensionNavItems({ group }: { group: NavGroupId }) {
+  const { source } = useQueryScope();
+  const items = useExtensions()
+    .filter((e) => e.nav.group === group && offers(source, e))
+    .sort((a, b) => a.nav.order - b.nav.order);
+  return items.map((e) => {
+    const Icon = e.icon;
+    return (
+      <li key={e.id}>
+        <ExtensionLink to={e.nav.to} className={NAV_LINK}>
+          <Icon className={ICON} aria-hidden="true" />
+          {e.title}
+        </ExtensionLink>
+      </li>
+    );
+  });
+}
+
+/** The "Extensions" group, when some extension joins it and the source offers it. */
+function ExtensionsGroup() {
+  const { source } = useQueryScope();
+  if (!useExtensions().some((e) => e.nav.group === "extensions" && offers(source, e))) return null;
+  return (
+    <NavGroup label="Extensions">
+      <ExtensionNavItems group="extensions" />
+    </NavGroup>
   );
 }
 
@@ -160,6 +193,7 @@ export function Shell() {
               <NavItem link={{ to: "/topology" }} icon={Waypoints}>
                 Topology
               </NavItem>
+              <ExtensionNavItems group="overview" />
             </NavGroup>
             <NavGroup label="Data">
               <NavItem link={{ to: "/database" }} icon={Database}>
@@ -171,6 +205,7 @@ export function Shell() {
               <NavItem link={{ to: "/files" }} icon={FileBox}>
                 Files
               </NavItem>
+              <ExtensionNavItems group="data" />
             </NavGroup>
             <NavGroup label="Functions">
               <NavItem link={{ to: "/functions" }} icon={FunctionSquare}>
@@ -179,11 +214,13 @@ export function Shell() {
               <NavItem link={{ to: "/schedules" }} icon={CalendarClock}>
                 Schedules
               </NavItem>
+              <ExtensionNavItems group="functions" />
             </NavGroup>
             <NavGroup label="Manage">
               <NavItem link={{ to: "/auth" }} icon={KeyRound}>
                 Authentication
               </NavItem>
+              <ExtensionNavItems group="manage" />
             </NavGroup>
             <NavGroup label="Observe">
               <NavItem link={{ to: "/logs" }} icon={ScrollText}>
@@ -192,7 +229,9 @@ export function Shell() {
               <NavItem link={{ to: "/history" }} icon={History}>
                 History
               </NavItem>
+              <ExtensionNavItems group="observe" />
             </NavGroup>
+            <ExtensionsGroup />
             <NavGroup>
               <NavItem link={{ to: "/settings" }} icon={Settings}>
                 Settings

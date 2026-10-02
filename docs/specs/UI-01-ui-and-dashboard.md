@@ -1901,3 +1901,33 @@ configuration (read; merge a part), auth events. The mock (`mock/auth-admin.ts`)
 random stream; reads need `viewData`, writes `writeData` and not read-only. The contract suite
 (`contract-auth-admin.ts`) checks the listing and its filters, create / ban (signing out) / unban / remove, and
 the configuration's merge.
+
+## 26. Extensions (the owner's call, 1 Oct 2026)
+
+Some screens are experiments the owner may keep or remove (Analytics, Workflows, Feature flags…), and later
+components may bring screens of their own. Such a screen is an **extension**: one folder,
+`packages/dashboard/src/extensions/<id>/`, holding everything it needs, listed in three small registries.
+
+- **What an extension declares** (`extensions/types.ts`, `DashboardExtension`): `id` (the folder's name),
+  `title`, `icon`, `nav` (its sidebar group — `overview`, `data`, `functions`, `manage`, `observe` or its own
+  `extensions` group before Settings — its order after the built-in entries, and the link), `routes` (path,
+  the screen's module loaded lazily and the export's name, an optional `validateSearch`), `requires` (the
+  contract methods it needs) and, when it has sub-screens, `column` (the section column's navigation, §23).
+- **Its contract** is optional methods, as every feature since §14: their types live in its folder and join
+  `DashboardDataSource` through `ExtensionFeatures` (`extensions/index.ts`). The sidebar shows the entry only
+  when the source has every method in `requires`; a route reached anyway says the deployment does not offer
+  it (`extensions/guard.tsx`, applied inside the lazy chunk).
+- **Its mock part** (`extensions/mock.ts`, `MockExtensionPart`) gets a `MockContext` from `MockDataSource` —
+  its random source, clock, `call` (latency, failures, abort), `can(operation)`, `record` (the audit log the
+  History screen reads) and the mock's options — and returns the methods it adds.
+- **Its contract-suite part** (`extensions/contract.ts`, `ContractExtensionPart`) runs inside
+  `describeDataSourceContract` and tests only what the source offers (writes only when the suite's writes are on).
+- **Links**: extension routes are in the router at run time but not in its types (their paths are plain
+  strings, which would widen every built-in `DashLink` to `string`), so extensions link with `ExtensionLink`.
+- **Inputs, not globals**: `<Dashboard extensions>`, `new MockDataSource({ extensions })` and
+  `describeDataSourceContract(…, { extensions })` default to the registries and accept others — the tests use
+  a sample extension (`test/fixtures/sample-extension.tsx`) this way, and a host can add screens of its own.
+- **Adding one**: create the folder (the extension's declaration, its screen(s), its contract types, mock
+  part and contract part) and add one line in each of `extensions/index.ts` (the declaration, and its features
+  in `ExtensionFeatures`), `extensions/mock.ts` and `extensions/contract.ts`.
+- **Removing one**: delete the folder and those lines; TypeScript points at any line left behind.
