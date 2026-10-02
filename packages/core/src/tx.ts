@@ -174,6 +174,9 @@ function formatBytes(n: number): string {
 export const TRANSACTION_MAX_READ_SIZE_ROWS = 32_000;
 export const TRANSACTION_MAX_READ_SIZE_BYTES = 1 << 24; // 16 MiB
 export const TRANSACTION_MAX_READ_SET_INTERVALS = 4096;
+/** Convex's TRANSACTION_MAX_NUM_SCHEDULED and TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES. */
+export const TRANSACTION_MAX_NUM_SCHEDULED = 1000;
+export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
 const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
@@ -222,7 +225,16 @@ export type PaginationResult = {
 };
 
 /** A transaction's read and write limits, and its usage against them. */
-export type TxLimits = { documentsRead: number; bytesRead: number; documentsWritten: number; bytesWritten: number };
+export type TxLimits = {
+  documentsRead: number;
+  bytesRead: number;
+  documentsWritten: number;
+  bytesWritten: number;
+  /** Read-set intervals (Convex's `database_queries`). */
+  databaseQueries: number;
+  functionsScheduled: number;
+  scheduledFunctionArgsBytes: number;
+};
 
 /** What `Tx.rollback` restores (see `Tx.begin`). */
 export type Savepoint = {
@@ -283,14 +295,23 @@ export class Tx {
     bytesRead: TRANSACTION_MAX_READ_SIZE_BYTES,
     documentsWritten: TRANSACTION_MAX_NUM_USER_WRITES,
     bytesWritten: TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+    databaseQueries: TRANSACTION_MAX_READ_SET_INTERVALS,
+    functionsScheduled: TRANSACTION_MAX_NUM_SCHEDULED,
+    scheduledFunctionArgsBytes: TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
   };
-  /** What has been read and written so far, against the limits. */
+  /** Functions scheduled by this transaction and their arguments' bytes (`scheduled-jobs.ts`). */
+  scheduledCount = 0;
+  scheduledBytes = 0;
+  /** What has been read, written and scheduled so far, against the limits. */
   get usage(): TxLimits {
     return {
       documentsRead: this.docsRead,
       bytesRead: this.bytesRead,
       documentsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
+      databaseQueries: this.readList.length,
+      functionsScheduled: this.scheduledCount,
+      scheduledFunctionArgsBytes: this.scheduledBytes,
     };
   }
   private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
@@ -472,9 +493,9 @@ export class Tx {
   /** @internal (ScanReads) */
   recordInterval(i: Interval) {
     this.readList.push(i);
-    if (!this.systemTx && this.readList.length > TRANSACTION_MAX_READ_SET_INTERVALS)
+    if (!this.systemTx && this.readList.length > this.limits.databaseQueries)
       throw new Error(
-        `Too many reads in a single function execution (limit: ${TRANSACTION_MAX_READ_SET_INTERVALS}). ${OVER_LIMIT_HELP}`,
+        `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
   }
 
