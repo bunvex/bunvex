@@ -483,6 +483,34 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Overview: the cache hit rate opens as a heatmap; axe with contrast on it, in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/", { colorScheme });
+      await heading(page, "Overview");
+      // the charts mount when the Metrics section scrolls into view (they are lazy)
+      await page.getByRole("heading", { level: 2, name: "Metrics" }).scrollIntoViewIfNeeded();
+      await page.mouse.wheel(0, 400);
+      await page.getByRole("region", { name: "Cache hit rate" }).waitFor({ timeout: 20_000 });
+      await page.locator('[data-slot="heatmap"] td[data-step]').first().waitFor({ timeout: 20_000 });
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run('[data-slot="heatmap"]', { resultTypes: ["violations"] });
+        return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+      });
+      expect(violations).toEqual([]);
+      // the steps are the theme's tokens, painted
+      const bg = await page
+        .locator('[data-slot="heatmap"] td[data-step]')
+        .first()
+        .evaluate((td) => getComputedStyle(td).backgroundColor);
+      expect(bg).not.toBe("rgba(0, 0, 0, 0)");
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test("Database: the grid fills to the bottom, the bars line up with the panel's header, the panel follows the row", async () => {
     for (const [table, width] of [
       ["tasks", 1440],
@@ -736,8 +764,8 @@ describe("the dashboard in a browser", () => {
     const { page, errors, close } = await open("/settings/general", { viewport: { width: 390, height: 844 } });
     await heading(page, "General");
     expect(await page.locator('[data-slot="section-column"]').isVisible()).toBe(false);
-    await page.getByRole("button", { name: "Pages" }).click();
-    await page.getByRole("complementary", { name: "Pages" }).getByRole("link", { name: "Snapshots" }).click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("complementary", { name: "Settings" }).getByRole("link", { name: "Snapshots" }).click();
     await heading(page, "Snapshots");
     expect(errors).toEqual([]);
     await close();

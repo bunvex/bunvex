@@ -4,6 +4,9 @@
 // rules, in order, each a set of conditions on the identity serving a variant. Checked as it is typed; the
 // source checks again on save.
 import { Button } from "@bunvex/ui/components/button";
+import { Checkbox } from "@bunvex/ui/components/checkbox";
+import { ChoiceRadios } from "@bunvex/ui/components/choice-radios";
+import { ChoiceSelect } from "@bunvex/ui/components/choice-select";
 import { Input } from "@bunvex/ui/components/input";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
@@ -148,11 +151,24 @@ export function FlagEditor(props: {
   const [d, setD] = useState<Draft>(() => draftOf(props.flag));
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<string>();
-  const ids = { key: useId(), name: useId(), description: useId(), type: useId(), off: useId(), problem: useId() };
+  // a new flag says nothing about its mistakes until something is typed (UX2-5, as the filters do since UX-2)
+  const [touched, setTouched] = useState(!!props.flag);
+  const ids = {
+    key: useId(),
+    name: useId(),
+    description: useId(),
+    type: useId(),
+    off: useId(),
+    problem: useId(),
+    enabled: useId(),
+  };
   const isNew = !props.flag;
   const built = inputOf(d);
   const problem = "error" in built ? built.error : flagProblem(built.flag, isNew ? props.existingKeys : []);
+  const shownProblem = touched ? problem : undefined;
+  const variantOptions = d.variants.map((v) => ({ value: v.key, label: v.key }));
   const update = (patch: Partial<Draft>) => {
+    setTouched(true);
     setD((x) => ({ ...x, ...patch }));
     setRefused(undefined);
   };
@@ -212,13 +228,17 @@ export function FlagEditor(props: {
         <label htmlFor={ids.type} className={label}>
           Type
         </label>
-        <select
+        <ChoiceSelect
           id={ids.type}
-          className="h-8 border bg-background px-2"
+          className="w-64"
           value={d.type}
           disabled={!isNew}
-          onChange={(e) => {
-            const type = e.target.value as FlagType;
+          options={[
+            { value: "boolean", label: "Boolean (on / off)" },
+            { value: "variant", label: "Variants (named)" },
+            { value: "json", label: "JSON (a value per variant)" },
+          ]}
+          onValueChange={(type: FlagType) => {
             const variants =
               type === "boolean"
                 ? BOOLEAN_VARIANTS
@@ -240,11 +260,7 @@ export function FlagEditor(props: {
               rules: [],
             });
           }}
-        >
-          <option value="boolean">Boolean (on / off)</option>
-          <option value="variant">Variants (named)</option>
-          <option value="json">JSON (a value per variant)</option>
-        </select>
+        />
       </div>
 
       <fieldset className="flex flex-col gap-2">
@@ -305,43 +321,35 @@ export function FlagEditor(props: {
         <label htmlFor={ids.off} className={label}>
           When off, serve
         </label>
-        <select
+        <ChoiceSelect
           id={ids.off}
-          className="h-8 border bg-background px-2 font-mono text-xs"
+          className="w-48 font-mono"
           value={d.offVariant}
-          onChange={(e) => update({ offVariant: e.target.value })}
-        >
-          {keys.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
+          options={variantOptions}
+          onValueChange={(offVariant) => update({ offVariant })}
+        />
       </div>
 
-      <fieldset className="flex flex-col gap-2">
-        <legend className={label}>When on, by default serve</legend>
-        <div className="flex gap-4">
-          {(["variant", "rollout"] as const).map((m) => (
-            <label key={m} className="flex items-center gap-1.5">
-              <input type="radio" name="flag-mode" checked={d.mode === m} onChange={() => update({ mode: m })} />
-              {m === "variant" ? "One variant" : "A percentage rollout"}
-            </label>
-          ))}
-        </div>
+      <div className="flex flex-col gap-2">
+        <ChoiceRadios
+          label="When on, by default serve"
+          labelClassName={label}
+          inline
+          value={d.mode}
+          options={[
+            { value: "variant", label: "One variant" },
+            { value: "rollout", label: "A percentage rollout" },
+          ]}
+          onValueChange={(mode) => update({ mode })}
+        />
         {d.mode === "variant" ? (
-          <select
+          <ChoiceSelect
             aria-label="The default variant"
-            className="h-8 border bg-background px-2 font-mono text-xs"
+            className="w-48 font-mono"
             value={d.variant}
-            onChange={(e) => update({ variant: e.target.value })}
-          >
-            {keys.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
+            options={variantOptions}
+            onValueChange={(variant) => update({ variant })}
+          />
         ) : (
           <div className="flex flex-col gap-1">
             {keys.map((k) => (
@@ -361,7 +369,7 @@ export function FlagEditor(props: {
             ))}
           </div>
         )}
-      </fieldset>
+      </div>
 
       <fieldset className="flex flex-col gap-3">
         <legend className={label}>Targeting rules, in order (the first that matches serves)</legend>
@@ -398,18 +406,12 @@ export function FlagEditor(props: {
                     value={c.attribute}
                     onChange={(e) => set({ attribute: e.target.value })}
                   />
-                  <select
+                  <ChoiceSelect
                     aria-label={`Rule ${ri + 1} condition ${ci + 1} operator`}
-                    className="h-8 border bg-background px-1 text-xs"
                     value={c.operator}
-                    onChange={(e) => set({ operator: e.target.value as FlagOperator })}
-                  >
-                    {FLAG_OPERATORS.map((o) => (
-                      <option key={o} value={o}>
-                        {o}
-                      </option>
-                    ))}
-                  </select>
+                    options={FLAG_OPERATORS.map((o) => ({ value: o, label: o }))}
+                    onValueChange={(operator: FlagOperator) => set({ operator })}
+                  />
                   {c.operator !== "exists" && (
                     <Input
                       aria-label={`Rule ${ri + 1} condition ${ci + 1} values`}
@@ -441,20 +443,15 @@ export function FlagEditor(props: {
                 And…
               </Button>
               <span className="ml-auto text-xs">serve</span>
-              <select
+              <ChoiceSelect
                 aria-label={`Rule ${ri + 1} serves`}
-                className="h-8 border bg-background px-2 font-mono text-xs"
+                className="w-40 font-mono"
                 value={r.variant}
-                onChange={(e) =>
-                  update({ rules: d.rules.map((x, j) => (j === ri ? { ...x, variant: e.target.value } : x)) })
+                options={variantOptions}
+                onValueChange={(variant) =>
+                  update({ rules: d.rules.map((x, j) => (j === ri ? { ...x, variant } : x)) })
                 }
-              >
-                {keys.map((k) => (
-                  <option key={k} value={k}>
-                    {k}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           </div>
         ))}
@@ -482,14 +479,14 @@ export function FlagEditor(props: {
       </fieldset>
 
       {isNew && (
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={d.enabled} onChange={(e) => update({ enabled: e.target.checked })} />
-          Turn it on now
-        </label>
+        <span className="flex items-center gap-2">
+          <Checkbox id={ids.enabled} checked={d.enabled} onCheckedChange={(enabled) => update({ enabled })} />
+          <label htmlFor={ids.enabled}>Turn it on now</label>
+        </span>
       )}
 
       <p id={ids.problem} className="min-h-5 text-xs text-destructive" aria-live="polite">
-        {problem}
+        {shownProblem}
       </p>
       {refused && (
         <p role="alert" className="text-xs text-destructive">
@@ -501,7 +498,7 @@ export function FlagEditor(props: {
           type="submit"
           size="sm"
           disabled={!!problem || saving}
-          aria-describedby={problem ? ids.problem : undefined}
+          aria-describedby={shownProblem ? ids.problem : undefined}
         >
           {saving ? "Saving…" : isNew ? "Create flag" : "Save changes"}
         </Button>

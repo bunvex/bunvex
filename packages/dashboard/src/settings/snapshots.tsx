@@ -5,6 +5,8 @@
 // `npx convex import`'s formats and modes.
 import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
+import { ChoiceRadios } from "@bunvex/ui/components/choice-radios";
+import { FilePicker } from "@bunvex/ui/components/file-picker";
 import { Input } from "@bunvex/ui/components/input";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download } from "lucide-react";
@@ -316,35 +318,25 @@ function ImportSection() {
           }}
         >
           <div className="flex flex-col gap-1">
-            <label htmlFor={fileId} className="text-sm font-medium">
-              File
-            </label>
-            <input
+            <span className="text-sm font-medium">File</span>
+            <FilePicker
               id={fileId}
-              type="file"
+              label="File"
               accept=".zip,.jsonl,.json,.csv"
-              className="text-sm file:mr-3 file:border file:bg-background file:px-2 file:py-1 file:text-sm"
-              onChange={(e) => pick(e.target.files?.[0] ?? null)}
+              file={file}
+              onFile={pick}
+              hint="A .zip snapshot, or one table as .jsonl, .json or .csv — or drop it here"
             />
           </div>
-          <fieldset className="flex flex-col gap-1">
-            <legend className="text-sm font-medium">Format</legend>
-            {FORMATS.map((f) => (
-              <label key={f.value} className="flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="format"
-                  value={f.value}
-                  checked={format === f.value}
-                  onChange={() => {
-                    setFormat(f.value);
-                    if (f.value !== "zip" && mode === "replaceAll") setMode("requireEmpty");
-                  }}
-                />
-                {f.label}
-              </label>
-            ))}
-          </fieldset>
+          <ChoiceRadios
+            label="Format"
+            value={format}
+            options={FORMATS}
+            onValueChange={(f) => {
+              setFormat(f);
+              if (f !== "zip" && mode === "replaceAll") setMode("requireEmpty");
+            }}
+          />
           {format !== "zip" && (
             <div className="flex flex-col gap-1">
               <label htmlFor={tableId} className="text-sm font-medium">
@@ -358,21 +350,12 @@ function ImportSection() {
               />
             </div>
           )}
-          <fieldset className="flex flex-col gap-1">
-            <legend className="text-sm font-medium">When a table already has documents</legend>
-            {MODES.filter((m) => !m.zipOnly || format === "zip").map((m) => (
-              <label key={m.value} className="flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name="mode"
-                  value={m.value}
-                  checked={mode === m.value}
-                  onChange={() => setMode(m.value)}
-                />
-                {m.label}
-              </label>
-            ))}
-          </fieldset>
+          <ChoiceRadios
+            label="When a table already has documents"
+            value={mode}
+            options={MODES.filter((m) => !m.zipOnly || format === "zip")}
+            onValueChange={setMode}
+          />
           <div>
             <Button type="submit" disabled={!formReady || busy}>
               {busy ? "Reading the file…" : "Upload and review"}

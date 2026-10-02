@@ -6,11 +6,12 @@ import type { ReactNode } from "react";
 import { useQueryScope } from "../context.tsx";
 import { type AuthOrganization, type AuthSession, toDataSourceError } from "../data-source.ts";
 import { formatTime } from "../database/values.ts";
-import { DashLink } from "../router.tsx";
+import { type AuthSearch, authRoute, DashLink } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { BAR1 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
+import { OrgPanel } from "./org-panel.tsx";
 import { organizationsQuery, sessionsQuery, useRefreshAuth, usersQuery } from "./queries.ts";
 
 /** A session's device, in a few words: "Safari on macOS". */
@@ -139,6 +140,11 @@ const orgCol = dataTableColumns<AuthOrganization>();
 export function OrganizationsPage({ heading }: { heading: ReactNode }) {
   const scope = useQueryScope();
   const orgs = useQuery(organizationsQuery(scope));
+  const search = authRoute.useSearch();
+  const navigate = authRoute.useNavigate();
+  const setSearch = (patch: Partial<AuthSearch>, replace = false) =>
+    navigate({ search: (s: AuthSearch): AuthSearch => ({ ...s, ...patch }), replace });
+  const canOpen = typeof scope.source.listAuthMembers === "function";
   const columns: DataTableColumn<AuthOrganization>[] = [
     orgCol.accessor((o) => o.name, { id: "name", header: "Name" }),
     orgCol.accessor((o) => o.slug, {
@@ -172,30 +178,51 @@ export function OrganizationsPage({ heading }: { heading: ReactNode }) {
       </div>
     );
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className={BAR1}>
-        {heading}
-        {orgs.data && (
-          <span className="text-sm text-muted-foreground tabular-nums">
-            {formatCount(orgs.data.length)} {orgs.data.length === 1 ? "organization" : "organizations"}
-          </span>
+    <>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className={BAR1}>
+          {heading}
+          {orgs.data && (
+            <span className="text-sm text-muted-foreground tabular-nums">
+              {formatCount(orgs.data.length)} {orgs.data.length === 1 ? "organization" : "organizations"}
+            </span>
+          )}
+        </div>
+        {orgs.error ? (
+          <ErrorState error={toDataSourceError(orgs.error)} />
+        ) : (
+          <DataTable
+            label="Organizations"
+            fill
+            columns={columns}
+            data={orgs.data ?? []}
+            getRowId={(o) => o.id}
+            defaultColumnWidth={(id) =>
+              ({ name: 220, slug: 160, members: 110, invitations: 170, created: 190 })[id] ?? 160
+            }
+            empty={orgs.isPending ? "Loading…" : "No organizations yet."}
+            grid={
+              canOpen
+                ? {
+                    activateOnClick: true,
+                    onCellActivate: (o) => setSearch({ org: o.id, orgTab: undefined }),
+                    // the open organization follows the current row, as on Users
+                    onCellFocus: (o) =>
+                      search.org !== undefined && o.id !== search.org && setSearch({ org: o.id }, true),
+                  }
+                : undefined
+            }
+          />
         )}
       </div>
-      {orgs.error ? (
-        <ErrorState error={toDataSourceError(orgs.error)} />
-      ) : (
-        <DataTable
-          label="Organizations"
-          fill
-          columns={columns}
-          data={orgs.data ?? []}
-          getRowId={(o) => o.id}
-          defaultColumnWidth={(id) =>
-            ({ name: 220, slug: 160, members: 110, invitations: 170, created: 190 })[id] ?? 160
-          }
-          empty={orgs.isPending ? "Loading…" : "No organizations yet."}
+      {canOpen && search.org !== undefined && (
+        <OrgPanel
+          org={orgs.data?.find((o) => o.id === search.org)}
+          tab={search.orgTab ?? "members"}
+          onTab={(tab) => setSearch({ orgTab: tab === "members" ? undefined : tab }, true)}
+          onClose={() => setSearch({ org: undefined, orgTab: undefined })}
         />
       )}
-    </div>
+    </>
   );
 }

@@ -2,11 +2,20 @@
 // Convex's settings sidebar (`DeploymentSettingsLayout.tsx`, `deploymentSettingsPages.ts`) — General first —
 // and the page beside it: Bar 1 (its name and what it is for), then its content, scrolling inside.
 import type { ReactNode } from "react";
+import { useQueryScope } from "../context.tsx";
+import { useExtensions } from "../extensions/context.ts";
+import { ExtensionLink } from "../extensions/link.tsx";
+import { offers } from "../extensions/types.ts";
 import { DashLink } from "../router.tsx";
 import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
 import { SECTION_ITEM, SectionColumn, SectionNav, useSectionSheet } from "../shell/section-column.tsx";
 
 function SettingsNav() {
+  const { source } = useQueryScope();
+  // pages the shown extensions add (UI-01 §26), only for those the deployment offers
+  const fromExtensions = useExtensions()
+    .filter((e) => offers(source, e))
+    .flatMap((e) => e.settings ?? []);
   return (
     <SectionNav
       label="Settings"
@@ -38,13 +47,27 @@ function SettingsNav() {
             </li>
           ),
         },
+        ...(fromExtensions.length > 0
+          ? [
+              {
+                label: "Extensions",
+                items: fromExtensions.map((item) => (
+                  <li key={item.to}>
+                    <ExtensionLink to={item.to} className={SECTION_ITEM}>
+                      {item.label}
+                    </ExtensionLink>
+                  </li>
+                )),
+              },
+            ]
+          : []),
       ]}
     />
   );
 }
 
 export function SettingsLayout(props: { title: string; description?: string; children: ReactNode }) {
-  const sheet = useSectionSheet({ kind: "settings-pages", label: "Pages", children: <SettingsNav /> });
+  const sheet = useSectionSheet({ kind: "settings-pages", label: "Settings", children: <SettingsNav /> });
   return (
     <div className={SCREEN}>
       <SectionColumn title="Settings" widthKey="bunvex-dashboard:settings-column-width">

@@ -4,10 +4,11 @@ import type { ReactNode } from "react";
 import { DashLink } from "../router.tsx";
 import { SECTION_ITEM, SectionColumn, SectionNav, useSectionSheet } from "../shell/section-column.tsx";
 
-export function SchedulesNav() {
+export function SchedulesNav(props: { withFilters?: boolean }) {
   return (
     <SectionNav
       label="Schedules"
+      withFilters={props.withFilters}
       groups={[
         {
           items: (
@@ -34,7 +35,7 @@ export function SchedulesNav() {
 export function useSchedulesColumn(filters?: ReactNode, onReset?: () => void) {
   const content = (
     <>
-      <SchedulesNav />
+      <SchedulesNav withFilters={!!filters} />
       {filters}
     </>
   );

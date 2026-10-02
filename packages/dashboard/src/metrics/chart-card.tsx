@@ -2,6 +2,7 @@
 // an error, not allowed).
 import { type ChartSeries, LineChart } from "@bunvex/ui/components/line-chart";
 import { Skeleton } from "@bunvex/ui/components/skeleton";
+import type { ReactNode } from "react";
 import { toDataSourceError } from "../data-source.ts";
 
 export function ChartCard(props: {
@@ -13,15 +14,20 @@ export function ChartCard(props: {
   max?: number;
   directLabels?: boolean;
   empty?: string;
+  /** Beside the title, e.g. a chart / heatmap switch. */
+  actions?: ReactNode;
 }) {
   const id = `chart-${props.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <section aria-labelledby={id} className="flex min-w-0 flex-col gap-3 border p-4">
-      <div>
-        <h3 id={id} className="text-sm font-medium">
-          {props.title}
-        </h3>
-        <p className="text-xs text-muted-foreground">{props.description}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 id={id} className="text-sm font-medium">
+            {props.title}
+          </h3>
+          <p className="text-xs text-muted-foreground">{props.description}</p>
+        </div>
+        {props.actions}
       </div>
       {props.error ? (
         <p role="alert" className="text-sm text-destructive">
