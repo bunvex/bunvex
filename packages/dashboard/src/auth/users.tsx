@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@bunvex/ui/components/dropdown-menu";
 import { Input } from "@bunvex/ui/components/input";
+import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ChevronDown, Mail, UserPlus } from "lucide-react";
@@ -51,22 +52,9 @@ export function Avatar({ user, className }: { user: AuthUser; className?: string
   );
 }
 
+/** A user's state as every screen says a state (UX2-12): the shared badge, an icon and a word. */
 export function UserStatusBadge({ user }: { user: AuthUser }) {
-  const s = userStatus(user);
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 border px-1.5 text-xs",
-        s === "banned"
-          ? "border-destructive/40 text-destructive"
-          : s === "verified"
-            ? "text-foreground"
-            : "text-muted-foreground",
-      )}
-    >
-      {s === "banned" ? "Banned" : s === "verified" ? "Verified" : "Unverified"}
-    </span>
-  );
+  return <StatusBadge status={userStatus(user)} />;
 }
 
 export const providerLabel = (p: string) => PROVIDER_LABEL[p] ?? p;
