@@ -2,10 +2,12 @@
 // who they are, their providers, emails to send them (password reset, magic link, email verification), their
 // sessions (each revocable), and a Danger zone — revoke every session, remove their second factors, ban
 // (for a while, or for good) or unban, impersonate, delete — each asking first.
+
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { Input } from "@bunvex/ui/components/input";
 import { JsonView } from "@bunvex/ui/components/json-view";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useId, useState } from "react";
@@ -289,18 +291,22 @@ function Overview({ user: u, onRemoved }: { user: AuthUser; onRemoved: () => voi
                     <label htmlFor={banForId} className="text-xs text-muted-foreground">
                       Ban for
                     </label>
-                    <select
-                      id={banForId}
-                      className="h-8 border bg-background px-2 text-sm"
-                      value={banFor}
-                      onChange={(e) => setBanFor(Number(e.target.value))}
+                    <Select
+                      items={BAN_FOR.map((b) => ({ value: String(b.seconds), label: b.label }))}
+                      value={String(banFor)}
+                      onValueChange={(v) => setBanFor(Number(v))}
                     >
-                      {BAN_FOR.map((b) => (
-                        <option key={b.label} value={b.seconds}>
-                          {b.label}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger id={banForId} className="min-w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {BAN_FOR.map((b) => (
+                          <SelectItem key={b.label} value={String(b.seconds)}>
+                            {b.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </span>
                   <span className="flex flex-col gap-1">
                     <label htmlFor={reasonId} className="text-xs text-muted-foreground">

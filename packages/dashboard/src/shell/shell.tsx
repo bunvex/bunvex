@@ -173,7 +173,8 @@ export function Shell() {
         </button>
         <nav
           aria-label="Dashboard"
-          className="shrink-0 border-b border-sidebar-border bg-sidebar text-sidebar-foreground md:w-52 md:border-r md:border-b-0"
+          // pinned to the viewport, scrolling on its own: a long page never shows where it ends (UX2-1)
+          className="shrink-0 border-b border-sidebar-border bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:h-svh md:w-52 md:overflow-y-auto md:border-r md:border-b-0"
         >
           <div className="flex h-12 items-center justify-between px-4 font-semibold tracking-tight">
             bunvex

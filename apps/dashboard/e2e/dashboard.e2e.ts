@@ -9,8 +9,9 @@ import { type Browser, chromium, type Page } from "playwright-core";
 
 const PORT = 4179;
 const ORIGIN = `http://localhost:${PORT}`;
-// no live writes and no delay from the mock: a stable page (the host takes these out of the address)
-const KNOBS = "writes=0&latency=0";
+// no live writes and no delay from the mock: a stable page, opened on the demo data without the sign-in page
+// (the host takes these out of the address)
+const KNOBS = "writes=0&latency=0&demo=1";
 const url = (path: string) => `${ORIGIN}${path}${path.includes("?") ? "&" : "?"}${KNOBS}`;
 const AXE = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
@@ -124,6 +125,19 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("the main nav is pinned to the viewport: a long page never shows where it ends (UX2-1)", async () => {
+    const { page, close } = await open("/settings/snapshots", { viewport: { width: 1400, height: 600 } });
+    await page.getByRole("heading", { level: 1, name: "Snapshots" }).waitFor();
+    await page.mouse.wheel(0, 2000);
+    await page.waitForTimeout(200);
+    const nav = await page.getByRole("navigation", { name: "Dashboard" }).evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), position: getComputedStyle(el).position };
+    });
+    expect(nav).toEqual({ top: 0, bottom: 600, position: "sticky" });
+    await close();
+  });
+
   test("the first load is the shell: each screen is its own chunk (UI-01 §14.1)", async () => {
     const assets = readdirSync(`${import.meta.dir}/../dist/assets`);
     const entry = assets.filter((f) => /^index-.*\.js$/.test(f));
@@ -137,7 +151,9 @@ describe("the dashboard in a browser", () => {
     // after; 583 kB on main on 1 Oct 2026 as screens grew, ~600 kB with the Overview (UI-01 §27: its own
     // ~17 kB; its charts and engine counters are lazy, the charts mounted when scrolled to) and the extension
     // registry's declarations in the shell (Analytics, Feature flags, Workflows: titles, icons, routes — the
-    // screens stay lazy). The guard keeps headroom: a screen imported eagerly again adds far more than that.
+    // screens stay lazy); ~641 kB on 2 Oct 2026 with UX review 2 (shared code the Vite split moved into the
+    // entry, no screen in it), so the guard went from 640 to 660 kB (the owner's call). It keeps headroom: a
+    // screen imported eagerly again adds far more than that.
     const { page, close } = await open("/");
     await heading(page, "Overview");
     const kb = await page.evaluate(
@@ -147,7 +163,7 @@ describe("the dashboard in a browser", () => {
           .filter((e) => e.name.endsWith(".js"))
           .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
     );
-    expect(kb).toBeLessThan(640);
+    expect(kb).toBeLessThan(660);
     await close();
   });
 
@@ -991,6 +1007,109 @@ describe("the dashboard in a browser", () => {
       }
       expect(found).toEqual([]);
     });
+});
+
+describe("the sign-in page (STUDY-12 §19)", () => {
+  /** A fresh tab on `path` with no knob, so the host starts signed out. */
+  async function fresh(
+    path = "/",
+    opts: { colorScheme?: "light" | "dark"; viewport?: { width: number; height: number } } = {},
+  ) {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 }, ...opts });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    const external: string[] = [];
+    page.on("pageerror", (e) => errors.push(String(e)));
+    page.on("request", (r) => {
+      if (!r.url().startsWith(ORIGIN) && !r.url().startsWith("data:") && !r.url().startsWith("blob:"))
+        external.push(r.url());
+    });
+    await page.goto(`${ORIGIN}${path}?writes=0&latency=0`);
+    return { page, errors, external, close: () => context.close() };
+  }
+  const axeViolations = async (page: Page) => {
+    await page.addScriptTag({ content: AXE });
+    return page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+      const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+    });
+  };
+
+  test("signed out: the page asks for a URL and an admin key; a bad URL or key is said; a good key opens the screens", async () => {
+    const { page, errors, external, close } = await fresh("/database/users");
+    await heading(page, "Sign in to a deployment");
+    const signIn = page.getByRole("button", { name: "Sign in" });
+    expect(await signIn.isDisabled()).toBe(true);
+    await page.getByLabel("Deployment URL", { exact: true }).fill("ftp://nope");
+    await page.getByLabel("Admin key", { exact: true }).fill("dev|abc");
+    await signIn.click();
+    await page.getByText("The URL must start with http:// or https://.").waitFor();
+    await page.getByLabel("Deployment URL", { exact: true }).fill("127.0.0.1:3210");
+    await page.getByLabel("Admin key", { exact: true }).fill("not-a-key");
+    await signIn.click();
+    await page.getByRole("alert").filter({ hasText: "The deployment URL or admin key is invalid" }).waitFor();
+    // the key is masked until shown
+    expect(await page.getByLabel("Admin key", { exact: true }).getAttribute("type")).toBe("password");
+    await page.getByRole("button", { name: "Show the admin key" }).click();
+    expect(await page.getByLabel("Admin key", { exact: true }).getAttribute("type")).toBe("text");
+    await page.getByLabel("Admin key", { exact: true }).fill("happy-otter|abc");
+    await signIn.click();
+    // the address it was opened at is the screen it opens on
+    await heading(page, "users");
+    // the header says where it is signed in, and signs out
+    await page.getByRole("button", { name: "Signed in: happy-otter" }).click();
+    await page.getByText("http://127.0.0.1:3210").waitFor();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    await heading(page, "Sign in to a deployment");
+    // like Convex, the key is not kept: a reload asks again
+    await page.reload();
+    await heading(page, "Sign in to a deployment");
+    expect(external).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("a read-only key: the screens open read-only", async () => {
+    const { page, close } = await fresh("/");
+    await heading(page, "Sign in to a deployment");
+    await page.getByLabel("Deployment URL", { exact: true }).fill("http://127.0.0.1:3210");
+    await page.getByLabel("Admin key", { exact: true }).fill("dev|readonly-1");
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await heading(page, "Overview");
+    // within the app (a reload would sign out: the key lives in memory)
+    await page.getByRole("link", { name: "Database" }).first().click();
+    await page.getByText("Read-only").first().waitFor();
+    await close();
+  });
+
+  test("the demo data: opens the screens, survives a reload, and Leave the demo goes back", async () => {
+    const { page, errors, close } = await fresh("/");
+    await page.getByRole("button", { name: "Use the demo data" }).click();
+    await heading(page, "Overview");
+    await page.reload();
+    await heading(page, "Overview");
+    await page.getByRole("button", { name: "Signed in: Demo data" }).click();
+    await page.getByRole("menuitem", { name: "Leave the demo" }).click();
+    await heading(page, "Sign in to a deployment");
+    await page.reload();
+    await heading(page, "Sign in to a deployment");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("axe, colour contrast included, in both themes; a phone's width does not scroll sideways", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, close } = await fresh("/", { colorScheme });
+      await heading(page, "Sign in to a deployment");
+      expect(await axeViolations(page)).toEqual([]);
+      await close();
+    }
+    const { page, close } = await fresh("/", { viewport: { width: 390, height: 800 } });
+    await heading(page, "Sign in to a deployment");
+    expect(await page.evaluate(() => document.scrollingElement!.scrollWidth - innerWidth)).toBe(0);
+    await close();
+  });
 });
 
 describe("the command palette (UI-01 §32)", () => {

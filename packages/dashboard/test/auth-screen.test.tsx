@@ -52,7 +52,7 @@ describe("the Authentication screen", () => {
       "Sign in / Providers",
       "Multi-factor",
       "Passkeys",
-      "Sessions",
+      "Session lifetime",
       "Rate limits",
       "URL configuration",
       "Emails",
@@ -160,6 +160,18 @@ describe("the Authentication screen", () => {
     const g = screen.getByRole("table", { name: "Sessions" });
     await waitFor(() => expect(within(g).getAllByRole("row").length).toBeGreaterThan(2));
     const user = userEvent.setup();
+    // a search narrows the sessions (UX2-19)
+    const someone = within(within(g).getAllByRole("row")[1]!).getAllByRole("cell")[0]!.textContent!;
+    await user.type(screen.getByRole("searchbox", { name: "Search sessions" }), someone);
+    await waitFor(() =>
+      expect(
+        within(g)
+          .getAllByRole("row")
+          .slice(1)
+          .every((r) => r.textContent!.includes(someone)),
+      ).toBe(true),
+    );
+    await user.clear(screen.getByRole("searchbox", { name: "Search sessions" }));
     await user.click(within(g).getAllByRole("button", { name: "Revoke" })[0]!);
     await user.click(screen.getAllByRole("button", { name: "Revoke" }).at(-1)!);
     await waitFor(async () => expect((await source.listAuthSessions({})).length).toBe(sessions.length - 1));

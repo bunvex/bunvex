@@ -2096,6 +2096,21 @@ writes when on), the screen and the editor.
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
 
+## 31. Signing in (STUDY-12 §19; 2 Oct 2026)
+
+- `apps/dashboard` opens on a **sign-in page** (`src/login/login-screen.tsx`, lazy): deployment URL (validated
+  and made canonical by `normalizeDeploymentUrl`), admin key (masked, show/hide), **Sign in**, and **Use the
+  demo data**. Prefilled from `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY`.
+- `AdminKeyVerifier` (`src/login/credentials.ts`) checks the key; only `mockVerifier` exists — the dashboard
+  does not talk to a real server yet. A checked key's operations become the mock's `Capabilities`
+  (`capabilitiesOf`): a read-only key opens the screens read-only.
+- The key stays in memory: a reload asks again (as Convex). The demo choice is kept for the tab; `?demo=1`
+  opens it directly (the e2e suite does).
+- The header's account entry (`account-entry.tsx`: a plain button until first used, then the menu is
+  fetched, so the first load does not grow) shows the deployment or "Demo data" and signs out.
+- An embedding page can hand credentials over (`embedded.ts`, Convex's message shapes).
+- Next: the real verifier (`GET /api/check_admin_key`) and a real data source.
+
 ## 32. The command palette (STUDY-12 §20; 2 Oct 2026)
 
 - `packages/dashboard/src/palette/`: `model.ts` (items, `fuzzyScore`, `searchItems`, `rememberPick`, pure)
@@ -2121,8 +2136,8 @@ every one. They land in five pull requests, one subsection each.
   system's Select), `ChoiceRadios` (Base UI RadioGroup with a label) and `FilePicker` (a button, the file's
   name and a drop zone over a hidden `<input type="file">`). The flag editor and Snapshots use them; a test
   (`test/native-controls.test.ts`) fails on any `<select>` or native file/radio/checkbox input outside an
-  explicit allow-list (the column's facet radios, Files' hidden upload input, the Schema toolbar's toggle, and
-  — until the Authentication pull request — two Authentication selects).
+  explicit allow-list (the column's facet radios, Files' hidden upload input and the Schema toolbar's toggle;
+  Authentication's two native selects use the design system's Select since its UX review 2 pull request).
 - **No error before typing** (UX2-5): the new-flag form says nothing until something is typed; Create stays
   disabled meanwhile (as the filters since UX-2).
 - **The Database bar keeps one row when narrow** (UX2-21): below a 42 rem table width (the panel open) "Index",
@@ -2154,3 +2169,47 @@ every one. They land in five pull requests, one subsection each.
   42 rem wide, icons when narrower, the same on the Logs screen and the Functions → Logs tab (checked at 1440:
   labelled in both); unchanged.
 - **Copy buttons** (UX2-7) are only on Authentication's Sign in / Providers: its pull request.
+
+### UX review 2 — Overview and pages (UX2-1, UX2-4, UX2-9, UX2-10, UX2-16, UX2-17, UX2-26, UX2-28)
+
+- **The main nav is pinned** (UX2-1): from `md` it is `sticky`, as tall as the viewport, and scrolls on its
+  own, so a long page never shows where the sidebar ends (an e2e test checks it after scrolling).
+- **The empty Database** (UX2-4) uses a table's frame: the section column (search, Create table, an empty
+  Tables list saying "No tables yet.") and Bar 1 ("Database · No tables yet"), the empty state centred where the
+  grid goes; below `lg` (no column) the empty state keeps its own Create table.
+- **Settings pages don't repeat their title** (UX2-9): a page renders its actions into Bar 1 through
+  `BarActions` (Environment variables: "Copy all as .env", "Add a variable"); the body starts with its content.
+- **Logs keep the message in view** (UX2-10): with the details panel open the columns run Time, Level,
+  Message, Outcome, Function, Request; the Functions → Logs tab has no Function column (it is always the open
+  function).
+- **Overview** (UX2-16, UX2-17, UX2-26): the summary is one row of four — both URLs in one cell — and Bar 1 no
+  longer repeats the deployment's name and version from the header; "Needs attention" runs across the page
+  above the indicators, and Recent activity sits beside the Metrics charts; numbers in attention items use
+  `formatCount`; a finished Get started step has a check and "Done", and the snippet's copy button is inside
+  the code block's corner.
+- **Topology's windows** (UX2-28): the node panel says "last minute" (the samples' interval counted once per
+  sample, then said as a person would), not "last 59 s".
+
+### UX review 2 — canvases and charts (UX2-14, UX2-15, UX2-25, UX2-27)
+
+- **Readable canvases** (UX2-14): `fitOptions` (shell/flow-controls) fits a small graph (up to six nodes) at
+  85–125 % and a big one never past 100 % — Schema and Workflows use it; a workflow without parallel steps runs
+  left to right. Topology keeps "never past 100 %" (the owner found bigger cards too big, §22), and its cards'
+  text goes from 11 to 12 px (labels 11 px).
+- **The workflow timeline** (UX2-15): a long idle gap — no step running, over a fifth of the run and over a
+  minute — is drawn short with a ⫽ marker saying how long it was ("Compress waits", on by default, can be
+  turned off); each bar says its duration; bars are at least 4 px.
+- **Charts** (UX2-25): `LineChart` bridges a missing stretch with a lighter dashed line instead of leaving
+  fragments, and its direct labels stay inside the plot (pushed up from the bottom, still a line apart).
+- **Analytics on a phone** (UX2-27): the visitors card, then the map (260 px), the breakdowns, and the live
+  feed last — five items until "Show N more".
+
+### UX review 2 — Authentication (UX2-18, UX2-19, and the Authentication parts of UX2-3)
+
+- **One "Sessions"** (UX2-18): the configuration page is "Session lifetime"; "Sessions" is the list of who is
+  signed in.
+- **Sessions do what the page is for** (UX2-19): a search by email, device or IP in Bar 2 (Revoke per row
+  was already there); the Impersonated column only when some session was impersonated, "—" otherwise. The
+  Organizations detail panel (members, invitations) is the Authentication follow-up pull request (#188).
+- **No browser selects** (UX2-3): Multi-factor's "Required for" and the user panel's "Ban for" use the design
+  system's Select.
