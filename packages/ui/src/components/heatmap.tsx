@@ -45,7 +45,9 @@ function Heatmap(props: HeatmapProps) {
   const every = Math.max(1, Math.ceil(props.times.length / 6));
   return (
     <div data-slot="heatmap" className={cn("flex min-w-0 flex-col gap-2", props.className)}>
-      <div className="overflow-x-auto">
+      {/* focusable, so a keyboard can scroll it when the columns do not fit (axe scrollable-region-focusable) */}
+      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region must be reachable by keyboard */}
+      <div tabIndex={0} className="overflow-x-auto outline-none focus-visible:ring-1 focus-visible:ring-ring/50">
         <table
           aria-label={props.label}
           className="w-full table-fixed border-separate border-spacing-0.5 text-xs"
