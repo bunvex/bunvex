@@ -234,6 +234,17 @@ export type Savepoint = {
   pendingViolation: { table: string; error: string } | null;
 };
 
+/** An imported document's `_id` refused (STUDY-42), with Convex's code. */
+export class ImportIdError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ImportIdError";
+  }
+}
+
 export class Tx {
   private readList: Interval[] = [];
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
@@ -309,7 +320,22 @@ export class Tx {
   /** A table visible to this transaction (the catalog, or one it created), or undefined. */
   private findTable(name: string): TableDef | undefined {
     if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
-    return this.catalog.tables.get(name) ?? this.createdTables.get(name)?.def;
+    const t = this.catalog.tables.get(name);
+    if (t) this.dependOn(t);
+    return t ?? this.createdTables.get(name)?.def;
+  }
+
+  private dependedOn = new Set<number>();
+  /**
+   * Record that this transaction used table `t` as the catalog had it: a read of its `_tables` document, so
+   * a commit that replaces or deletes the table (an import's activation, STUDY-42) conflicts with a mutation
+   * that wrote it and invalidates a query that read it.
+   */
+  private dependOn(t: TableDef) {
+    if (this.systemTx || t.metaId === undefined || this.dependedOn.has(t.id)) return;
+    this.dependedOn.add(t.id);
+    const k = encodeKey([t.metaId]);
+    this.recordInterval({ index: this.catalog.table(TABLES_TABLE).byId.id, lo: k, hi: prefixEnd(k) });
   }
 
   /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
@@ -379,7 +405,8 @@ export class Tx {
       const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
       const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
       const meta = plan.insertTables[0];
-      for (const t of plan.insertTables) await this.insert(TABLES_TABLE, t);
+      let metaId: string | undefined;
+      for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
       const def = new Catalog().add(
         name,
@@ -387,6 +414,7 @@ export class Tx {
         meta.number,
         plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
       );
+      def.metaId = metaId;
       this.createdTables.set(name, { def, meta, indexes: plan.insertIndexes });
       return def;
     } finally {
@@ -559,6 +587,74 @@ export class Tx {
       iterated: false,
     };
     return this.makeQuery(table, st);
+  }
+
+  /**
+   * A query of a table given by its definition, hidden or being deleted too (an import's or the deletion
+   * worker's, STUDY-42). System transactions only.
+   */
+  queryDef(t: TableDef): TxQuery {
+    if (!this.systemAccess) throw new Error("queryDef is for system transactions");
+    const st: QState = {
+      t,
+      ix: t.indexes.get("by_creation_time"),
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      filters: [],
+      stage: "initializer",
+      closed: false,
+      iterated: false,
+    };
+    return this.makeQuery(t.name, st);
+  }
+
+  /**
+   * Insert a document as an import does (Convex's `ImportFacingModel::insert`, STUDY-42): its `_id` kept
+   * when it has one (it must be an id of this table's number), its `_creationTime` kept when it is a float,
+   * else new ones. Into any table given by its definition (an import's hidden table). System only.
+   */
+  async importInsert(t: TableDef, fields: Record<string, unknown>): Promise<string> {
+    if (!this.systemAccess) throw new Error("importInsert is for system transactions");
+    if (!this.writable) throw new Error("queries cannot write");
+    const { _id, _creationTime, ...rest } = fields;
+    let id: string;
+    if (_id === undefined) {
+      const internal = new Uint8Array(16);
+      outsideExecution(() => crypto.getRandomValues(internal.subarray(0, 14)));
+      internal[14] = this.day >> 8;
+      internal[15] = this.day & 0xff;
+      id = encodeId(t.number, internal);
+    } else {
+      let decoded: { tableNumber: number } | null = null;
+      try {
+        decoded = typeof _id === "string" ? decodeId(_id) : null;
+      } catch {
+        decoded = null;
+      }
+      if (!decoded) throw new ImportIdError("InvalidId", `invalid _id '${String(_id)}'`);
+      if (decoded.tableNumber !== t.number)
+        throw new ImportIdError(
+          "ImportConflict",
+          `_id ${_id as string} cannot be imported into '${t.name}' because it came from a different deployment and conflict with preexisting tables in this deployment. Try deleting preexisting tables or importing into an empty deployment.`,
+        );
+      id = _id as string;
+    }
+    let creationTime: number;
+    if (typeof _creationTime === "number") creationTime = _creationTime;
+    else {
+      creationTime = this.nextCreationTime;
+      this.nextCreationTime = nextUp(creationTime);
+    }
+    const doc = { ...copyFields(rest, "insert"), _id: id, _creationTime: creationTime };
+    this.stage(t, id, null, sortFields(doc));
+    return id;
+  }
+
+  /** Delete a document of a table given by its definition (the deletion worker's). System only. */
+  async deleteFrom(t: TableDef, doc: Doc) {
+    if (!this.systemAccess) throw new Error("deleteFrom is for system transactions");
+    this.stage(t, doc._id as string, this.writes.get(doc._id as string)?.old ?? doc, null);
   }
 
   private makeQuery(table: string, st: QState): TxQuery {
