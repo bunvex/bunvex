@@ -20,9 +20,7 @@ export const SCHEDULED_FUNCTIONS_INDEXES = {
   [SCHEDULED_BY_COMPLETED_TS]: ["completedTime"],
 };
 
-/** Convex's TRANSACTION_MAX_NUM_SCHEDULED and TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES. */
-export const TRANSACTION_MAX_NUM_SCHEDULED = 1000;
-export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
+export { TRANSACTION_MAX_NUM_SCHEDULED, TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES } from "./tx.ts";
 
 export type JobState =
   | { kind: "pending" }
@@ -61,9 +59,6 @@ export function publicJob(d: JobDoc): PublicJob {
     : { _id, _creationTime, name, args, scheduledTime, completedTime, state };
 }
 
-/** The jobs and argument bytes scheduled so far by each transaction (Convex's per-transaction limits). */
-const scheduledBy = new WeakMap<Tx, { count: number; bytes: number }>();
-
 /**
  * Insert a job, counting toward the transaction's limits. `canceled`: the job is born canceled (scheduled by
  * a running action whose own job was canceled, as Convex does).
@@ -72,16 +67,16 @@ export async function insertJob(
   db: Tx,
   job: { name: string; args: Value[]; scheduledTime: number; now: number; canceled?: boolean },
 ): Promise<string> {
-  const used = scheduledBy.get(db) ?? { count: 0, bytes: 0 };
-  used.count++;
-  used.bytes += valueSize(job.args as Value);
-  scheduledBy.set(db, used);
-  if (used.count > TRANSACTION_MAX_NUM_SCHEDULED)
-    throw new Error(`Too many functions scheduled by this mutation (limit: ${TRANSACTION_MAX_NUM_SCHEDULED})`);
-  if (used.bytes > TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES)
+  // Convex's `check_scheduling_limits`, against the transaction's limits (a nested call's are lowered).
+  const size = valueSize(job.args as Value);
+  if (db.scheduledCount >= db.limits.functionsScheduled)
+    throw new Error(`Too many functions scheduled by this mutation (limit: ${db.limits.functionsScheduled})`);
+  if (db.scheduledBytes + size > db.limits.scheduledFunctionArgsBytes)
     throw new Error(
-      `Too large total size of the arguments of scheduled functions from this mutation (limit: ${TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES} bytes)`,
+      `Too large total size of the arguments of scheduled functions from this mutation (limit: ${db.limits.scheduledFunctionArgsBytes} bytes)`,
     );
+  db.scheduledCount++;
+  db.scheduledBytes += size;
   const doc: Omit<JobDoc, "_id" | "_creationTime"> = job.canceled
     ? {
         name: job.name,
