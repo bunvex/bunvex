@@ -13,9 +13,18 @@
 // - the row ends `completed` (the activation's timestamp, the documents written) or `failed`, with the
 //   message prefixed "Hit an error while importing:" as Convex's.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { type Engine, ImportIdError, SNAPSHOT_IMPORTS_TABLE, schemaToJson, type TableDef, type Tx } from "@bunvex/core";
+import {
+  type Engine,
+  ImportIdError,
+  OccError,
+  SNAPSHOT_IMPORTS_TABLE,
+  schemaToJson,
+  type TableDef,
+  type Tx,
+} from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId, type ValidatorJSON, type Value } from "@bunvex/values";
+import { INTERNAL_SERVER_ERROR_MESSAGE, isSystemError } from "./errors.ts";
 import {
   confirmationMessage,
   ImportError,
@@ -79,6 +88,8 @@ export type ImportRow = {
   fq_object_key: string;
   /** The upload's size, for reading a ZIP by ranges (bunvex's own field). */
   object_size: bigint;
+  /** The hidden tables this import created, by name (bunvex's own field): resumed, or dropped if it fails. */
+  hidden_tables?: { name: string; tablet: string }[];
   member_id: null;
   checkpoints: Checkpoint[] | null;
   requestor: { type: "snapshotImport" };
@@ -128,7 +139,43 @@ function foreignKeys(v: ValidatorJSON, out = new Set<string>()): Set<string> {
 export type ImportOptions = {
   /** The current time in ms (tests). */
   now?: () => number;
+  /** The backoff between attempts after a system error (Convex's: 30 s doubling to 5 minutes). */
+  retryBackoffMs?: { initial: number; max: number };
 };
+
+/** Convex's SNAPSHOT_IMPORT_MAX_SYSTEM_FAILURES: after this many retries a system error fails the import. */
+export const MAX_SYSTEM_FAILURES = 5;
+
+/** The blob store failed (Convex's storage errors): not the import's fault, so retried. */
+class StorageFailure extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/**
+ * A failure of the system rather than of the import's content, which Convex retries (an error without
+ * `ErrorMetadata`): a storage failure, a server error, a conflict that outlasted its retries.
+ */
+const isRetryable = (e: unknown) => e instanceof StorageFailure || isSystemError(e) || e instanceof OccError;
+
+/** A stream whose read errors are storage failures. */
+function storageStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(c) {
+      let r: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        r = await reader.read();
+      } catch (e) {
+        throw new StorageFailure(e);
+      }
+      if (r.done) c.close();
+      else c.enqueue(r.value);
+    },
+    cancel: (why) => reader.cancel(why),
+  });
+}
 
 export class ImportService {
   private running: Promise<void> | null = null;
@@ -138,6 +185,9 @@ export class ImportService {
   private changed: { promise: Promise<void>; resolve: () => void } = Promise.withResolvers<void>();
   private readonly tokenKey: Buffer;
   private readonly now: () => number;
+  private readonly backoff: { initial: number; max: number };
+  /** The import the worker is running, if any. */
+  private current: string | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -148,6 +198,7 @@ export class ImportService {
   ) {
     this.tokenKey = Buffer.from(engine.secretKey("snapshot import upload"));
     this.now = opts.now ?? Date.now;
+    this.backoff = opts.retryBackoffMs ?? { initial: 30_000, max: 300_000 };
   }
 
   private sys<T>(fn: (db: Tx) => Promise<T>, write = false): Promise<T> {
@@ -286,6 +337,15 @@ export class ImportService {
         );
       await this.setState(db, id, () => ({ state: "failed", error_message: "Import canceled" }));
     });
+    // The worker drops a running import's tables itself, when it sees the cancellation.
+    if (this.current !== id) await this.dropHidden(id);
+  }
+
+  /** Drop the hidden tables a failed or canceled import created. */
+  private async dropHidden(id: string) {
+    const row = await this.row(id);
+    const tablets = (row?.hidden_tables ?? []).map((h) => Number(h.tablet));
+    if (tablets.length) await this.engine.dropHiddenTables(tablets).catch(() => {});
   }
 
   /** Wait until the import is waiting for confirmation, completed or failed (Convex's `wait_for_import_worker`). */
@@ -324,6 +384,7 @@ export class ImportService {
   }
 
   private async loop() {
+    let failures = 0;
     while (!this.stopped) {
       const next = await this.sys(async (db) => {
         const rows = (await db.query(SNAPSHOT_IMPORTS_TABLE).collect()) as unknown as ImportRow[];
@@ -339,19 +400,45 @@ export class ImportService {
         this.wake = null;
         continue;
       }
+      this.current = next._id;
       try {
         if (next.state.state === "uploaded") await this.confirmable(next);
         else await this.run(next);
+        failures = 0;
       } catch (e) {
         if (this.stopped) return;
-        if (e instanceof Canceled) continue;
-        const msg = e instanceof Error ? e.message : String(e);
-        await this.write((db) =>
-          this.setState(db, next._id, () => ({
-            state: "failed",
-            error_message: `Hit an error while importing:\n${msg}`,
-          })),
-        ).catch(() => {});
+        if (e instanceof Canceled) {
+          await this.dropHidden(next._id);
+          continue;
+        }
+        // As Convex's worker: a system error is retried (the next attempt resumes from the checkpoints) with a
+        // backoff, until it has failed too often; an error of the import's own fails it at once.
+        if (isRetryable(e) && failures < MAX_SYSTEM_FAILURES) {
+          const delay = Math.min(this.backoff.initial * 2 ** failures, this.backoff.max) * (0.5 + Math.random() / 2);
+          failures++;
+          console.error(`bunvex: import ${next._id} failed, retrying: ${(e as Error).message}`);
+          // Not running while it waits: a cancellation meanwhile drops its tables itself.
+          this.current = null;
+          await Promise.race([
+            Bun.sleep(delay),
+            new Promise<void>((done) => {
+              this.wake = done;
+            }),
+          ]);
+          this.wake = null;
+          continue;
+        }
+        failures = 0;
+        // Its tables go first, so whoever sees it failed sees nothing left behind.
+        await this.dropHidden(next._id);
+        const msg = isRetryable(e)
+          ? INTERNAL_SERVER_ERROR_MESSAGE
+          : `Hit an error while importing:\n${e instanceof Error ? e.message : String(e)}`;
+        await this.write((db) => this.setState(db, next._id, () => ({ state: "failed", error_message: msg }))).catch(
+          () => {},
+        );
+      } finally {
+        this.current = null;
       }
     }
   }
@@ -365,9 +452,14 @@ export class ImportService {
     const key = row.fq_object_key;
     const store = this.store;
     const get = async (range?: { start: number; end: number }) => {
-      const body = await store.get(key, range);
+      let body: ReadableStream<Uint8Array> | null;
+      try {
+        body = await store.get(key, range);
+      } catch (e) {
+        throw new StorageFailure(e);
+      }
       if (!body) throw new Error(`the uploaded import ${key} is missing`);
-      return body;
+      return storageStream(body);
     };
     if (row.format.format !== "zip")
       return parseSingleTable(row.format, async () => (await get()) as unknown as AsyncIterable<Uint8Array>);
@@ -596,10 +688,11 @@ export class ImportService {
   }
 
   private async run(row: ImportRow) {
-    const created: number[] = [];
-    // A run interrupted by a restart starts over: drop what it had created.
-    const stale = (row.checkpoints ?? []).map((c) => c.tablet_id).filter((t): t is string => t !== null);
-    if (stale.length) await this.engine.dropHiddenTables(stale.map(Number));
+    // The hidden tables to activate; a retried or restarted run resumes into the ones it created before
+    // (Convex's checkpoints), skipping the documents already in them.
+    const hidden: number[] = [];
+    const previous = new Map((row.hidden_tables ?? []).map((h) => [h.name, Number(h.tablet)]));
+    const skip = new Map<string, number>();
     try {
       this.failIfTooOld(row);
       const parsed = await this.parse(row);
@@ -621,7 +714,15 @@ export class ImportService {
         const number = numbers.get(name);
         const active = this.engine.catalog.tables.get(name);
         let def: TableDef;
-        if (mode === "Append" && active) def = active;
+        const resumed = previous.get(name);
+        const kept = resumed === undefined ? undefined : this.engine.catalog.hidden.get(resumed);
+        if (kept) {
+          // As Convex: an append into a new table cannot resume (nothing records how far it got).
+          if (mode === "Append") throw new Error("can't resume append import");
+          def = kept;
+          hidden.push(def.id);
+          skip.set(name, await this.count(def));
+        } else if (mode === "Append" && active) def = active;
         else {
           if (mode === "RequireEmpty" && active && (await this.count(active)) > 0)
             throw new ImportError(
@@ -633,12 +734,14 @@ export class ImportService {
             ...(active ? { copyIndexesOf: name } : {}),
             replacing: replacedByAll,
           });
-          created.push(def.id);
+          hidden.push(def.id);
+          const tablet = String(def.id);
           await this.write(async (db) => {
             const cur = await this.mustGet(db, row._id);
             await db.patch(SNAPSHOT_IMPORTS_TABLE, cur._id, {
+              hidden_tables: [...(cur.hidden_tables ?? []).filter((h) => h.name !== name), { name, tablet }],
               checkpoints: (cur.checkpoints ?? []).map((c) =>
-                c.display_table_name === name ? { ...c, tablet_id: String(def.id) } : c,
+                c.display_table_name === name ? { ...c, tablet_id: tablet } : c,
               ),
             });
           });
@@ -661,14 +764,15 @@ export class ImportService {
       let total = 0;
       for (const t of tables) {
         const def = defs.get(t.name)!;
-        if (t.name === "_storage") await this.importStorage(row, t, def, parsed, schemaTables);
-        else total += await this.importTable(row, t, def, schemaTables);
+        const skipped = skip.get(t.name) ?? 0;
+        if (t.name === "_storage") await this.importStorage(row, t, def, parsed, schemaTables, skipped);
+        else total += await this.importTable(row, t, def, schemaTables, skipped);
       }
 
       const imported = new Set(defs.keys());
       const deleteNames = mode === "ReplaceAll" ? replacedByAll.filter((n) => !imported.has(n)) : [];
       const schema = this.engine.schema;
-      const { ts } = await this.engine.activateTables(created, deleteNames, async (db) => {
+      const { ts } = await this.engine.activateTables(hidden, deleteNames, async (db) => {
         // Only an import still running is finished (it may have been canceled).
         const cur = await db.asSystem(() => this.mustGet(db, row._id));
         if (cur.state.state === "failed") throw new Canceled();
@@ -696,7 +800,6 @@ export class ImportService {
           }
         }
       });
-      created.length = 0;
       await this.write((db) =>
         this.setState(db, row._id, () => ({
           state: "completed",
@@ -705,7 +808,6 @@ export class ImportService {
         })),
       );
     } catch (e) {
-      if (created.length) await this.engine.dropHiddenTables(created).catch(() => {});
       throw this.userError(e);
     }
   }
@@ -744,13 +846,21 @@ export class ImportService {
   }
 
   /** One table's rows, in batches (Convex's `import_single_table`); the documents written. */
-  private async importTable(row: ImportRow, t: ImportTable, def: TableDef, schemaTables: Map<number, string>) {
+  private async importTable(
+    row: ImportRow,
+    t: ImportTable,
+    def: TableDef,
+    schemaTables: Map<number, string>,
+    skip: number,
+  ) {
     await this.progress(row._id, `Importing "${t.name}"`, t.name, 0);
     let n = 0;
     let batch: Record<string, Value>[] = [];
     let size = 0;
     for await (const r of t.rows()) {
       n++;
+      // Written by an earlier attempt (batches commit whole and in order, so a count is a prefix).
+      if (n <= skip) continue;
       batch.push(rowToDocument(r, t.uniform, n));
       size += r.text?.length ?? JSON.stringify(r.json).length;
       if (size > BATCH_MAX_BYTES || batch.length > BATCH_MAX_DOCUMENTS) {
@@ -772,6 +882,7 @@ export class ImportService {
     def: TableDef,
     parsed: ParsedImport,
     schemaTables: Map<number, string>,
+    skip: number,
   ) {
     await this.progress(row._id, `Importing "_storage"`, "_storage", 0);
     type Meta = { _creationTime?: number; sha256?: string; contentType?: string; internalId?: string };
@@ -801,8 +912,20 @@ export class ImportService {
     let done = 0;
     for (const file of parsed.storageFiles) {
       if (!this.files) throw new ImportError("FileStorageDisabled", "File storage is not configured on this server.");
+      // Stored by an earlier attempt: one file per transaction, in order.
+      if (done < skip) {
+        done++;
+        continue;
+      }
       const m = metadata.get(file.id) ?? {};
-      const written = await this.files.put(streamFrom(file.read()));
+      let written: Awaited<ReturnType<BlobStore["put"]>>;
+      try {
+        written = await this.files.put(streamFrom(file.read()));
+      } catch (e) {
+        throw e instanceof InvalidZipError || e instanceof ImportError || e instanceof StorageFailure
+          ? e
+          : new StorageFailure(e);
+      }
       const sha256 = b64(written.sha256);
       if (m.sha256 !== undefined && m.sha256 !== sha256) {
         await this.files.delete(written.key).catch(() => {});

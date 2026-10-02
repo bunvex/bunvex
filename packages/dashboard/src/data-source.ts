@@ -379,6 +379,7 @@ export type FieldPatch = Value | { $unset: true };
 
 import type { AuthFeatures } from "./data-source-auth.ts";
 import type { AuthAdminFeatures } from "./data-source-auth-admin.ts";
+import type { ClientsFeatures } from "./data-source-clients.ts";
 import type { MetricsFeatures } from "./data-source-metrics.ts";
 import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
@@ -386,6 +387,7 @@ import type { TopologyFeatures } from "./data-source-topology.ts";
 
 export * from "./data-source-auth.ts";
 export * from "./data-source-auth-admin.ts";
+export * from "./data-source-clients.ts";
 export * from "./data-source-deployment.ts";
 export * from "./data-source-metrics.ts";
 export * from "./data-source-snapshot.ts";
@@ -402,6 +404,7 @@ export interface DashboardDataSource
     AuthAdminFeatures,
     SnapshotFeatures,
     TopologyFeatures,
+    ClientsFeatures,
     ExtensionFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;
   getCapabilities(opts?: CallOptions): Promise<Capabilities>;

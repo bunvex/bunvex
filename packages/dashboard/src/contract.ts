@@ -8,6 +8,7 @@
 import { test as bunTest, describe, expect } from "bun:test";
 import { describeAuthContract } from "./contract-auth.ts";
 import { describeAuthAdminContract } from "./contract-auth-admin.ts";
+import { describeClientsContract } from "./contract-clients.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
@@ -566,6 +567,7 @@ export function describeDataSourceContract(
     describeDeploymentStateContract({ make, test, opts });
     describeMetricsContract({ make, test });
     describeTopologyContract({ make, test, watchTimeoutMs });
+    describeClientsContract({ make, test, writes: !!opts.writes });
     describeAuthContract({ make, test });
     describeAuthAdminContract({ make, test });
     describeSnapshotContract({ make, test, opts });

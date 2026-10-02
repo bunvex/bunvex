@@ -1,6 +1,7 @@
 // What the Overview derives from the contract (UI-01 §27), kept pure so it is tested apart from the screen:
 // totals over the top-k series, the latest minute that has data, and the "needs attention" list.
-import type { Timeseries, TopKSeries, Topology } from "../data-source.ts";
+import { PLATFORM_LABEL as PLATFORM_NAME } from "../clients/names.ts";
+import type { ClientSummary, Timeseries, TopKSeries, Topology } from "../data-source.ts";
 import { formatCount } from "./stats.ts";
 
 /** Per bucket, the sum of every series (a missing value counts as nothing; a bucket with none stays null). */
@@ -54,6 +55,8 @@ export type AttentionInput = {
   /** Scheduler lag in seconds per bucket. */
   schedulerLag?: Timeseries;
   paused?: boolean;
+  /** Who is connected (UI-01 §33): SDK versions past the policy need an upgrade. */
+  clients?: ClientSummary;
 };
 
 /** Failing functions: any failure in the last FAIL_WINDOW buckets. */
@@ -111,6 +114,17 @@ export function attention(input: AttentionInput): Attention[] {
         to: "functions",
         search: { function: f.function, tab: "statistics" },
       });
+  }
+  // outdated SDKs, per platform: refused (unsupported) is critical, an upgrade required a warning
+  for (const v of input.clients?.sdkVersions ?? []) {
+    if (v.state === "supported") continue;
+    out.push({
+      id: `sdk-${v.platform}-${v.version}`,
+      severity: v.state === "unsupported" ? "critical" : "warning",
+      text: `${formatCount(v.connections)} ${PLATFORM_NAME[v.platform]} ${v.connections === 1 ? "client runs" : "clients run"} SDK ${v.version}: ${v.state === "unsupported" ? "no longer supported" : "an upgrade is required"}`,
+      to: "topology",
+      search: { clients: `platform:${v.platform}` },
+    });
   }
   const lag = input.schedulerLag ? latest(input.schedulerLag) : null;
   if (lag !== null && lag >= LAG_LIMIT_S)

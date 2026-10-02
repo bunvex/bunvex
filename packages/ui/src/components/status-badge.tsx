@@ -5,6 +5,7 @@ import {
   Archive,
   BadgeCheck,
   Ban,
+  CircleArrowUp,
   CircleCheck,
   CircleDashed,
   CircleSlash,
@@ -31,7 +32,10 @@ export type Status =
   | "unverified"
   | "banned"
   | "active"
-  | "revoked";
+  | "revoked"
+  // a client SDK's version under the deployment's policy (UI-01 §33), as Convex's ClientVersionState
+  | "upgrade"
+  | "unsupported";
 
 const LOOK: Record<Status, { label: string; icon: typeof CircleCheck; className: string }> = {
   success: { label: "Success", icon: CircleCheck, className: "text-success" },
@@ -48,6 +52,8 @@ const LOOK: Record<Status, { label: string; icon: typeof CircleCheck; className:
   banned: { label: "Banned", icon: UserX, className: "text-destructive" },
   active: { label: "Active", icon: CircleCheck, className: "text-success" },
   revoked: { label: "Revoked", icon: Ban, className: "text-muted-foreground" },
+  upgrade: { label: "Upgrade required", icon: CircleArrowUp, className: "text-warning" },
+  unsupported: { label: "Unsupported", icon: CircleX, className: "text-destructive" },
 };
 
 function StatusBadge({ status, children, className }: { status: Status; children?: ReactNode; className?: string }) {
@@ -59,7 +65,11 @@ function StatusBadge({ status, children, className }: { status: Status; children
       className={cn("inline-flex items-center gap-1 text-xs", className)}
     >
       <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", tone)} />
-      <span className={cn((status === "failure" || status === "banned") && "text-destructive")}>{label}</span>
+      <span
+        className={cn((status === "failure" || status === "banned" || status === "unsupported") && "text-destructive")}
+      >
+        {label}
+      </span>
       {children !== undefined && (
         <>
           {" "}
