@@ -9,8 +9,8 @@ import { useQueryScope } from "../context.tsx";
 import type { FileFilter, FileKind } from "../data-source.ts";
 import { DashLink, type FilesSearch } from "../router.tsx";
 import { formatBytes, formatCount } from "../screens/stats.ts";
-import { dayBound } from "../shell/day-input.tsx";
-import { FacetRadios, SECTION_ITEM, SectionFilters, SectionNav } from "../shell/section-column.tsx";
+import { DayInput, dayBound } from "../shell/day-input.tsx";
+import { FacetRadios, FacetSection, SECTION_ITEM, SectionFilters, SectionNav } from "../shell/section-column.tsx";
 import { fileStatsQuery } from "./queries.ts";
 
 export const VIEWS = [
@@ -170,12 +170,14 @@ export function FilesSections(props: {
           options={DAYS.map((d, i) => ({ value: d.value, label: d.label, count: days[i]?.data?.count }))}
           value={presetOf(search.from, search.to)}
           onChange={(p) => setSearch({ from: presetFrom(p), to: undefined })}
-          note={
-            search.from && !presetOf(search.from, search.to)
-              ? "A custom range, set in the bar above the list."
-              : undefined
-          }
         />
+        {/* the custom range lives here, under its presets, as on History — not a second date filter in the bar */}
+        <FacetSection title="Custom range">
+          <div className="flex flex-col gap-2 px-3 py-1">
+            <DayInput label="Uploaded from" value={search.from} onChange={(v) => setSearch({ from: v })} />
+            <DayInput label="Uploaded until" value={search.to} onChange={(v) => setSearch({ to: v })} />
+          </div>
+        </FacetSection>
         <FacetRadios
           title="Size"
           options={[{ value: "all", label: "Any size" }, ...SIZES].map((s, i) => ({

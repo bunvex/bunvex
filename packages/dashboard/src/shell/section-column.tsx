@@ -179,6 +179,7 @@ export function FacetSection(props: { title: string; onAll?: () => void; childre
         {props.onAll && (
           <button
             type="button"
+            aria-label={`All: ${props.title}`}
             className="text-xs text-muted-foreground underline-offset-2 hover:underline"
             onClick={props.onAll}
           >
@@ -203,14 +204,27 @@ function Choice(props: {
   count?: number;
   onChange: (on: boolean) => void;
   mono?: boolean;
+  /** "Only this one", shown on hover and focus (UX2-23). */
+  onOnly?: () => void;
+  onlyLabel?: string;
 }) {
   const id = useId();
   return (
-    <li className="flex items-center gap-2 px-3 py-1 hover:bg-muted/50">
+    <li className="group/choice flex items-center gap-2 px-3 py-1 hover:bg-muted/50">
       <Checkbox id={id} checked={props.checked} onCheckedChange={(on) => props.onChange(on === true)} />
       <label htmlFor={id} className={cn("min-w-0 flex-1 cursor-pointer truncate", props.mono && "font-mono text-xs")}>
         {props.label}
       </label>
+      {props.onOnly && (
+        <button
+          type="button"
+          aria-label={props.onlyLabel}
+          className="text-xs text-muted-foreground underline-offset-2 opacity-0 group-hover/choice:opacity-100 hover:text-foreground hover:underline focus-visible:opacity-100"
+          onClick={props.onOnly}
+        >
+          Only
+        </button>
+      )}
       <Count n={props.count} />
     </li>
   );
@@ -226,27 +240,49 @@ export function FacetGroup<T extends string>(props: {
   /** A choice's words; the value itself by default. */
   label?: (o: T) => ReactNode;
   mono?: boolean;
+  /** Group the choices under small headings (in the options' order of first appearance). */
+  groupOf?: (o: T) => string;
 }) {
   const chosen = props.value === "all" ? props.options : props.value;
+  const groups = props.groupOf
+    ? [...new Set(props.options.map(props.groupOf))].map((g) => ({
+        title: g,
+        options: props.options.filter((o) => props.groupOf!(o) === g),
+      }))
+    : [{ title: undefined, options: props.options }];
   const set = (o: T, on: boolean) => {
     const next = on ? [...chosen, o] : chosen.filter((x) => x !== o);
     props.onChange(props.options.every((x) => next.includes(x)) ? "all" : next);
   };
   return (
     <FacetSection title={props.title} onAll={props.value !== "all" ? () => props.onChange("all") : undefined}>
-      <ul className="text-sm">
-        {props.options.map((o) => (
-          <Choice
-            key={o}
-            label={props.label?.(o) ?? o}
-            mono={props.mono}
-            checked={chosen.includes(o)}
-            count={props.counts.get(o) ?? 0}
-            onChange={(on) => set(o, on)}
-          />
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <FacetGroupList key={g.title ?? ""} title={g.title}>
+          {g.options.map((o) => (
+            <Choice
+              key={o}
+              label={props.label?.(o) ?? o}
+              mono={props.mono}
+              checked={chosen.includes(o)}
+              count={props.counts.get(o) ?? 0}
+              onChange={(on) => set(o, on)}
+              onOnly={props.options.length > 2 ? () => props.onChange([o]) : undefined}
+              onlyLabel={`Only ${o}`}
+            />
+          ))}
+        </FacetGroupList>
+      ))}
     </FacetSection>
+  );
+}
+
+function FacetGroupList(props: { title?: string; children: ReactNode }) {
+  if (!props.title) return <ul className="text-sm">{props.children}</ul>;
+  return (
+    <fieldset className="m-0 min-w-0 border-0 p-0">
+      <legend className="px-3 pt-1.5 text-[11px] text-muted-foreground">{props.title}</legend>
+      <ul className="text-sm">{props.children}</ul>
+    </fieldset>
   );
 }
 
