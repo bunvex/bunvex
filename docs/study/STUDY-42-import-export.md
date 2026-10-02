@@ -1,6 +1,6 @@
 # STUDY-42 — Snapshot export and import (`bunvex export`, `bunvex import`)
 
-- **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) accepted as recommended (owner, 2026-10-02), X6 and X7 built in #210
+- **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) accepted as recommended (owner, 2026-10-02), X6 and X7 built in #210; X9 accepted (owner, 2026-10-02) and built in #216
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 14 ([parity README](../parity/README.md));
@@ -159,7 +159,7 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
   in `crates/model/src/lib.rs`, "to make import/export more likely to work nicely"): `_storage` ids always
   carry 540. bunvex numbers its system tables in order (`_storage` is 522), and 540 is free, so such a ZIP
   imports and `_storage` takes number 540 (test "a Convex ZIP with files"). Matching Convex's fixed numbers
-  is X9.
+  is X9, built in #216: a new deployment's `_storage` is 540 already.
 
 ### PR 3 — import (plan)
 - **Formats:** all four. CSV with Rust's `f64` parse rules; JSON and JSONL with numbers as float64; the ZIP's `uniform` encoding.
@@ -183,7 +183,7 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 | X7 | An import interrupted by a restart starts over (its hidden tables are dropped and written again). Convex resumes from its checkpoints, skipping the documents already in each hidden table (an append cannot resume in Convex either) | not built yet; only the time it takes differed | accepted, then built (owner, 2026-10-02; #210): resolved |
 | X8 | The parser's detail in "Row N wasn't valid JSON: …" and "Not valid JSON: …" is JavaScript's wording (serde_json's in Convex), and invalid UTF-8 in a CSV says "Failed to parse CSV row 1: invalid UTF-8" | bunvex parses with the runtime's JSON parser and its own CSV reader; the message structure is Convex's | accepted (owner, 2026-10-02) |
 
-| X9 | bunvex numbers its system tables in order from 513 (`_storage` 522, `_scheduled_functions` 518, …). Convex gives each one a fixed number (`_storage` 540, `_scheduled_functions` 539, `_exports` 516, …), so the ids of system documents differ between the two, and an import changes `_storage`'s number | not built yet; can be matched by giving bunvex's system tables Convex's numbers (and bunvex-only tables numbers Convex does not use) | awaits owner (recommended: match Convex) |
+| X9 | bunvex numbers its system tables in order from 513 (`_storage` 522, `_scheduled_functions` 518, …). Convex gives each one a fixed number (`_storage` 540, `_scheduled_functions` 539, `_exports` 516, …), so the ids of system documents differ between the two, and an import changes `_storage`'s number | not built yet; can be matched by giving bunvex's system tables Convex's numbers (and bunvex-only tables numbers Convex does not use) | accepted: match Convex (owner, 2026-10-02); built in #216: resolved |
 
 **Follow-up:** X1, X3 and X4 are in the ledger's "Waiting on a dependency" (components, item 12, an audit log); X5 can be built any time.
 

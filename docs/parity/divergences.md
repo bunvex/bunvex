@@ -195,6 +195,7 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-223 | System tables were numbered in order from 513 (`_storage` 522) | As Convex: each system table takes Convex's fixed number (`DefaultTableNumber`: `_storage` 540, `_scheduled_functions` 539, `_exports` 516, …), bunvex's own take 9998 and 9999; a table created before keeps its number | yes (the ids of files and scheduled functions) | owner, 2026-10-02 (#216) | [STUDY-42 X9](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-220 | A failed import step failed the import at once | As Convex: a system error (storage, server, an exhausted conflict) is retried with a backoff from 30 s to 5 minutes, and fails the import with "Your request couldn't be completed. Try again later." after 5 retries; an error of the import's own fails it at once | yes | owner, 2026-10-02 (#210) | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-221 | An interrupted import started over | As Convex: a retried or restarted import resumes into the hidden tables it created, skipping the documents (and files) already written; an append into a new table cannot resume ("can't resume append import") | no (only the time) | owner, 2026-10-02 (#210) | [STUDY-42 X7](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-65 | No retention: every version and tombstone was kept forever | As Convex: index versions are pruned 4 min behind the newest commit, document versions 14 days behind (STUDY-33); reads below the window fail with `OutOfRetention` | yes (a transaction reading 4 min after its snapshot fails) | owner, 2026-10-01 (STUDY-33) | [STUDY-09 D5](../study/STUDY-09-persistence-layout.md#4-divergences), [STUDY-33](../study/STUDY-33-retention.md) |
@@ -291,9 +292,8 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).
 
-| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
-|---|---|---|---|---|---|
-| DV-223 | System tables are numbered in order from 513 (`_storage` 522) | fixed numbers per system table (`_storage` 540, `_scheduled_functions` 539, …) | yes (the ids of files and scheduled functions; an import changes `_storage`'s number) | match Convex's numbers | [STUDY-42 X9](../study/STUDY-42-import-export.md#4-divergences) |
+DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
+[Resolved to match Convex](#resolved-to-match-convex).
 
 ## Waiting on a dependency
 
