@@ -122,10 +122,11 @@ bunvex/
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── admin-key                print an admin key (STUDY-34)                             ✅
-│   │   ├── dev                      watch files and push                                      M
-│   │   ├── codegen                  API types (or inferred types — open decision)             M
+│   │   ├── dev                      watch files and push (STUDY-37)                           🟡
+│   │   ├── codegen                  _generated/ api, server, dataModel (STUDY-36)             🟡
 │   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
-│   │   ├── run, env, logs, data                                                                D
+│   │   ├── run, env, start          run a function, env vars, the server (STUDY-37)           🟡
+│   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
 │   │   └── mcp                      for AI agents                                              D
 │   │
@@ -145,7 +146,7 @@ bunvex/
 │   └── with-postgres/, with-auth/…                                                             D
 │
 ├── bench/                           microbenchmarks + convex-bench adapters (not published)    ✅
-├── docker/                          server image (bunvex start)                                M
+├── docker/                          server image (bunvex start), compose (STUDY-38)            🟡
 ├── docs/
 │   ├── specs/                       design records for MAINTAINERS (ENGINE-00, PERSIST-01, ARCH-01…) ✅
 │   ├── study/                       how Convex does X and how bunvex maps it (STUDY-NN), before code ✅
@@ -195,7 +196,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── persistence-conformance (──► values) client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
                 ◄── sync-e2e ──► client, react, server (tests only, never published)
-cli ──► server, core                                      bunvex ──► re-exports only
+cli ──► server, core, client                              bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)
 ui ◄── apps/site

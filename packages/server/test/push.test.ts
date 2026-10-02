@@ -248,30 +248,63 @@ describe("deploy2 over HTTP", () => {
     expect([unknown.status, unknown.body.code]).toEqual([400, "RaceDetected"]);
   });
 
-  test("auth.config from the push, evaluated with the server's environment: its tokens are accepted", async () => {
+  test("auth.config from the push, evaluated with the deployment's variables; kept across a restart", async () => {
     const issuer = await startIssuer();
     stops.push(issuer.stop);
-    process.env.PUSH_TEST_ISSUER = issuer.url;
-    try {
-      const d = await deployment(tmp());
-      stops.push(() => d.s.shutdown());
-      const who = mod(
-        "who.js",
-        `import { query } from "@bunvex/server"; export const me = query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null);`,
-      );
-      const auth = mod(
-        "auth.config.js",
-        `export default { providers: [{ domain: process.env.PUSH_TEST_ISSUER, applicationID: "app" }] };`,
-      );
-      const r = await d.push([who, auth]);
-      expect(r.start.body.appAuth).toEqual([{ domain: issuer.url, applicationID: "app" }]);
-      expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
-      // Without auth.config in the next push, tokens are no longer accepted.
-      await d.push([who]);
-      expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
-    } finally {
-      delete process.env.PUSH_TEST_ISSUER;
-    }
+    const dir = tmp();
+    const store = new MemoryBlobStore();
+    const d = await deployment(dir, { store });
+    const who = mod(
+      "who.js",
+      `import { query } from "@bunvex/server"; export const me = query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null);`,
+    );
+    const auth = mod(
+      "auth.config.js",
+      `export default { providers: [{ domain: process.env.ISSUER, applicationID: "app" }] };`,
+    );
+    // A variable it reads that is not set: Convex's error.
+    const missing = await d.push([who, auth]);
+    expect(missing.start.status).toBe(400);
+    expect(missing.start.body).toEqual({
+      code: "AuthConfigMissingEnvironmentVariable",
+      message:
+        "Hit an error while pushing:\nEnvironment variable ISSUER is used in auth config file but its value was not set",
+    });
+    expect(
+      (await d.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: issuer.url }] })).status,
+    ).toBe(200);
+    const r = await d.push([who, auth]);
+    expect(r.start.body.appAuth).toEqual([{ domain: issuer.url, applicationID: "app" }]);
+    expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    // A restart re-evaluates the stored auth config.
+    await d.s.shutdown();
+    await d.engine.close();
+    const again = await deployment(dir, { store });
+    stops.push(() => again.s.shutdown());
+    await again.s.codeReady;
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    // Removing the variable it reads would break it: refused, nothing changed.
+    const refused = await again.post("/api/update_environment_variables", {
+      changes: [{ name: "ISSUER", value: null }],
+    });
+    expect(refused).toEqual({
+      status: 400,
+      body: {
+        code: "AuthConfigMissingEnvironmentVariable",
+        message: "Environment variable ISSUER is used in auth config file but its value was not set",
+      },
+    });
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    // Changing it re-evaluates the config: the old issuer's tokens are no longer accepted.
+    await again.post("/api/update_environment_variables", {
+      changes: [{ name: "ISSUER", value: "https://elsewhere.example" }],
+    });
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
+    // Without auth.config in the next push, tokens are no longer accepted either.
+    await again.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: issuer.url }] });
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    await again.push([who]);
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
   });
 
   test("crons come with the push, in its commit", async () => {
@@ -303,5 +336,167 @@ describe("deploy2 over HTTP", () => {
     await b.s.codeReady;
     expect((await b.call("query", "messages:list")).value).toEqual(["kept v1"]);
     expect((await b.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
+  });
+});
+
+describe("environment variables (STUDY-37)", () => {
+  const envMod = mod(
+    "env.js",
+    `import { action, query } from "@bunvex/server";
+     export const read = query(async (_, { name }) => process.env[name] ?? null);
+     export const inAction = action(async (_, { name }) => process.env[name] ?? null);
+     export const keys = query(async () => Object.keys(process.env));`,
+  );
+
+  test("the HTTP API: update (one batch, Convex's errors) and list, with their operations", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const list = async (key = KEY) => {
+      const r = await fetch(`${d.api}/api/list_environment_variables`, { headers: { authorization: `Bunvex ${key}` } });
+      return { status: r.status, body: await r.json() };
+    };
+    expect(await list()).toEqual({ status: 200, body: { environmentVariables: {} } });
+    const ok = await fetch(`${d.api}/api/update_environment_variables`, {
+      method: "POST",
+      headers: { authorization: `Bunvex ${KEY}` },
+      body: JSON.stringify({
+        changes: [
+          { name: "B", value: "2" },
+          { name: "A", value: "1" },
+        ],
+      }),
+    });
+    expect([ok.status, await ok.text()]).toEqual([200, ""]);
+    expect((await list()).body).toEqual({ environmentVariables: { A: "1", B: "2" } });
+    expect((await d.post("/api/v1/update_environment_variables", { changes: [{ name: "B" }] })).status).toBe(200);
+    expect((await list()).body).toEqual({ environmentVariables: { A: "1" } });
+    // A refused batch changes nothing.
+    const bad = await d.post("/api/update_environment_variables", {
+      changes: [
+        { name: "C", value: "3" },
+        { name: "9X", value: "no" },
+      ],
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe("EnvironmentVariableNameInvalid");
+    const builtIn = await d.post("/api/update_environment_variables", {
+      changes: [{ name: "BUNVEX_CLOUD_URL", value: "x" }],
+    });
+    expect(builtIn.body).toEqual({
+      code: "EnvVarNameForbidden",
+      message: 'Environment variable with name "BUNVEX_CLOUD_URL" is built-in and cannot be overridden',
+    });
+    expect((await list()).body).toEqual({ environmentVariables: { A: "1" } });
+    // Their operations: a read-only key lists but does not write; no key is refused.
+    expect((await list(READ_ONLY)).status).toBe(200);
+    expect((await d.post("/api/update_environment_variables", { changes: [] }, READ_ONLY)).status).toBe(403);
+    expect((await d.post("/api/update_environment_variables", { changes: [] }, null)).status).toBe(403);
+    // The CLI's system queries.
+    expect(
+      (
+        (await d.call("query", "_system/cli/queryEnvironmentVariables", {}, `Bunvex ${KEY}`)).value as {
+          name: string;
+        }[]
+      ).map((v) => v.name),
+    ).toEqual(["A"]);
+    expect(
+      (await d.call("query", "_system/cli/queryEnvironmentVariables:get", { name: "A" }, `Bunvex ${KEY}`)).value,
+    ).toEqual({
+      name: "A",
+      value: "1",
+    });
+    expect(
+      (await d.call("query", "_system/cli/queryEnvironmentVariables:get", { name: "Z" }, `Bunvex ${KEY}`)).value,
+    ).toBe(null);
+  });
+
+  test("process.env in pushed code: per name in the read set, actions at their start, the built-ins", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([envMod]);
+    const set = (name: string, value: string | null) =>
+      d.post("/api/update_environment_variables", { changes: [{ name, value }] });
+    expect((await d.call("query", "env:read", { name: "X" })).value).toBe(null);
+    await set("X", "1");
+    expect((await d.call("query", "env:read", { name: "X" })).value).toBe("1"); // the cached null was invalidated
+    await set("X", "2");
+    expect((await d.call("query", "env:read", { name: "X" })).value).toBe("2");
+    expect((await d.call("action", "env:inAction", { name: "X" })).value).toBe("2");
+    expect((await d.call("query", "env:read", { name: "BUNVEX_CLOUD_URL" })).value).toBe(d.api);
+    expect((await d.call("query", "env:read", { name: "BUNVEX_SITE_URL" })).value).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+$/,
+    );
+    // Convex's isolate env lists nothing, and refuses a name that does not parse.
+    expect((await d.call("query", "env:keys")).value).toEqual([]);
+    const invalid = await d.call("query", "env:read", { name: "a-b" });
+    expect(invalid.errorMessage).toContain("The environment variable name a-b is invalid.");
+    // The server's own environment is not the deployment's.
+    expect((await d.call("query", "env:read", { name: "PATH" })).value).toBe(null);
+    // A "use node" action: the process's allowlisted variables plus the deployment's, which can be listed.
+    await d.push([
+      envMod,
+      {
+        path: "nodeEnv.js",
+        environment: "node",
+        source: `"use node";
+         import { action } from "@bunvex/server";
+         export const keys = action(async () => Object.keys(process.env));`,
+      },
+    ]);
+    const keys = (await d.call("action", "nodeEnv:keys")).value as string[];
+    expect(keys).toContain("X");
+    expect(keys).toContain("BUNVEX_CLOUD_URL");
+    expect(keys).toContain("PATH");
+    expect(keys).not.toContain("HOME");
+  });
+
+  test("a subscription re-runs when a variable it read changes", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([envMod]);
+    const values: unknown[] = [];
+    const ws = new WebSocket(`${d.api.replace("http", "ws")}/api/1.0/sync`);
+    await new Promise((r) => ws.addEventListener("open", r));
+    ws.addEventListener("message", (ev) => {
+      const m = JSON.parse(String(ev.data));
+      if (m.type === "Transition") for (const q of m.modifications) if (q.type === "QueryUpdated") values.push(q.value);
+    });
+    ws.send(
+      JSON.stringify({ type: "Connect", sessionId: crypto.randomUUID(), connectionCount: 0, lastCloseReason: null }),
+    );
+    ws.send(
+      JSON.stringify({
+        type: "ModifyQuerySet",
+        baseVersion: 0,
+        newVersion: 1,
+        modifications: [{ type: "Add", queryId: 0, udfPath: "env:read", args: [{ name: "Y" }] }],
+      }),
+    );
+    const until = async (n: number) => {
+      for (let i = 0; i < 100 && values.length < n; i++) await Bun.sleep(20);
+    };
+    await until(1);
+    await d.post("/api/update_environment_variables", { changes: [{ name: "OTHER", value: "1" }] });
+    await d.post("/api/update_environment_variables", { changes: [{ name: "Y", value: "yes" }] });
+    await until(2);
+    ws.close();
+    expect(values).toEqual([null, "yes"]);
+  });
+
+  test("a push whose variables changed before its finish is a race", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const start = await d.post("/api/deploy2/start_push", {
+      dryRun: false,
+      appDefinition: { schema: null, changedModules: [envMod], unchangedModuleHashes: [] },
+      componentDefinitions: [],
+    });
+    expect(start.status).toBe(200);
+    await d.post("/api/update_environment_variables", { changes: [{ name: "X", value: "1" }] });
+    const finish = await d.post("/api/deploy2/finish_push", { startPush: start.body, dryRun: false });
+    expect(finish).toEqual({
+      status: 400,
+      body: { code: "RaceDetected", message: "Environment variables have changed during push" },
+    });
   });
 });

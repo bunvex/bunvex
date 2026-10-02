@@ -17,7 +17,7 @@
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA. MongoDB has no Convex counterpart: its URL decides (`tls=true`).
 import { mkdirSync } from "node:fs";
-import type { Persistence } from "@bunvex/core";
+import { bundledModule, type Persistence } from "@bunvex/core";
 
 export type PersistenceConfig = {
   kind: string;
@@ -153,6 +153,9 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
 
 /** @bunvex/persistence is an optional dependency of the server: loaded only when an external driver is asked for. */
 async function external<T>(name: string): Promise<T> {
+  // A standalone executable carries the drivers (STUDY-39).
+  const bundled = bundledModule<T>(`@bunvex/persistence/${name}`);
+  if (bundled) return bundled;
   try {
     return (await import(`@bunvex/persistence/${name}`)) as T;
   } catch (e) {

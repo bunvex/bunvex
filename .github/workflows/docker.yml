@@ -1,0 +1,67 @@
+name: Docker
+
+# The self-hosted image (STUDY-38): built and smoke-tested (docker/smoke.sh, on SQLite and on Postgres) when
+# it or what it runs changes. Publishing to ghcr.io is off until the owner turns it on (STUDY-38 K5): set the
+# repository variable PUBLISH_IMAGE to "true", and pushes to main publish :latest and :<sha>.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docker/**"
+      - "packages/**"
+      - "bun.lock"
+      - "package.json"
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: image smoke test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: docker/smoke.sh (${{ matrix.database }})
+        run: docker/smoke.sh
+        env:
+          SMOKE_POSTGRES: ${{ matrix.database == 'postgres' && '1' || '' }}
+
+  publish:
+    name: publish to ghcr.io
+    needs: smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGE == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/bunvex/bunvex-backend:latest
+            ghcr.io/bunvex/bunvex-backend:${{ github.sha }}

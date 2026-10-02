@@ -11,6 +11,7 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   cancelJob,
+  ENVIRONMENT_VARIABLES_TABLE,
   type Engine,
   type JobDoc,
   type PaginationOptions,
@@ -22,6 +23,7 @@ import {
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
+import type { Functions } from "./functions.ts";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { FileStorage } from "./storage.ts";
 
@@ -93,7 +95,7 @@ const cronNextRunDoc = (d: Doc) => ({
 });
 
 /** What a system function may use besides its transaction. */
-export type SystemEnv = { files: FileStorage | null };
+export type SystemEnv = { files: FileStorage | null; functions?: Functions };
 /** A system query or mutation: its argument validators (checked as Convex's) and its handler. */
 export type SystemQuery = {
   args: Record<string, GenericValidator>;
@@ -115,6 +117,31 @@ const withUrl = (files: FileStorage, d: Record<string, unknown>, row: { storageI
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
+  "_system/cli/modules:apiSpec": {
+    args: { componentId },
+    handler: async (_db, _args, env) => env.functions?.apiSpec() ?? [],
+  },
+  // The CLI's (STUDY-37, Convex's `_system/cli/queryEnvironmentVariables`): every variable, by name.
+  "_system/cli/queryEnvironmentVariables": {
+    args: {},
+    op: "ViewEnvironmentVariables",
+    handler: async (db) =>
+      db.asSystem(() => db.query(ENVIRONMENT_VARIABLES_TABLE).withIndex("by_name").order("asc").collect()),
+  },
+  "_system/cli/queryEnvironmentVariables:get": {
+    args: { name: v.string() },
+    op: "ViewEnvironmentVariables",
+    handler: async (db, { name }: { name: string }) => {
+      const doc = await db.asSystem(() =>
+        db
+          .query(ENVIRONMENT_VARIABLES_TABLE)
+          .withIndex("by_name", (q) => q.eq("name", name))
+          .first(),
+      );
+      return doc ? { name: doc.name, value: doc.value } : null;
+    },
+  },
   "_system/frontend/paginatedScheduledJobs": {
     args: { componentId, paginationOpts: paginationOptsValidator, udfPath: v.optional(v.string()) },
     handler: async (db, { paginationOpts, udfPath }: { paginationOpts: PaginationOptions; udfPath?: string }) => {

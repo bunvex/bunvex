@@ -517,7 +517,13 @@ export async function typecheck(functionsDir: string, cwd: string, mode: Typeche
     join(cwd, "node_modules", "typescript", "bin", "tsc"),
   ].find(existsSync);
   if (!tsc) return cantRun("No `tsc` binary found, so skipping typecheck.");
-  const p = Bun.spawn([process.execPath, tsc, "--project", functionsDir], { cwd, stdout: "pipe", stderr: "pipe" });
+  // In the standalone executable (STUDY-39) `process.execPath` is bunvex itself: BUN_BE_BUN makes it Bun.
+  const p = Bun.spawn([process.execPath, tsc, "--project", functionsDir], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, BUN_BE_BUN: "1" },
+  });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return code === 0 ? { ok: true } : { ok: false, output: `${out}${err}`.trim() };
 }

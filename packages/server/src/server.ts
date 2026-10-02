@@ -1,7 +1,15 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
-import { type Caller, type Engine, OccError, parseValue, stringifyValue } from "@bunvex/core";
+import {
+  type Caller,
+  type Engine,
+  EnvironmentVariableError,
+  type EnvVarChange,
+  OccError,
+  parseValue,
+  stringifyValue,
+} from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
@@ -17,15 +25,22 @@ import {
   removeTypePrefix,
   splitActingAs,
 } from "./admin-keys.ts";
-import { loadLatestCodeVersion, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
+import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
-import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
+import {
+  clientError,
+  FunctionPathError,
+  INTERNAL_SERVER_ERROR_MESSAGE,
+  isSystemError,
+  isTryAgainError,
+  withRequestId,
+} from "./errors.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
-import { PushError, PushService } from "./push.ts";
+import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
@@ -50,6 +65,8 @@ export type ServerOptions = {
   engine: Engine;
   functions: Functions;
   port?: number;
+  /** The interface both ports listen on (Convex's `--interface`; default Bun's, all interfaces). */
+  hostname?: string;
   label?: string;
   /** What to do when persistence fails and the committer stops. Default: log and exit(1), as Convex does, so
    *  a supervisor restarts the process and it recovers from what persistence durably holds. */
@@ -369,6 +386,9 @@ export function createServer(opts: ServerOptions) {
   /** The push routes (set below, once the code store exists). */
   let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
+  let envRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   /** The admin routes; the caller is already identified. */
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
@@ -391,6 +411,7 @@ export function createServer(opts: ServerOptions) {
         sync: sync.stats,
       });
     }
+    if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -420,6 +441,7 @@ export function createServer(opts: ServerOptions) {
 
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
+    ...(opts.hostname ? { hostname: opts.hostname } : {}),
     idleTimeout: 120,
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
@@ -469,7 +491,8 @@ export function createServer(opts: ServerOptions) {
       if (
         url.pathname === "/stats" ||
         url.pathname === "/api/check_admin_key" ||
-        /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname)
+        /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
+        /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
         if (caller instanceof Response) return caller;
@@ -485,7 +508,7 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts)$/.exec(url.pathname);
+      const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
       if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       let body: { path: string; args: unknown; ts?: unknown };
       try {
@@ -494,9 +517,26 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
       }
       if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
-      const kind = route[1];
+      let kind = route[1]!;
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
+      // Convex's `/api/function` (`execute_any_function`): the function's own kind; an admin may run an
+      // internal one (its key's operation is checked as for any call), others only public ones.
+      if (kind === "function") {
+        const found = functions.kindOf(body.path);
+        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+          return udfResponse(
+            {
+              ok: false,
+              error: new FunctionPathError(
+                `Could not find function for '${body.path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
+              ),
+              logLines: [],
+            } as never,
+            kind,
+          );
+        kind = found;
+      }
       // A query at a ts `query_ts` gave (Convex's `/api/query_at_ts`): every such query reads one snapshot.
       let at: number | undefined;
       if (kind === "query_at_ts") {
@@ -551,6 +591,7 @@ export function createServer(opts: ServerOptions) {
       ? null
       : Bun.serve({
           port: sitePort,
+          ...(opts.hostname ? { hostname: opts.hostname } : {}),
           idleTimeout: 120,
           ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
           fetch(req, srv) {
@@ -560,6 +601,26 @@ export function createServer(opts: ServerOptions) {
             return serveHttpAction(req, url.pathname, url.search);
           },
         });
+  /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
+  const siteOrigin = site
+    ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`)
+    : null;
+  /** The built-in variables (STUDY-37 E2): always set, never settable. */
+  const builtinEnv: Record<string, string> = {
+    BUNVEX_CLOUD_URL: cloudOrigin.replace(/\/$/, ""),
+    ...(siteOrigin ? { BUNVEX_SITE_URL: siteOrigin.replace(/\/$/, "") } : {}),
+  };
+  functions.builtinEnv = builtinEnv;
+  /** The deployment's variables with the built-ins, as `auth.config` sees them. */
+  const deploymentEnv = async () => ({
+    ...builtinEnv,
+    ...Object.fromEntries(await engine.query((db) => engine.environment.snapshot(db))),
+  });
+  /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
+  let authModule: ModuleSource | null = null;
+  const useAuth = (providers: unknown[] | null) => {
+    verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
+  };
   /**
    * Make a code version live (STUDY-35): its functions replace every function at once, its router the
    * HTTP actions', its crons the stored ones (the same diff as at start); then every subscription to a
@@ -593,8 +654,12 @@ export function createServer(opts: ServerOptions) {
   };
   /** A deployable server's code: the latest version in the store, live once this resolves. */
   const codeReady: Promise<void> = opts.deployable
-    ? loadLatestCodeVersion(engine, modulesStore).then(async (v) => {
-        if (v) await installCodeVersion(v);
+    ? deploymentEnv().then(async (env) => {
+        const code = await loadLatestCode(engine, modulesStore, env);
+        if (!code) return;
+        await installCodeVersion(code.version);
+        authModule = code.authConfig;
+        if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
       })
     : Promise.resolve();
   codeReady.catch((e) =>
@@ -620,9 +685,70 @@ export function createServer(opts: ServerOptions) {
     engine,
     modulesStore,
     cronExecutor,
-    install: (version, auth) => installCodeVersion(version, { crons: false, auth }),
-    authEnv: () => ({ ...process.env }) as Record<string, string>,
+    install: (version, auth, module) => {
+      authModule = module;
+      return installCodeVersion(version, { crons: false, auth });
+    },
+    deploymentEnv,
   });
+  envRoute = async (url, req, caller) => {
+    if (url.pathname.endsWith("/list_environment_variables")) {
+      if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      functions.requireOperation(caller, "ViewEnvironmentVariables");
+      const vars = await engine.query((db) => engine.environment.list(db));
+      return json({ environmentVariables: Object.fromEntries(vars.map((v) => [v.name, v.value])) });
+    }
+    if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    functions.requireOperation(caller, "WriteEnvironmentVariables");
+    let changes: EnvVarChange[];
+    try {
+      const body = JSON.parse(await new Response(capped(req).body).text()) as { changes?: unknown };
+      if (!Array.isArray(body?.changes)) return requestError(400, "BadJsonBody", "missing field `changes`");
+      changes = body.changes.map((c: { name?: unknown; value?: unknown }) => {
+        if (typeof c?.name !== "string") throw new Error("missing field `name`");
+        if (c.value !== undefined && c.value !== null && typeof c.value !== "string")
+          throw new Error("invalid type for `value`: expected a string or null");
+        return { name: c.name, value: (c.value as string | null | undefined) ?? null };
+      });
+    } catch (e) {
+      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+    }
+    try {
+      // Convex re-evaluates the deployed auth config in the update's transaction. Evaluating code cannot run
+      // inside one here (its import phase draws randomness), so it is evaluated first with the variables the
+      // batch would leave, and the batch commits only if the variables it started from are still the
+      // deployment's (else it starts over).
+      let providers: unknown[] | null = null;
+      for (let attempt = 0; ; attempt++) {
+        const base = await engine.query((db) => engine.environment.list(db));
+        const after = new Map(base.map((v) => [v.name, v.value]));
+        for (const c of changes) if (c.value === null) after.delete(c.name);
+        for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
+        // The batch's own checks first, so that a bad name is reported as such, not as an auth config error.
+        await engine.query(async (db) => engine.environment.check(db, changes, Object.keys(builtinEnv)));
+        if (authModule)
+          providers = await evaluateAuthConfig(
+            engine,
+            authModule,
+            { ...builtinEnv, ...Object.fromEntries(after) },
+            "This change would make the auth config invalid",
+          );
+        const same = await engine.mutation(async (db) => {
+          const now = await engine.environment.list(db);
+          if (JSON.stringify(now) !== JSON.stringify(base)) return false;
+          await engine.environment.update(db, changes, Object.keys(builtinEnv));
+          return true;
+        }, "update_env_vars");
+        if (same) break;
+        if (attempt >= 4) return requestError(409, "RaceDetected", "Environment variables changed during the update");
+      }
+      if (authModule) useAuth(providers);
+      return new Response(null, { status: 200 });
+    } catch (e) {
+      if (e instanceof EnvironmentVariableError || e instanceof PushError) return requestError(400, e.code, e.message);
+      throw e;
+    }
+  };
   pushRoute = async (url: URL, req: Request): Promise<Response> => {
     let body: Record<string, unknown>;
     try {
@@ -676,7 +802,7 @@ export function createServer(opts: ServerOptions) {
     /** The site port's server (HTTP actions), if any. */
     site,
     /** The site's origin, as Convex's `CONVEX_SITE_URL` default. */
-    siteUrl: site ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`) : null,
+    siteUrl: siteOrigin,
     /** The API's public origin (file URLs start with it). */
     cloudOrigin,
     /** The file storage, if any. */

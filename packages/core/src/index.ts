@@ -1,8 +1,11 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
+
+export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  ENVIRONMENT_VARIABLES_TABLE,
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
@@ -101,6 +104,17 @@ export {
   stringifyValue,
   type TxBody,
 } from "./engine.ts";
+export {
+  checkEnvVarName,
+  checkEnvVarValue,
+  ENV_VAR_LIMIT,
+  ENV_VAR_NAME_MAX_LENGTH,
+  ENV_VAR_TOTAL_SIZE_LIMIT,
+  ENV_VAR_VALUE_MAX_LENGTH,
+  EnvironmentVariableError,
+  EnvironmentVariables,
+  type EnvVarChange,
+} from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";

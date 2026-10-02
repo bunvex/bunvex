@@ -1,0 +1,38 @@
+name: Release binaries
+
+# The backend executables (STUDY-39, STUDY-40), released as Convex releases convex-local-backend
+# (its precompile.yml): a push to the `release` branch, or a manual run, builds every target and creates a
+# prerelease `precompiled-<date>-<sha>` with `bunvex-local-backend-<target>.zip`; promote-binaries.yml makes it the latest.
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and create the prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - id: name
+        run: echo "name=$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - run: bun scripts/build-binary.ts --version "${{ steps.name.outputs.name }}"
+      - run: scripts/smoke-binary.sh dist/bin/x86_64-unknown-linux-gnu/bunvex-local-backend
+      - name: Create the prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "precompiled-${{ steps.name.outputs.name }}" dist/bin/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Precompiled ${{ steps.name.outputs.name }}" \
+            --notes "bunvex-local-backend for each platform, as Convex's convex-local-backend: see docker/README.md (Without Docker) and STUDY-40." \
+            --prerelease

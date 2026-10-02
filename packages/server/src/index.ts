@@ -88,6 +88,16 @@ export {
   query,
   queryGeneric,
 } from "./functions.ts";
+export {
+  instanceSecretError,
+  LOCAL_BACKEND_USAGE,
+  type LocalBackendFlags,
+  type LocalBackendIo,
+  localBackendMain,
+  parseLocalBackendFlags,
+  type RunningLocalBackend,
+  startLocalBackend,
+} from "./local-backend.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 export type {

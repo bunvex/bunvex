@@ -18,6 +18,7 @@ import { parseAuthConfig } from "@bunvex/auth";
 import { type Engine, type SchemaDefinition, SchemaPushError, schemaToJson } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import {
+  AUTH_CONFIG_MODULE,
   readPackage,
   type SourcePackage,
   storedModules,
@@ -54,13 +55,16 @@ type StartPushRequest = {
 type Pending = {
   version: CodeVersion;
   modules: ModuleSource[];
+  authModule: ModuleSource | null;
+  /** The variables the push was evaluated with (Convex re-reads them at `finish_push`). */
+  env: string;
   schema: SchemaDefinition;
   auth: unknown[] | null;
   schemaId: string;
   addedIndexes: string[];
 };
 
-const AUTH_CONFIG = "auth.config.js";
+const AUTH_CONFIG = AUTH_CONFIG_MODULE;
 const emptySchema: SchemaDefinition = { tables: new Map(), schemaValidation: false };
 
 export type PushDeps = {
@@ -68,10 +72,56 @@ export type PushDeps = {
   modulesStore: BlobStore;
   cronExecutor: CronJobExecutor;
   /** Make a committed version live: functions, router, verifier, subscriptions. */
-  install: (version: CodeVersion, auth: unknown[] | null) => Promise<unknown>;
-  /** The environment auth.config sees until deployment environment variables exist (owner, 2026-10-02). */
-  authEnv: () => Record<string, string>;
+  install: (version: CodeVersion, auth: unknown[] | null, authModule: ModuleSource | null) => Promise<unknown>;
+  /** The deployment's variables and the built-ins, as `auth.config` sees them (STUDY-37). */
+  deploymentEnv: () => Promise<Record<string, string>>;
 };
+
+/** The variables, canonically, to tell whether they changed during a push. */
+const fingerprint = (env: Record<string, string>) =>
+  JSON.stringify(Object.entries(env).sort(([a], [b]) => (a < b ? -1 : 1)));
+
+/**
+ * Evaluate `auth.config.js` with the deployment's variables (Convex's `get_evaluated_auth_config`): its
+ * providers. A variable it reads that is not set fails with Convex's `AuthConfigMissingEnvironmentVariable`.
+ */
+export async function evaluateAuthConfig(
+  engine: Engine,
+  m: ModuleSource,
+  env: Record<string, string>,
+  explanation = "Hit an error while evaluating your auth config",
+): Promise<unknown[]> {
+  const config = await udfConfig(engine);
+  let missing: string | null = null;
+  let c: unknown;
+  try {
+    const v = await CodeVersion.load([m], {
+      seed: config.seed,
+      timestamp: config.timestamp,
+      env,
+      onMissingEnv: (name) => {
+        missing = name;
+        throw new Error(`Environment variable ${name} is used in auth config file but its value was not set`);
+      },
+    });
+    c = (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
+  } catch (e) {
+    if (missing !== null)
+      throw new PushError(
+        "AuthConfigMissingEnvironmentVariable",
+        `Environment variable ${missing} is used in auth config file but its value was not set`,
+      );
+    const message =
+      e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
+    throw new PushError("InvalidAuthConfig", `${explanation}:\n${message.trimEnd()}`);
+  }
+  try {
+    parseAuthConfig(c);
+  } catch (e) {
+    throw new PushError("InvalidAuthConfig", (e as Error).message);
+  }
+  return (c as { providers: unknown[] }).providers;
+}
 
 export class PushService {
   private pending = new Map<string, Pending>();
@@ -157,20 +207,21 @@ export class PushService {
         );
       schema = s;
     }
-    let auth: unknown[] | null = null;
-    if (authModule) {
-      const c = await this.evaluateDefault(authModule, this.deps.authEnv(), "InvalidAuthConfig", "auth config");
-      try {
-        parseAuthConfig(c);
-      } catch (e) {
-        throw new PushError("InvalidAuthConfig", (e as Error).message);
-      }
-      auth = (c as { providers: unknown[] }).providers;
-    }
+    const env = await this.deps.deploymentEnv();
+    const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
     const analysis: Record<string, AnalyzedModule> = version.analysis;
     if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, addedIndexes: [] });
     const { schemaId, addedIndexes } = await this.deps.engine.startSchemaPush(schema);
-    this.pending.set(schemaId, { version, modules, schema, auth, schemaId, addedIndexes });
+    this.pending.set(schemaId, {
+      version,
+      modules,
+      authModule: authModule ?? null,
+      env: fingerprint(env),
+      schema,
+      auth,
+      schemaId,
+      addedIndexes,
+    });
     return this.response(version, schema, auth, analysis, { schemaId, addedIndexes });
   }
 
@@ -233,8 +284,11 @@ export class PushService {
     const p = schemaId ? this.pending.get(schemaId) : undefined;
     if (!p) throw new PushError("RaceDetected", "Schema was overwritten by another push.");
     if (req.dryRun) return this.diff(p, [], { enabled: [], disabled: [], dropped: [] }, emptyCronDiff());
+    // As Convex: the push was evaluated with variables that must still be the deployment's.
+    if (fingerprint(await this.deps.deploymentEnv()) !== p.env)
+      throw new PushError("RaceDetected", "Environment variables have changed during push");
     const before = new Set(((await storedModules(this.deps.engine))?.rows ?? []).map((r) => r.path));
-    const pkg = await writePackage(this.deps.modulesStore, p.modules);
+    const pkg = await writePackage(this.deps.modulesStore, p.authModule ? [...p.modules, p.authModule] : p.modules);
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff };
     };
@@ -256,7 +310,7 @@ export class PushService {
     }
     this.pending.delete(p.schemaId);
     for (const id of this.pending.keys()) if (id !== p.schemaId) this.pending.delete(id);
-    await this.deps.install(p.version, p.auth);
+    await this.deps.install(p.version, p.auth, p.authModule);
     this.deps.cronExecutor.refresh();
     for (const old of committed.value.unused) await this.deps.modulesStore.delete(old.storageKey).catch(() => {});
     const after = new Set(p.version.modules.keys());

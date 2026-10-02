@@ -19,6 +19,7 @@ import { posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, runImportPhase } from "@bunvex/core";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
+import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
 import { describeUncaught } from "./errors.ts";
 import { type FunctionDef, isFunctionDef } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
@@ -69,8 +70,10 @@ export type LoadOptions = {
   /** The deployment's import-phase seed and time (Convex's `UdfConfig`), so imports are reproducible. */
   seed: Uint32Array;
   timestamp: number;
-  /** The environment variables a module sees as `process.env`. */
+  /** The environment variables a module sees as `process.env` outside an execution (at import). */
   env?: Record<string, string>;
+  /** Called when the import reads a variable that is not set (the auth config: Convex throws then). */
+  onMissingEnv?: (name: string) => void;
   importTimeoutMs?: number;
 };
 
@@ -99,7 +102,7 @@ const sha256 = (m: ModuleSource) =>
     .digest("hex");
 
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
-function contextGlobals(node: boolean, env: Record<string, string>) {
+function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
   const g = globalThis as Record<string, unknown>;
   const web = [
     "console",
@@ -136,10 +139,11 @@ function contextGlobals(node: boolean, env: Record<string, string>) {
   ];
   const out: Record<string, unknown> = {};
   for (const k of web) out[k] = g[k];
-  out.process = { env: { ...env } };
+  // The deployment's variables (STUDY-37): the execution's, else the load's.
+  out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
   if (node) {
     for (const k of ["Buffer", "setImmediate", "clearImmediate", "global"]) out[k] = g[k];
-    out.process = Object.assign(Object.create(process), { env: { ...env } });
+    out.process = Object.assign(Object.create(process), { env: nodeProcessEnv({ ...env }, currentAllEnv) });
   }
   return out;
 }
@@ -173,7 +177,7 @@ export class CodeVersion {
       throw new InvalidModulesError(`Too many modules: ${users.length} > maximum ${MAX_USER_MODULES}`);
     const env = opts.env ?? {};
     const contexts = {
-      isolate: vm.createContext(contextGlobals(false, env)),
+      isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv)),
       node: vm.createContext(contextGlobals(true, env)),
     };
     for (const c of Object.values(contexts)) {

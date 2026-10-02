@@ -20,7 +20,7 @@ import {
   valueNesting,
   valueSize,
 } from "@bunvex/values";
-import BTree from "sorted-btree";
+import { BTree } from "./btree.ts";
 import {
   Catalog,
   INDEX_TABLE,
@@ -393,6 +393,20 @@ export class Tx {
       ix.metaRead = { index: this.catalog.table(INDEX_TABLE).byId.id, lo: k, hi: prefixEnd(k) };
     }
     this.recordInterval(ix.metaRead);
+  }
+
+  /**
+   * @internal Run `fn` without keeping the reads it records: for values read whole and then recorded one
+   * by one (the environment variables, STUDY-37).
+   */
+  async unrecorded<T>(fn: () => Promise<T>): Promise<T> {
+    const n = this.reads.length;
+    try {
+      return await fn();
+    } finally {
+      void this.reads; // settle the scans it made
+      this.readList.length = n;
+    }
   }
 
   /** @internal (ScanReads) */
