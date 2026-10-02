@@ -1881,6 +1881,15 @@ plugin's ban, impersonation and session revocation); STUDY-12 §7.8 cites what w
 Full-bleed tables: every session (user, signed in, expires, device in words, IP, impersonated by, Revoke after
 a confirmation); every organization (name, slug, members, pending invitations, created).
 
+**An organization's panel** (2 Oct 2026, owner's follow-up): a row (click, Enter) opens it, docked, in the URL
+(`?org=<id>&orgTab=members|invitations`), following the current row like Users. **Members**: name, email, role
+(Owner / Admin / Member, changed in place), Remove after a confirmation (the user account stays); an
+organization keeps an owner — the source refuses to demote or remove the last one and the panel says why.
+**Invitations**: every status (Pending, Accepted, Rejected, Canceled — icon and word), newest first, with the
+role, when it was sent and when a pending one expires; **Invite by email** with a role; **Resend** (extends
+the expiry) and **Cancel** (after a confirmation) for pending ones. The counts in the grid are the members and
+the pending invitations, so they stay true after a change.
+
 ### 25.3 Configuration
 
 A form per page over its part of the configuration, saved alone (`updateAuthConfig({ <part> })`), with
@@ -1890,17 +1899,23 @@ providers** that were Settings → Authentication (§19.1; that page is gone, it
 Settings' column loses the item). **Multi-factor**: TOTP, email codes, backup codes, who must use one.
 **Passkeys**: on/off, relying party name and ID. **Sessions**: lifetime, refresh age, fresh age. **Rate
 limits**: on/off, max per window. **URL configuration**: site URL, redirect allow-list. **Emails**: subject and
-body per template. **Audit**: the auth events, newest first.
+body per template, now with the **variables** each email fills in (insert at the caret), a warning for one it
+does not fill (it would reach the recipient as written), and a **preview** with sample values, light or dark,
+rendered in a **sandboxed iframe** (`sandbox=""`: no scripts, no same origin) — plain text keeps its links and
+line breaks, HTML is used as such (`auth/email-preview.ts`, pure and unit-tested). **Audit**: the auth events,
+newest first.
 
 ### 25.4 Contract
 
 `data-source-auth-admin.ts`: every method optional, detected with `typeof`; `listAuthUsers` offers the screen.
 Users (paged, searched, filtered by provider and status), one user, create, invite, send an email, sessions
-(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations, the
-configuration (read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
+(all or a user's), revoke one or all, remove factors, ban / unban, impersonate, remove, organizations and
+their members (list, change role, remove) and invitations (list, invite, resend, cancel), the configuration
+(read; merge a part), auth events. The mock (`mock/auth-admin.ts`) implements them from its own
 random stream; reads need `viewData`, writes `writeData` and not read-only. The contract suite
 (`contract-auth-admin.ts`) checks the listing and its filters, create / ban (signing out) / unban / remove, and
-the configuration's merge.
+the configuration's merge, and organizations: counts match members and pending invitations, the last owner
+is kept, a role changes, an invitation is pending then canceled (and cannot be resent), a member is removed.
 
 ## 26. Extensions (the owner's call, 1 Oct 2026)
 
