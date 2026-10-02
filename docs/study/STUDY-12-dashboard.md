@@ -816,3 +816,24 @@ the List view.
 
 Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
 own clock for the lease; per-node logs.
+
+## 17. Workflows and work pools (a bunvex addition, added 1 Oct 2026)
+
+Convex ships durable workflows and work pools as components (`@convex-dev/workflow`, `@convex-dev/workpool`;
+their READMEs, read 1 Oct 2026) but its dashboard has no view of them — users ask for one. The owner asked
+for it, built as an extension (UI-01 §26) that may be removed later.
+
+- **Concepts taken from the components** (no code copied): a workflow's steps are queries, mutations,
+  actions, sleeps, waits for an event and nested workflows, journaled so each runs once; steps started
+  together run in parallel (the workflow starts at most `maxParallelism` at once); failed steps retry by a
+  policy (`maxAttempts`, `initialBackoffMs`, `base`); a run ends `success`, `failed` or `canceled` (the
+  `onComplete` kinds) and can be canceled, or **restarted from a step**. A work pool runs functions with a
+  `maxParallelism`, retries actions with exponential backoff (by default or per call) and reports completion.
+- **What bunvex shows** (UI-01 §26.3): runs, a run as a diagram + timeline + journal, cancel / rerun /
+  restart from a step, and the pools' parallelism, queues, retries and throughput.
+- **Future**: a source that reads the components' tables (or bunvex's own durable workflows) and pushes
+  changes instead of the 5 s refresh; awaited events and sleeps shown with what they wait for.
+- **Decided by the agent, the owner can veto**: W1 — reads need `viewData`, the actions `writeData` (no new
+  permissions); W2 — a run opens in place of the list (`?run=`), not in the side panel (a diagram needs the
+  room); W3 — Restart is offered on finished runs only (cancel a running one first).
+

@@ -1,5 +1,6 @@
 // The mock's part of each extension (UI-01 §26): `MockDataSource` gives every part a context and adds the
 // methods it returns. To remove an extension: delete its line here (and its folder, `index.ts`, `contract.ts`).
 import type { MockExtensionPart } from "./mock-types.ts";
+import { workflowsMock } from "./workflows/mock-part.ts";
 
-export const mockParts: readonly MockExtensionPart[] = [];
+export const mockParts: readonly MockExtensionPart[] = [workflowsMock];

@@ -3,9 +3,10 @@
 // `mock.ts` and in `contract.ts`. This module stays light — it imports declarations only; each screen is a
 // lazy chunk.
 import type { DashboardExtension } from "./types.ts";
+import type { WorkflowFeatures } from "./workflows/data-source.ts";
+import { workflowsExtension } from "./workflows/index.ts";
 
 /** Every extension's contract features, merged into `DashboardDataSource` (all optional methods). */
-// biome-ignore lint/suspicious/noEmptyInterface: extensions add their features here
-export interface ExtensionFeatures {}
+export interface ExtensionFeatures extends WorkflowFeatures {}
 
-export const extensions: readonly DashboardExtension[] = [];
+export const extensions: readonly DashboardExtension[] = [workflowsExtension];
