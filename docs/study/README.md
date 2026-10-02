@@ -77,6 +77,7 @@ to a spec.
 | [STUDY-32](STUDY-32-file-storage.md) | File storage: `ctx.storage`, `_storage`, upload tokens and URLs, downloads, local and S3 backends | accepted: F1–F4 as recommended (owner, 2026-10-01) |
 | [STUDY-40](STUDY-40-local-backend-and-local-deployments.md) | `bunvex-local-backend` as Convex's `convex-local-backend`, local deployments in `bunvex dev` (download, state, `.env.local`), the npm package | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md) | `ctx.runQuery` / `ctx.runMutation` in queries and mutations (one transaction, sub-transactions, depth 8, `useStaleSnapshot`, `transactionLimits`), and the 1 s user execution limit | accepted: all as recommended (owner, 2026-10-02) |
+| [STUDY-42](STUDY-42-import-export.md) | Snapshot export (ZIP, `_exports`, endpoints, `bunvex export`) and import (CSV/JSON/JSONL/ZIP, modes, hidden tables, `_snapshot_imports`, `bunvex import`) | accepted: all as recommended (owner, 2026-10-02) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
