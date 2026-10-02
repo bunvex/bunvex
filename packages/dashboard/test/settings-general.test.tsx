@@ -28,7 +28,7 @@ describe("Settings: General", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["General", "Environment variables", "Authentication", "Snapshots"]);
+    ).toEqual(["General", "Environment variables", "Snapshots"]); // Authentication moved to its own screen (UI-01 §25)
     expect(within(nav).getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 

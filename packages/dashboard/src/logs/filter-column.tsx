@@ -1,9 +1,9 @@
-// The Logs filter column (UI-01 §22.4), on the shared facet column (`shell/facet-column.tsx`): Time range
+// The Logs filter column (UI-01 §22.4), on the shared facet column (`shell/section-column.tsx`): Time range
 // (presets), Functions, Type and Function kind, each choice with how many loaded lines it holds (under the
 // time range and the search). The Functions screen's column has Time range and Type only: its list is one
 // function's. On a phone the same sections open in a sheet.
 import type { FunctionKind } from "../data-source.ts";
-import { FacetColumn, FacetGroup, FacetRadios } from "../shell/facet-column.tsx";
+import { FacetGroup, FacetRadios, SectionColumn, SectionFilters } from "../shell/section-column.tsx";
 import {
   FUNCTION_KINDS,
   LOG_TYPES,
@@ -77,11 +77,13 @@ export function FilterSections(props: FilterSectionsProps) {
   );
 }
 
-/** The column beside the list, from `md` (a phone gets the Filters sheet instead). */
-export function FilterColumn(props: FilterSectionsProps & { widthKey: string; onReset?: () => void }) {
+/** The section column beside the list, from `md` (a phone gets the Filters sheet instead). */
+export function FilterColumn(props: FilterSectionsProps & { title: string; widthKey: string; onReset?: () => void }) {
   return (
-    <FacetColumn label="Log filters" widthKey={props.widthKey} onReset={props.onReset}>
-      <FilterSections {...props} />
-    </FacetColumn>
+    <SectionColumn title={props.title} widthKey={props.widthKey}>
+      <SectionFilters label="Log filters" onReset={props.onReset}>
+        <FilterSections {...props} />
+      </SectionFilters>
+    </SectionColumn>
   );
 }

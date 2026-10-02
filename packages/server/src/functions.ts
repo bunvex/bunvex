@@ -288,14 +288,16 @@ export class Functions {
     return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args), cachedQueryLogs, caller);
   }
 
-  /** A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Never cached. */
+  /**
+   * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query
+   * cache, as in Convex: a result cached at or before `ts` and still valid at `ts` answers it.
+   */
   async runQueryAtJson(name: string, args: unknown, ts: number, caller?: Caller): Promise<string> {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
-    const r = await this.engine.queryTracked(this.queryBody(name, args, true), {}, ts, caller);
-    if (!r.ok) throw r.error;
-    return stringifyValue(r.value);
+    const body = this.queryBody(name, args, true);
+    return this.engine.queryJson(body, cacheKey(name, args), cachedQueryLogs, caller, ts);
   }
 
   async runMutation(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {

@@ -15,11 +15,12 @@ import { formatLiteral } from "../database/literal.ts";
 import { formatTime } from "../database/values.ts";
 import { KIND_LETTER } from "../logs/log-list.tsx";
 import { type ScheduledSearch, scheduledRoute } from "../router.tsx";
-import { BAR1 } from "../shell/bars.ts";
+import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
-import { FacetColumn, FacetGroup, FacetRadios, useFiltersSheet } from "../shell/facet-column.tsx";
 import { Panel } from "../shell/panel.tsx";
+import { FacetGroup, FacetRadios, SectionFilters } from "../shell/section-column.tsx";
+import { useSchedulesColumn } from "./column.tsx";
 import { formatRelative } from "./format.ts";
 import { scheduledQuery, scheduleKeys, useSchedulesLive } from "./queries.ts";
 
@@ -46,7 +47,7 @@ const STATES = ["pending", "inProgress"] as const;
 type RunState = (typeof STATES)[number];
 const STATE_LABEL: Record<RunState, string> = { pending: "Pending", inProgress: "Running" };
 
-export function ScheduledView({ heading }: { heading: ReactNode }) {
+export function ScheduledView() {
   const scope = useQueryScope();
   const { source } = scope;
   const queryClient = useQueryClient();
@@ -151,17 +152,20 @@ export function ScheduledView({ heading }: { heading: ReactNode }) {
       />
     </>
   );
-  const sheet = useFiltersSheet({ kind: "schedules-filters", onReset: reset, children: sections });
+  const { column, button, sheet } = useSchedulesColumn(
+    <SectionFilters label="Schedule filters" onReset={reset}>
+      {sections}
+    </SectionFilters>,
+    reset,
+  );
 
   return (
     <>
-      <FacetColumn label="Schedule filters" widthKey="bunvex-dashboard:schedules-filters-width" onReset={reset}>
-        {sections}
-      </FacetColumn>
+      {column}
       <div className="@container/schedules flex min-h-0 min-w-0 flex-1 flex-col">
         <div className={BAR1}>
-          {heading}
-          {sheet.button}
+          <h1 className={BAR_TITLE}>Scheduled functions</h1>
+          {button}
           {/* the count next to the title, as on the other list screens (UX-14) */}
           {!list.isPending && !list.error && (
             <span className="sr-only text-sm text-muted-foreground tabular-nums @xl/schedules:not-sr-only">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
@@ -217,7 +221,7 @@ export function ScheduledView({ heading }: { heading: ReactNode }) {
           />
         )}
       </div>
-      {sheet.sheet}
+      {sheet}
       {open !== undefined && (
         <RunDetails
           run={open}

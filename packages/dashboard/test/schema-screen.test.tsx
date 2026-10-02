@@ -21,12 +21,12 @@ const lit = (value: string): ValidatorJson => ({ type: "literal", value });
 beforeEach(() => localStorage.clear());
 
 describe("the Schema screen", () => {
-  test("is in the navigation, between Database and Functions", async () => {
+  test("is in the navigation's Data group, between Database and Files", async () => {
     mount("/schema");
     await heading();
     const nav = screen.getAllByRole("link").map((a) => a.textContent?.trim());
     expect(nav.indexOf("Schema")).toBe(nav.indexOf("Database") + 1);
-    expect(nav.indexOf("Functions")).toBe(nav.indexOf("Schema") + 1);
+    expect(nav.indexOf("Files")).toBe(nav.indexOf("Schema") + 1);
   });
 
   test("counts the tables and references, and a table opens beside the diagram from the URL", async () => {

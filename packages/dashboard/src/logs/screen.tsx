@@ -9,7 +9,7 @@ import { type AuditEvent, type LogEntry, toDataSourceError } from "../data-sourc
 import { logsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { useFiltersSheet } from "../shell/facet-column.tsx";
+import { useSectionSheet } from "../shell/section-column.tsx";
 import { interleave, useLogEvents } from "./events.ts";
 import { exportName, saveText, toJsonLines } from "./export.ts";
 import { FilterColumn, FilterSections } from "./filter-column.tsx";
@@ -93,6 +93,8 @@ export function LogsView(props: {
   heading?: ReactNode;
   /** Where the filter column's width is kept. */
   widthKey: string;
+  /** On top of the section column; "Logs" by default. */
+  columnTitle?: string;
   /** The exported file's name starts with this. */
   exportPrefix: string;
   /** The deployment's events to place among the lines (STUDY-12 §10.4), and what Enter on one does. */
@@ -139,7 +141,7 @@ export function LogsView(props: {
     kinds: props.functions !== undefined,
   };
   const reset = filtered ? () => onView({ ...ALL_LOGS }) : undefined;
-  const filtersSheet = useFiltersSheet({
+  const filtersSheet = useSectionSheet({
     kind: "logs-filters",
     onReset: reset,
     children: <FilterSections {...sections} />,
@@ -147,7 +149,7 @@ export function LogsView(props: {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <FilterColumn {...sections} widthKey={props.widthKey} onReset={reset} />
+      <FilterColumn {...sections} title={props.columnTitle ?? "Logs"} widthKey={props.widthKey} onReset={reset} />
       <div className="@container/logs flex min-h-0 min-w-0 flex-1 flex-col">
         <LogBar
           heading={props.heading}

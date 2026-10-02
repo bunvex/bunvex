@@ -95,7 +95,16 @@ export type TopologySearch = { node?: string };
 export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
-export type FilesSearch = { order?: "asc"; from?: string; to?: string; file?: string };
+export type FilesSearch = {
+  order?: "asc";
+  from?: string;
+  to?: string;
+  file?: string;
+  /** A view by kind (UI-01 §24): images, documents, other. */
+  view?: "images" | "documents" | "other";
+  /** A size range: under 1 KB, 1 KB – 1 MB, over 1 MB. */
+  size?: "small" | "medium" | "large";
+};
 const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
 export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch => ({
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
@@ -103,6 +112,8 @@ export const validateFilesSearch = (input: Record<string, unknown>): FilesSearch
   from: day(input.from),
   to: day(input.to),
   file: str(input.file),
+  view: input.view === "images" || input.view === "documents" || input.view === "other" ? input.view : undefined,
+  size: input.size === "small" || input.size === "medium" || input.size === "large" ? input.size : undefined,
 });
 
 /** History (UI-01 §14.5, §22.5): actions (a comma list), a day range (`YYYY-MM-DD`, the viewer's zone), the open event. */
@@ -138,10 +149,7 @@ const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "File
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
 const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
-const AuthenticationSettingsScreen = lazyRouteComponent(
-  () => import("./settings/auth.tsx"),
-  "AuthenticationSettingsScreen",
-);
+const AuthScreen = lazyRouteComponent(() => import("./auth/screen.tsx"), "AuthScreen");
 const EnvironmentVariablesScreen = lazyRouteComponent(
   () => import("./settings/screen.tsx"),
   "EnvironmentVariablesScreen",
@@ -255,10 +263,65 @@ export const envVarsRoute = createRoute({
   component: EnvironmentVariablesScreen,
 });
 
+/** Settings → Authentication moved to the Authentication screen's "Sign in / Providers" (UI-01 §25). */
 export const authSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings/authentication",
-  component: AuthenticationSettingsScreen,
+  beforeLoad: () => {
+    throw redirect({ to: "/auth/$section", params: { section: "providers" }, replace: true });
+  },
+});
+
+/** The Authentication screen's pages (UI-01 §25). */
+export const AUTH_SECTIONS = [
+  "users",
+  "sessions",
+  "organizations",
+  "providers",
+  "multi-factor",
+  "passkeys",
+  "session-lifetime",
+  "rate-limits",
+  "urls",
+  "emails",
+  "audit",
+] as const;
+export type AuthSection = (typeof AUTH_SECTIONS)[number];
+
+/** Users: a search, a provider, a status, the open user and its tab. */
+export type AuthSearch = {
+  q?: string;
+  provider?: string;
+  status?: "verified" | "unverified" | "banned";
+  user?: string;
+  tab?: "overview" | "logs" | "json";
+};
+export const validateAuthSearch = (input: Record<string, unknown>): AuthSearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  q: str(input.q),
+  provider: typeof input.provider === "string" && /^[a-z-]+$/.test(input.provider) ? input.provider : undefined,
+  status:
+    input.status === "verified" || input.status === "unverified" || input.status === "banned"
+      ? input.status
+      : undefined,
+  user: str(input.user),
+  tab: input.tab === "logs" || input.tab === "json" || input.tab === "overview" ? input.tab : undefined,
+});
+
+/** `/auth` opens Users. */
+export const authIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "auth",
+  beforeLoad: () => {
+    throw redirect({ to: "/auth/$section", params: { section: "users" }, replace: true });
+  },
+});
+
+export const authRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "auth/$section",
+  validateSearch: validateAuthSearch,
+  component: AuthScreen,
 });
 
 export const snapshotsSettingsRoute = createRoute({
@@ -308,6 +371,8 @@ export const routeTree = rootRoute.addChildren([
   envVarsRoute,
   authSettingsRoute,
   snapshotsSettingsRoute,
+  authIndexRoute,
+  authRoute,
 ]);
 
 // ------------------------------------------------------------------ the router

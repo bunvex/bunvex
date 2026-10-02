@@ -76,6 +76,7 @@ export {
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
+export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
