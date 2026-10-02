@@ -5,6 +5,7 @@
 // deployment is a leader alone. Every method is optional — a source offers the view by having them (detected
 // with `typeof`) — and needs the `viewMetrics` operation. Re-exported by `data-source.ts`.
 import type { CallOptions, DataSourceError, Unsubscribe } from "./data-source.ts";
+import type { ClientBucket } from "./data-source-clients.ts";
 
 export type NodeRole = "leader" | "follower";
 
@@ -66,6 +67,8 @@ export type TopologyNode = {
   connections: number;
   /** Live query subscriptions across those connections. */
   subscriptions: number;
+  /** Who those connections are (UI-01 §33): by platform, app and SDK version; absent when the source cannot tell. */
+  clients?: ClientBucket[];
   /** The node's own query cache (absent when the source cannot tell). */
   cache?: NodeCache;
   /** Followers: how far behind the leader's commit stream. Absent on the leader. */

@@ -103,12 +103,14 @@ bunvex/
 │   ├── dashboard/                   @bunvex/dashboard  the dashboard screens (UI-01), fed by an
 │   │   ├── data-source              injected DashboardDataSource — the contract with the server   🟡
 │   │   │                            (required core + optional areas: writes, runner, deployment,
-│   │   │                            state, metrics, snapshots, auth, auth admin, topology; UI-01 §0)
+│   │   │                            state, metrics, snapshots, auth, auth admin, topology, clients;
+│   │   │                            UI-01 §0, §33)
 │   │   ├── mock                     MockDataSource, and the contract suite any source must pass  ✅
 │   │   ├── shell                    sidebar in groups, section column, docked panel, bars (§0)    ✅
 │   │   ├── database                 tables, filters, data grid, editing, live changes (STUDY-12) ✅
 │   │   ├── schema                   the schema as a diagram: tables, references (STUDY-12 §14)     ✅
 │   │   ├── topology                 nodes by role, lag, cache, the store and lease (an addition)    ✅
+│   │   ├── clients                  who the clients are: platforms, apps, SDK states (an addition) 🟡
 │   │   ├── logs                     filter column, histogram, live lines, details (STUDY-12 §7)    ✅
 │   │   ├── functions                module tree; statistics, validators and logs of a function    ✅
 │   │   ├── runner                   run a function: literal args, live queries, history, as a user ✅

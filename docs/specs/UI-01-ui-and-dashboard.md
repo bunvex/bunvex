@@ -2213,3 +2213,51 @@ every one. They land in five pull requests, one subsection each.
   Organizations detail panel (members, invitations) is the Authentication follow-up pull request (#188).
 - **No browser selects** (UX2-3): Multi-factor's "Required for" and the user panel's "Ban for" use the design
   system's Select.
+
+## 33. Who the clients are (STUDY-12 §21; a bunvex addition; 2 Oct 2026)
+
+A mock-only interface for client identification: every client says what it is when it connects; nothing has
+to be registered. The real handshake and `@bunvex/client` come with a later server and SDK study.
+
+### 33.1 Contract, mock, Topology and Overview
+
+- **Contract** (`data-source-clients.ts`, optional, typeof-detected): `ClientInfo`; `TopologyNode.clients`
+  (buckets by platform, registered app, SDK and app version); `getClientSummary`; the app registry
+  (`listClientApps`, `createClientApp`, `updateClientApp`, `deleteClientApp`); `compareVersions`, `sdkState`
+  and `appOf` as shared logic. Contract suite part `contract-clients.ts`: the summary adds up, SDK states
+  follow the policy, a node's buckets add up to its connections; the registry's writes under `writes`.
+- **Mock** (`mock/clients.ts`): one weighted population of clients shared by every view; three registered
+  apps (Shop Web, Shop iOS, Shop Android); outdated SDKs on iOS, Android and Node; registry writes are audited
+  (`create_client_app`…, said in words in History).
+- **Topology:** with clients known, the top layer is one dashed card per **platform** (default) or per
+  **registered app** (`?clientsBy=app`; unregistered clients per platform), in a fixed order so live numbers
+  never move a card, each linked to the nodes serving it (links labelled while lit). A group opens a panel
+  (`?clients=<key>`): its connections, the nodes serving it, app versions, SDK versions with their state. On a
+  phone the groups head the column and say their nodes in words. A source that cannot tell keeps one clients
+  card per serving node.
+- **Overview:** a **Clients** block (connections by platform as a bar and a list; SDK versions in use with
+  their state), loaded lazily; **Needs attention** lists each outdated SDK (unsupported: critical; upgrade
+  required: warning) and links to the platform's group on Topology.
+
+### 33.2 Logs, Functions → Statistics and Settings → Apps
+
+- **Logs:** a line carries the `client` that made its request (`LogEntry.client`; the mock gives users'
+  calls one, scheduled runs and crons none). The filter column gains **Platform** and **App version** facets
+  with counts, shown only when the loaded lines say who made them; in the URL as `platform=` and
+  `appVersion=` (comma lists, `none` for an empty choice) and kept per deployment with the rest of the view.
+  Choosing either leaves out the lines no client made. A line's details show its **Client**: the device,
+  runtime and app (named by the registry: "iPhone 14 · iOS 18.6 · Shop iOS 2.3.0"), then the SDK, build and a
+  development environment.
+- **Functions → Statistics:** a **By platform** card (optional `functionClients(fn, window)`, needs
+  `viewMetrics`): the function's calls in the last hour per platform as bars, with their errors, most calls
+  first, and the calls no client made (scheduled, crons, other functions) in a line below. The mock measures
+  it from its log history, so it adds up to the Function calls chart (contract suite).
+- **Settings → Apps** (under Configuration, and in the command palette; shown when the source offers the
+  registry): the registered apps with their platform, identifiers, notes, when a client last connected and
+  the app versions seen with their connections. **Register an app** and **Edit** open an inline form (name,
+  platform, identifiers one per line with a hint per platform, notes); a save that drops identifiers or
+  changes the platform — clients that stop being named by the app — asks first; **Remove** asks first and
+  says the clients keep connecting. Read-only credentials see the list without its actions. Last, **How a
+  client says who it is**: a per-platform snippet (TypeScript for the JS platforms, Swift for iOS, Kotlin for
+  Android) marked **Planned API**, since `@bunvex/client` and the native SDKs are not released.
+

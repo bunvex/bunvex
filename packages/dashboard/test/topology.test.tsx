@@ -31,6 +31,8 @@ const card = (id: string) => document.querySelector<HTMLElement>(`.react-flow__n
 async function withTopology(edit: (t: Topology) => void, opts = {}) {
   const src = source({ nodes: 4, ...opts });
   const t = await src.getTopology();
+  // these tests are about nodes: one clients card per serving node, as a source that cannot tell who they are
+  for (const n of t.nodes) delete n.clients;
   edit(t);
   src.getTopology = async () => structuredClone(t);
   src.watchTopology = () => () => {};
@@ -85,7 +87,7 @@ describe("the layout", () => {
     ]);
     const one = layoutTopology(await source().getTopology());
     expect(one.placed.map((p) => p.id)).toEqual(["clients:node-a", "node:node-a", "store"]);
-    expect(neighbourhood("node-b", before.links)).toEqual(
+    expect(neighbourhood("node:node-b", before.links)).toEqual(
       new Set(["node:node-b", "clients:node-b", "ws:node-b", "stream:node-b", "node:node-a"]),
     );
   });
@@ -168,7 +170,7 @@ describe("the diagram's edges and nodes", () => {
 
 describe("the Topology screen", () => {
   test("one node (bunvex today): clients, the node and its store; where followers will appear", async () => {
-    mount("/topology");
+    mount("/topology", await withTopology(() => {}, { nodes: 1 }));
     await loaded(3);
     expect(screen.getByTestId("topology-summary").textContent).toMatch(/^Leader node-a · no followers/);
     expect(screen.getByText(/followers appear when bunvex runs more than one/)).toBeDefined();

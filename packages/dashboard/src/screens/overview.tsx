@@ -42,6 +42,7 @@ const SECTION_TITLE = "text-sm font-medium";
 // budget, UI-01 §14.1)
 const HealthMetrics = lazy(() => import("../metrics/health.tsx").then((m) => ({ default: m.HealthMetrics })));
 const Engine = lazy(() => import("./engine.tsx").then((m) => ({ default: m.Engine })));
+const ClientsBlock = lazy(() => import("./overview-clients.tsx").then((m) => ({ default: m.ClientsBlock })));
 
 export function Overview() {
   const scope = useQueryScope();
@@ -64,6 +65,7 @@ export function Overview() {
             {/* the most urgent first, across the page; the long activity list beside the charts (UX2-17) */}
             <NeedsAttention />
             <Indicators />
+            <Clients />
             <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
               <section aria-labelledby="overview-metrics" className="min-w-0">
                 <h2 id="overview-metrics" className={SECTION_TITLE}>
@@ -313,11 +315,13 @@ function NeedsAttention() {
   const lag = useMetric(["scheduler-lag"], lagOk, (w, signal) => source.scheduledJobLag!(w, { signal }));
   const topology = useTopology();
   const state = useQuery(deploymentStateQuery(scope));
+  const clients = useClientSummary();
   const items = attention({
     failures: failures.data,
     topology: topology.data,
     schedulerLag: lag.data,
     paused: state.data?.state === "paused",
+    clients: clients.data,
   });
   return (
     <section aria-labelledby="overview-attention">
@@ -362,7 +366,10 @@ function AttentionLink({ a }: { a: Attention }) {
       );
     case "topology":
       return (
-        <DashLink link={{ to: "/topology", search: { node: a.search?.node } }} className={cls}>
+        <DashLink
+          link={{ to: "/topology", search: { node: a.search?.node, clients: a.search?.clients } }}
+          className={cls}
+        >
           {a.text}
         </DashLink>
       );
@@ -539,7 +546,47 @@ function WhenVisible({ fallback, children }: { fallback: ReactNode; children: Re
   return <div ref={ref}>{seen ? <Suspense fallback={fallback}>{children}</Suspense> : fallback}</div>;
 }
 
+// ------------------------------------------------------------------ clients (UI-01 §33)
+
+/** Who is connected, when the source says: by platform, and the SDK versions in use. */
+function Clients() {
+  const scope = useQueryScope();
+  const caps = useQuery(capabilitiesQuery(scope));
+  const summary = useClientSummary();
+  const offered = typeof scope.source.getClientSummary === "function";
+  if (!offered || (caps.data && !caps.data.operations.includes("viewMetrics")) || summary.error) return null;
+  // the block's place is kept while it loads: the sections below never jump (a lazy one may be watching them)
+  const loading = <div className="mt-3 h-52 border" aria-hidden="true" />;
+  return (
+    <section aria-labelledby="overview-clients">
+      <h2 id="overview-clients" className={SECTION_TITLE}>
+        Clients
+      </h2>
+      {summary.data ? (
+        <Suspense fallback={loading}>
+          <ClientsBlock summary={summary.data} />
+        </Suspense>
+      ) : (
+        loading
+      )}
+    </section>
+  );
+}
+
 // ------------------------------------------------------------------ shared queries
+
+function useClientSummary() {
+  const scope = useQueryScope();
+  const { source } = scope;
+  const caps = useQuery(capabilitiesQuery(scope));
+  const canView = caps.data?.operations.includes("viewMetrics") ?? false;
+  return useQuery({
+    queryKey: [...dashboardKeys.all(scope.scope), "client-summary"] as const,
+    queryFn: ({ signal }) => source.getClientSummary!({ signal }),
+    enabled: typeof source.getClientSummary === "function" && canView,
+    refetchInterval: 10_000,
+  });
+}
 
 function useTopology() {
   const scope = useQueryScope();

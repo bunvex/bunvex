@@ -6,6 +6,7 @@
 // Logs screen, per function on the Functions screen); the screen opened without filters starts from the
 // last view, as Convex's does. A brushed window lives in the URL only.
 import type { FunctionKind, LogEntry, LogLevel } from "../data-source.ts";
+import { CLIENT_PLATFORMS, type ClientPlatform } from "../data-source-clients.ts";
 
 export type LogType = "success" | "failure" | LogLevel;
 export const LOG_TYPES: readonly LogType[] = ["success", "failure", "debug", "info", "warn", "error"];
@@ -31,6 +32,9 @@ export type LogView = {
   functions: string[] | "all";
   types: LogType[] | "all";
   kinds: FunctionKind[] | "all";
+  /** The client that made the request (UI-01 §33): its platform, and its app's version. */
+  platforms?: ClientPlatform[] | "all";
+  appVersions?: string[] | "all";
   /** Matches a function path, a message or a request id, ignoring case. */
   text: string;
   /** A preset range back from now; a brushed `window` overrides it. */
@@ -70,6 +74,13 @@ const typeMatches = (e: LogEntry, types: LogType[]) =>
  */
 export function matchesLogView(e: LogEntry, v: LogView, now = Date.now()): boolean {
   if (v.functions !== "all" && !(e.function && v.functions.includes(e.function.path))) return false;
+  if (v.platforms && v.platforms !== "all" && !(e.client && v.platforms.includes(e.client.platform))) return false;
+  if (
+    v.appVersions &&
+    v.appVersions !== "all" &&
+    !(e.client?.app?.version && v.appVersions.includes(e.client.app.version))
+  )
+    return false;
   if (v.kinds !== "all" && !(e.function && v.kinds.includes(e.function.kind))) return false;
   if (v.types !== "all" && !typeMatches(e, v.types)) return false;
   return inTimeAndText(e, v, now);
@@ -83,9 +94,15 @@ export function facetCounts(lines: LogEntry[], v: LogView, now = Date.now()) {
   const functions = new Map<string, number>();
   const kinds = new Map<FunctionKind, number>();
   const types = new Map<LogType, number>();
+  const platforms = new Map<ClientPlatform, number>();
+  const appVersions = new Map<string, number>();
   const add = <K>(m: Map<K, number>, k: K) => m.set(k, (m.get(k) ?? 0) + 1);
   for (const e of lines) {
     if (!inTimeAndText(e, v, now)) continue;
+    if (e.client) {
+      add(platforms, e.client.platform);
+      if (e.client.app?.version) add(appVersions, e.client.app.version);
+    }
     if (e.function) {
       add(functions, e.function.path);
       add(kinds, e.function.kind);
@@ -93,13 +110,15 @@ export function facetCounts(lines: LogEntry[], v: LogView, now = Date.now()) {
     add(types, e.level);
     if (e.execution) add(types, e.execution.status);
   }
-  return { functions, kinds, types };
+  return { functions, kinds, types, platforms, appVersions };
 }
 
 export const isFiltered = (v: LogView) =>
   v.functions !== "all" ||
   v.types !== "all" ||
   v.kinds !== "all" ||
+  (v.platforms ?? "all") !== "all" ||
+  (v.appVersions ?? "all") !== "all" ||
   v.text.trim() !== "" ||
   v.range !== "all" ||
   v.window !== undefined;
@@ -112,6 +131,9 @@ export type LogsSearch = {
   function?: string;
   type?: string;
   kind?: string;
+  /** The client's platforms and app versions (UI-01 §33), comma lists. */
+  platform?: string;
+  appVersion?: string;
   q?: string;
   range?: RangePreset;
   /** A brushed window, in wall-clock ms. */
@@ -133,6 +155,8 @@ export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
     function: undefined,
     type: undefined,
     kind: undefined,
+    platform: undefined,
+    appVersion: undefined,
     q: undefined,
     range: undefined,
     from: undefined,
@@ -155,6 +179,15 @@ export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
           ?.split(",")
           .filter((k) => FUNCTION_KINDS.includes(k as FunctionKind))
           .join(",");
+  const platform = nonEmpty(input.platform);
+  const platforms =
+    platform === NONE
+      ? NONE
+      : platform
+          ?.split(",")
+          .filter((p) => CLIENT_PLATFORMS.includes(p as ClientPlatform))
+          .join(",");
+  const appVersion = nonEmpty(input.appVersion);
   const q = nonEmpty(input.q);
   const range = typeof input.range === "string" && input.range in RANGES ? (input.range as RangePreset) : undefined;
   const ms = (x: unknown) => {
@@ -166,6 +199,8 @@ export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
   if (fn) out.function = fn;
   if (types) out.type = types;
   if (kinds) out.kind = kinds;
+  if (platforms) out.platform = platforms;
+  if (appVersion) out.appVersion = appVersion;
   if (q) out.q = q;
   if (range) out.range = range;
   // a window needs both ends, in order
@@ -178,11 +213,15 @@ export function validateLogsSearch(input: Record<string, unknown>): LogsSearch {
 
 /** The view a URL asks for, or null when it asks for none (then the saved view applies). */
 export function viewFromSearch(s: LogsSearch): LogView | null {
-  if (!s.function && !s.type && !s.kind && !s.q && !s.range && s.from === undefined) return null;
+  if (!s.function && !s.type && !s.kind && !s.platform && !s.appVersion && !s.q && !s.range && s.from === undefined)
+    return null;
   return {
     functions: list(s.function),
     types: list(s.type) as LogType[] | "all",
     kinds: list(s.kind) as FunctionKind[] | "all",
+    // the client facets only when chosen: a view without them reads as before (UI-01 §33)
+    ...(s.platform && { platforms: list(s.platform) as ClientPlatform[] }),
+    ...(s.appVersion && { appVersions: list(s.appVersion) as string[] }),
     text: s.q ?? "",
     range: s.range ?? "all",
     ...(s.from !== undefined && s.to !== undefined && { window: { from: s.from, to: s.to } }),
@@ -194,6 +233,8 @@ export function searchFromView(v: LogView): LogsSearch {
   if (v.functions !== "all") out.function = joined(v.functions);
   if (v.types !== "all") out.type = joined(v.types);
   if (v.kinds !== "all") out.kind = joined(v.kinds);
+  if (v.platforms && v.platforms !== "all") out.platform = joined(v.platforms);
+  if (v.appVersions && v.appVersions !== "all") out.appVersion = joined(v.appVersions);
   if (v.text.trim() !== "") out.q = v.text;
   if (v.range !== "all") out.range = v.range;
   if (v.window) {
@@ -217,6 +258,12 @@ export function readLogView(key: string): LogView {
       kinds: strings(v.kinds)
         ? (v.kinds as string[]).filter((k): k is FunctionKind => FUNCTION_KINDS.includes(k as FunctionKind))
         : "all",
+      ...(strings(v.platforms) && {
+        platforms: (v.platforms as string[]).filter((p): p is ClientPlatform =>
+          CLIENT_PLATFORMS.includes(p as ClientPlatform),
+        ),
+      }),
+      ...(strings(v.appVersions) && { appVersions: v.appVersions as string[] }),
       text: typeof v.text === "string" ? v.text : "",
       range: typeof v.range === "string" && v.range in RANGES ? (v.range as RangePreset) : "all",
     };

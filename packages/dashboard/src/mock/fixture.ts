@@ -1,5 +1,6 @@
 // The mock deployment's data: a few tables of plausible documents, a function registry of every kind, and
 // a history of function logs. Deterministic for a given seed and `now`.
+
 import type {
   DeploymentInfo,
   Document,
@@ -11,7 +12,9 @@ import type {
   LogEntry,
   LogLevel,
 } from "../data-source.ts";
+import type { ClientInfo } from "../data-source-clients.ts";
 import { encodeInt64 } from "../filters.ts";
+import { clientFor } from "./clients.ts";
 import { MOCK_VALIDATORS } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
 
@@ -144,7 +147,7 @@ export function makeExecution(
   seq: number,
   time: number,
   run?: { fn: FunctionInfo; error?: string; identity?: { subject: string; issuer: string; name?: unknown } },
-  within?: { requestId: string; parentExecutionId: string; startedBy: ExecutionIdentity },
+  within?: { requestId: string; parentExecutionId: string; startedBy: ExecutionIdentity; client?: ClientInfo },
 ): LogEntry[] {
   const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
   const requestId = within?.requestId ?? rnd.id().slice(0, 16);
@@ -154,6 +157,8 @@ export function makeExecution(
   // stream, so the fixture's data stays what it was.
   const startedBy: ExecutionIdentity =
     within?.startedBy ?? (run?.identity ? "acting_as_user" : run ? "admin" : seq % 7 === 0 ? "system" : "user");
+  // who made the request (UI-01 §33): a user's client, from the sequence; the dashboard's and the system's carry none
+  const client = within ? within.client : startedBy === "user" ? clientFor(seq) : undefined;
   const failed = run ? run.error !== undefined : rnd.chance(fn.kind === "action" ? 0.08 : 0.03);
   const durationMs = fn.kind === "action" ? rnd.int(20, 900) : rnd.int(0, 40);
   const lines: { level: LogLevel; message: string }[] = [];
@@ -182,6 +187,7 @@ export function makeExecution(
     requestId,
     executionId,
     ...(within && { parentExecutionId: within.parentExecutionId }),
+    ...(client && { client }),
   });
   const out = lines.slice(0, -1).map((l, i) => entry(l, seq + i, time + i));
   // an action may call queries and mutations: their executions sit inside it, in the same request
@@ -194,7 +200,7 @@ export function makeExecution(
           seq + out.length,
           time + out.length,
           { fn: rnd.pick(callable) },
-          { requestId, parentExecutionId: executionId, startedBy },
+          { requestId, parentExecutionId: executionId, startedBy, client },
         ),
       );
   }

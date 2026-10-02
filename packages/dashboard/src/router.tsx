@@ -95,8 +95,13 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 export type SchemaSearch = { table?: string };
 
 /** The Topology screen's open node (UI-01 §22). */
-export type TopologySearch = { node?: string };
-export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
+/** `clientsBy`: the client cards by platform (default) or by registered app; `clients`: an opened group's key. */
+export type TopologySearch = { node?: string; clientsBy?: "app"; clients?: string };
+export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({
+  node: str(input.node),
+  clientsBy: input.clientsBy === "app" ? "app" : undefined,
+  clients: str(input.clients),
+});
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
 export type FilesSearch = {
@@ -152,6 +157,7 @@ const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx")
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
+const AppsSettingsScreen = lazyRouteComponent(() => import("./settings/apps.tsx"), "AppsSettingsScreen");
 const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
 const AuthScreen = lazyRouteComponent(() => import("./auth/screen.tsx"), "AuthScreen");
 const EnvironmentVariablesScreen = lazyRouteComponent(
@@ -342,6 +348,12 @@ export const authRoute = createRoute({
   component: AuthScreen,
 });
 
+export const appsSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "settings/apps",
+  component: AppsSettingsScreen,
+});
+
 export const snapshotsSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings/snapshots",
@@ -408,6 +420,7 @@ const builtInRoutes = [
   generalSettingsRoute,
   envVarsRoute,
   authSettingsRoute,
+  appsSettingsRoute,
   snapshotsSettingsRoute,
   authIndexRoute,
   authRoute,

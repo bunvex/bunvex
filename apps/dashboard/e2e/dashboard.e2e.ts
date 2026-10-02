@@ -134,7 +134,14 @@ describe("the dashboard in a browser", () => {
     const phone = { viewport: { width: 390, height: 800 } };
     const { page, errors, close } = await open("/", phone);
     await heading(page, "Overview");
-    for (const path of ["/database/users", "/functions?function=tasks:list", "/logs", "/settings/general", "/files"]) {
+    for (const path of [
+      "/database/users",
+      "/functions?function=tasks:list",
+      "/logs",
+      "/settings/general",
+      "/settings/apps",
+      "/files",
+    ]) {
       await page.goto(`${ORIGIN}${path}`);
       await page.locator("main h1").first().waitFor();
       const overflow = await page.evaluate(() => document.scrollingElement!.scrollWidth - innerWidth);
@@ -421,15 +428,19 @@ describe("the dashboard in a browser", () => {
     const one = await open("/topology");
     await heading(one.page, "Topology");
     await one.page.getByRole("region", { name: "Topology diagram" }).locator(".react-flow__edge").nth(1).waitFor();
-    expect(await one.page.locator(".react-flow__node").count()).toBe(3);
+    // the node, the store, and one card per client platform (UI-01 §33)
+    expect(await one.page.locator(".react-flow__node-server").count()).toBe(1);
+    expect(await one.page.locator(".react-flow__node-clientgroup").count()).toBe(6);
     await one.close();
     for (const colorScheme of ["light", "dark"] as const) {
       const { page, errors, close } = await open("/topology?nodes=4", { colorScheme });
       await heading(page, "Topology");
       const canvas = page.getByRole("region", { name: "Topology diagram" });
       await canvas.locator(".react-flow__edge").nth(6).waitFor();
-      expect(await canvas.locator(".react-flow__node").count()).toBe(8);
-      expect(await canvas.locator(".react-flow__edge").count()).toBe(7);
+      expect(await canvas.locator(".react-flow__node-server").count()).toBe(4);
+      expect(await canvas.locator(".react-flow__node-clientgroup").count()).toBe(6);
+      // three streams, the leader's commits, and at least one link from each client group
+      expect(await canvas.locator(".react-flow__edge").count()).toBeGreaterThanOrEqual(10);
       expect(await page.locator("[data-cache-strip]").count()).toBe(4);
       expect(await page.locator("[data-cache-strip]").first().textContent()).toMatch(/^Cache\d+%[\d.]+k?\/5k\d+\/s$/);
       expect(await page.locator("[data-edge-label]").allTextContents()).toContainEqual(
@@ -460,6 +471,46 @@ describe("the dashboard in a browser", () => {
     expect(await still.page.locator("[data-reduced-motion]").count()).toBe(1);
     expect(await still.page.locator("[data-particle]").count()).toBe(0);
     await still.close();
+  });
+
+  test("Topology: clients by platform, by app on request; a group's panel says which SDKs are outdated", async () => {
+    const { page, errors, close } = await open("/topology?nodes=4");
+    await heading(page, "Topology");
+    const canvas = page.getByRole("region", { name: "Topology diagram" });
+    await canvas.locator('.react-flow__node[data-id="group:platform:web"]').waitFor();
+    // a group's links are drawn, labelled when it is lit
+    await canvas.locator('.react-flow__node[data-id="group:platform:web"]').hover();
+    await expect_(async () =>
+      expect(await page.locator('[data-edge-label^="ws:platform:web:"]').count()).toBeGreaterThan(0),
+    );
+    await page.getByRole("button", { name: "App" }).click();
+    await canvas.locator('.react-flow__node[data-id="group:unregistered:expo"]').waitFor();
+    expect(page.url()).toContain("clientsBy=app");
+    await canvas.locator('.react-flow__node[data-id="group:unregistered:node"]').click();
+    const panel = page.getByRole("complementary", { name: "Unregistered · Node" });
+    await panel.getByText("Upgrade required").waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Clients: Logs filtered by platform, a line's client; calls by platform; Settings → Apps", async () => {
+    const { page, errors, close } = await open("/logs");
+    await heading(page, "Logs");
+    const filters = page.getByRole("navigation", { name: "Log filters" });
+    await filters.getByRole("region", { name: "Platform" }).getByRole("button", { name: "Only ios" }).click();
+    await expect_(async () => expect(page.url()).toContain("platform=ios"));
+    await page.getByRole("grid", { name: "Log lines" }).getByRole("row").nth(1).getByRole("gridcell").nth(5).click();
+    await expect_(async () => expect(await page.getByTestId("log-client").textContent()).toContain("bunvex-swift"));
+    await page.goto(`${ORIGIN}/functions?function=tasks:list`);
+    await page.getByRole("table", { name: "Calls and errors by platform" }).waitFor();
+    await page.goto(`${ORIGIN}/settings/apps`);
+    await heading(page, "Apps");
+    expect(await page.getByTestId("client-app").count()).toBe(3);
+    await page.getByTestId("client-app").nth(1).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Keep it" }).click();
+    expect(await page.getByTestId("client-app").count()).toBe(3);
+    expect(errors).toEqual([]);
+    await close();
   });
 
   test("Topology on a phone: one column framed to the width, readable, panned vertically; a tap opens a node", async () => {
@@ -1021,6 +1072,8 @@ describe("the dashboard in a browser", () => {
         ["/settings/general", "General"],
         ["/settings/authentication", "Sign in / Providers"], // moved to Authentication (UI-01 §25)
         ["/settings/snapshots", "Snapshots"],
+        ["/settings/apps", "Apps"],
+        ["/logs?platform=ios", "Logs"],
         ["/auth/users", "Users"],
         ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],

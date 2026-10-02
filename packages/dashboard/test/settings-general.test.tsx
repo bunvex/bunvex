@@ -28,7 +28,7 @@ describe("Settings: General", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["General", "Environment variables", "Snapshots", "Map style"]); // Authentication moved to its own screen (UI-01 §25); Map style comes from the Analytics extension
+    ).toEqual(["General", "Environment variables", "Apps", "Snapshots", "Map style"]); // Authentication moved to its own screen (UI-01 §25); Map style comes from the Analytics extension; Apps: UI-01 §33.2
     expect(within(nav).getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 
