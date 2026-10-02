@@ -66,7 +66,7 @@ to a spec.
 | [STUDY-30](STUDY-30-scheduler-and-crons.md) | Scheduled functions (`ctx.scheduler`, `_scheduled_functions`) and cron jobs | accepted: S1–S3 as recommended (owner, 2026-10-01) |
 | [STUDY-33](STUDY-33-retention.md) | Retention: garbage collection of old index and document versions, the windows, reads below them | implemented; R1–R4 accepted (owner, 2026-10-01) |
 | [STUDY-34](STUDY-34-admin-keys.md) | Admin keys: format and crypto, instance name, identities (admin, acting user, system), admin-only functions and endpoints | accepted: AK1–AK6 as recommended (owner, 2026-10-01) |
-| [STUDY-35](STUDY-35-push-and-deploy.md) | Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | draft: P1–P6 pending |
+| [STUDY-35](STUDY-35-push-and-deploy.md) | Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | accepted: P1–P6 as recommended (owner, 2026-10-02) |
 | [STUDY-28](STUDY-28-builtin-auth.md) | Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done |
 | [STUDY-31](STUDY-31-http-actions.md) | HTTP actions: `httpRouter`, `httpAction`, serving on `/http` and the site port, errors, limits, auth | accepted: H1–H5 as recommended (owner, 2026-10-01) |
 | [STUDY-29](STUDY-29-index-backfill.md) | Background index backfill: index states, staged indexes, the worker, checkpoints and resume, queries on a backfilling index | implemented (#115); B1, B2 decided (owner, 2026-10-01: DV-126, DV-127) |

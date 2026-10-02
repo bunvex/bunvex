@@ -16,5 +16,8 @@
     "hooks": "@bunvex/ui/hooks",
     "lib": "@bunvex/ui/lib",
     "ui": "@bunvex/ui/components"
+  },
+  "registries": {
+    "@mapcn": "https://mapcn.dev/r/{name}.json"
   }
 }
