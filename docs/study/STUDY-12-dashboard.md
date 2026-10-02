@@ -883,3 +883,67 @@ for it, built as an extension (UI-01 §26) that may be removed later.
   permissions); W2 — a run opens in place of the list (`?run=`), not in the side panel (a diagram needs the
   room); W3 — Restart is offered on finished runs only (cancel a running one first).
 
+
+## 19. Signing in to a deployment (added 2 Oct 2026)
+
+The owner asked for the sign-in page now, without connecting to a real server yet (2 Oct 2026).
+
+### 19.1 How Convex does it
+
+Convex's self-hosted dashboard (`npm-packages/dashboard-self-hosted`):
+
+- **The credentials.** A deployment URL and an admin key. `DeploymentCredentialsForm.tsx` asks for both
+  ("Deployment URL", "Admin Key" masked with a show/hide eye, the hint "The admin key is required every time
+  you open the dashboard", a "Log In" button enabled once both are filled).
+- **Where they come from** (`pages/_app.tsx`, `DeploymentInfoProvider`): the form; the build's environment
+  (`NEXT_PUBLIC_DEPLOYMENT_URL`, `NEXT_PUBLIC_ADMIN_KEY`, prefilled into the form); a `/api/current_deployment`
+  route of the host (used by `npx convex dev`'s local dashboard); a legacy "list deployments" API (`?a=port&d=name`);
+  and, embedded in an iframe, the parent page (`useEmbeddedDashboardCredentials`: the dashboard posts
+  `{ type: "dashboard-credentials-request" }` to its parent with target `"*"` and accepts any
+  `{ type: "dashboard-credentials", adminKey, deploymentUrl, deploymentName, visiblePages? }` message — no
+  origin check).
+- **The check** (`lib/checkDeploymentInfo.ts`): `GET <url>/api/check_admin_key` with
+  `Authorization: Convex <key>`; 200 → `{ allowedOps, isReadOnly }` (an older backend without JSON → all
+  allowed); 404 → all allowed (an old backend without the route); anything else is retried (a few times),
+  then "The deployment URL or admin key is invalid. Please check that you have entered the correct values."
+  An empty `allowedOps` means every operation (`useIsOperationAllowed`). Operation names are the keybroker's
+  `DeploymentOp` (`crates/keybroker/src/operations.rs`).
+- **Storage.** The key and URL go to `sessionStorage` (`useSessionStorage("adminKey")`,
+  `"deploymentUrl"`) after a successful check, but a page load always starts from the login state: the stored
+  values are read by the screens, not used to sign in again — so a reload asks for the key again (hence the
+  hint). Nothing in `localStorage`.
+- **Leaving.** The header's settings menu has "Log Out", which clears the stored values and shows the form.
+  One deployment at a time; switching = log out and log in.
+
+### 19.2 What users observe
+
+A page asking for the URL and key, an error under the form when they don't check out, the screens with the
+key's permissions (read-only keys make the data read-only), and a way to log out. Apps observe nothing.
+
+### 19.3 How bunvex does it
+
+In the dashboard **host** (`apps/dashboard/src/login`), not the `@bunvex/dashboard` package (which keeps taking
+an injected data source):
+
+- The same two fields, labels in bunvex's words ("Deployment URL", "Admin key" with show/hide, "Sign in"),
+  the same hint that the key is asked every time, the same error sentence. The URL is validated and made
+  canonical before the check (a scheme added — `http` for a local address —, no trailing slash, no query).
+- `verifyAdminKey` is an interface (`AdminKeyVerifier.verify(url, key) → { ok, allowedOps, isReadOnly } |
+  { ok: false, error }`). **Only the mock verifier exists** (no network call): a key shaped `<name>|<secret>`
+  signs in, `…|readonly…` is read-only, `…|viewer…` may only view data and logs. The real verifier
+  (`check_admin_key`, then a real data source) is a follow-up.
+- Server operation names map to the dashboard's (`capabilitiesOf`), empty = all, as Convex.
+- Prefill from `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY`, as Convex's `NEXT_PUBLIC_*`.
+- Embedding: the same request/credentials messages, also without an origin check, as Convex (LG3).
+- The key is kept **in memory only** and a reload asks again — what users observe in Convex.
+- The header's account entry shows the deployment's name (from the key's `<name>|` prefix, as Convex's keys
+  are named) and URL, and "Sign out".
+
+### 19.4 Divergences and additions
+
+| ID | Difference | Why | Status |
+|---|---|---|---|
+| LG1 | **Use the demo data** on the sign-in page: the screens on the mock, kept for the tab (`sessionStorage`), "Leave the demo" in the header | a bunvex addition: explore the dashboard without a deployment; it is also how development and the e2e tests open it (`?demo=1`) | addition, as the owner asked (2 Oct 2026) |
+| LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | pending (DV-204) |
+| LG3 | Embedded credentials accepted from any origin, as Convex | match Convex; an allow-list of parent origins would be safer | matches Convex (no divergence); a question for the owner in the PR |
+| LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |

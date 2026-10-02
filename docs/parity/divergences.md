@@ -268,6 +268,10 @@ DV-187–DV-192 (STUDY-38 K1–K6) were accepted as recommended (owner, 2026-10-
 DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 
+| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
+|---|---|---|---|---|---|---|
+| DV-204 | Dashboard sign-in: the admin key is never written to storage | written to `sessionStorage`, but not used to sign in again on reload | no (dashboard) | same observable behaviour; no secret in storage | accept | [STUDY-12 LG2](../study/STUDY-12-dashboard.md#194-divergences-and-additions) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not

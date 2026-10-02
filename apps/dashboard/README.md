@@ -30,3 +30,11 @@ the CI job "e2e · dashboard in Chromium" is not a required check.
 
 It is a host only: screens, data and styles come from `@bunvex/dashboard` and `@bunvex/ui`
 ([UI-01](../../docs/specs/UI-01-ui-and-dashboard.md)).
+
+## Signing in
+
+The app opens on a sign-in page: a deployment URL and an admin key (UI-01 §31, STUDY-12 §19). Only a mock
+verifier exists for now — the dashboard does not talk to a real server yet: a key shaped `name|secret`
+signs in (`name|readonly…` read-only, `name|viewer…` view-only). **Use the demo data** opens the screens on the
+mock; `?demo=1` does it from the address. `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY` prefill the
+form. The key lives in memory: a reload asks for it again.

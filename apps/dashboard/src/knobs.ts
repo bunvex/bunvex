@@ -3,7 +3,7 @@
 // (sessionStorage, so a reload keeps them) and taken out of the address before the router starts — the
 // route's parameters stay.
 const KEY = "bunvex:dashboard-dev-knobs";
-const KNOBS = ["latency", "fail", "writes", "tables", "tasks", "executions", "nodes"] as const;
+const KNOBS = ["latency", "fail", "writes", "tables", "tasks", "executions", "nodes", "demo"] as const;
 
 type Env = {
   location: Pick<Location, "search" | "pathname" | "hash">;
@@ -34,5 +34,16 @@ export function takeDevKnobs({ location, history, storage }: Env): URLSearchPara
     return new URLSearchParams(storage?.getItem(KEY) ?? "");
   } catch {
     return new URLSearchParams();
+  }
+}
+
+/** Forgets one knob kept for the tab (e.g. `demo` once the demo is left), keeping the others. */
+export function forgetDevKnob(storage: Pick<Storage, "getItem" | "setItem"> | undefined, name: string) {
+  try {
+    const kept = new URLSearchParams(storage?.getItem(KEY) ?? "");
+    kept.delete(name);
+    storage?.setItem(KEY, kept.toString());
+  } catch {
+    // storage off: nothing was kept
   }
 }
