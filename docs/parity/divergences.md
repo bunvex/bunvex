@@ -229,6 +229,17 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
 
+STUDY-38 (the Docker image), awaiting the owner:
+
+| ID | bunvex | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-187 | The image runs `bunvex start` from TypeScript sources on `oven/bun` | compiled binaries on Ubuntu, Node for Node actions | no (operational) | accept | [STUDY-38 K1](../study/STUDY-38-docker.md#4-divergences) |
+| DV-188 | `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN`, volume at `/bunvex/data` | `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, `/convex/data` | yes (compose files) | rule 5 | [STUDY-38 K2](../study/STUDY-38-docker.md#4-divergences) |
+| DV-189 | No `dashboard` service until item 12 | the dashboard on 6791 | yes | accept | [STUDY-38 K3](../study/STUDY-38-docker.md#4-divergences) |
+| DV-190 | S3 per use case (its bucket set), not all-or-nothing on five buckets | all five or local | yes (config) | accept | [STUDY-38 K4](../study/STUDY-38-docker.md#4-divergences) |
+| DV-191 | Image published to `ghcr.io/bunvex/bunvex-backend` from `main` | `ghcr.io/get-convex/convex-backend` | — | owner turns it on | [STUDY-38 K5](../study/STUDY-38-docker.md#4-divergences) |
+| DV-192 | Convex knobs with no bunvex counterpart left out of the compose file | — | no | accept | [STUDY-38 K6](../study/STUDY-38-docker.md#4-divergences) |
+
 ## Gaps recorded in studies
 
 Missing pieces that studies listed in their Divergences tables as *gap* or *follow-up*. They are not
