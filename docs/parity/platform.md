@@ -197,7 +197,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | `export --path [--include-file-storage]` | `cli/convexExport.ts` | missing | |
 | `data [table] --limit --order --format --component` | `cli/data.ts` | missing | |
 | `logs` (`--history`, `--success`, `--jsonl`) | `cli/logs.ts` | missing | |
-| `env set\|get\|remove\|list` (and `env default …`, which is cloud-only) | `cli/env.ts` | missing | |
+| `env set\|get\|remove\|list` (and `env default …`, which is cloud-only) | `cli/env.ts` | done (STUDY-37) | `bunvex env`: Convex's forms (`NAME value`, `NAME=value`), value sources (argument, `--from-file`, piped stdin, a prompt), the .env batch (`--force`, CLI-managed `BUNVEX_*` names skipped), `get` (missing: stderr, exit 0), `remove`/`rm`/`unset`, `list [--names-only]` with Convex's dotfile quoting; messages on stderr, values on stdout. The batch reads .env lines (no multi-line quoted values, which dotenv accepts). `env default` is cloud-only (DV-186). |
 | `codegen` (`--typecheck`, `--init`, `--commonjs`, …) | `cli/codegen.ts` | partial (STUDY-36) | `bunvex codegen [--init] [--typecheck]`, from the code alone with no deployment (DV-173). `--init` writes `tsconfig.json` (with `allowImportingTsExtensions`, DV-177) and `README.md`. The typecheck is the app's own `tsc --project <functions>`. No `--commonjs`, `--dry-run`, `--debug` or `--component-dir`. |
 | `function-spec` (JSON of every function's args and returns) | `cli/functionSpec.ts` | missing | |
 | `typecheck`, `dashboard`, `docs`, `update`, `network-test` | `cli/*.ts` | missing | Low priority. |
