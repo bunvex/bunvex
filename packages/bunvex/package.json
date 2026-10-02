@@ -1,6 +1,7 @@
 {
   "name": "bunvex",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
+  "private": true,
   "description": "A Convex-style reactive backend for Bun, with its own database engine on pluggable persistence.",
   "license": "Apache-2.0",
   "type": "module",

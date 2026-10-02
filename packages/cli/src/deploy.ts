@@ -49,7 +49,20 @@ export function codegenConfig(cwd: string): CodegenConfig {
   const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
   if (fileType !== "ts" && fileType !== "js/dts")
     throw new Error(`bunvex.json: "codegen.fileType" must be "ts" or "js/dts"`);
-  return { fileType };
+  return { fileType, packages: packagesOf(cwd) };
+}
+
+/** Which bunvex the app installs (STUDY-40): `bunvex`, else the scoped `@bunvex/*` packages; `bunvex` by default. */
+function packagesOf(cwd: string): CodegenConfig["packages"] {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, Record<string, unknown>>;
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+    if ("bunvex" in deps) return "bunvex";
+    if (Object.keys(deps).some((d) => d.startsWith("@bunvex/"))) return "@bunvex";
+  } catch {
+    // no package.json
+  }
+  return "bunvex";
 }
 
 const sha256 = (m: ModuleConfig) =>

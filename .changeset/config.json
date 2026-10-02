@@ -2,10 +2,17 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [["@bunvex/*", "bunvex"]],
   "linked": [],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@bunvex/bench"]
+  "ignore": [
+    "@bunvex/bench",
+    "@bunvex/dashboard",
+    "@bunvex/persistence-conformance",
+    "@bunvex/sync-e2e",
+    "@bunvex/testing",
+    "@bunvex/ui"
+  ]
 }

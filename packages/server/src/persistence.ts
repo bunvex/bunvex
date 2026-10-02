@@ -135,21 +135,28 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
       return new SqlitePersistence(`${dir}/bunvex.sqlite`, { durable });
     }
     case "postgres": {
-      const { PostgresPersistence } = await external<typeof import("@bunvex/persistence/postgres")>("postgres");
+      const { PostgresPersistence } = await external<Driver<"PostgresPersistence">>("postgres");
       return PostgresPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
     }
     case "mysql": {
-      const { MysqlPersistence } = await external<typeof import("@bunvex/persistence/mysql")>("mysql");
+      const { MysqlPersistence } = await external<Driver<"MysqlPersistence">>("mysql");
       return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
     }
     case "mongodb": {
-      const { MongoPersistence } = await external<typeof import("@bunvex/persistence/mongodb")>("mongodb");
+      const { MongoPersistence } = await external<Driver<"MongoPersistence">>("mongodb");
       return MongoPersistence.open(needUrl(), { pool: c.pool, timeoutMs: c.timeoutMs });
     }
     default:
       throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql, mongodb)`);
   }
 }
+
+/**
+ * What the server uses of an @bunvex/persistence driver, typed here: the package is optional, and an app that
+ * does not install it still typechecks the server's sources (STUDY-40, published as TypeScript).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: each driver's open() takes its own options
+type Driver<Name extends string> = { [K in Name]: { open(url: string, ...rest: any[]): Promise<Persistence> } };
 
 /** @bunvex/persistence is an optional dependency of the server: loaded only when an external driver is asked for. */
 async function external<T>(name: string): Promise<T> {

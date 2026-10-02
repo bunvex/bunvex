@@ -1,8 +1,21 @@
 # @bunvex/cli
 
-The bunvex command line: dev, codegen, deploy, run, import/export.
+The `bunvex` command: develop, deploy and run functions on a [bunvex](https://github.com/bunvex/bunvex)
+deployment, a reactive backend for Bun with Convex's model (queries, mutations, actions, live queries).
 
-**Status:** `bunvex admin-key` (STUDY-34) and `bunvex deploy` (STUDY-35). The rest is not started. What will live here, and its status, is tracked in
-[ARCHITECTURE.md](../../ARCHITECTURE.md):
+```sh
+bun add @bunvex/server @bunvex/values
+bun add -d @bunvex/cli typescript @types/bun
+mkdir bunvex                                   # your functions: bunvex/messages.ts, bunvex/schema.ts, …
+bunx bunvex dev                                # a local deployment, pushed to on every change
+```
 
-- dev · codegen · deploy · run/env/logs/data · import/export · mcp
+With nothing configured, `bunvex dev` runs the project's local deployment: it downloads `bunvex-local-backend`
+from the latest release, keeps its state in `.bunvex/local/default/`, and writes `.env.local`. To use a
+self-hosted deployment instead, set `BUNVEX_SELF_HOSTED_URL` and `BUNVEX_SELF_HOSTED_ADMIN_KEY`.
+
+Commands: `dev`, `deploy`, `codegen`, `run`, `env`, `admin-key`. `bunvex <command> --help` for each.
+
+This is an alpha preview, published from the TypeScript sources: it needs Bun.
+
+What is built, and what is next: [ARCHITECTURE.md](https://github.com/bunvex/bunvex/blob/main/ARCHITECTURE.md).

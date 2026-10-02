@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/protocol",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "description": "The wire messages between bunvex clients and servers.",
   "license": "Apache-2.0",
   "type": "module",
@@ -11,5 +11,17 @@
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/protocol"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
   }
 }

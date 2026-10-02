@@ -71,7 +71,7 @@
     },
     "packages/auth": {
       "name": "@bunvex/auth",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/values": "workspace:*",
         "jose": "^6.2.12",
@@ -79,7 +79,7 @@
     },
     "packages/bunvex": {
       "name": "bunvex",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "bin": {
         "bunvex": "./bin/bunvex.ts",
       },
@@ -98,7 +98,7 @@
     },
     "packages/cli": {
       "name": "@bunvex/cli",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "bin": {
         "bunvex": "./bin/bunvex.ts",
       },
@@ -112,7 +112,7 @@
     },
     "packages/client": {
       "name": "@bunvex/client",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/protocol": "workspace:*",
         "@bunvex/values": "workspace:*",
@@ -120,7 +120,7 @@
     },
     "packages/core": {
       "name": "@bunvex/core",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/values": "workspace:*",
         "sorted-btree": "^2.1.0",
@@ -158,11 +158,11 @@
     },
     "packages/file-storage": {
       "name": "@bunvex/file-storage",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
     },
     "packages/persistence": {
       "name": "@bunvex/persistence",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/core": "workspace:*",
       },
@@ -192,11 +192,11 @@
     },
     "packages/protocol": {
       "name": "@bunvex/protocol",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
     },
     "packages/react": {
       "name": "@bunvex/react",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/client": "workspace:*",
         "@bunvex/values": "workspace:*",
@@ -211,18 +211,18 @@
     },
     "packages/server": {
       "name": "@bunvex/server",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
       "dependencies": {
         "@bunvex/auth": "workspace:*",
         "@bunvex/core": "workspace:*",
         "@bunvex/file-storage": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/values": "workspace:*",
+        "@types/object-inspect": "^1.13.0",
         "object-inspect": "^1.13.4",
       },
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
-        "@types/object-inspect": "^1.13.0",
         "jose": "^6.2.12",
       },
       "peerDependencies": {
@@ -294,7 +294,7 @@
     },
     "packages/values": {
       "name": "@bunvex/values",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.0",
     },
   },
   "packages": {

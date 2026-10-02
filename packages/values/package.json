@@ -1,8 +1,7 @@
 {
   "name": "@bunvex/values",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.",
+  "version": "0.1.0-alpha.0",
+  "description": "Validators (v.string(), v.id()\u2026), table-tagged ids and value types shared by client and server.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -12,5 +11,17 @@
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/values"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
   }
 }
