@@ -27,7 +27,7 @@ import {
   SectionFilters,
   useSectionSheet,
 } from "../shell/section-column.tsx";
-import { ACTION_LABELS, describeEvent } from "./describe.ts";
+import { ACTION_LABELS, areaOf, describeEvent } from "./describe.ts";
 
 const PAGE = 50;
 const col = dataTableColumns<AuditEvent>();
@@ -127,6 +127,7 @@ function History() {
         value={actions ?? "all"}
         counts={counts}
         label={(a) => ACTION_LABELS[a] ?? a}
+        groupOf={areaOf}
         onChange={(v) =>
           setSearch({ action: v === "all" ? undefined : v.length ? v.join(",") : "none", event: undefined })
         }

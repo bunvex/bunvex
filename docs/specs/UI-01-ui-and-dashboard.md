@@ -2050,6 +2050,27 @@ writes when on), the screen and the editor.
 The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
 every one. They land in five pull requests, one subsection each.
 
+### UX review 2 — filters and forms (UX2-2, UX2-3, UX2-5, UX2-21, UX2-23, UX2-24)
+
+- **One Bar 2 recipe** (UX2-2): inline controls, vertically centred, no labels above inputs (`BAR2` is
+  `items-center`). Files' Bar 2 is the storage-ID lookup and Order; its custom upload-date range moved into
+  the column under the Uploaded presets (as History's), so the date filter is no longer in two places.
+- **No browser chrome in forms** (UX2-3): `@bunvex/ui` gains `ChoiceSelect` (a single choice in the design
+  system's Select), `ChoiceRadios` (Base UI RadioGroup with a label) and `FilePicker` (a button, the file's
+  name and a drop zone over a hidden `<input type="file">`). The flag editor and Snapshots use them; a test
+  (`test/native-controls.test.ts`) fails on any `<select>` or native file/radio/checkbox input outside an
+  explicit allow-list (the column's facet radios, Files' hidden upload input, the Schema toolbar's toggle, and
+  — until the Authentication pull request — two Authentication selects).
+- **No error before typing** (UX2-5): the new-flag form says nothing until something is typed; Create stays
+  disabled meanwhile (as the filters since UX-2).
+- **The Database bar keeps one row when narrow** (UX2-21): below a 42 rem table width (the panel open) "Index",
+  "Order" and the buttons' first words go to screen readers only.
+- **Facets** (UX2-23): many-valued facets are checkboxes with **Only** on hover/focus — Schedules' Function
+  facet too (one function is filtered by the source, several over the loaded runs; "Cancel all" only with none
+  or one picked); radios stay for exclusive ranges (days, size). A facet's "All" is named "All: <facet>".
+- **History's actions** (UX2-24): short words ("Env var added", "Run canceled") grouped by area — Data, Files,
+  Environment variables, Schedules, Deploys, Other — as labelled groups.
+
 ### UX review 2 — consistency components (UX2-6, UX2-7, UX2-8, UX2-11, UX2-12, UX2-13, UX2-20, UX2-22)
 
 - **One tab pattern** (UX2-6): `TabsList` is underlined (`variant="line"`, 13 px) by default — Functions, the

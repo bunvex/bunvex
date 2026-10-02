@@ -72,18 +72,23 @@ describe("the History screen", () => {
     const column = screen.getByRole("navigation", { name: "History filters" });
     const actions = within(column).getByRole("region", { name: "Action" });
     const box = (name: string) => within(actions).getByRole("checkbox", { name });
+    // short words, under their area (UX2-24)
+    expect(within(actions).getByRole("group", { name: "Deploys" })).toBeDefined();
+    within(within(actions).getByRole("group", { name: "Deploys" })).getByRole("checkbox", {
+      name: "Functions deployed",
+    });
     // the count of each action among the loaded events, in text
-    expect(box("Deployed functions").closest("li")!.lastElementChild!.textContent).toBe("3");
+    expect(box("Functions deployed").closest("li")!.lastElementChild!.textContent).toBe("3");
     // keep only deploys: uncheck every other action
     for (const other of within(actions).getAllByRole("checkbox"))
-      if (other !== box("Deployed functions")) await user.click(other);
+      if (other !== box("Functions deployed")) await user.click(other);
     await waitFor(() => expect(params(history)).toEqual({ action: "push_config" }));
     await waitFor(() => expect(rows().every((r) => what(r) === "Deployed functions")).toBe(true));
     expect(rows().length).toBe(3);
     // the counts stay those of every action, so the others can be added back
-    expect(box("Deployed functions").closest("li")!.lastElementChild!.textContent).toBe("3");
-    expect(box("Added documents").closest("li")!.lastElementChild!.textContent).toBe("1");
-    await user.click(box("Added documents"));
+    expect(box("Functions deployed").closest("li")!.lastElementChild!.textContent).toBe("3");
+    expect(box("Documents added").closest("li")!.lastElementChild!.textContent).toBe("1");
+    await user.click(box("Documents added"));
     await waitFor(() => expect(params(history)).toEqual({ action: "push_config,add_documents" }));
     fireEvent.change(within(column).getByLabelText("Until"), { target: { value: "2020-01-01" } });
     fireEvent.blur(within(column).getByLabelText("Until")); // a typed day applies once complete (UX-15)
