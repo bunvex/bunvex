@@ -26,10 +26,11 @@ import {
 } from "@xyflow/react";
 import { Crown, Database, Lock, MemoryStick, MonitorSmartphone, Server, Tags } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { type ClientGroup, PlatformIcon } from "../clients/words.tsx";
 import type { NodeCache, Topology, TopologyNode, TopologyStore } from "../data-source.ts";
 import { formatBytes, formatCount, formatPercent } from "../screens/stats.ts";
 import { FlowBackground, FlowControls } from "../shell/flow-controls.tsx";
-import { type LayoutMode, type Link, layoutTopology, neighbourhood, STORE_ID } from "./layout.ts";
+import { type LayoutMode, type Link, layoutTopology, neighbourhood, STORE_ID, serverId } from "./layout.ts";
 import { LagGauge, StateLabel } from "./parts.tsx";
 import { compact, DRIVER, lagText, servesClients } from "./words.ts";
 
@@ -66,6 +67,7 @@ const dimmed = (look: Look, id: string) => look.lit !== null && !look.lit.has(id
 // ------------------------------------------------------------------ nodes
 
 type ClientsData = { node: string; connections: number };
+type GroupData = { group: ClientGroup; opened: boolean };
 type ServerData = { node: TopologyNode; topology: Topology; opened: boolean };
 type StoreData = { store: TopologyStore };
 
@@ -105,6 +107,36 @@ function ClientsNode({ id, data }: NodeProps<Node<ClientsData, "clients">>) {
       <MonitorSmartphone aria-hidden="true" className={cn("size-4 shrink-0", MUTED)} />
       <span className="font-mono text-sm tabular-nums">{formatCount(data.connections)}</span>
       <span className={MUTED}>clients</span>
+      <Handle type="source" position={Position.Bottom} className={HANDLE} isConnectable={false} />
+    </div>
+  );
+}
+
+/** A client group (UI-01 §33): a platform or a registered app, its live connections; on a phone, its nodes. */
+function GroupNode({ id, data }: NodeProps<Node<GroupData, "clientgroup">>) {
+  const look = useContext(LookContext);
+  const g = data.group;
+  return (
+    <div
+      className={cn(
+        CARD,
+        "flex flex-col gap-0.5 border-dashed px-3 py-2",
+        look.mode === "wide" && "w-[168px]",
+        data.opened && "ring-2 ring-ring",
+        dimmed(look, id) && "opacity-30",
+      )}
+      data-client-group={g.key}
+    >
+      <div className="flex items-center gap-2">
+        <PlatformIcon platform={g.platform} className="size-4" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium" title={g.label}>
+          {g.label}
+        </span>
+        <span className="font-mono text-sm tabular-nums">{formatCount(g.connections)}</span>
+      </div>
+      {look.mode === "narrow" && (
+        <span className={MUTED}>{g.perNode.map((p) => `${p.node} ${formatCount(p.connections)}`).join(" · ")}</span>
+      )}
       <Handle type="source" position={Position.Bottom} className={HANDLE} isConnectable={false} />
     </div>
   );
@@ -212,7 +244,8 @@ function StoreNode({ id, data }: NodeProps<Node<StoreData, "store">>) {
   );
 }
 
-const nodeTypes = { clients: ClientsNode, server: ServerNode, store: StoreNode };
+// not "group": React Flow styles its own group nodes
+const nodeTypes = { clients: ClientsNode, clientgroup: GroupNode, server: ServerNode, store: StoreNode };
 
 // ------------------------------------------------------------------ edges
 
@@ -226,6 +259,8 @@ type FlowData = {
   particles: number;
   trip: number;
   lock?: boolean;
+  /** A client group's link: labelled only while lit, so many groups never bury the diagram in labels. */
+  quiet?: boolean;
   /** Narrow layout: the stream's lane in the left margin. */
   lane?: number;
   lanes?: number;
@@ -277,7 +312,7 @@ function FlowEdge(props: EdgeProps<Edge<FlowData, "flow">>) {
           </circle>
         ))}
       {/* on a phone a stream's label would sit across the other lanes: its card says the lag */}
-      {look.labels && !narrowStream && (
+      {look.labels && !narrowStream && (!d.quiet || (look.lit !== null && !faded)) && (
         <EdgeLabelRenderer>
           <div
             className={cn(
@@ -316,13 +351,32 @@ export function streamLook(
 // ------------------------------------------------------------------ the canvas
 
 /** The picture as React Flow nodes and edges (exported for tests: happy-dom cannot measure, so draws no edge). */
-export function toFlow(t: Topology, opened: string | undefined, mode: LayoutMode = "wide") {
-  const { placed, links, width } = layoutTopology(t, mode);
+export function toFlow(
+  t: Topology,
+  opened: string | undefined,
+  mode: LayoutMode = "wide",
+  groups?: ClientGroup[],
+  openedGroup?: string,
+) {
+  const { placed, links: laid, width } = layoutTopology(t, mode, groups);
+  // a phone draws no group links: each group's card names its nodes
+  const links = mode === "narrow" ? laid.filter((l) => !(l.kind === "clients" && l.group)) : laid;
+  const groupOf = new Map((groups ?? []).map((g) => [g.key, g]));
   const byId = new Map(t.nodes.map((n) => [n.id, n]));
   const leader = t.nodes.find((n) => n.role === "leader");
   const cps = leader?.commitsPerSecond ?? 0;
   const lanes = links.filter((l) => l.kind === "stream").length;
   const nodes: Node[] = placed.map((p) => {
+    if (p.kind === "group") {
+      const g = groupOf.get(p.key)!;
+      return {
+        id: p.id,
+        type: "clientgroup",
+        position: { x: p.x, y: p.y },
+        ariaLabel: `${g.label}: ${formatCount(g.connections)} clients, on ${g.perNode.map((x) => `${x.node} ${formatCount(x.connections)}`).join(", ")}; press Enter for their versions`,
+        data: { group: g, opened: openedGroup === g.key },
+      };
+    }
     if (p.kind === "clients") {
       const n = byId.get(p.node)!;
       return {
@@ -359,6 +413,25 @@ export function toFlow(t: Topology, opened: string | undefined, mode: LayoutMode
   });
   const edges: Edge<FlowData>[] = links.map((l) => {
     const n = byId.get(l.node)!;
+    if (l.kind === "clients" && l.group) {
+      const count = groupOf.get(l.group)?.perNode.find((x) => x.node === l.node)?.connections ?? 0;
+      return {
+        id: l.id,
+        source: l.source,
+        target: l.target,
+        type: "flow",
+        targetHandle: "in-top",
+        data: {
+          kind: l.kind,
+          label: `${formatCount(count)} ws`,
+          tone: "normal",
+          width: 1 + Math.min(2, count / 150),
+          particles: 0,
+          trip: 0,
+          quiet: true,
+        },
+      };
+    }
     if (l.kind === "clients")
       return {
         id: l.id,
@@ -418,7 +491,15 @@ export function toFlow(t: Topology, opened: string | undefined, mode: LayoutMode
 
 const PAD = 16;
 
-function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpen: (node: string) => void }) {
+function Canvas(props: {
+  t: Topology;
+  opened?: string;
+  highlight?: string;
+  onOpen: (node: string) => void;
+  groups?: ClientGroup[];
+  openedGroup?: string;
+  onOpenGroup?: (key: string) => void;
+}) {
   const { t } = props;
   const flow = useReactFlow();
   const dark = useDark();
@@ -430,10 +511,14 @@ function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpe
   );
   const [hovered, setHovered] = useState<string>();
   const [labels, setLabels] = useState(true);
-  const { nodes, edges, links, width } = useMemo(() => toFlow(t, props.opened, mode), [t, props.opened, mode]);
-  const focus = hovered ?? props.highlight;
+  const { nodes, edges, links, width } = useMemo(
+    () => toFlow(t, props.opened, mode, props.groups, props.openedGroup),
+    [t, props.opened, mode, props.groups, props.openedGroup],
+  );
+  // hovered: a card's id; highlight: a node picked in the feed
+  const focus = hovered ?? (props.highlight ? serverId(props.highlight) : undefined);
   const lit = useMemo(() => (focus ? neighbourhood(focus, links) : null), [focus, links]);
-  const shape = t.nodes.map((n) => `${n.id}:${n.role}`).join(",");
+  const shape = [...t.nodes.map((n) => `${n.id}:${n.role}`), ...(props.groups ?? []).map((g) => g.key)].join(",");
   const duration = reduced ? 0 : 200;
   const frame = () => {
     // never past 100 % (the owner found bigger cards too big, 1 Oct 2026); the cards' own text is 12 px (UX2-14)
@@ -451,6 +536,7 @@ function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpe
   const look = useMemo(() => ({ lit, labels, reduced, mode }), [lit, labels, reduced, mode]);
   const node = (id: string) =>
     id.startsWith("node:") ? id.slice(5) : id.startsWith("clients:") ? id.slice(8) : undefined;
+  const hoverId = (id: string) => (id.startsWith("clients:") ? serverId(id.slice(8)) : id);
   return (
     <LookContext.Provider value={look}>
       <section
@@ -460,11 +546,13 @@ function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpe
         data-layout={mode}
         data-reduced-motion={reduced ? "" : undefined}
         onKeyDown={(e) => {
-          const id = (e.target as HTMLElement).closest(".react-flow__node-server")?.getAttribute("data-id");
-          if (id && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            props.onOpen(id.slice(5));
-          }
+          if (e.key !== "Enter" && e.key !== " ") return;
+          const card = (e.target as HTMLElement).closest(".react-flow__node-server, .react-flow__node-clientgroup");
+          const id = card?.getAttribute("data-id");
+          if (!id) return;
+          e.preventDefault();
+          if (id.startsWith("group:")) props.onOpenGroup?.(id.slice(6));
+          else props.onOpen(id.slice(5));
         }}
       >
         <ReactFlow
@@ -473,10 +561,11 @@ function Canvas(props: { t: Topology; opened?: string; highlight?: string; onOpe
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodeClick={(_, n) => {
+            if (n.id.startsWith("group:")) return props.onOpenGroup?.(n.id.slice(6));
             const id = node(n.id);
             if (id) props.onOpen(id);
           }}
-          onNodeMouseEnter={(_, n) => setHovered(node(n.id))}
+          onNodeMouseEnter={(_, n) => setHovered(n.id === STORE_ID ? undefined : hoverId(n.id))}
           onNodeMouseLeave={() => setHovered(undefined)}
           colorMode={dark ? "dark" : "light"}
           fitView={mode === "wide"}
@@ -521,10 +610,22 @@ export function TopologyDiagram(props: {
   /** A node to light up (an event picked in the feed). */
   highlight?: string;
   onOpen: (node: string) => void;
+  /** Who the clients are, grouped (UI-01 §33): one card per group instead of one per serving node. */
+  groups?: ClientGroup[];
+  openedGroup?: string;
+  onOpenGroup?: (key: string) => void;
 }) {
   return (
     <ReactFlowProvider>
-      <Canvas t={props.topology} opened={props.opened} highlight={props.highlight} onOpen={props.onOpen} />
+      <Canvas
+        t={props.topology}
+        opened={props.opened}
+        highlight={props.highlight}
+        onOpen={props.onOpen}
+        groups={props.groups}
+        openedGroup={props.openedGroup}
+        onOpenGroup={props.onOpenGroup}
+      />
     </ReactFlowProvider>
   );
 }

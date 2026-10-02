@@ -19,6 +19,10 @@ import {
   type AuthUserQuery,
   type CallOptions,
   type Capabilities,
+  type ClientApp,
+  type ClientAppInput,
+  type ClientBucket,
+  type ClientSummary,
   type CronJob,
   type CronRun,
   type DashboardDataSource,
@@ -72,6 +76,7 @@ import { validateValue } from "../validators.ts";
 import { MockAudit } from "./audit.ts";
 import { SAMPLE_AUTH_PROVIDERS } from "./auth.ts";
 import { MockAuthAdmin } from "./auth-admin.ts";
+import { MockClients } from "./clients.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
 import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
@@ -196,6 +201,8 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
+  /** Who connects (UI-01 §33). Not part of the contract: tests read it. */
+  readonly clients: MockClients;
   /** The app's users and their auth (UI-01 §25). Not part of the contract: tests read it. */
   readonly authAdmin: MockAuthAdmin;
 
@@ -276,7 +283,9 @@ export class MockDataSource implements DashboardDataSource {
       stepMs: opts.snapshotStepMs ?? 300,
     });
     this.authAdmin = new MockAuthAdmin(opts.seed ?? 1, () => this.scheduler.now());
+    this.clients = new MockClients(() => this.scheduler.now());
     this.topology = new MockTopology(this.rnd, {
+      clients: (connections, salt) => this.clients.buckets(connections, salt),
       nodes: opts.nodes ?? 1,
       now: opts.now ?? Date.now(),
       version: this.deployment.version,
@@ -1191,6 +1200,66 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canViewTopology();
       return this.topology.snapshot();
+    });
+  }
+
+  // ---------------------------------------------------------------- clients (§33), simulated
+
+  private allBuckets(): ClientBucket[] {
+    return this.topology.snapshot().nodes.flatMap((n) => n.clients ?? []);
+  }
+
+  getClientSummary(opts?: CallOptions): Promise<ClientSummary> {
+    return this.call(opts?.signal, () => {
+      this.canViewTopology();
+      return this.clients.summary(this.allBuckets());
+    });
+  }
+
+  listClientApps(opts?: CallOptions): Promise<ClientApp[]> {
+    return this.call(opts?.signal, () => {
+      this.canViewTopology();
+      return this.clients.list(this.allBuckets());
+    });
+  }
+
+  private checkApp(app: Partial<ClientAppInput>) {
+    if (app.name !== undefined && !app.name.trim())
+      throw new DataSourceError("invalid_request", "An app needs a name.");
+    if (app.identifiers !== undefined && !app.identifiers.some((i) => i.trim()))
+      throw new DataSourceError(
+        "invalid_request",
+        "An app needs at least one identifier (bundle id, package or origin).",
+      );
+  }
+
+  createClientApp(app: ClientAppInput, opts?: CallOptions): Promise<ClientApp> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      this.checkApp(app);
+      const made = this.clients.create(app);
+      this.record("create_client_app", { app: made.name, platform: made.platform });
+      return made;
+    });
+  }
+
+  updateClientApp(id: string, patch: Partial<ClientAppInput>, opts?: CallOptions): Promise<ClientApp> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      this.checkApp(patch);
+      const app = this.clients.update(id, patch);
+      if (!app) throw new DataSourceError("not_found", `No app ${id}.`);
+      this.record("update_client_app", { app: app.name });
+      return app;
+    });
+  }
+
+  deleteClientApp(id: string, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      const name = this.clients.registered().find((a) => a.id === id)?.name;
+      if (!this.clients.remove(id)) throw new DataSourceError("not_found", `No app ${id}.`);
+      this.record("delete_client_app", { app: name ?? id });
     });
   }
 

@@ -36,6 +36,14 @@ export const ACTION_AREAS: readonly { area: string; actions: Record<string, stri
     actions: { cancel_scheduled_function: "Run canceled", cancel_all_scheduled_functions: "Runs canceled" },
   },
   { area: "Deploys", actions: { push_config: "Functions deployed", build_indexes: "Indexes built" } },
+  {
+    area: "Apps",
+    actions: {
+      create_client_app: "App registered",
+      update_client_app: "App changed",
+      delete_client_app: "App removed",
+    },
+  },
 ];
 export const ACTION_LABELS: Record<string, string> = Object.assign({}, ...ACTION_AREAS.map((a) => a.actions));
 /** An action's area in the facet; "Other" for one no area lists (e.g. an extension's). */
@@ -70,6 +78,12 @@ export function describeEvent(e: AuditEvent): string {
       return `Canceled a scheduled run${m.function ? ` of ${str(m.function)}` : ""}`;
     case "cancel_all_scheduled_functions":
       return `Canceled ${n(m.count, "scheduled run")}${m.function ? ` of ${str(m.function)}` : ""}`;
+    case "create_client_app":
+      return `Registered the app ${str(m.app)}`;
+    case "update_client_app":
+      return `Changed the app ${str(m.app)}`;
+    case "delete_client_app":
+      return `Removed the app ${str(m.app)}`;
     case "push_config":
       return "Deployed functions";
     case "request_export":

@@ -1002,3 +1002,53 @@ Data page). bunvex adds one, as the owner asked (2 Oct 2026): Ctrl+K or Cmd+K an
   ↑/↓ to move, Enter to pick, Escape to close (a Base UI dialog: the focus is trapped and returns).
 - **Not yet:** "Create table" as an action (the table list's inline name box has no URL to open it by), and
   running destructive actions from the palette itself.
+
+## 21. Who the clients are (a bunvex addition, added 2 Oct 2026)
+
+**The owner's idea (2 Oct 2026):** every client says what it is when it connects (platform, SDK and version,
+the app's id, version and build, its runtime and environment), so the dashboard can tell clients apart, as
+Firebase and Appwrite do (their SDKs send platform and version headers, and their consoles keep a registry of
+the project's apps). For now it is a mock-only interface: the handshake and `@bunvex/client` are a later
+server and SDK study.
+
+### 21.1 How Convex does it
+
+- Every request of the npm client carries one header, `Convex-Client: npm-<version>`
+  (`npm-packages/convex/src/browser/http_client.ts`, `browser/sync/client.ts`); the CLI sends
+  `npm-cli-<version>` (`cli/lib/utils/utils.ts`).
+- The backend parses it into a `ClientType` (Python, CLI, NPM, Actions, Rust, Swift, Kotlin, the dashboard,
+  importers and exporters…) and a version, and grades the version against per-type thresholds
+  (`upgrade_required`, `unsupported`) into a `ClientVersionState` (`crates/common/src/version.rs`); an
+  unsupported client is refused, the state is logged and counted (`crates/common/src/http/mod.rs`).
+- There is no app identity (no bundle id, app version or device), no registry of apps, and the dashboard shows
+  none of it.
+
+### 21.2 What an app can observe
+
+Nothing new: connecting needs no registration, and an unregistered client works as before. An app could only
+observe the policy, if a future server refuses an unsupported SDK, as Convex's does.
+
+### 21.3 How bunvex does it (the dashboard, on the mock)
+
+- **Contract** (`data-source-clients.ts`, all optional): a `ClientInfo` (platform, SDK, app, runtime, device,
+  environment); per topology node, `clients` buckets (platform, registered app or none, SDK version, app
+  version, connections); `getClientSummary` (by platform, SDK versions with their state under a policy of
+  `upgradeBelow` / `unsupportedBelow` per platform — Convex's two thresholds); the registry
+  `listClientApps` / `createClientApp` / `updateClientApp` / `deleteClientApp` (name, platform, identifiers
+  such as a bundle id, a package name or an origin, colour, notes; versions seen and last seen). Reads need
+  `viewMetrics`, the registry's writes `writeData`.
+- **Mock** (`mock/clients.ts`): one population (a web app, its iOS and Android builds, an unregistered Expo
+  staff app, Node workers, a Bun script) feeds the topology, and later the logs, sessions and analytics, so
+  they agree; a few SDKs sit past the policy. Registering an app re-labels its clients at once.
+- **Screens:** Topology's client cards by platform (or by app, `?clientsBy=app`), each linked to the nodes
+  serving it, a group's panel with its app and SDK versions (UI-01 §33.1); the Overview's Clients block and an
+  outdated-SDK item in Needs attention.
+
+### 21.4 Additions and calls the owner can veto
+
+| ID | Choice | Why | Status |
+|---|---|---|---|
+| C1 | Client identification and an optional app registry | the owner's idea; Convex sends only `Convex-Client: npm-<version>` | **decided** (owner, 2 Oct 2026): a bunvex addition, mock-only for now |
+| C2 | The SDK policy has Convex's two thresholds per platform (upgrade required, unsupported) | the same states as `ClientVersionState` | my call, matches Convex |
+| C3 | Reading who the clients are needs `viewMetrics`; registering apps `writeData` | no dedicated operation, as for Topology (T5) | my call, the owner can veto |
+| C4 | Group links in the diagram are labelled only while lit | many groups × followers would bury the canvas in labels | my call, the owner can veto |

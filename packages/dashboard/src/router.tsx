@@ -95,8 +95,13 @@ export function validateScheduledSearch(input: Record<string, unknown>): Schedul
 export type SchemaSearch = { table?: string };
 
 /** The Topology screen's open node (UI-01 §22). */
-export type TopologySearch = { node?: string };
-export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({ node: str(input.node) });
+/** `clientsBy`: the client cards by platform (default) or by registered app; `clients`: an opened group's key. */
+export type TopologySearch = { node?: string; clientsBy?: "app"; clients?: string };
+export const validateTopologySearch = (input: Record<string, unknown>): TopologySearch => ({
+  node: str(input.node),
+  clientsBy: input.clientsBy === "app" ? "app" : undefined,
+  clients: str(input.clients),
+});
 export const validateSchemaSearch = (input: Record<string, unknown>): SchemaSearch => ({ table: str(input.table) });
 
 export type FilesSearch = {
