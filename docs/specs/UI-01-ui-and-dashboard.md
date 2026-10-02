@@ -1965,6 +1965,35 @@ components may bring screens of their own. Such a screen is an **extension**: on
 - **Not yet** (server work): the client `track()` helper and automatic page views, the server-side GeoIP
   lookup that places a session, retention of analytics events, and a custom tile style setting.
 
+### 26.3 Workflows and work pools (an extension; STUDY-12 §18)
+
+`extensions/workflows/` — a bunvex addition the owner may keep or remove. Sidebar: Functions, after Schedules.
+
+- **Runs** (`/workflows/runs`): every run, newest first — workflow, status (icon and word), current step,
+  start, duration, steps, retries — with Status and Workflow filters in the section column (in the URL).
+- **A run** (`?run=`, opens in place): the run's error on top when it failed; its steps as a **diagram** (React
+  Flow, already the Schema's and Topology's dependency: one row per group of steps run together, side by side,
+  an edge from each step of a group to each of the next; each node shows the kind, the function, the status
+  in words, its tries and duration; a running step pulses, not under reduced motion; fixed, not draggable); a
+  **timeline** (a bar per step on one axis from the run's start, the running one up to now); and the
+  **journal** (each step's start, finish, tries, arguments and result or error, as literals). The selected step
+  (`?step=`) is shared by the three; a node, a timeline row or a journal row selects it.
+- **Actions** (a write-capable credential, behind a confirmation): **Cancel run** (a running one: its running
+  and pending steps become canceled), **Rerun** (a new run with the same arguments, opened), **Restart from step
+  N** (a new run that replays steps before N from this journal and runs again from N, opened). The mock records
+  them in the audit log.
+- **Work pools** (`/workflows/workpools`): per pool, running against `maxParallelism` (a bar; "full" in words
+  when it is), pending, backing off, the last 24 hours, the retry policy in words, and completed / failed per
+  minute over 30 minutes (a line chart with a legend and a table).
+- **Contract** (`extensions/workflows/data-source.ts`): optional `listWorkflowRuns`, `getWorkflowRun`,
+  `listWorkflowNames`, `listWorkpools` (reads, `viewData`) and `cancelWorkflowRun`, `rerunWorkflow`,
+  `restartWorkflowFrom` (writes). The contract part checks runs newest first and filterable, a journal in
+  index order whose groups never go back, statuses that agree (a finished run has no running step; a
+  succeeded one only succeeded steps), pools within their parallelism; with writes on, cancel / rerun /
+  restart (a restart keeps the replayed steps). **Mock**: four workflows (sequential steps, a parallel group,
+  sleeps, an awaited event, a nested workflow) over two days, with retries and every outcome; three pools.
+- Live: runs and pools refresh every 5 s while the screen is open (a source could push later).
+
 ## 27. The Overview (the owner's call, 1 Oct 2026; supersedes the Health screen of §9 slice 4 and §18.1's page)
 
 Health becomes the **Overview** at `/` (nav "Overview"; `/health` redirects): the home page, Convex's Health

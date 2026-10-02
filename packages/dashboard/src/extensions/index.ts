@@ -8,8 +8,10 @@ import { analyticsExtension } from "./analytics/index.ts";
 import { flagsExtension } from "./flags/extension.ts";
 import type { FlagsFeatures } from "./flags/types.ts";
 import type { DashboardExtension } from "./types.ts";
+import type { WorkflowFeatures } from "./workflows/data-source.ts";
+import { workflowsExtension } from "./workflows/index.ts";
 
 /** Every extension's contract features, merged into `DashboardDataSource` (all optional methods). */
-export interface ExtensionFeatures extends AnalyticsFeatures, FlagsFeatures {}
+export interface ExtensionFeatures extends AnalyticsFeatures, FlagsFeatures, WorkflowFeatures {}
 
-export const extensions: readonly DashboardExtension[] = [analyticsExtension, flagsExtension];
+export const extensions: readonly DashboardExtension[] = [analyticsExtension, flagsExtension, workflowsExtension];

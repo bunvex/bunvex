@@ -3,5 +3,6 @@
 import { analyticsContract } from "./analytics/contract.ts";
 import type { ContractExtensionPart } from "./contract-types.ts";
 import { flagsContract } from "./flags/contract.ts";
+import { workflowsContract } from "./workflows/contract.ts";
 
-export const contractParts: readonly ContractExtensionPart[] = [analyticsContract, flagsContract];
+export const contractParts: readonly ContractExtensionPart[] = [analyticsContract, flagsContract, workflowsContract];

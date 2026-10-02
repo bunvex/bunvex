@@ -135,7 +135,9 @@ describe("the dashboard in a browser", () => {
     ).toEqual([]);
     // what the home screen's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB
     // after; 583 kB on main on 1 Oct 2026 as screens grew, ~600 kB with the Overview (UI-01 §27: its own
-    // ~17 kB; its charts and engine counters are lazy, the charts mounted when scrolled to)
+    // ~17 kB; its charts and engine counters are lazy, the charts mounted when scrolled to) and the extension
+    // registry's declarations in the shell (Analytics, Feature flags, Workflows: titles, icons, routes — the
+    // screens stay lazy). The guard keeps headroom: a screen imported eagerly again adds far more than that.
     const { page, close } = await open("/");
     await heading(page, "Overview");
     const kb = await page.evaluate(
@@ -305,6 +307,32 @@ describe("the dashboard in a browser", () => {
     // MapLibre loads with the Analytics screen only, never with the shell
     const entry = readdirSync(`${import.meta.dir}/../dist/assets`).find((f) => /^index-.*\.js$/.test(f))!;
     expect(readFileSync(`${import.meta.dir}/../dist/assets/${entry}`, "utf8")).not.toContain("maplibregl");
+  });
+
+  test("Workflows: a run's steps drawn as a diagram, its timeline and journal; axe in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, external, close } = await open("/workflows/runs?status=failed", { colorScheme });
+      await heading(page, "Runs");
+      await page.getByRole("grid", { name: "Workflow runs" }).getByRole("gridcell").first().click();
+      await page.getByRole("region", { name: "Journal" }).waitFor();
+      await page.locator(".react-flow__node").nth(2).waitFor();
+      expect(await page.locator(".react-flow__edge").count()).toBeGreaterThan(1);
+      await page.locator(".react-flow__node").first().click();
+      await page.waitForURL(/step=0/);
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run(document, { resultTypes: ["violations"] });
+        return r.violations.map(
+          (v: { id: string; nodes: { html: string }[] }) =>
+            `${v.id}: ${v.nodes.map((n) => n.html.slice(0, 90)).join(" | ")}`,
+        );
+      });
+      expect([colorScheme, violations]).toEqual([colorScheme, []]);
+      expect([errors, external]).toEqual([[], []]);
+      await close();
+    }
   });
 
   test("Schema: the tables drawn with their references; a table opens with Enter; xyflow stays in its chunk", async () => {

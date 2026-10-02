@@ -3,5 +3,6 @@
 import { analyticsMock } from "./analytics/mock-part.ts";
 import { flagsMock } from "./flags/mock.ts";
 import type { MockExtensionPart } from "./mock-types.ts";
+import { workflowsMock } from "./workflows/mock-part.ts";
 
-export const mockParts: readonly MockExtensionPart[] = [analyticsMock, flagsMock];
+export const mockParts: readonly MockExtensionPart[] = [analyticsMock, flagsMock, workflowsMock];
