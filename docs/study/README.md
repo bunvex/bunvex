@@ -48,7 +48,7 @@ to a spec.
 | [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | decided; D3 fixed (#17, B4); D9 built (DV-62); D5, D6 gaps (DV-65, DV-66; D6 partly built, #117); D4 not tracked |
 | [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | implemented / decided; D12 (`db.system`) a gap (DV-69) |
 | [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | implemented / decided: all resolved (DV-31, DV-44, DV-46, DV-49, DV-70, DV-71) |
-| [STUDY-12](STUDY-12-dashboard.md) | The dashboard (Data browser first) | accepted: D9 now matches Convex; the others kept (#16) |
+| [STUDY-12](STUDY-12-dashboard.md) | The dashboard: every screen, on the mock (§1–§15) | accepted: divergences decided; bunvex additions recorded; open items in §6 (the Health review) |
 | [STUDY-13](STUDY-13-validators.md) | Validators (`v.*`) and args / returns validation | implemented (#24, #25) |
 | [STUDY-14](STUDY-14-schemas.md) | Schemas: `defineSchema`, `defineTable`, document validation, implicit tables | implemented (#29, #33) |
 | [STUDY-15](STUDY-15-query-filter.md) | `.filter()` and the filter builder | implemented (#37) |
