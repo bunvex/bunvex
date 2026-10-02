@@ -93,15 +93,28 @@ Then `@bunvex/client` (base client, reconnect, backoff, optimistic updates, reac
 
 In this order:
 
-1. auth (OIDC and custom JWT, `ctx.auth`);
-2. scheduler and crons (STUDY-30);
-3. HTTP actions;
-4. file storage (it uses HTTP actions for uploads and downloads; built-in auth, STUDY-28, needs them too —
-   swapped with HTTP actions by the owner, 2026-10-01);
-5. retention and garbage collection of old versions;
-6. admin keys;
-7. the CLI and codegen;
-8. import/export in Convex's snapshot format, so data can move between Convex and bunvex.
+1. auth (OIDC and custom JWT, `ctx.auth`) — done;
+2. scheduler and crons (STUDY-30) — done;
+3. HTTP actions (STUDY-31) — done;
+4. file storage (STUDY-32; it uses HTTP actions for uploads and downloads; built-in auth, STUDY-28, needs them
+   too — swapped with HTTP actions by the owner, 2026-10-01) — done;
+5. retention and garbage collection of old versions (STUDY-33) — done;
+6. admin keys (STUDY-34);
+7. pushing and deploying functions: module loading, restart or hot swap, sandboxing (ARCH-01 open decisions
+   2–3), the pushed code kept in the store;
+8. codegen (`_generated/api`, `server`, `dataModel`; ARCH-01 open decision 1);
+9. the CLI, part 1: `start`, `deploy`, `dev`, `run`, `admin-key`, and environment variables (`process.env`,
+   `env set|get|list|remove`);
+10. the Docker image and docker-compose (credentials bootstrap), so a self-hosted app can be brought up as
+    with Convex;
+11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit;
+12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
+    functions it reads), then live logs;
+13. built-in auth (STUDY-28) phases;
+14. import/export in Convex's snapshot format, so data can move between Convex and bunvex.
+
+Items 7–12 were ordered by the owner on 2026-10-01 to reach a self-hosted example app end to end (bring the
+containers up, deploy functions, see them work) before the remaining platform items.
 
 ### Phase 4 — the rest
 
