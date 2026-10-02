@@ -473,6 +473,13 @@ export class SyncSession {
     this.hub.sessions.delete(this);
   }
 
+  /** Whether this client takes `TransitionChunk`s: set by the server from the client's version (DV-10). */
+  transitionChunks = false;
+
+  private sendTransition(json: string) {
+    for (const frame of transitionFrames(json, this.transitionChunks)) this.send(frame);
+  }
+
   private send(frame: string) {
     if (this.closed || !this.ws) return;
     this.ws.send(frame);
@@ -741,7 +748,7 @@ export class SyncSession {
 
     const end: v1.StateVersion = { querySet, ts: wireTs(ts), identity };
     const endText = versionJson(end);
-    this.send(
+    this.sendTransition(
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
         `"modifications":[${[...modifications.values()].join(",")}],` +
         // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
@@ -884,6 +891,49 @@ export class SyncSession {
 const baseKeyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
 const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
+
+/** Convex's MAX_MESSAGE_SIZE: a larger transition goes as chunks of this many bytes (DV-10). */
+export const MAX_TRANSITION_MESSAGE_BYTES = 5_000_000;
+/** Convex's MIN_NPM_VERSION_FOR_TRANSITION_CHUNKS: older clients get every transition whole. */
+export const MIN_CLIENT_VERSION_FOR_TRANSITION_CHUNKS = "1.28.0";
+
+/**
+ * Whether a sync client takes `TransitionChunk`s (Convex's `new_sync_worker_config`): an npm client — its
+ * version in the client header (`npm-<version>`), else in the URL (`/api/<version>/sync`) — at least 1.28.0.
+ */
+export function supportsTransitionChunks(clientHeader: string | null, path: string): boolean {
+  let version: string | undefined;
+  if (clientHeader !== null) {
+    const m = /^npm-(.+)$/.exec(clientHeader);
+    if (!m) return false;
+    version = m[1];
+  } else version = /^\/api\/([^/]+)\/sync$/.exec(path)?.[1];
+  if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) return false;
+  return Bun.semver.order(version, MIN_CLIENT_VERSION_FOR_TRANSITION_CHUNKS) >= 0;
+}
+
+/**
+ * A transition's frames (Convex's `maybe_split_transition`): itself, or — over MAX_TRANSITION_MESSAGE_BYTES
+ * for a client that takes them — its JSON cut into chunks of at most that many bytes on UTF-8 character
+ * boundaries, numbered from 0, sharing an id (the JSON's length in bytes, as Convex's).
+ */
+export function transitionFrames(json: string, chunks: boolean): string[] {
+  if (!chunks) return [json];
+  const bytes = Buffer.from(json);
+  if (bytes.length <= MAX_TRANSITION_MESSAGE_BYTES) return [json];
+  const parts: string[] = [];
+  for (let start = 0; start < bytes.length; ) {
+    let end = Math.min(start + MAX_TRANSITION_MESSAGE_BYTES, bytes.length);
+    // Back off continuation bytes (10xxxxxx), so a character is never split.
+    while (end > start && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+    parts.push(bytes.toString("utf8", start, end));
+    start = end;
+  }
+  const transitionId = String(bytes.length);
+  return parts.map((chunk, partNumber) =>
+    JSON.stringify({ type: "TransitionChunk", chunk, partNumber, totalParts: parts.length, transitionId }),
+  );
+}
 /**
  * A commit ts as Convex's clients see it: wall-clock nanoseconds in a u64. bunvex counts microseconds (a JS
  * number is exact only to 2^53; STUDY-06 D9), so the wire value is × 1000: same magnitude and order as

@@ -56,6 +56,7 @@ import {
   SyncHub,
   SyncSession,
   splayOptions,
+  supportsTransitionChunks,
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
@@ -483,6 +484,7 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url);
       if (/^\/api\/[^/]+\/sync$/.test(url.pathname)) {
         const data: WsData = { session: new SyncSession(sync) };
+        data.session.transitionChunks = supportsTransitionChunks(req.headers.get("bunvex-client"), url.pathname);
         if (srv.upgrade(req, { data })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
