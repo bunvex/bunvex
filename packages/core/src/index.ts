@@ -62,6 +62,24 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export type {
+  BaseDatabaseReader,
+  ExpressionOrValueOf,
+  FieldTypeFromFieldPath,
+  FilterBuilder,
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+  IndexRange,
+  IndexRangeBuilder,
+  LowerBoundIndexRangeBuilder,
+  OrderedQuery,
+  PaginationResultOf,
+  PatchValue,
+  Query,
+  QueryInitializer,
+  SystemDataModel,
+  UpperBoundIndexRangeBuilder,
+} from "./database-types.ts";
 export { type ExecutionKind, installDeterminismIn, runImportPhase, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
@@ -83,7 +101,7 @@ export {
   stringifyValue,
   type TxBody,
 } from "./engine.ts";
-export { Expression, type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
@@ -154,4 +172,4 @@ export {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 export { SystemReader } from "./system-reader.ts";
-export { IndexRangeBuilder, type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";
+export { type PaginationOptions, type PaginationResult, Tx, type TxQuery } from "./tx.ts";
