@@ -647,6 +647,7 @@ export class Tx {
       this.nextCreationTime = nextUp(creationTime);
     }
     const doc = { ...copyFields(rest, "insert"), _id: id, _creationTime: creationTime };
+    checkSystemFields(doc, {}, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     return id;
   }
@@ -930,12 +931,22 @@ export class Tx {
   /** The first write this transaction made that the pending schema refuses: its table and message. */
   pendingViolation: { table: string; error: string } | null = null;
 
+  /**
+   * The table a number names for the schema's `v.id` checks; an import's, which checks its documents
+   * against the tables as they will be once it is activated (Convex's `table_mapping_for_schema`).
+   */
+  schemaTables: ((n: number) => string | undefined) | null = null;
+
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     if (!this.writable) throw new Error("queries cannot write");
     if (!t.name.startsWith("_")) this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
     if (dv) {
-      const msg = checkValue(dv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+      const msg = checkValue(
+        dv,
+        next as unknown as Value,
+        this.schemaTables ?? ((n) => this.catalog.byNumber(n)?.name),
+      );
       if (msg)
         throw new Error(
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,

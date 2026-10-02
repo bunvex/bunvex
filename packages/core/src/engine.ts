@@ -28,6 +28,7 @@ import {
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,
   SESSION_REQUESTS_TABLE,
+  SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
@@ -465,6 +466,7 @@ export class Engine {
         indexes: { by_state_and_ts: ["state", "start_ts"], by_requestor: ["requestor", "_creationTime"] },
         document: v.any(),
       },
+      { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
     ];
     return [...systemTables, ...schema.tables.values()];
   }
@@ -773,9 +775,13 @@ export class Engine {
   /**
    * Create a hidden table (an import's, as Convex's `create_empty_table`): invisible to functions, with
    * `number` (else the first free one) and the indexes of the active table `copyIndexesOf` (empty, so
-   * enabled at once; writes maintain them). Its definition, once committed.
+   * enabled at once; writes maintain them). `number` may be the active table's of the same name, or of a
+   * table in `replacing` (one the activation deletes). Its definition, once committed.
    */
-  async createHiddenTable(name: string, opts: { number?: number; copyIndexesOf?: string } = {}): Promise<TableDef> {
+  async createHiddenTable(
+    name: string,
+    opts: { number?: number; copyIndexesOf?: string; replacing?: string[] } = {},
+  ): Promise<TableDef> {
     const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
     const indexes: Record<string, string[]> = {};
     for (const ix of [...(source?.indexes.values() ?? []), ...(source?.pending ?? [])])
@@ -793,7 +799,7 @@ export class Engine {
             (t) =>
               t.number === opts.number &&
               (t.state ?? "active") !== "deleting" &&
-              !(t.name === name && (t.state ?? "active") === "active"),
+              !((t.name === name || opts.replacing?.includes(t.name)) && (t.state ?? "active") === "active"),
           );
           if (holder) throw new Error(`Table number ${opts.number} is already used by table "${holder.name}".`);
           meta.number = opts.number;
@@ -831,9 +837,9 @@ export class Engine {
     tablets: number[],
     deleteNames: string[] = [],
     body?: (db: Tx) => Promise<void>,
-  ): Promise<{ deleted: TableDef[] }> {
+  ): Promise<{ deleted: TableDef[]; ts: number }> {
     let deleted: TableDef[] = [];
-    await this.runMutation(
+    const { ts } = await this.runMutation(
       async (db) => {
         const { tables } = await readCatalog(db);
         const toDelete = new Set<number>();
@@ -863,9 +869,32 @@ export class Engine {
       },
       true,
       "_system/activate_tables",
+      true,
     );
     this.startTableDeletion();
-    return { deleted };
+    return { deleted, ts };
+  }
+
+  /** Drop hidden tables (a failed import's): invisible already, their documents removed in the background. */
+  async dropHiddenTables(tablets: number[]) {
+    await this.runMutation(
+      async (db) => {
+        const { tables } = await readCatalog(db);
+        const gone: number[] = [];
+        for (const tablet of tablets) {
+          const t = tables.find((x) => x.tablet === tablet);
+          if (!t || t.state !== "hidden") continue;
+          await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+          gone.push(tablet);
+        }
+        db.onCommitVisible = () => {
+          this.catalog = this.catalog.withTableStates({ delete: gone });
+        };
+      },
+      true,
+      "_system/drop_hidden_tables",
+    );
+    this.startTableDeletion();
   }
 
   /** Delete an active table: invisible at once, its documents removed in the background. */

@@ -1,6 +1,6 @@
 # STUDY-42 — Snapshot export and import (`bunvex export`, `bunvex import`)
 
-- **Status:** accepted: all as recommended (owner, 2026-10-02)
+- **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) await the owner
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 14 ([parity README](../parity/README.md));
@@ -126,7 +126,31 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 - **Table numbers:** a table can be created with a chosen number.
 - Every persistence driver keeps working unchanged: no new driver API.
 
-### PR 3 — import
+### PR 3 — import (as built)
+
+- **Parsing** (`import-parse.ts`): CSV with its own RFC 4180 reader (header trimmed of spaces, blank lines
+  skipped, Rust's `f64` grammar, NaN/±inf becoming null as serde_json writes them, an empty file importing
+  nothing as Convex's), JSON Lines (blank lines are rows, BOM refused), JSON arrays (16 MiB), ZIPs read by byte
+  ranges from the blob store (`zip-reader.ts`: stored and deflated entries, ZIP64, CRC checked; Info-ZIP's
+  archives too). Convex's messages, prefixed "Hit an error while importing:".
+- **Running** (`imports.ts`): Convex's states and transitions, checkpoints and summary; numbers from
+  `_tables`, then the first `_id`, then the existing table's (Convex's `assign_table_numbers`, its conflict
+  checks and messages); every table into a new hidden table (`Engine.createHiddenTable`), in batches of
+  8 MiB / 8000 documents (`Tx.importInsert`), checked against the schema with the tables as they will be
+  (`Tx.schemaTables`); one `activateTables` with Convex's final checks (still in progress, schema unchanged,
+  `ImportForeignKey`); `_storage` files stored again under their ids and storage UUIDs. A failed or canceled
+  import's hidden tables are dropped (`Engine.dropHiddenTables`).
+- **HTTP:** `/api/import`, `/api/import/{start_upload,upload_part,finish_upload}`, `/api/perform_import`,
+  `/api/cancel_import` (ImportBackups); part tokens are signed for their upload. The
+  `_system/cli/queryImport` and `:list` queries (ViewBackups).
+- **CLI:** `bunvex import <path> [--table] [--format] [--replace|--append|--replace-all] [-y]`, the upload
+  in 5 MiB parts (`BUNVEX_IMPORT_CHUNK_SIZE`), the summary and "Perform import?", progress by polling the
+  row, "Added N documents to table "T"."
+- **Not verified:** a Convex ZIP **with files**: Convex's `_storage` ids carry Convex's number for it, which
+  may be held by another bunvex system table (then the import fails with a table-number error). The only
+  real Convex ZIP at hand (convex-backend's `demos/cron-jobs/test.zip`) has no files; it imports.
+
+### PR 3 — import (plan)
 - **Formats:** all four. CSV with Rust's `f64` parse rules; JSON and JSONL with numbers as float64; the ZIP's `uniform` encoding.
 - **Modes:** the four modes.
 - **Ids:** `_id` and `_creationTime` kept, table numbers from `_tables` or the ids, and `_storage` restored.
@@ -144,7 +168,14 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 | X4 | No audit-log entries for exports and imports | bunvex has no audit log yet | accepted (owner, 2026-10-02) |
 | X5 | Import reads ZIPs in the current `"uniform"` encoding only. Convex also reads the legacy inferred-schema encoding of older Convex exports | the legacy one needs Convex's shape inference; it only matters for ZIPs exported by old Convex versions | accepted (owner, 2026-10-02) |
 
+| X6 | A failed step fails the import at once. Convex retries an error that is not the import's own (a bad request) up to 5 times, with a backoff from 30 s to 5 minutes | bunvex does not yet tell a transient system error from a content error everywhere; can be built | awaits owner (recommended: accept for now, build later) |
+| X7 | An import interrupted by a restart starts over (its hidden tables are dropped and written again). Convex resumes from its checkpoints, skipping the documents already in each hidden table (an append cannot resume in Convex either) | not built yet; only the time it takes differs | awaits owner (recommended: accept for now, build later) |
+| X8 | The parser's detail in "Row N wasn't valid JSON: …" and "Not valid JSON: …" is JavaScript's wording (serde_json's in Convex), and invalid UTF-8 in a CSV says "Failed to parse CSV row 1: invalid UTF-8" | bunvex parses with the runtime's JSON parser and its own CSV reader; the message structure is Convex's | awaits owner (recommended: accept) |
+
 **Follow-up:** X1, X3 and X4 are in the ledger's "Waiting on a dependency" (components, item 12, an audit log); X5 can be built any time.
+
+**X5 as built:** a table in the legacy encoding is refused only when it has documents, so an older Convex export
+of empty tables (its `generated_schema.jsonl` says `"never"`) imports.
 
 ## 5. Tests
 

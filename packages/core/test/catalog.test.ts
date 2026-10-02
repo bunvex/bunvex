@@ -51,6 +51,7 @@ describe("catalog (_tables / _index)", () => {
           _schemas: 527,
           _environment_variables: 528,
           _exports: 529,
+          _snapshot_imports: 530,
           users: 10001,
           posts: 10002,
         });

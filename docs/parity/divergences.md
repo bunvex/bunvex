@@ -185,7 +185,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-216 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-217 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | owner, 2026-10-02 (as recommended) | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one (a legacy table with no documents imports) | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -284,6 +284,12 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 are also listed in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built), to close later.
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
+
+| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
+|---|---|---|---|---|---|
+| DV-220 | A failed import step fails the import at once | retries errors that are not the import's own up to 5 times (30 s → 5 min) | yes (an import a transient error would not fail) | accept for now; build the retries later | [STUDY-42 X6](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-221 | An import interrupted by a restart starts over | resumes from its checkpoints | no (only the time) | accept for now; build resuming later | [STUDY-42 X7](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-222 | The JSON parser's detail in import messages is JavaScript's; a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | accept | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 
 ## Waiting on a dependency
 

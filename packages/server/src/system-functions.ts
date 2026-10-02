@@ -18,6 +18,7 @@ import {
   type PaginationOptions,
   type PaginationResult,
   SCHEDULED_FUNCTIONS_TABLE,
+  SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   stringifyValue,
   type Tx,
@@ -95,6 +96,13 @@ const cronNextRunDoc = (d: Doc) => ({
   nextTs: ns(d.nextTs as number),
 });
 
+/** An import's row as Convex's: without bunvex's own `object_size`. */
+const importDoc = (d: Record<string, unknown> | null) => {
+  if (!d) return null;
+  const { object_size: _, ...rest } = d;
+  return rest;
+};
+
 /** What a system function may use besides its transaction. */
 export type SystemEnv = { files: FileStorage | null; functions?: Functions };
 /** A system query or mutation: its argument validators (checked as Convex's) and its handler. */
@@ -130,6 +138,19 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
           .order("desc")
           .first(),
       ),
+  },
+  // The CLI's `import` follows an import with it (Convex's `_system/cli/queryImport`), and lists them first.
+  "_system/cli/queryImport": {
+    args: { importId: v.id(SNAPSHOT_IMPORTS_TABLE) },
+    op: "ViewBackups",
+    handler: async (db, args: { importId: string }) =>
+      db.asSystem(async () => importDoc(await db.get(SNAPSHOT_IMPORTS_TABLE, args.importId))),
+  },
+  "_system/cli/queryImport:list": {
+    args: {},
+    op: "ViewBackups",
+    handler: async (db) =>
+      db.asSystem(async () => (await db.query(SNAPSHOT_IMPORTS_TABLE).order("desc").take(20)).map(importDoc)),
   },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
