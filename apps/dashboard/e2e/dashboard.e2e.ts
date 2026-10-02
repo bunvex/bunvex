@@ -107,7 +107,7 @@ describe("the dashboard in a browser", () => {
   test("a phone's width: no screen scrolls sideways; the screens are behind Menu", async () => {
     const phone = { viewport: { width: 390, height: 800 } };
     const { page, errors, close } = await open("/", phone);
-    await heading(page, "Health");
+    await heading(page, "Overview");
     for (const path of ["/database/users", "/functions?function=tasks:list", "/logs", "/settings/general", "/files"]) {
       await page.goto(`${ORIGIN}${path}`);
       await page.locator("main h1").first().waitFor();
@@ -133,9 +133,11 @@ describe("the dashboard in a browser", () => {
     expect(
       ["Documents in ", "Log lines", "Search functions", "Run a function"].filter((t) => code.includes(t)),
     ).toEqual([]);
-    // what Health's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB after
+    // what the home screen's first load fetches, as the browser counts it: 722 kB before route splitting, ~494 kB
+    // after; 583 kB on main on 1 Oct 2026 as screens grew, ~600 kB with the Overview (UI-01 §27: its own
+    // ~17 kB; its charts and engine counters are lazy, the charts mounted when scrolled to)
     const { page, close } = await open("/");
-    await heading(page, "Health");
+    await heading(page, "Overview");
     const kb = await page.evaluate(
       () =>
         performance
@@ -143,7 +145,7 @@ describe("the dashboard in a browser", () => {
           .filter((e) => e.name.endsWith(".js"))
           .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
     );
-    expect(kb).toBeLessThan(600);
+    expect(kb).toBeLessThan(640);
     await close();
   });
 
@@ -554,16 +556,31 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
-  test("Health: the deployment's counters, with nothing fetched elsewhere", async () => {
+  test("Overview: the deployment, its indicators and the Engine section, with nothing fetched elsewhere", async () => {
     const { page, external, errors, close } = await open("/");
-    await heading(page, "Health");
+    await heading(page, "Overview");
+    await page.getByText("Calls per minute", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: "Needs attention" }).waitFor();
+    await page.locator("summary", { hasText: "Engine" }).click();
     await page
-      .getByText(/commit/i)
+      .getByText(/Commit timestamp/i)
       .first()
       .waitFor();
     expect(external).toEqual([]);
     expect(errors).toEqual([]);
     await close();
+  });
+
+  test("Feature flags (an extension): the list and a flag's details with its chart, in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/flags?flag=new-dashboard", { colorScheme });
+      await heading(page, "Feature flags");
+      await page.getByRole("grid", { name: "Feature flags" }).getByText("checkout-flow").waitFor();
+      const panel = page.getByRole("complementary", { name: /new-dashboard/ });
+      await panel.getByRole("figure", { name: /Evaluations of new-dashboard/ }).waitFor();
+      expect(errors).toEqual([]);
+      await close();
+    }
   });
 
   test("Functions: a function's page, then its query subscribed in the runner", async () => {
@@ -845,7 +862,7 @@ describe("the dashboard in a browser", () => {
     test(`axe, colour contrast included, on the main screens (${colorScheme})`, async () => {
       const found: string[] = [];
       for (const [path, name] of [
-        ["/", "Health"],
+        ["/", "Overview"],
         ["/database/users", "users"],
         ["/database/users?panel=schema", "users"],
         ["/database/users?panel=add", "users"],
@@ -863,6 +880,7 @@ describe("the dashboard in a browser", () => {
         ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
+        ["/flags?flag=new-dashboard", "Feature flags"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

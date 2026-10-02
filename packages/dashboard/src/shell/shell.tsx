@@ -6,13 +6,13 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import {
-  Activity,
   CalendarClock,
   Database,
   FileBox,
   FunctionSquare,
   History,
   KeyRound,
+  LayoutDashboard,
   Menu,
   Network,
   Play,
@@ -187,8 +187,8 @@ export function Shell() {
           >
             {/* the screens in labelled groups (UI-01 §23.2); Settings last, on its own */}
             <NavGroup>
-              <NavItem link={{ to: "/", activeOptions: { exact: true } }} icon={Activity}>
-                Health
+              <NavItem link={{ to: "/", activeOptions: { exact: true } }} icon={LayoutDashboard}>
+                Overview
               </NavItem>
               <NavItem link={{ to: "/topology" }} icon={Waypoints}>
                 Topology
