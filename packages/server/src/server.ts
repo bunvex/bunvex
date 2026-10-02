@@ -6,10 +6,21 @@ import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
+import {
+  ADMIN_KEY_PURPOSE,
+  AdminKeys,
+  actingIdentity,
+  BadAdminKeyError,
+  BadDeployKeyError,
+  HeaderParseError,
+  OperationNotPermittedError,
+  removeTypePrefix,
+  splitActingAs,
+} from "./admin-keys.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
-import { callerOf, type Functions } from "./functions.ts";
+import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -25,6 +36,7 @@ import {
   splayOptions,
   wireTs,
 } from "./sync.ts";
+import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -130,42 +142,77 @@ export function createServer(opts: ServerOptions) {
     redactErrors: redact,
     ...(opts.authFetch ? { fetch: opts.authFetch } : {}),
   });
+  /** This deployment's admin keys (STUDY-34): checked against its instance name and secret. */
+  const adminKeys = new AdminKeys(engine.instanceName, engine.derivedKey(ADMIN_KEY_PURPOSE));
+  /**
+   * An admin key's caller (Convex's `authenticate` for `AuthenticationToken::Admin`): the key's identity,
+   * acting as the user after its `:` when there is one (not with a system key).
+   */
+  const adminCaller = (raw: string, withActingAs: boolean): AdminCaller => {
+    const { key, actingAs } = withActingAs ? splitActingAs(raw) : { key: removeTypePrefix(raw), actingAs: null };
+    const admin = adminKeys.check(key);
+    if (actingAs && admin.kind === "system")
+      throw new Error("Admin identity returned from check_admin_key was not an admin.");
+    return adminCallerOf(admin, actingAs);
+  };
+  /** An access failure as Convex answers it: its status and code, or the internal error. */
+  const accessError = (e: unknown): Response | null => {
+    if (
+      e instanceof BadAdminKeyError ||
+      e instanceof BadDeployKeyError ||
+      e instanceof OperationNotPermittedError ||
+      e instanceof HeaderParseError
+    )
+      return requestError(e.status, e.code, e.message);
+    return null;
+  };
   /**
    * The caller of an HTTP request, from its `Authorization` header (Convex's `ExtractAuthenticationToken`):
-   * `Bearer <jwt>` is a user, verified against the auth config; no header is no identity. A failure is the
+   * `Bunvex <admin key>[:<base64 identity>]` is an admin (DV-97), `Bearer <jwt>` a user verified against the
+   * auth config; without a header, `?adminKey=` is an admin; otherwise no identity. A failure is the
    * request's error response.
    */
   const callerOfRequest = async (req: Request): Promise<Caller | Response> => {
     const header = req.headers.get("authorization");
-    if (header === null) return callerOf(null);
-    if (header.length < 7) return requestError(400, "InvalidHeaderFailure", "Invalid authentication header");
-    const scheme = header.slice(0, 7).toLowerCase();
-    // Admin keys (`Bunvex <key>`, DV-97) come with Phase 3's admin keys; until then they are refused.
-    if (scheme === "bunvex ") return requestError(401, "Unauthenticated", "Admin keys are not supported yet");
-    if (scheme !== "bearer " || header.length === 7) return requestError(400, "InvalidAdminKey", "Invalid admin key");
     try {
+      if (header === null) {
+        const key = new URL(req.url).searchParams.get("adminKey");
+        return key === null ? callerOf(null) : adminCaller(key, false);
+      }
+      if (header.length < 7) return requestError(400, "InvalidHeaderFailure", "Invalid authentication header");
+      const scheme = header.slice(0, 7).toLowerCase();
+      if (scheme === "bunvex ") return adminCaller(header.slice(7), true);
+      if (scheme !== "bearer " || header.length === 7) return requestError(400, "InvalidAdminKey", "Invalid admin key");
       return callerOf((await verifier.verify(header.slice(7).trim())).identity);
     } catch (e) {
       if (e instanceof AuthenticationError) return requestError(e.status, e.code, e.message);
+      const r = accessError(e);
+      if (r) return r;
+      if (e instanceof Error && e.message.startsWith("Admin identity returned"))
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       throw e;
     }
   };
   /**
-   * An HTTP action's caller (STUDY-31): the same verification, but a failure never rejects the request —
+   * An HTTP action's caller (STUDY-31): the same identification, but a failure never rejects the request —
    * it is kept, and `ctx.auth.getUserIdentity()` throws it (Convex's `Identity::Unknown(error)`).
    */
   const identifyHttpAction = async (req: Request): Promise<{ caller: Caller; error: Error | null }> => {
     const header = req.headers.get("authorization");
     const none = callerOf(null);
-    if (header === null) return { caller: none, error: null };
-    if (header.length < 7) return { caller: none, error: new Error("Invalid authentication header") };
-    const scheme = header.slice(0, 7).toLowerCase();
-    if (scheme === "bunvex ") return { caller: none, error: new Error("Admin keys are not supported yet") };
-    if (scheme !== "bearer " || header.length === 7) return { caller: none, error: new Error("Invalid admin key") };
     try {
+      if (header === null) {
+        const key = new URL(req.url).searchParams.get("adminKey");
+        return { caller: key === null ? none : adminCaller(key, false), error: null };
+      }
+      if (header.length < 7) return { caller: none, error: new Error("Invalid authentication header") };
+      const scheme = header.slice(0, 7).toLowerCase();
+      if (scheme === "bunvex ") return { caller: adminCaller(header.slice(7), true), error: null };
+      if (scheme !== "bearer " || header.length === 7) return { caller: none, error: new Error("Invalid admin key") };
       return { caller: callerOf((await verifier.verify(header.slice(7).trim())).identity), error: null };
     } catch (e) {
-      if (e instanceof AuthenticationError) return { caller: none, error: new Error(e.message) };
+      if (e instanceof AuthenticationError || accessError(e) || e instanceof Error)
+        return { caller: none, error: new Error((e as Error).message) };
       throw e;
     }
   };
@@ -214,6 +261,11 @@ export function createServer(opts: ServerOptions) {
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
     if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
       return requestError(429, r.error.code, r.error.message);
+    // An access check (an admin's operation, a key where one is required) is the request's error (403).
+    if (!r.ok) {
+      const denied = accessError(r.error);
+      if (denied) return denied;
+    }
     if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
     if (isSystemError(r.error))
       return requestError(isTryAgainError(r.error) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
@@ -232,6 +284,14 @@ export function createServer(opts: ServerOptions) {
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
     verifyToken: (token) => verifier.verify(token),
+    adminCaller: (key, impersonating) => {
+      const admin = adminKeys.check(removeTypePrefix(key));
+      if (impersonating === undefined || impersonating === null) return adminCallerOf(admin, null);
+      const actingAs = actingIdentity(impersonating);
+      if (!actingAs) throw new HeaderParseError();
+      if (admin.kind === "system") throw new Error("Admin identity returned from check_admin_key was not an admin.");
+      return adminCallerOf(admin, actingAs);
+    },
   });
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
   scheduler.start();
@@ -290,6 +350,55 @@ export function createServer(opts: ServerOptions) {
     }
   };
 
+  /** The admin routes; the caller is already identified. */
+  const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
+    const admin = (caller as AdminCaller).admin;
+    // Convex's `check_admin_key`: an admin or acting user (not the system) gets its operations.
+    if (url.pathname === "/api/check_admin_key") {
+      if (!admin || admin.kind !== "admin") throw new BadDeployKeyError(engine.instanceName);
+      return json({ success: true, allowedOps: admin.allowedOps, isReadOnly: admin.readOnly });
+    }
+    // `/stats` (bunvex's counters) needs ViewMetrics (DV-162).
+    if (url.pathname === "/stats") {
+      functions.requireOperation(caller, "ViewMetrics");
+      const c = engine.committer;
+      return json({
+        ...engine.stats,
+        storage: opts.label, // field name kept for the benchmark harness
+        ts: c.visibleTs,
+        groups: c.groups,
+        conflicts: c.conflicts,
+        syncSessions: sync.sessions.size,
+        sync: sync.stats,
+      });
+    }
+    if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(await new Response(capped(req).body).text()) ?? {};
+    } catch (e) {
+      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+    }
+    functions.requireOperation(caller, "WriteData");
+    // Convex's `/api/cancel_job {id, componentId?}` and `/api/cancel_all_jobs {udfPath?, startNextTs?,
+    // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
+    if (url.pathname === "/api/cancel_job") {
+      if (typeof body.id !== "string") return requestError(400, "BadJsonBody", "missing field `id`");
+      await cancelScheduledJob(engine, body.id);
+      return new Response(null, { status: 200 });
+    }
+    if (url.pathname === "/api/cancel_all_jobs") {
+      const ns = (x: unknown) => (typeof x === "number" ? BigInt(Math.trunc(x)) : undefined);
+      await cancelAllScheduledJobs(engine, {
+        ...(typeof body.udfPath === "string" ? { udfPath: body.udfPath } : {}),
+        ...(ns(body.startNextTs) === undefined ? {} : { startNextTs: ns(body.startNextTs) }),
+        ...(ns(body.endNextTs) === undefined ? {} : { endNextTs: ns(body.endNextTs) }),
+      });
+      return new Response(null, { status: 200 });
+    }
+    return requestError(404, "NotFound", `no route for ${url.pathname}`);
+  };
+
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
     idleTimeout: 120,
@@ -331,17 +440,21 @@ export function createServer(opts: ServerOptions) {
         srv.timeout(req, 0);
         return serveHttpAction(capped(req), url.pathname.slice(5) || "/", url.search);
       }
-      if (url.pathname === "/stats") {
-        const c = engine.committer;
-        return json({
-          ...engine.stats,
-          storage: opts.label, // field name kept for the benchmark harness
-          ts: c.visibleTs,
-          groups: c.groups,
-          conflicts: c.conflicts,
-          syncSessions: sync.sessions.size,
-          sync: sync.stats,
-        });
+      // The admin API (STUDY-34): each route needs an admin key, and its operation.
+      if (
+        url.pathname === "/stats" ||
+        url.pathname === "/api/check_admin_key" ||
+        /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname)
+      ) {
+        const caller = await callerOfRequest(req);
+        if (caller instanceof Response) return caller;
+        try {
+          return await adminRoute(url, req, caller);
+        } catch (e) {
+          const r = accessError(e);
+          if (r) return r;
+          throw e;
+        }
       }
       // The latest ts, for a consistent series of HTTP queries (Convex's `/api/query_ts`): base64 u64, as the
       // sync protocol encodes timestamps.

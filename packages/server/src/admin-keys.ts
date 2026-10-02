@@ -382,3 +382,130 @@ export class AdminKeys {
     return issueAdminKey({ ...o, instanceName: this.instanceName, cipherKey: this.cipherKey });
   }
 }
+
+// ---- Operations and access errors ---------------------------------------------------------------------
+
+/** How Convex names each operation in `OperationNotPermitted` (crates/roles `deployment_op_action`). */
+export const OP_ACTIONS: Record<DeploymentOp, string> = {
+  Deploy: "deployment:deploy",
+  ViewEnvironmentVariables: "deployment:env:view",
+  WriteEnvironmentVariables: "deployment:env:write",
+  PauseDeployment: "deployment:pause",
+  UnpauseDeployment: "deployment:unpause",
+  ViewLogs: "deployment:logs:view",
+  ViewMetrics: "deployment:metrics:view",
+  ViewIntegrations: "deployment:integrations:view",
+  WriteIntegrations: "deployment:integrations:write",
+  ViewData: "deployment:data:view",
+  WriteData: "deployment:data:write",
+  ViewBackups: "deployment:backups:view",
+  CreateBackups: "deployment:backups:create",
+  DownloadBackups: "deployment:backups:download",
+  DeleteBackups: "deployment:backups:delete",
+  ImportBackups: "deployment:backups:import",
+  ActAsUser: "deployment:functions:actAsUser",
+  RunInternalQueries: "deployment:functions:runInternalQueries",
+  RunInternalMutations: "deployment:functions:runInternalMutations",
+  RunInternalActions: "deployment:functions:runInternalActions",
+  RunTestQuery: "deployment:functions:runTestQuery",
+  ViewAuditLog: "deployment:auditLog:view",
+  ViewUsageLimits: "deployment:usageLimits:view",
+  WriteUsageLimits: "deployment:usageLimits:write",
+  ViewUsage: "deployment:usage:view",
+  UseAiGateway: "deployment:aiGateway:use",
+};
+
+/** An admin without the operation: 403 `OperationNotPermitted`, Convex's message. */
+export class OperationNotPermittedError extends Error {
+  readonly status = 403;
+  readonly code = "OperationNotPermitted";
+  constructor(readonly op: DeploymentOp) {
+    super(`You do not have permission to perform this operation (${OP_ACTIONS[op]}).`);
+    this.name = "OperationNotPermittedError";
+  }
+}
+
+/** No admin where one is required (Convex's `bad_admin_key_error`): 403 `BadDeployKey`. */
+export class BadDeployKeyError extends Error {
+  readonly status = 403;
+  readonly code = "BadDeployKey";
+  constructor(instanceName?: string) {
+    super(
+      instanceName === undefined
+        ? "The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment."
+        : `The provided deploy key was invalid for deployment '${instanceName}'. Double check that the environment this key was generated for matches the desired deployment.`,
+    );
+    this.name = "BadDeployKeyError";
+  }
+}
+
+/** A malformed `Authorization` header (Convex: 400 `HeaderParseFailure`). */
+export class HeaderParseError extends Error {
+  readonly status = 400;
+  readonly code = "HeaderParseFailure";
+  constructor() {
+    super("Malformed Authorization header.");
+    this.name = "HeaderParseError";
+  }
+}
+
+const STRING_FIELDS = [
+  "issuer",
+  "subject",
+  "name",
+  "givenName",
+  "familyName",
+  "nickname",
+  "preferredUsername",
+  "profileUrl",
+  "pictureUrl",
+  "websiteUrl",
+  "email",
+  "gender",
+  "birthday",
+  "timezone",
+  "language",
+  "phoneNumber",
+  "address",
+  "updatedAt",
+];
+const BOOL_FIELDS = ["emailVerified", "phoneNumberVerified"];
+
+/**
+ * The identity an admin acts as (Convex's `UserIdentityAttributes` from JSON): an object with
+ * `tokenIdentifier`, or `issuer` and `subject` (then `tokenIdentifier` is `issuer|subject`); the standard
+ * fields typed, every other field a custom claim. Null when it is not one.
+ */
+export function actingIdentity(json: unknown): Record<string, unknown> | null {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) return null;
+  const o = json as Record<string, unknown>;
+  for (const f of STRING_FIELDS) if (o[f] !== undefined && o[f] !== null && typeof o[f] !== "string") return null;
+  for (const f of BOOL_FIELDS) if (o[f] !== undefined && o[f] !== null && typeof o[f] !== "boolean") return null;
+  let tokenIdentifier = o.tokenIdentifier;
+  if (tokenIdentifier !== undefined && typeof tokenIdentifier !== "string") return null;
+  if (tokenIdentifier === undefined) {
+    if (typeof o.issuer !== "string" || typeof o.subject !== "string") return null;
+    tokenIdentifier = `${o.issuer}|${o.subject}`;
+  }
+  const out: Record<string, unknown> = { tokenIdentifier };
+  for (const [k, v] of Object.entries(o)) if (k !== "tokenIdentifier" && v !== null && v !== undefined) out[k] = v;
+  return out;
+}
+
+/** `<key>[:<base64 JSON identity>]` after `removeTypePrefix` (Convex's `extract_admin_key`). */
+export function splitActingAs(key: string): { key: string; actingAs: Record<string, unknown> | null } {
+  const stripped = removeTypePrefix(key);
+  const colon = stripped.indexOf(":");
+  if (colon === -1) return { key: stripped, actingAs: null };
+  const b64 = stripped.slice(colon + 1);
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) throw new HeaderParseError();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+  } catch {
+    throw new HeaderParseError();
+  }
+  const actingAs = actingIdentity(parsed);
+  if (!actingAs) throw new HeaderParseError();
+  return { key: stripped.slice(0, colon), actingAs };
+}
