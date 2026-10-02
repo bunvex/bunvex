@@ -35,7 +35,7 @@ export {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
-export { type ExecutionKind, wallClock } from "./determinism.ts";
+export { type ExecutionKind, installDeterminismIn, runImportPhase, wallClock } from "./determinism.ts";
 export {
   type CacheCompanion,
   type Caller,

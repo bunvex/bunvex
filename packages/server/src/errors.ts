@@ -42,13 +42,17 @@ export type UncaughtError = { message: string; data?: JSONValue };
  * An error the runtime reports with its message alone (no `Uncaught`, no frames), as Convex's
  * `JsError::from_message`: a function that does not exist, or of another kind.
  */
+/** An Error from this realm or another (a function's code runs in its own context, STUDY-35). */
+export const isError = (e: unknown): e is Error =>
+  e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
+
 export class FunctionPathError extends Error {
   override name = "FunctionPathError";
 }
 
 export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof FunctionPathError) return { message: `${e.message}\n` };
-  if (!(e instanceof Error)) {
+  if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
     return { message: `Uncaught ${what}\n` };
   }

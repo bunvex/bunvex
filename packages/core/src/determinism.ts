@@ -13,7 +13,8 @@
 // `installDeterminism()`, or that reaches a non-global API, still escapes.
 import { AsyncLocalStorage } from "node:async_hooks";
 
-export type ExecutionKind = "query" | "mutation";
+/** `import`: a code version's modules being evaluated (Convex's import phase, STUDY-35). */
+export type ExecutionKind = "query" | "mutation" | "import";
 type Execution = {
   kind: ExecutionKind;
   now: number;
@@ -78,6 +79,8 @@ export const preciseClock = (): number => {
 };
 
 function notAllowed(what: string, kind: ExecutionKind): Error {
+  // At import time Convex refuses every syscall the same way (`No<Op>DuringImport`, isolate analyze.rs).
+  if (kind === "import") return new Error(`${what} unsupported at import time`);
   return new Error(`Can't use ${what} in ${kind === "query" ? "queries" : "mutations"}. Use an action instead.`);
 }
 
@@ -137,11 +140,14 @@ export function installDeterminism() {
     const e = executions.getStore();
     if (!e) return realPerformanceNow();
     e.observed.time = true;
+    // Convex's import phase sees 0.
+    if (e.kind === "import") return 0;
     const elapsed = e.kind === "mutation" ? realPerformanceNow() - e.monotonicStart : 0;
     return toTenthMs(e.perfStart + elapsed);
   };
   crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
     const e = executions.getStore();
+    if (e?.kind === "import") throw new Error("Cannot use cryptographic randomness at import time");
     if (e) throw notAllowed("crypto.getRandomValues()", e.kind);
     return realGetRandomValues(array as never) as T;
   }) as typeof crypto.getRandomValues;
@@ -172,6 +178,58 @@ export function runDeterministic<T>(
     observed,
   };
   return executions.run(execution, fn);
+}
+
+/**
+ * Run a code version's import phase (Convex's: `Math.random` seeded and `Date.now()` fixed by the
+ * deployment, `performance.now()` 0; no fetch, timers or cryptographic randomness).
+ */
+export function runImportPhase<T>(seed: Uint32Array, now: number, fn: () => T): T {
+  const rng = seededRandom(seed);
+  const execution: Execution = {
+    kind: "import",
+    now: Math.floor(now),
+    random: rng,
+    perfStart: 0,
+    monotonicStart: realPerformanceNow(),
+    observed: { time: false },
+  };
+  return executions.run(execution, fn);
+}
+
+/**
+ * The same deterministic `Date` and `Math.random` in another realm (a code version's `vm` context,
+ * STUDY-35): its intrinsics are its own, so they are replaced there too; the rest (fetch, timers,
+ * `performance`, `crypto`) are this realm's, already replaced, and handed to the context as they are.
+ */
+export function installDeterminismIn(g: { Date: DateConstructor; Math: Math }) {
+  installDeterminism();
+  const ContextDate = g.Date;
+  const contextNow = ContextDate.now.bind(ContextDate);
+  const contextRandom = g.Math.random.bind(g.Math);
+  ContextDate.now = () => {
+    const e = executions.getStore();
+    if (!e) return contextNow();
+    e.observed.time = true;
+    return e.now;
+  };
+  g.Math.random = () => {
+    const e = executions.getStore();
+    return e ? e.random() : contextRandom();
+  };
+  g.Date = new Proxy(ContextDate, {
+    construct(target, args, newTarget) {
+      const e = args.length === 0 ? executions.getStore() : undefined;
+      if (e) e.observed.time = true;
+      return Reflect.construct(target, e ? [e.now] : args, newTarget);
+    },
+    apply(target) {
+      const e = executions.getStore();
+      if (!e) return target();
+      e.observed.time = true;
+      return new target(e.now).toString();
+    },
+  });
 }
 
 /** Run engine work (a persistence call) outside the current execution: real globals, no restrictions. */

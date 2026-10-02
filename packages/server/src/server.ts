@@ -17,6 +17,7 @@ import {
   removeTypePrefix,
   splitActingAs,
 } from "./admin-keys.ts";
+import type { CodeVersion } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { clientError, INTERNAL_SERVER_ERROR_MESSAGE, isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
@@ -217,13 +218,15 @@ export function createServer(opts: ServerOptions) {
     }
   };
   const router = opts.http === undefined ? undefined : checkRouter(opts.http);
-  const serveHttpAction = httpActionServer({
+  /** What HTTP actions are served from; a code version replaces its router (STUDY-35). */
+  const httpOptions = {
     functions,
     router,
     identify: identifyHttpAction,
     redact,
     headTimeoutMs: opts.httpActionHeadTimeoutMs,
-  });
+  };
+  const serveHttpAction = httpActionServer(httpOptions);
 
   /** A failed function run, for a client: the message (without its request id) and the app's data. */
   const formatError = (e: unknown): { error: string; data?: string } => {
@@ -535,7 +538,23 @@ export function createServer(opts: ServerOptions) {
             return serveHttpAction(req, url.pathname, url.search);
           },
         });
+  /**
+   * Make a code version live (STUDY-35): its functions replace every function at once, its router the
+   * HTTP actions', its crons the stored ones (the same diff as at start); then every subscription to a
+   * changed module runs again. Requests already running finish on the code they started with.
+   */
+  const installCodeVersion = async (version: CodeVersion) => {
+    const changed = functions.install(version.functions, version.moduleHashes);
+    httpOptions.router = version.router;
+    const crons = await cronExecutor.push(
+      version.crons ? cronSpecs(version.crons, (id, name) => functions.cronTarget(id, name)) : new Map(),
+    );
+    sync.invalidateModules(changed);
+    return { changed, crons };
+  };
+
   return {
+    installCodeVersion,
     server,
     /** The site port's server (HTTP actions), if any. */
     site,
