@@ -6,6 +6,7 @@ import type { GenericDatabaseReader, GenericDatabaseWriter, GenericDataModel } f
 import type {
   DefaultFunctionArgs,
   EmptyObject,
+  FunctionArgs,
   FunctionReference,
   FunctionReturnType,
   FunctionVisibility,
@@ -16,22 +17,73 @@ import type { Auth, FunctionDef, StorageActionWriter, StorageReader, StorageWrit
 import type { PublicHttpAction } from "./router.ts";
 import type { Scheduler } from "./scheduler.ts";
 
-/** A query's context: a reader of the data model. */
+type Callable<Kind extends "query" | "mutation" | "action"> = FunctionReference<Kind, "public" | "internal">;
+
+/** Convex's `TransactionLimits`: lower a nested call's limits (bunvex applies the read and write ones, STUDY-41). */
+export type TransactionLimits = {
+  bytesRead?: number;
+  bytesWritten?: number;
+  databaseQueries?: number;
+  documentsRead?: number;
+  documentsWritten?: number;
+  functionsScheduled?: number;
+  scheduledFunctionArgsBytes?: number;
+};
+/** Convex's `AdvancedRunQueryOptions` (`useStaleSnapshot` only from a mutation). */
+export type AdvancedRunQueryOptions = { transactionLimits?: TransactionLimits; useStaleSnapshot?: boolean };
+
+/** Convex's `ArgsAndOptions`: the arguments (optional when there are none), then the options. */
+export type ArgsAndOptions<
+  F extends FunctionReference<"query" | "mutation" | "action", "public" | "internal">,
+  Options,
+> =
+  FunctionArgs<F> extends EmptyObject
+    ? [args?: EmptyObject, options?: Options]
+    : [args: FunctionArgs<F>, options?: Options];
+
+/** A query's context: a reader of the data model, and the queries it may run in its transaction. */
 export interface GenericQueryCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseReader<DataModel>;
   auth: Auth;
   storage: StorageReader;
+  /** Run a query in this query's transaction: its reads join this query's (STUDY-41). */
+  runQuery<Query extends Callable<"query">>(
+    query: Query,
+    ...args: ArgsAndOptions<Query, { transactionLimits?: TransactionLimits }>
+  ): Promise<FunctionReturnType<Query>>;
+  // biome-ignore lint/suspicious/noExplicitAny: a function named by a string has an unknown result
+  runQuery(
+    name: string,
+    args?: Record<string, unknown>,
+    options?: { transactionLimits?: TransactionLimits },
+  ): Promise<any>;
 }
 
-/** A mutation's context: a writer of the data model, and the scheduler. */
+/** A mutation's context: a writer of the data model, the scheduler, and the functions it may run. */
 export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseWriter<DataModel>;
   auth: Auth;
   storage: StorageWriter;
   scheduler: Scheduler;
+  /** Run a query in this mutation's transaction, seeing its writes (or, `useStaleSnapshot`, its snapshot). */
+  runQuery<Query extends Callable<"query">>(
+    query: Query,
+    ...args: ArgsAndOptions<Query, AdvancedRunQueryOptions>
+  ): Promise<FunctionReturnType<Query>>;
+  // biome-ignore lint/suspicious/noExplicitAny: a function named by a string has an unknown result
+  runQuery(name: string, args?: Record<string, unknown>, options?: AdvancedRunQueryOptions): Promise<any>;
+  /** Run a mutation in a sub-transaction of this one: its writes are rolled back if it throws. */
+  runMutation<Mutation extends Callable<"mutation">>(
+    mutation: Mutation,
+    ...args: ArgsAndOptions<Mutation, { transactionLimits?: TransactionLimits }>
+  ): Promise<FunctionReturnType<Mutation>>;
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  runMutation(
+    name: string,
+    args?: Record<string, unknown>,
+    options?: { transactionLimits?: TransactionLimits },
+  ): Promise<any>;
 }
-
-type Callable<Kind extends "query" | "mutation" | "action"> = FunctionReference<Kind, "public" | "internal">;
 
 /**
  * An action's context: no `db`, but the functions it runs. A reference's arguments and result are typed;

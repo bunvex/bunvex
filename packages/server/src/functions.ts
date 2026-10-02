@@ -14,10 +14,12 @@ import {
 } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
+  BunvexError,
   checkValue,
   displayValue,
   type GenericValidator,
   type Infer,
+  isBunvexError,
   isSimpleObject,
   type ObjectType,
   type PropertyValidators,
@@ -58,6 +60,32 @@ const registryKey = (name: string) => {
   const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
 };
+
+/** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
+export const MAX_NESTED_CALL_DEPTH = 8;
+
+/** The options of a nested `ctx.runQuery` / `ctx.runMutation` (Convex's `AdvancedRunQueryOptions`). */
+export type NestedOptions = {
+  useStaleSnapshot?: boolean;
+  transactionLimits?: {
+    bytesRead?: number;
+    bytesWritten?: number;
+    documentsRead?: number;
+    documentsWritten?: number;
+    databaseQueries?: number;
+    functionsScheduled?: number;
+    scheduledFunctionArgsBytes?: number;
+  };
+};
+
+/**
+ * A nested call's error as its caller sees it (Convex's `performAsyncSyscall`): a new `Error` with the
+ * message, or a `BunvexError` with the data (STUDY-41 N2: without Convex's appended stack text).
+ */
+function toCallerError(e: unknown): Error {
+  if (isBunvexError(e)) return new BunvexError(e.data);
+  return new Error(e instanceof Error ? e.message : String(e));
+}
 
 /** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
 export type StorageReader = ReturnType<FileStorage["reader"]>;
@@ -395,14 +423,10 @@ export class Functions {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const f = this.fn(name, "query", fromClient, caller);
     return async (db: Tx) => {
-      const ctx = {
-        db: db as unknown as QueryCtx["db"],
-        auth: txAuth(db),
-        storage: this.fileStorage?.reader(db) ?? noStorage,
-      };
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      return this.checkReturns(f, await (env ? withEnv(env, () => f.handler(ctx, a)) : f.handler(ctx, a)));
+      const run = () => this.invoke(f, db, a, 0);
+      return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     };
   }
 
@@ -412,16 +436,124 @@ export class Functions {
    */
   private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
     return perAttempt(async (db: Tx) => {
-      const ctx = {
-        db: db as unknown as MutationCtx["db"],
-        auth: txAuth(db),
-        scheduler: makeScheduler(this, { db, job }),
-        storage: this.fileStorage?.writer(db) ?? noStorage,
-      };
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      return this.checkReturns(f, await (env ? withEnv(env, () => f.handler(ctx, a)) : f.handler(ctx, a)));
+      const run = () => this.invoke(f, db, a, 0, job);
+      return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     });
+  }
+
+  /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
+  private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
+    const nested = this.nestedCalls(db, f.kind as "query" | "mutation", depth);
+    const ctx =
+      f.kind === "query"
+        ? {
+            db: db as unknown as QueryCtx["db"],
+            auth: txAuth(db),
+            storage: this.fileStorage?.reader(db) ?? noStorage,
+            runQuery: nested.runQuery,
+          }
+        : {
+            db: db as unknown as MutationCtx["db"],
+            auth: txAuth(db),
+            scheduler: makeScheduler(this, { db, job }),
+            storage: this.fileStorage?.writer(db) ?? noStorage,
+            runQuery: nested.runQuery,
+            runMutation: nested.runMutation,
+          };
+    return (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args);
+  }
+
+  /**
+   * `ctx.runQuery` (queries and mutations) and `ctx.runMutation` (mutations), as Convex's `1.0/runUdf`
+   * (STUDY-41): the function runs in the caller's transaction — its writes, identity and time, its reads
+   * joining the caller's read set — after its path, kind, arguments and the depth are checked; a nested
+   * mutation is a sub-transaction, rolled back if it throws; its result is checked after (a failed check
+   * keeps the writes, as Convex). `useStaleSnapshot` (mutations): a query at the transaction's snapshot,
+   * without its pending writes, its reads discarded. `transactionLimits` lowers the read and write limits
+   * for the call. Any error reaches the caller as a catchable one.
+   */
+  private nestedCalls(db: Tx, callerKind: "query" | "mutation", depth: number) {
+    // One queue per running function: Convex runs its nested calls one at a time, in call order (STUDY-41
+    // N4). Per function, not per transaction: a nested function's own calls must not wait for its caller's.
+    let queue: Promise<unknown> = Promise.resolve();
+    const call = (kind: "query" | "mutation", ref: FunctionRef, args: unknown, opts?: NestedOptions) => {
+      if (opts?.useStaleSnapshot && callerKind === "query")
+        throw new Error("`useStaleSnapshot` is only supported in mutations, not queries.");
+      const run = queue.then(() => this.runNested(db, kind, ref, args, opts, depth));
+      queue = run.catch(() => {});
+      return run;
+    };
+    return {
+      runQuery: (ref: FunctionRef, args?: unknown, opts?: NestedOptions) => call("query", ref, args, opts),
+      runMutation:
+        callerKind === "mutation"
+          ? (ref: FunctionRef, args?: unknown, opts?: NestedOptions) => call("mutation", ref, args, opts)
+          : undefined,
+    };
+  }
+
+  private async runNested(
+    db: Tx,
+    kind: "query" | "mutation",
+    ref: FunctionRef,
+    args: unknown,
+    opts: NestedOptions | undefined,
+    depth: number,
+  ): Promise<unknown> {
+    const name = registryKey(getFunctionName(ref));
+    const f = this.fn(name, kind, false);
+    const a = this.checkArgs(f, args === undefined ? {} : args);
+    if (depth >= MAX_NESTED_CALL_DEPTH)
+      throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
+    if (opts?.useStaleSnapshot) {
+      const caller: Caller = { identity: db.identity, key: "" };
+      const value = await this.engine.query(
+        (stale) => {
+          stale.identity = db.identity;
+          return this.withLimits(stale, opts.transactionLimits, () => this.invoke(f, stale, a, depth + 1));
+        },
+        undefined,
+        undefined,
+        caller,
+        db.snapshot,
+      );
+      return this.checkReturns(f, value);
+    }
+    const sp = kind === "mutation" ? db.begin() : null;
+    let value: unknown;
+    try {
+      value = await this.withLimits(db, opts?.transactionLimits, () => this.invoke(f, db, a, depth + 1));
+    } catch (e) {
+      if (sp) db.rollback(sp);
+      throw toCallerError(e);
+    }
+    return this.checkReturns(f, value);
+  }
+
+  /**
+   * Run `fn` with `db`'s limits lowered by `budget` (Convex's `TransactionLimits::from_budget`: each limit
+   * becomes the usage so far plus the budget, never above the current one), restored after. Only the limits
+   * bunvex counts apply (STUDY-41 N3).
+   */
+  private async withLimits<T>(db: Tx, budget: NestedOptions["transactionLimits"], fn: () => T): Promise<Awaited<T>> {
+    if (!budget) return await fn();
+    const saved = db.limits;
+    const usage = db.usage;
+    const lower = (k: keyof typeof saved, b: number | undefined) =>
+      b === undefined ? saved[k] : Math.min(usage[k] + b, saved[k]);
+    db.limits = {
+      documentsRead: lower("documentsRead", budget.documentsRead),
+      bytesRead: lower("bytesRead", budget.bytesRead),
+      documentsWritten: lower("documentsWritten", budget.documentsWritten),
+      bytesWritten: lower("bytesWritten", budget.bytesWritten),
+    };
+    try {
+      return await fn();
+    } finally {
+      db.limits = saved;
+    }
   }
 
   /**

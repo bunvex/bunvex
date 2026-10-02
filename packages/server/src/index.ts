@@ -102,6 +102,8 @@ export { paginationOptsValidator, paginationResultValidator } from "./pagination
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 export type {
   ActionBuilder,
+  AdvancedRunQueryOptions,
+  ArgsAndOptions,
   ArgsArray,
   ArgsArrayToObject,
   GenericActionCtx,
@@ -113,6 +115,7 @@ export type {
   RegisteredAction,
   RegisteredMutation,
   RegisteredQuery,
+  TransactionLimits,
 } from "./registration.ts";
 export {
   type HttpActionCtx,
