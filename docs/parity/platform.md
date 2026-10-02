@@ -191,14 +191,14 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
 | `dev` (watch, push, typecheck, codegen, `--once`, `--until-success`, `--run`, `--tail-logs`, local backend) | `npm/convex/cli/dev.ts`; `lib/localDeployment/*` | missing | Downloads and runs `convex-local-backend`. bunvex would run its own server in-process. |
-| `deploy` (`--dry-run`, `-y`, `--cmd`, `--preview-*`, `--skip-large-indexes-check`, `--message`) | `cli/deploy.ts`; `lib/deploy2.ts` | partial (STUDY-35) | `bunvex deploy [--url] [--admin-key] [--dry-run] [--env-file]`: bundles `bunvex/` (or `bunvex.json`'s `functions`, DV-170) and pushes over deploy2 with the diff of module hashes; target from `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171), the environment, `.env.local`, `.env`. No codegen or typecheck yet (item 8); `-y`, `--cmd`, previews and the large-index check are missing. |
+| `deploy` (`--dry-run`, `-y`, `--cmd`, `--preview-*`, `--skip-large-indexes-check`, `--message`) | `cli/deploy.ts`; `lib/deploy2.ts` | partial (STUDY-35) | `bunvex deploy [--url] [--admin-key] [--dry-run] [--env-file]`: bundles `bunvex/` (or `bunvex.json`'s `functions`, DV-170) and pushes over deploy2 with the diff of module hashes; target from `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171), the environment, `.env.local`, `.env`. Codegen before bundling and after `start_push`, then the typecheck (`--codegen enable|disable`, `--typecheck enable|try|disable`, default `try`; STUDY-36); `-y`, `--cmd`, previews and the large-index check are missing. |
 | `run <fn> [args]` (`--watch`, `--push`, `--identity`, `--component`, `--inline-query`) | `cli/run.ts` | missing | Needs admin-key auth and acting-as-user. |
 | `import` (`--table`, `--replace`, `--append`, `--replace-all`, `--format csv\|jsonLines\|jsonArray\|zip`) | `cli/convexImport.ts` | missing | |
 | `export --path [--include-file-storage]` | `cli/convexExport.ts` | missing | |
 | `data [table] --limit --order --format --component` | `cli/data.ts` | missing | |
 | `logs` (`--history`, `--success`, `--jsonl`) | `cli/logs.ts` | missing | |
 | `env set\|get\|remove\|list` (and `env default …`, which is cloud-only) | `cli/env.ts` | missing | |
-| `codegen` (`--typecheck`, `--init`, `--commonjs`, …) | `cli/codegen.ts` | missing | Open decision #1: codegen or type inference. |
+| `codegen` (`--typecheck`, `--init`, `--commonjs`, …) | `cli/codegen.ts` | partial (STUDY-36) | `bunvex codegen [--init] [--typecheck]`, from the code alone with no deployment (DV-173). `--init` writes `tsconfig.json` (with `allowImportingTsExtensions`, DV-177) and `README.md`. The typecheck is the app's own `tsc --project <functions>`. No `--commonjs`, `--dry-run`, `--debug` or `--component-dir`. |
 | `function-spec` (JSON of every function's args and returns) | `cli/functionSpec.ts` | missing | |
 | `typecheck`, `dashboard`, `docs`, `update`, `network-test` | `cli/*.ts` | missing | Low priority. |
 | `mcp start` (tools: data, env, functionSpec, logs, run, runOneoffQuery, status, tables) | `cli/mcp.ts`; `lib/mcp/tools` | missing | ARCHITECTURE marks mcp D. |
@@ -209,11 +209,11 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `api.d.ts` / `api.js`: `api`, `internal`, `components` (runtime `anyApi`) | `npm/convex/cli/codegen_templates/api.ts` | missing | Types are built with `FilterApi<ApiFromModules<…>>`. |
-| `dataModel.d.ts`: `Doc<T>`, `Id<T>`, `TableNames`, `DataModel` | `codegen_templates/dataModel.ts` | missing | `AnyDataModel` when there is no schema. |
-| `server.d.ts` / `server.js`: typed `query`, `mutation`, `action`, `internal*`, `httpAction`, ctx types | `codegen_templates/server.ts` | missing | |
+| `api.d.ts` / `api.js`: `api`, `internal`, `components` (runtime `anyApi`) | `npm/convex/cli/codegen_templates/api.ts` | done (STUDY-36) | Dynamic mode: one `import type` per module (Convex's keys and identifiers), `FilterApi<ApiFromModules<…>>`; the initial pass writes an `AnyApi` stub. `components` is `{}` (DV-174). The layout is the generator's own (DV-175). |
+| `dataModel.d.ts`: `Doc<T>`, `Id<T>`, `TableNames`, `DataModel` | `codegen_templates/dataModel.ts` | done (STUDY-36) | Dynamic mode, from `typeof schema`; `AnyDataModel` and `Doc = any` when there is no schema. Static mode is missing. |
+| `server.d.ts` / `server.js`: typed `query`, `mutation`, `action`, `internal*`, `httpAction`, ctx types | `codegen_templates/server.ts` | done (STUDY-36) | The `*Generic` builders typed with `DataModel`; `QueryCtx` … `DatabaseWriter`. `env` is untyped (DV-176). |
 | `component.ts` (ComponentApi) and component-level codegen | `codegen_templates/component_api.ts` | missing | |
-| `convex.json` codegen options (`staticApi`, `staticDataModel`, `fileType`, `generateCommonJSApi`, `legacyComponentApi`) | `cli/lib/config.ts`; `schemas/convex.schema.json` | missing | |
+| `convex.json` codegen options (`staticApi`, `staticDataModel`, `fileType`, `generateCommonJSApi`, `legacyComponentApi`) | `cli/lib/config.ts`; `schemas/convex.schema.json` | partial (STUDY-36) | `bunvex.json`'s `codegen.fileType` (`"ts"` or `"js/dts"`); the others are missing. |
 | Other `convex.json` keys: `functions` dir, `node.externalPackages`, `node.nodeVersion`, `bundler.includeSourcesContent`, `typescriptCompiler` | same | missing | |
 
 ### 14. Deploy / push flow

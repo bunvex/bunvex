@@ -1,0 +1,565 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the generated files api, server and dataModel (golden) 1`] = `
+{
+  "api": {
+    "api.d.ts": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type * as messages from "../messages.js";
+import type * as foo_bar_baz from "../foo/bar-baz.js";
+import type * as delete_ from "../delete.js";
+import type * as api_ from "../api.js";
+
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "bunvex/server";
+
+declare const fullApi: ApiFromModules<{
+  messages: typeof messages;
+  "foo/bar-baz": typeof foo_bar_baz;
+  delete: typeof delete_;
+  api: typeof api_;
+}>;
+
+/**
+ * A utility for referencing bunvex functions in your app's public API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = api.myModule.myFunction;
+ * \`\`\`
+ */
+export declare const api: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "public">
+>;
+
+/**
+ * A utility for referencing bunvex functions in your app's internal API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * \`\`\`
+ */
+export declare const internal: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "internal">
+>;
+
+export declare const components: {};
+"
+,
+    "api.js": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import { anyApi } from "bunvex/server";
+
+/**
+ * A utility for referencing bunvex functions in your app's API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = api.myModule.myFunction;
+ * \`\`\`
+ */
+export const api = anyApi;
+export const internal = anyApi;
+export const components = {};
+"
+,
+  },
+  "apiStub": {
+    "api.d.ts": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type { AnyApi } from "bunvex/server";
+
+export declare const api: AnyApi;
+export declare const internal: AnyApi;
+export declare const components: {};
+"
+,
+    "api.js": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import { anyApi } from "bunvex/server";
+
+/**
+ * A utility for referencing bunvex functions in your app's API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = api.myModule.myFunction;
+ * \`\`\`
+ */
+export const api = anyApi;
+export const internal = anyApi;
+export const components = {};
+"
+,
+  },
+  "dataModel": {
+    "dataModel.d.ts": 
+"/* eslint-disable */
+/**
+ * Generated data model types.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type {
+  DataModelFromSchemaDefinition,
+  DocumentByName,
+  SystemTableNames,
+  TableNamesInDataModel,
+} from "bunvex/server";
+import type { GenericId } from "bunvex/values";
+import schema from "../schema.js";
+
+/**
+ * The names of all of your tables.
+ */
+export type TableNames = TableNamesInDataModel<DataModel>;
+
+/**
+ * The type of a document stored in bunvex.
+ *
+ * @typeParam TableName - A string literal type of the table name (like "users").
+ */
+export type Doc<TableName extends TableNames> = DocumentByName<DataModel, TableName>;
+
+/**
+ * An identifier for a document in bunvex: its \`_id\`.
+ *
+ * Ids are strings at run time; the type tells one table's ids from another's, and from other strings.
+ * Load a document with \`db.get(tableName, id)\` in queries and mutations.
+ *
+ * @typeParam TableName - A string literal type of the table name (like "users").
+ */
+export type Id<TableName extends TableNames | SystemTableNames> = GenericId<TableName>;
+
+/**
+ * The app's data model: its tables, the type of their documents, and their indexes.
+ *
+ * It parameterizes \`queryGeneric\`, \`mutationGeneric\` and the database types.
+ */
+export type DataModel = DataModelFromSchemaDefinition<typeof schema>;
+"
+,
+  },
+  "server": {
+    "server.d.ts": 
+"/* eslint-disable */
+/**
+ * Generated utilities for implementing server-side bunvex query and mutation functions.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type {
+  ActionBuilder,
+  HttpActionBuilder,
+  MutationBuilder,
+  QueryBuilder,
+  GenericActionCtx,
+  GenericMutationCtx,
+  GenericQueryCtx,
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+} from "bunvex/server";
+import type { DataModel } from "./dataModel.js";
+
+/**
+ * Define a query in this bunvex app's public API, readable by clients.
+ */
+export declare const query: QueryBuilder<DataModel, "public">;
+
+/**
+ * Define a query that only other bunvex functions can call.
+ */
+export declare const internalQuery: QueryBuilder<DataModel, "internal">;
+
+/**
+ * Define a mutation in this bunvex app's public API, callable by clients.
+ */
+export declare const mutation: MutationBuilder<DataModel, "public">;
+
+/**
+ * Define a mutation that only other bunvex functions can call.
+ */
+export declare const internalMutation: MutationBuilder<DataModel, "internal">;
+
+/**
+ * Define an action in this bunvex app's public API: it may call third-party services.
+ */
+export declare const action: ActionBuilder<DataModel, "public">;
+
+/**
+ * Define an action that only other bunvex functions can call.
+ */
+export declare const internalAction: ActionBuilder<DataModel, "internal">;
+
+/**
+ * Define an HTTP action, served by the router exported from \`http.ts\`.
+ */
+export declare const httpAction: HttpActionBuilder;
+
+/**
+ * The deployment's environment variables.
+ */
+export declare const env: Record<string, string | undefined>;
+
+/** The context of every query: a database reader, \`auth\` and \`storage\`. */
+export type QueryCtx = GenericQueryCtx<DataModel>;
+
+/** The context of every mutation: a database writer, \`auth\`, \`storage\` and \`scheduler\`. */
+export type MutationCtx = GenericMutationCtx<DataModel>;
+
+/** The context of every action: \`runQuery\`, \`runMutation\`, \`runAction\`, \`auth\`, \`storage\` and \`scheduler\`. */
+export type ActionCtx = GenericActionCtx<DataModel>;
+
+/** Reading the database (\`ctx.db\` in queries). */
+export type DatabaseReader = GenericDatabaseReader<DataModel>;
+
+/** Reading and writing the database (\`ctx.db\` in mutations). */
+export type DatabaseWriter = GenericDatabaseWriter<DataModel>;
+"
+,
+    "server.js": 
+"/* eslint-disable */
+/**
+ * Generated utilities for implementing server-side bunvex query and mutation functions.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import {
+  actionGeneric,
+  httpActionGeneric,
+  queryGeneric,
+  mutationGeneric,
+  internalActionGeneric,
+  internalMutationGeneric,
+  internalQueryGeneric,
+} from "bunvex/server";
+
+/**
+ * Define a query in this bunvex app's public API, readable by clients.
+ */
+export const query = queryGeneric;
+
+/**
+ * Define a query that only other bunvex functions can call.
+ */
+export const internalQuery = internalQueryGeneric;
+
+/**
+ * Define a mutation in this bunvex app's public API, callable by clients.
+ */
+export const mutation = mutationGeneric;
+
+/**
+ * Define a mutation that only other bunvex functions can call.
+ */
+export const internalMutation = internalMutationGeneric;
+
+/**
+ * Define an action in this bunvex app's public API: it may call third-party services.
+ */
+export const action = actionGeneric;
+
+/**
+ * Define an action that only other bunvex functions can call.
+ */
+export const internalAction = internalActionGeneric;
+
+/**
+ * Define an HTTP action, served by the router exported from \`http.ts\`.
+ */
+export const httpAction = httpActionGeneric;
+
+/**
+ * The deployment's environment variables.
+ */
+export const env = process.env;
+"
+,
+  },
+}
+`;
+
+exports[`the generated files without a schema, and with fileType ts (golden) 1`] = `
+{
+  "api": {
+    "api.ts": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type * as messages from "../messages.js";
+import type * as foo_bar_baz from "../foo/bar-baz.js";
+import type * as delete_ from "../delete.js";
+import type * as api_ from "../api.js";
+
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "bunvex/server";
+import { anyApi } from "bunvex/server";
+
+const fullApi: ApiFromModules<{
+  messages: typeof messages;
+  "foo/bar-baz": typeof foo_bar_baz;
+  delete: typeof delete_;
+  api: typeof api_;
+}> = anyApi as any;
+
+/**
+ * A utility for referencing bunvex functions in your app's public API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = api.myModule.myFunction;
+ * \`\`\`
+ */
+export const api: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "public">
+> = anyApi as any;
+
+/**
+ * A utility for referencing bunvex functions in your app's internal API.
+ *
+ * Usage:
+ * \`\`\`js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * \`\`\`
+ */
+export const internal: FilterApi<
+  typeof fullApi,
+  FunctionReference<any, "internal">
+> = anyApi as any;
+
+export const components = {};
+"
+,
+  },
+  "apiStub": {
+    "api.ts": 
+"/* eslint-disable */
+/**
+ * Generated \`api\` utility.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type { AnyApi } from "bunvex/server";
+import { anyApi } from "bunvex/server";
+
+export const api: AnyApi = anyApi;
+export const internal: AnyApi = anyApi;
+export const components = {};
+"
+,
+  },
+  "dataModel": {
+    "dataModel.ts": 
+"/* eslint-disable */
+/**
+ * Generated data model types.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import type { AnyDataModel } from "bunvex/server";
+import type { GenericId } from "bunvex/values";
+
+/**
+ * No \`schema.ts\` file found!
+ *
+ * Without a schema the types are permissive (\`Doc = any\`). Add a \`schema.ts\` for type-safe documents,
+ * then rerun codegen with \`bunvex dev\`.
+ */
+
+/**
+ * The names of all of your tables.
+ */
+export type TableNames = string;
+
+/**
+ * The type of a document stored in bunvex.
+ */
+export type Doc = any;
+
+/**
+ * An identifier for a document in bunvex: its \`_id\`.
+ *
+ * Ids are strings at run time; the type tells one table's ids from another's, and from other strings.
+ * Load a document with \`db.get(tableName, id)\` in queries and mutations.
+ *
+ * @typeParam TableName - A string literal type of the table name (like "users").
+ */
+export type Id<TableName extends TableNames = TableNames> = GenericId<TableName>;
+
+/**
+ * The app's data model: its tables, the type of their documents, and their indexes.
+ *
+ * It parameterizes \`queryGeneric\`, \`mutationGeneric\` and the database types.
+ */
+export type DataModel = AnyDataModel;
+"
+,
+  },
+  "server": {
+    "server.ts": 
+"/* eslint-disable */
+/**
+ * Generated utilities for implementing server-side bunvex query and mutation functions.
+ *
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run \`bunvex dev\`.
+ * @module
+ */
+
+import {
+  actionGeneric,
+  httpActionGeneric,
+  queryGeneric,
+  mutationGeneric,
+  internalActionGeneric,
+  internalMutationGeneric,
+  internalQueryGeneric,
+} from "bunvex/server";
+import type {
+  ActionBuilder,
+  HttpActionBuilder,
+  MutationBuilder,
+  QueryBuilder,
+  GenericActionCtx,
+  GenericMutationCtx,
+  GenericQueryCtx,
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+} from "bunvex/server";
+import type { DataModel } from "./dataModel.js";
+
+/**
+ * Define a query in this bunvex app's public API, readable by clients.
+ */
+export const query: QueryBuilder<DataModel, "public"> = queryGeneric;
+
+/**
+ * Define a query that only other bunvex functions can call.
+ */
+export const internalQuery: QueryBuilder<DataModel, "internal"> = internalQueryGeneric;
+
+/**
+ * Define a mutation in this bunvex app's public API, callable by clients.
+ */
+export const mutation: MutationBuilder<DataModel, "public"> = mutationGeneric;
+
+/**
+ * Define a mutation that only other bunvex functions can call.
+ */
+export const internalMutation: MutationBuilder<DataModel, "internal"> = internalMutationGeneric;
+
+/**
+ * Define an action in this bunvex app's public API: it may call third-party services.
+ */
+export const action: ActionBuilder<DataModel, "public"> = actionGeneric;
+
+/**
+ * Define an action that only other bunvex functions can call.
+ */
+export const internalAction: ActionBuilder<DataModel, "internal"> = internalActionGeneric;
+
+/**
+ * Define an HTTP action, served by the router exported from \`http.ts\`.
+ */
+export const httpAction: HttpActionBuilder = httpActionGeneric;
+
+/**
+ * The deployment's environment variables.
+ */
+export const env: Record<string, string | undefined> = (
+  globalThis as unknown as { process: { env: Record<string, string | undefined> } }
+).process.env;
+
+/** The context of every query: a database reader, \`auth\` and \`storage\`. */
+export type QueryCtx = GenericQueryCtx<DataModel>;
+
+/** The context of every mutation: a database writer, \`auth\`, \`storage\` and \`scheduler\`. */
+export type MutationCtx = GenericMutationCtx<DataModel>;
+
+/** The context of every action: \`runQuery\`, \`runMutation\`, \`runAction\`, \`auth\`, \`storage\` and \`scheduler\`. */
+export type ActionCtx = GenericActionCtx<DataModel>;
+
+/** Reading the database (\`ctx.db\` in queries). */
+export type DatabaseReader = GenericDatabaseReader<DataModel>;
+
+/** Reading and writing the database (\`ctx.db\` in mutations). */
+export type DatabaseWriter = GenericDatabaseWriter<DataModel>;
+"
+,
+  },
+}
+`;

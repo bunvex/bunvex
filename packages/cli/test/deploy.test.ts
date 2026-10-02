@@ -2,9 +2,9 @@
 // does and pushed to a running deployable server; its functions, schema, HTTP routes and crons go live; a
 // second deploy sends only what changed.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
@@ -149,7 +149,44 @@ describe("bunvex deploy", () => {
     ).json()) as { moduleHashes: { path: string }[] };
     const paths = hashes.moduleHashes.map((h) => h.path).filter((p) => !p.startsWith("_deps/"));
     expect(paths.sort()).toEqual(["crons.js", "files.js", "http.js", "jobs.js", "lib/format.js", "messages.js"]);
+    // Codegen ran (STUDY-36): the api lists every module; the stale _generated/api.ts is gone.
+    const apiDts = readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8");
+    for (const m of ["crons", "files", "http", "jobs", "lib/format", "messages"])
+      expect(apiDts).toContain(`"../${m}.js"`);
+    expect(existsSync(join(app, "bunvex/_generated/api.ts"))).toBe(false);
+    expect(existsSync(join(app, "bunvex/_generated/dataModel.d.ts"))).toBe(true);
   });
+
+  test("a type error stops the push before it finishes; --typecheck=disable and --codegen=disable", async () => {
+    const d = await deployment();
+    const app = tmp();
+    mkdirSync(join(app, "node_modules"));
+    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(app, "node_modules/bunvex"));
+    symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(app, "node_modules/typescript"));
+    write(app, {
+      "bunvex/a.ts": `import { v } from ${JSON.stringify(["bunvex", "values"].join("/"))};
+import { query } from "./_generated/server";
+export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => (await ctx.db.query("t").collect()).length.toString() });`,
+    });
+    expect(await main(["codegen", "--init", "--typecheck=disable"], io(app).it)).toBe(0);
+    const flags = ["--url", d.url, "--admin-key", KEY];
+    const failed = io(app);
+    expect(await main(["deploy", ...flags], failed.it)).toBe(1);
+    expect(failed.err.join("\n")).toContain(`bunvex/a.ts(3,`);
+    expect((await d.call("query", "a:q")).status).toBe("error"); // nothing was deployed
+    expect(await main(["deploy", "--typecheck=disable", ...flags], io(app).it)).toBe(0);
+    // Deployed despite the type error: its `returns` check fails at run time.
+    expect((await d.call("query", "a:q")).status).toBe("error");
+    expect((await d.call("query", "a:q")).errorMessage).toContain("ReturnsValidationError");
+    // Without codegen, _generated/ is left as it is.
+    const before = readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8");
+    write(app, {
+      "bunvex/b.ts": `import { query } from "./_generated/server";\nexport const r = query(async () => 1);`,
+    });
+    expect(await main(["deploy", "--codegen=disable", "--typecheck=disable", ...flags], io(app).it)).toBe(0);
+    expect(readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8")).toBe(before);
+    expect(await main(["deploy", "--codegen=sometimes", ...flags], io(app).it)).toBe(2);
+  }, 120_000);
 
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();

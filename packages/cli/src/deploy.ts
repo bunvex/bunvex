@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
+import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
 import type { Io } from "./io.ts";
 
 export const DEPLOY_USAGE = `Usage: bunvex deploy [options]
@@ -20,6 +21,8 @@ Options:
   --admin-key <key>    its admin key (default: BUNVEX_SELF_HOSTED_ADMIN_KEY)
   --dry-run            analyze the push without changing the deployment
   --env-file <path>    read BUNVEX_SELF_HOSTED_* from this file instead of .env.local / .env
+  --codegen <mode>     enable (default) or disable: regenerate _generated/
+  --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
@@ -40,16 +43,28 @@ export function parseEnvFile(text: string): Record<string, string> {
   return out;
 }
 
-export function functionsDir(cwd: string): string {
+type ProjectConfig = { functions?: unknown; codegen?: { fileType?: unknown } };
+
+function readProjectConfig(cwd: string): ProjectConfig {
   const configPath = join(cwd, "bunvex.json");
-  if (existsSync(configPath)) {
-    const config = JSON.parse(readFileSync(configPath, "utf8")) as { functions?: unknown };
-    if (config.functions !== undefined) {
-      if (typeof config.functions !== "string") throw new Error(`bunvex.json: "functions" must be a string`);
-      return resolve(cwd, config.functions);
-    }
+  return existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf8")) as ProjectConfig) : {};
+}
+
+export function functionsDir(cwd: string): string {
+  const config = readProjectConfig(cwd);
+  if (config.functions !== undefined) {
+    if (typeof config.functions !== "string") throw new Error(`bunvex.json: "functions" must be a string`);
+    return resolve(cwd, config.functions);
   }
   return resolve(cwd, "bunvex");
+}
+
+/** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
+export function codegenConfig(cwd: string): CodegenConfig {
+  const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
+  if (fileType !== "ts" && fileType !== "js/dts")
+    throw new Error(`bunvex.json: "codegen.fileType" must be "ts" or "js/dts"`);
+  return { fileType };
 }
 
 const sha256 = (m: ModuleConfig) =>
@@ -77,14 +92,30 @@ export function partitionModules(
   };
 }
 
-type Flags = { url?: string; adminKey?: string; dryRun: boolean; envFile?: string };
+type Flags = {
+  url?: string;
+  adminKey?: string;
+  dryRun: boolean;
+  envFile?: string;
+  codegen: boolean;
+  typecheck: TypecheckMode;
+};
 function parseFlags(args: string[]): Flags | string {
-  const f: Flags = { dryRun: false };
+  const f: Flags = { dryRun: false, codegen: true, typecheck: "try" };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--dry-run") f.dryRun = true;
-    else if (name === "--url" || name === "--admin-key" || name === "--env-file") {
+    else if (name === "--codegen" || name === "--typecheck") {
+      const v = inline ?? args[++i];
+      if (name === "--codegen") {
+        if (v !== "enable" && v !== "disable") return "--codegen must be enable or disable";
+        f.codegen = v === "enable";
+      } else {
+        if (v !== "enable" && v !== "try" && v !== "disable") return "--typecheck must be enable, try or disable";
+        f.typecheck = v;
+      }
+    } else if (name === "--url" || name === "--admin-key" || name === "--env-file") {
       const v = inline ?? args[++i];
       if (!v) return `${name} needs a value`;
       if (name === "--url") f.url = v;
@@ -125,8 +156,14 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     return 1;
   }
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
+  let dir: string;
+  let codegen: CodegenConfig;
   try {
-    bundled = await bundleFunctions(functionsDir(io.cwd));
+    dir = functionsDir(io.cwd);
+    codegen = codegenConfig(io.cwd);
+    // Convex's initial codegen: what modules importing `_generated/` need to bundle.
+    if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
+    bundled = await bundleFunctions(dir);
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
     return 1;
@@ -173,6 +210,15 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
       componentDefinitions: [],
       nodeDependencies: [],
     });
+    // Convex's final codegen and typecheck, after the push is analyzed and before it is finished.
+    if (flags.codegen) runCodegen(dir, codegen);
+    const checked = await typecheck(dir, io.cwd, flags.typecheck);
+    if (!checked.ok) {
+      io.err(checked.output);
+      io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+      return 1;
+    }
+    if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
     if (flags.dryRun) {
       const fns = Object.values(
         (start.analysis as Record<string, { functions: Record<string, { functions: unknown[] }> }>)[""]!.functions,
