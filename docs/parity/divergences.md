@@ -240,7 +240,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 
 | Study row | Missing |
 |---|---|
-| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | Existing documents are not re-checked when the schema changes (deploy/push flow) |
+| [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | ~~Existing documents are not re-checked when the schema changes~~ — closed by STUDY-35 (pushes walk them; writes while pending are checked) |
 | [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex` (phase 4); staged database indexes are built (STUDY-29) |
 | [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |

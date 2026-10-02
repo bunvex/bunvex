@@ -60,13 +60,26 @@ describe("a push's schema change", () => {
     const p2 = await e.startSchemaPush(v2);
     expect(p2.addedIndexes).toEqual(["items.by_tag"]);
     expect((await byIndex(e, "by_n", "n", 3)).length).toBe(1);
-    await e.mutation((db) => db.insert("items", { n: 99 })); // fine under v1 (tag optional)
-    await until(async () => (await e.schemaPushStatus(p2.schemaId)).type === "complete");
+    const untagged = await e.mutation((db) => db.insert("items", { n: 99 })); // fine under v1 (tag optional)
+    // ...but not under v2: the push fails, as Convex's, naming the document; the old schema keeps serving.
+    await until(async () => (await e.schemaPushStatus(p2.schemaId)).type === "failed");
+    const failed = await e.schemaPushStatus(p2.schemaId);
+    expect(failed).toMatchObject({ type: "failed", tableName: "items" });
+    expect((failed as { error: string }).error).toMatch(
+      new RegExp(
+        `^(Document with ID "${untagged}" in table "items" does not match the schema|Failed to insert or update a document in table "items" because it does not match the schema)`,
+      ),
+    );
+    await expect(e.commitSchemaPush(p2.schemaId, async () => {})).rejects.toThrow(/Schema validation failed/);
+    await e.mutation((db) => db.delete(untagged as string));
+    const p2b = await e.startSchemaPush(v2);
+    await until(async () => (await e.schemaPushStatus(p2b.schemaId)).type === "complete");
     expect((await byIndex(e, "by_n", "n", 3)).length).toBe(1); // still served: the push has not finished
     // The commit switches the validators for new writes (existing documents are validated separately).
-    const r = await e.commitSchemaPush(p2.schemaId, async () => "body ran");
+    const r = await e.commitSchemaPush(p2b.schemaId, async () => "body ran");
     expect(r.value).toBe("body ran");
     expect(r.indexDiff).toEqual({ enabled: ["items.by_tag"], disabled: [], dropped: ["items.by_n"] });
+    expect(p2b.addedIndexes).toEqual([]); // by_tag was added (and backfilled) by the failed push already
     expect((await byIndex(e, "by_tag", "tag", "t1")).length).toBe(17);
     await expect(byIndex(e, "by_n", "n", 3)).rejects.toThrow();
     await expect(e.mutation((db) => db.insert("items", { n: 1 }))).rejects.toThrow(/tag/);
@@ -80,17 +93,17 @@ describe("a push's schema change", () => {
     }).init();
     engines.push(e);
     const p0 = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()) }));
+    await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
     await e.commitSchemaPush(p0.schemaId, async () => {});
     for (let i = 0; i < 300; i += 100)
       await e.mutation(async (db) => {
         for (let j = i; j < i + 100; j++) await db.insert("items", { n: j });
       });
     const p = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) }));
-    expect(await e.schemaPushStatus(p.schemaId)).toEqual({
+    expect(await e.schemaPushStatus(p.schemaId)).toMatchObject({
       type: "inProgress",
       indexesComplete: 0,
       indexesTotal: 1,
-      schemaValidationComplete: true,
     });
     await expect(e.commitSchemaPush(p.schemaId, async () => {})).rejects.toBeInstanceOf(SchemaPushError);
     await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
@@ -119,13 +132,13 @@ describe("a push's schema change", () => {
         throw new Error("code rows failed");
       }),
     ).rejects.toThrow("code rows failed");
-    // Still the old schema: no validators (v1 wants a number), and the push still pending.
-    await e.mutation((db) => db.insert("items", { n: "not yet validated" }));
+    // Still the old schema: no validators (v1 wants a number), and the push not active.
     expect(
       await e.query((db) => db.asSystem(async () => (await db.query(SCHEMAS_TABLE).collect()).map((r) => r.state))),
-    ).toEqual(["pending"]);
+    ).toEqual(["validated"]);
     await e.commitSchemaPush(p.schemaId, async () => {});
     await expect(e.mutation((db) => db.insert("items", { n: "now validated" }))).rejects.toThrow();
+    expect((await e.query((db) => db.query("items").collect())).length).toBe(0);
   });
 
   test("an index the new schema drops is not dropped by the backfill's end, only by the commit", async () => {
@@ -144,6 +157,7 @@ describe("a push's schema change", () => {
   test("two pushes in a row, each backfilling an index: the worker runs again for the second", async () => {
     const e = await open(tmp());
     const base = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()) }));
+    await until(async () => (await e.schemaPushStatus(base.schemaId)).type === "complete");
     await e.commitSchemaPush(base.schemaId, async () => {});
     await e.mutation(async (db) => {
       for (let i = 0; i < 50; i++) await db.insert("items", { n: i, m: i % 5 });
@@ -204,6 +218,52 @@ describe("a push's schema change", () => {
     expect((await byIndex(b, "by_n", "n", 7)).length).toBe(1);
     expect([...b.schema.tables.keys()]).toEqual(["items"]);
     await expect(b.mutation((db) => db.insert("items", { n: "not a number" }))).rejects.toThrow();
+  });
+
+  test("existing documents are checked: the first that does not match fails the push, named as Convex's", async () => {
+    const e = await open(tmp());
+    const p0 = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()) }));
+    await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
+    await e.commitSchemaPush(p0.schemaId, async () => {});
+    for (let i = 0; i < 600; i++) await e.mutation((db) => db.insert("items", { n: i }));
+    const bad = await e.mutation((db) => db.insert("items", { n: "seven" }));
+    const p = await e.startSchemaPush(defineSchema({ items: defineTable({ n: v.number() }) }));
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "failed");
+    expect(await e.schemaPushStatus(p.schemaId)).toEqual({
+      type: "failed",
+      tableName: "items",
+      error: `Document with ID "${bad}" in table "items" does not match the schema: Value does not match validator.\nPath: .n\nValue: "seven"\nValidator: v.float64()`,
+    });
+  });
+
+  test("a write while the schema is pending is accepted, and fails the pending schema if it does not match", async () => {
+    const e = await open(tmp());
+    const p0 = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()) }));
+    await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
+    await e.commitSchemaPush(p0.schemaId, async () => {});
+    const p = await e.startSchemaPush(defineSchema({ items: defineTable({ n: v.number() }) }));
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
+    // Validated, not yet committed: a write the new schema refuses still lands (the active schema allows it)…
+    await e.mutation((db) => db.insert("items", { n: "late" }));
+    expect((await e.query((db) => db.query("items").collect())).length).toBe(1);
+    // …and fails the pending schema.
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "failed");
+    expect(((await e.schemaPushStatus(p.schemaId)) as { error: string }).error).toMatch(
+      /^Failed to insert or update a document in table "items" because it does not match the schema: /,
+    );
+    await expect(e.commitSchemaPush(p.schemaId, async () => {})).rejects.toThrow(/Schema validation failed/);
+  });
+
+  test("a table whose validator did not change is not walked, unless validation was off", async () => {
+    const e = await open(tmp());
+    const loose = defineSchema({ items: defineTable({ n: v.number() }) }, { schemaValidation: false });
+    const p0 = await e.startSchemaPush(loose);
+    await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
+    await e.commitSchemaPush(p0.schemaId, async () => {});
+    await e.mutation((db) => db.insert("items", { n: "not checked while validation is off" }));
+    const p = await e.startSchemaPush(defineSchema({ items: defineTable({ n: v.number() }) }));
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type !== "inProgress");
+    expect((await e.schemaPushStatus(p.schemaId)).type).toBe("failed");
   });
 
   test("schemaToJson / schemaFromJson round-trip (Convex's DatabaseSchema shape)", () => {

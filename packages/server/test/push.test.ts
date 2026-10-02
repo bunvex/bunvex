@@ -184,6 +184,28 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
+  test("a schema the existing documents do not match: wait_for_schema answers failed", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const loose = mod(
+      "schema.js",
+      `import { defineSchema, defineTable } from "@bunvex/server"; import { v } from "@bunvex/values";
+       export default defineSchema({ messages: defineTable(v.any()).index("by_author", ["author"]) });`,
+    );
+    await d.push([messages(1)], loose);
+    await d.call("mutation", "messages:send", { author: "ada", body: "ok" });
+    const strict = mod(
+      "schema.js",
+      `import { defineSchema, defineTable } from "@bunvex/server"; import { v } from "@bunvex/values";
+       export default defineSchema({ messages: defineTable({ author: v.string(), body: v.string(), score: v.number() }).index("by_author", ["author"]) });`,
+    );
+    const r = await d.push([messages(2)], strict);
+    expect(r.wait).toMatchObject({ type: "failed", componentPath: "", tableName: "messages" });
+    expect(r.wait!.error).toMatch(/^Document with ID ".+" in table "messages" does not match the schema: /);
+    expect(r.finish!.body.code).toBe("SchemaNotReady");
+    expect((await d.call("query", "messages:list")).value).toEqual(["ok v1"]);
+  });
+
   test("the Deploy operation: no key, a read-only key, an embedded server", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

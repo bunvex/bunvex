@@ -780,6 +780,13 @@ export class Tx {
 
   /** Validators of the declared tables' documents; set by the engine for mutations (STUDY-14). */
   docValidators: Map<string, GenericValidator> | null = null;
+  /**
+   * A pushed schema's validators while it is pending (STUDY-35, Convex's `enforce` on a pending schema): a
+   * write that does not match is NOT refused — it fails the pending schema once the write commits.
+   */
+  pendingValidators: Map<string, GenericValidator> | null = null;
+  /** The first write this transaction made that the pending schema refuses: its table and message. */
+  pendingViolation: { table: string; error: string } | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     if (!this.writable) throw new Error("queries cannot write");
@@ -791,6 +798,15 @@ export class Tx {
         throw new Error(
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
         );
+    }
+    const pv = next && !this.pendingViolation && this.pendingValidators?.get(t.name);
+    if (pv) {
+      const msg = checkValue(pv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+      if (msg)
+        this.pendingViolation = {
+          table: t.name,
+          error: `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
+        };
     }
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).

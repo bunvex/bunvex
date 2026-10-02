@@ -3,7 +3,7 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
-import { fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
+import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
 import {
   bootstrapCatalog,
   buildCatalog,
@@ -494,14 +494,7 @@ export class Engine {
   }
 
   private installValidators(schema: SchemaDefinition) {
-    // Schema enforcement (STUDY-14): each declared table's validator, with the system fields added.
-    const out = new Map<string, GenericValidator>();
-    if (schema.schemaValidation)
-      for (const t of schema.tables.values()) {
-        const dv = documentValidator(t.name, t.document);
-        if (dv) out.set(t.name, dv);
-      }
-    this.docValidators = out;
+    this.docValidators = validatorsOf(schema);
   }
 
   private startIndexWorker() {
@@ -511,6 +504,79 @@ export class Engine {
 
   /** The schema change a push started and has not finished: its `_schemas` row and the schema. */
   private pendingPush: { id: string; schema: SchemaDefinition } | null = null;
+  /** The pending schema's document validators, checked on every write (but not enforced) until it finishes. */
+  private pendingValidators: Map<string, GenericValidator> | null = null;
+  /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
+  private validation: Promise<unknown> | null = null;
+
+  /** A transaction's commit hook, plus failing the pending schema when one of its writes did not match it. */
+  private withPendingCheck(tx: Tx): ((ts: number) => void) | undefined {
+    const own = tx.onCommitVisible;
+    const v = tx.pendingViolation;
+    if (!v) return own ?? undefined;
+    const pending = this.pendingPush;
+    return (ts) => {
+      own?.(ts);
+      if (pending) void this.failSchemaPush(pending.id, v.error, v.table).catch(() => {});
+    };
+  }
+
+  /** Mark a pending (or validated) schema `failed` (Convex's `mark_failed`). */
+  private async failSchemaPush(schemaId: string, error: string, tableName: string | null) {
+    await this.runMutation(
+      async (db) => {
+        const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
+        if (row && (row.state === "pending" || row.state === "validated"))
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: "failed", error, tableName });
+      },
+      true,
+      "schema_worker",
+    );
+  }
+
+  /**
+   * Convex's `SchemaWorker`: walk every table whose validator the pushed schema changes (or adds) and check
+   * each existing document; the first that does not match fails the schema
+   * (`Document with ID "…" in table "…" does not match the schema: …`), else it becomes `validated`. Writes
+   * made meanwhile are checked as they commit (`pendingValidators`).
+   */
+  private async validateExisting(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
+    const stillPending = () => this.pendingPush?.id === schemaId;
+    if (schema.schemaValidation)
+      for (const t of schema.tables.values()) {
+        const validator = documentValidator(t.name, t.document);
+        if (!validator) continue;
+        const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
+        if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
+        let cursor: string | null = null;
+        for (;;) {
+          if (!stillPending()) return;
+          const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
+          for (const doc of page.page) {
+            const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+            if (msg) {
+              await this.failSchemaPush(
+                schemaId,
+                `Document with ID "${doc._id as string}" in table "${t.name}" does not match the schema: ${msg}`,
+                t.name,
+              );
+              return;
+            }
+          }
+          if (page.isDone) break;
+          cursor = page.continueCursor;
+        }
+      }
+    if (!stillPending()) return;
+    await this.runMutation(
+      async (db) => {
+        const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
+        if (row?.state === "pending") await db.patch(SCHEMAS_TABLE, schemaId, { state: "validated" });
+      },
+      true,
+      "schema_worker",
+    );
+  }
 
   /**
    * A push's schema change, first half (Convex's `start_push` → `handle_schema_change_in_start_push`):
@@ -533,7 +599,8 @@ export class Engine {
         for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
         for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
         for (const row of await db.query(SCHEMAS_TABLE).collect())
-          if (row.state === "pending") await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+          if (row.state === "pending" || row.state === "validated")
+            await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
         const schemaId = await db.insert(SCHEMAS_TABLE, {
           state: "pending",
           schema: JSON.stringify(schemaToJson(schema)),
@@ -550,7 +617,14 @@ export class Engine {
       "start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
+    const active = this.schema;
     this.pendingPush = { id: r.schemaId, schema };
+    this.pendingValidators = validatorsOf(schema);
+    this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
+      this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
+        () => {},
+      ),
+    );
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }
@@ -574,6 +648,7 @@ export class Engine {
         if (row.state === "failed")
           return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
         if (row.state === "active") return { type: "complete" as const };
+        const validated = row.state === "validated";
         const pending = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
         const indexes = (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
@@ -588,12 +663,12 @@ export class Engine {
             total++;
             if (live.some((i) => i.state !== "backfilling")) done++;
           }
-        if (done < total)
+        if (done < total || !validated)
           return {
             type: "inProgress" as const,
             indexesComplete: done,
             indexesTotal: total,
-            schemaValidationComplete: true,
+            schemaValidationComplete: validated,
           };
         return { type: "complete" as const };
       }),
@@ -617,8 +692,15 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (!row || row.state !== "pending")
+        if (row?.state === "failed")
+          throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${row.error as string}`);
+        if (!row || (row.state !== "pending" && row.state !== "validated"))
           throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
+        if (row.state !== "validated")
+          throw new SchemaPushError(
+            "SchemaNotReady",
+            "The existing documents are still being checked against the schema.",
+          );
         const { tables, indexes } = await readCatalog(db);
         const f = finishCatalog(declared, tables, indexes);
         if (!f) throw new SchemaPushError("SchemaNotReady", "The schema's indexes are still backfilling.");
@@ -638,7 +720,10 @@ export class Engine {
           this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
           this.schema = pending.schema;
           this.installValidators(pending.schema);
-          if (this.pendingPush?.id === schemaId) this.pendingPush = null;
+          if (this.pendingPush?.id === schemaId) {
+            this.pendingPush = null;
+            this.pendingValidators = null;
+          }
         };
         return {
           value,
@@ -692,7 +777,10 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.instanceSecret = this.instanceSecret;
-    if (kind === "mutation") tx.docValidators = this.docValidators;
+    if (kind === "mutation") {
+      tx.docValidators = this.docValidators;
+      tx.pendingValidators = this.pendingValidators;
+    }
     const observed: Observed = { time: false };
     const value = await runDeterministic(kind, now, () => body(tx), observed);
     return { tx, value, observed, now };
@@ -980,7 +1068,7 @@ export class Engine {
           docs,
           idx,
           source,
-          onVisible: tx.onCommitVisible ?? undefined,
+          onVisible: this.withPendingCheck(tx),
         });
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
@@ -1059,6 +1147,17 @@ export async function readSystemRows(persistence: Persistence, table: string): P
   const { tables, indexes } = await readCatalog(read(bootstrapCatalog()));
   if (!tables.some((t) => t.name === table)) return [];
   return (await read(buildCatalog(tables, indexes)).query(table).collect()) as Record<string, unknown>[];
+}
+
+/** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */
+function validatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
+  const out = new Map<string, GenericValidator>();
+  if (schema.schemaValidation)
+    for (const t of schema.tables.values()) {
+      const dv = documentValidator(t.name, t.document);
+      if (dv) out.set(t.name, dv);
+    }
+  return out;
 }
 
 /** A push's schema change that cannot finish (Convex's `RaceDetected`, or indexes not ready). */
