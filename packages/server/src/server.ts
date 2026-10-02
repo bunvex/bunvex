@@ -42,7 +42,7 @@ import { ExportError, ExportService } from "./exports.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
-import { ImportError, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
+import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -147,6 +147,8 @@ export type ServerOptions = {
    * imports off.
    */
   importStorage?: BlobStore | null;
+  /** The import worker's clock and retry backoff (tests). */
+  importOptions?: ImportOptions;
   fileStorage?: BlobStore | null;
   /**
    * The public origins (F2): the API's, which file URLs start with (Convex's `CONVEX_CLOUD_ORIGIN`), and the
@@ -739,7 +741,9 @@ export function createServer(opts: ServerOptions) {
           s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
         })
       : opts.importStorage;
-  const importService = importStore ? new ImportService(engine, importStore, blobs ?? null) : null;
+  const importService = importStore
+    ? new ImportService(engine, importStore, blobs ?? null, opts.importOptions ?? {})
+    : null;
   importService?.startWorker();
   /** Convex's `parse_format_arg`. */
   const importFormat = (format: string | null, table: string | null): ImportFormat => {

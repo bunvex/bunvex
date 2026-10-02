@@ -30,6 +30,15 @@ afterEach(async () => {
 
 type Doc = Record<string, Value>;
 
+/** A blob store whose reads fail while `failRead` says so (a storage outage). */
+class FlakyStore extends MemoryBlobStore {
+  failRead: (key: string, range?: { start: number; end: number }) => boolean = () => false;
+  override async get(key: string, range?: { start: number; end: number }) {
+    if (this.failRead(key, range)) throw new Error("storage is unavailable");
+    return super.get(key, range);
+  }
+}
+
 async function setup(schema: SchemaDefinition = defineSchema({})) {
   const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
     instanceName: NAME,
@@ -42,13 +51,15 @@ async function setup(schema: SchemaDefinition = defineSchema({})) {
     uploadUrl: mutation(async ({ storage }) => storage.generateUploadUrl()),
   });
   const files = new MemoryBlobStore();
+  const uploads = new FlakyStore();
   const s = createServer({
     engine,
     functions,
     port: 0,
     fileStorage: files,
     exportStorage: new MemoryBlobStore(),
-    importStorage: new MemoryBlobStore(),
+    importStorage: uploads,
+    importOptions: { retryBackoffMs: { initial: 5, max: 20 } },
   });
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
@@ -96,7 +107,7 @@ async function setup(schema: SchemaDefinition = defineSchema({})) {
     const res = await post("/api/import/finish_upload", { import: args, uploadToken, partTokens });
     return (await res.json()) as { importId: string };
   };
-  return { engine, functions, api, post, importNow, docs, queryImport, waitState, upload, files };
+  return { engine, functions, api, post, importNow, docs, queryImport, waitState, upload, files, uploads };
 }
 
 /** A ZIP built as an export builds it. */
@@ -446,6 +457,59 @@ describe("modes, ids and the summary", () => {
     const res = await t.post("/api/import?format=jsonLines&tableName=x", "{}\n", READ_ONLY);
     expect(res.status).toBe(403);
     expect((await t.post("/api/import/start_upload", {}, READ_ONLY)).status).toBe(403);
+  });
+});
+
+describe("system errors", () => {
+  test("a storage failure is retried, and the next attempt resumes where the last one stopped", async () => {
+    const t = await setup();
+    const big = Array.from({ length: 8005 }, (_, i) => `{"i":${i}}`).join("\n");
+    const zipBytes = await zipOf([
+      ["a/documents.jsonl", `${big}\n`],
+      ["b/documents.jsonl", '{"b":1}\n'],
+    ]);
+    // Find where `b`'s bytes start, and fail its read while the import runs (its 2nd read; the 1st is the summary's).
+    const { ZipReader } = await import("../src/zip-reader.ts");
+    const zr = await ZipReader.open({
+      size: zipBytes.length,
+      read: async (a, b) => zipBytes.slice(a, b + 1),
+      stream: async (a, b) => new Blob([zipBytes.slice(a, b + 1)]).stream(),
+    });
+    const b = zr.entries.find((e) => e.name === "b/documents.jsonl")!;
+    let reads = 0;
+    t.uploads.failRead = (_key, range) => range?.start === b.offset && ++reads === 2;
+    const r = await t.importNow(zipBytes, "format=zip");
+    expect(r.body).toEqual({ numWritten: 8006 });
+    expect(reads).toBeGreaterThanOrEqual(3);
+    // `a` was written once: its first 8001 rows by the failed attempt, the rest by the next one.
+    const a = await t.docs("a");
+    expect(a.length).toBe(8005);
+    expect(new Set(a.map((d) => d.i)).size).toBe(8005);
+    expect(await t.docs("b")).toHaveLength(1);
+    // The retry wrote into the same hidden table: none is left over.
+    await t.engine.tablesDeleted();
+    expect(t.engine.catalog.hidden.size).toBe(0);
+  });
+
+  test("a storage failure that lasts fails the import after Convex's retries, leaving nothing", async () => {
+    const t = await setup();
+    const zipBytes = await zipOf([["a/documents.jsonl", '{"a":1}\n']]);
+    const { importId } = await t.upload(zipBytes, { format: "zip" }, 1 << 20);
+    await t.waitState(importId, ["waiting_for_confirmation"]);
+    let reads = 0;
+    t.uploads.failRead = (_key, range) => range !== undefined && ++reads > 0;
+    const hiddenBefore = t.engine.catalog.hidden.size;
+    await t.post("/api/perform_import", { importId });
+    const done = await t.waitState(importId, ["completed", "failed"]);
+    expect(done.state).toEqual({
+      state: "failed",
+      error_message: "Your request couldn't be completed. Try again later.",
+    });
+    // The first attempt and MAX_SYSTEM_FAILURES retries.
+    expect(reads).toBeGreaterThanOrEqual(6);
+    await t.engine.tablesDeleted();
+    expect(t.engine.catalog.hidden.size).toBe(hiddenBefore);
+    expect(t.engine.catalog.tables.has("a")).toBe(false);
   });
 });
 
