@@ -53,7 +53,7 @@ describe("the Analytics extension", () => {
     expect(within(tile).getByText(String(r.visitorsLast30Min))).toBeDefined();
     expect(within(tile).getByText("desktop")).toBeDefined(); // shown capitalised by CSS
     expect(screen.getByText(/The map needs WebGL/)).toBeDefined();
-    for (const name of ["Pages", "Referrers", "Countries", "Browsers"])
+    for (const name of ["Pages", "Referrers", "Countries", "Browsers and apps"])
       expect(screen.getByRole("region", { name })).toBeDefined();
     const countries = screen.getByRole("region", { name: "Countries" });
     expect(within(countries).getByText(r.countries[0]!.name)).toBeDefined();

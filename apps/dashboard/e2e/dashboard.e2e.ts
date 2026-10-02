@@ -1079,6 +1079,7 @@ describe("the dashboard in a browser", () => {
         ["/topology?nodes=4", "Topology"],
         ["/topology?nodes=4&node=node-b", "Topology"],
         ["/flags?flag=new-dashboard", "Feature flags"],
+        ["/auth/sessions", "Sessions"],
       ] as const) {
         const { page, close } = await open(path, { colorScheme });
         await heading(page, name);

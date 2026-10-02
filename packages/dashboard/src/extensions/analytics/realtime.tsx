@@ -198,7 +198,7 @@ export function RealtimePage({ heading }: { heading: ReactNode }) {
             <Breakdown title="Pages" column="Path" rows={r.pages} />
             <Breakdown title="Referrers" column="Referrer" rows={r.referrers} />
             <Breakdown title="Countries" column="Country" rows={r.countries} />
-            <Breakdown title="Browsers" column="Browser" rows={r.browsers} />
+            <Breakdown title="Browsers and apps" column="Browser or app" rows={r.browsers} />
           </div>
         </div>
       )}
