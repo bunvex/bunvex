@@ -25,7 +25,7 @@ const verifier = mockVerifier();
 const LoginScreen = lazy(() => import("./login/login-screen.tsx").then((m) => ({ default: m.LoginScreen })));
 
 function mockSource(session: Exclude<HostSession, { kind: "signed-out" }>) {
-  return new MockDataSource({
+  const source = new MockDataSource({
     latencyMs: Number(params.get("latency") ?? 120),
     failRate: Number(params.get("fail") ?? 0),
     // a task inserted (or deleted) every few seconds, so the Database screen has something live to show
@@ -41,6 +41,10 @@ function mockSource(session: Exclude<HostSession, { kind: "signed-out" }>) {
     // a signed-in key brings its permissions (a read-only key, a viewer key: credentials.ts)
     ...(session.kind === "deployment" && { capabilities: capabilitiesOf(session, OPERATIONS) }),
   });
+  // ?validate=pass|fail: as if a schema had just been pushed, checked against the documents (UI-01 §21.4)
+  const validate = params.get("validate");
+  if (validate === "pass" || validate === "fail") source.simulateSchemaValidation(validate);
+  return source;
 }
 
 function App() {
@@ -107,10 +111,6 @@ function App() {
     />
   );
 }
-
-// ?validate=pass|fail: as if a schema had just been pushed, checked against the documents (UI-01 §21.4)
-const validate = params.get("validate");
-if (validate === "pass" || validate === "fail") source.simulateSchemaValidation(validate);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
