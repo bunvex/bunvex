@@ -189,6 +189,16 @@ describe("the dashboard in a browser", () => {
           .reduce((n, e) => n + (e as PerformanceResourceTiming).decodedBodySize, 0) / 1024,
     );
     expect(kb).toBeLessThan(660);
+    // the header's theme toggle once pulled Base UI's tooltip (its whole floating-positioning engine, ~83 kB)
+    // into this load: no tooltip popup machinery before a screen asks for it
+    const loaded = await page.evaluate(() =>
+      performance
+        .getEntriesByType("resource")
+        .map((e) => e.name.split("/").pop() ?? "")
+        .filter((n) => n.endsWith(".js")),
+    );
+    const dist = `${import.meta.dir}/../dist/assets`;
+    expect(loaded.filter((n) => readFileSync(`${dist}/${n}`, "utf8").includes("tooltip-trigger"))).toEqual([]);
     await close();
   });
 
