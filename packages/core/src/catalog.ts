@@ -28,6 +28,8 @@ export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
 /** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
 export const SCHEMAS_TABLE = "_schemas";
+/** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
+export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";

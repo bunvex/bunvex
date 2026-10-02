@@ -11,6 +11,7 @@ import {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  ENVIRONMENT_VARIABLES_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -50,6 +51,7 @@ import {
   runDeterministic,
   wallClock,
 } from "./determinism.ts";
+import { EnvironmentVariables } from "./environment-variables.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
@@ -226,6 +228,13 @@ export class Engine {
    * New indexes are NOT waited for: they are backfilled in the background (STUDY-29), and a query on one
    * fails with `IndexBackfillingError` until it is enabled; `indexesReady()` resolves then.
    */
+  private env: EnvironmentVariables | null = null;
+  /** The deployment's environment variables (STUDY-37). */
+  get environment(): EnvironmentVariables {
+    this.env ??= new EnvironmentVariables(() => this.catalog, this.committer);
+    return this.env;
+  }
+
   async init() {
     // The lease first (PERSIST-01 C7): maxTs is only meaningful once no other process can write.
     if (hasLease(this.persistence)) await this.acquireLease(this.persistence);
@@ -433,6 +442,7 @@ export class Engine {
       { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
       { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
+      { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
     ];
     return [...systemTables, ...schema.tables.values()];
   }

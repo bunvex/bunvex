@@ -5,6 +5,7 @@
 import type { UserIdentity } from "@bunvex/auth";
 import {
   type Caller,
+  checkEnvVarName,
   type Engine,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -31,6 +32,7 @@ import {
   type DeploymentOp,
   OperationNotPermittedError,
 } from "./admin-keys.ts";
+import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import type {
@@ -234,7 +236,40 @@ export class Functions {
     for (const k of fns.keys()) if (!this.fns.has(k)) changed.add(Functions.moduleOf(k));
     this.fns = new Map(fns);
     this.moduleHashes = new Map(moduleHashes);
+    this.deployed = true;
     return changed;
+  }
+
+  /** Whether the functions are pushed code, which sees the deployment's variables (STUDY-37 E3). */
+  private deployed = false;
+  /** The built-in variables (the server's origins), read after the deployment's (which cannot hold them). */
+  builtinEnv: Record<string, string> = {};
+
+  /** A query's or mutation's `process.env`: each read in `db`'s read set. */
+  private async txEnv(db: Tx): Promise<EnvReader | null> {
+    if (!this.deployed) return null;
+    const read = await this.engine.environment.reader(db);
+    return (name) => read(name) ?? this.builtinEnv[name];
+  }
+
+  /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
+  private async actionEnv(): Promise<{ all: Record<string, string>; read: EnvReader } | null> {
+    if (!this.deployed) return null;
+    const vars = await this.engine.query((db) => this.engine.environment.snapshot(db));
+    const all = { ...this.builtinEnv, ...Object.fromEntries(vars) };
+    return {
+      all,
+      read: (name) => {
+        checkEnvVarName(name);
+        return all[name];
+      },
+    };
+  }
+
+  /** Run `fn` under an action's environment. */
+  private async inActionEnv<T>(fn: () => T | Promise<T>): Promise<T> {
+    const env = await this.actionEnv();
+    return env ? withAllEnv(env.all, env.read, fn) : fn();
   }
 
   /** Where files go (STUDY-32); set by `createServer`. */
@@ -327,14 +362,16 @@ export class Functions {
   queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const f = this.fn(name, "query", fromClient, caller);
-    return async (db: Tx) =>
-      this.checkReturns(
-        f,
-        await f.handler(
-          { db: db as unknown as QueryCtx["db"], auth: txAuth(db), storage: this.fileStorage?.reader(db) ?? noStorage },
-          this.checkArgs(f, args),
-        ),
-      );
+    return async (db: Tx) => {
+      const ctx = {
+        db: db as unknown as QueryCtx["db"],
+        auth: txAuth(db),
+        storage: this.fileStorage?.reader(db) ?? noStorage,
+      };
+      const a = this.checkArgs(f, args);
+      const env = await this.txEnv(db);
+      return this.checkReturns(f, await (env ? withEnv(env, () => f.handler(ctx, a)) : f.handler(ctx, a)));
+    };
   }
 
   /**
@@ -342,20 +379,17 @@ export class Functions {
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
    */
   private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
-    return perAttempt(async (db: Tx) =>
-      this.checkReturns(
-        f,
-        await f.handler(
-          {
-            db: db as unknown as MutationCtx["db"],
-            auth: txAuth(db),
-            scheduler: makeScheduler(this, { db, job }),
-            storage: this.fileStorage?.writer(db) ?? noStorage,
-          },
-          this.checkArgs(f, args),
-        ),
-      ),
-    );
+    return perAttempt(async (db: Tx) => {
+      const ctx = {
+        db: db as unknown as MutationCtx["db"],
+        auth: txAuth(db),
+        scheduler: makeScheduler(this, { db, job }),
+        storage: this.fileStorage?.writer(db) ?? noStorage,
+      };
+      const a = this.checkArgs(f, args);
+      const env = await this.txEnv(db);
+      return this.checkReturns(f, await (env ? withEnv(env, () => f.handler(ctx, a)) : f.handler(ctx, a)));
+    });
   }
 
   /**
@@ -558,7 +592,7 @@ export class Functions {
     const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
     const ctx = this.actionCtx(caller, null, opts.job);
     const a = this.checkArgs(f, args);
-    return this.actionPermits.run(() => Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
+    return this.actionPermits.run(() => this.inActionEnv(() => f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
   }
 
   /**
@@ -590,6 +624,6 @@ export class Functions {
     authError: Error | null,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError);
-    return this.actionPermits.run(async () => handler(ctx, request));
+    return this.actionPermits.run(async () => this.inActionEnv(() => handler(ctx, request)));
   }
 }

@@ -114,17 +114,36 @@ export async function storedModules(engine: Engine): Promise<{ rows: ModuleRow[]
   );
 }
 
-/** The latest deployed version, loaded (what a deployable server runs on start), or null. */
+/** The auth config travels in the package beside the modules, but is not one (STUDY-35, STUDY-37). */
+export const AUTH_CONFIG_MODULE = "auth.config.js";
+
+/**
+ * The latest deployed code (what a deployable server runs on start): the version, loaded, and the
+ * stored `auth.config.js`, if any; or null.
+ */
+export async function loadLatestCode(
+  engine: Engine,
+  store: BlobStore,
+  env: Record<string, string> = {},
+): Promise<{ version: CodeVersion; authConfig: ModuleSource | null } | null> {
+  const stored = await storedModules(engine);
+  if (!stored) return null;
+  const sources = await readPackage(store, stored.pkg.storageKey);
+  const config = await udfConfig(engine);
+  const version = await CodeVersion.load(
+    sources.filter((m) => m.path !== AUTH_CONFIG_MODULE),
+    { seed: config.seed, timestamp: config.timestamp, env },
+  );
+  return { version, authConfig: sources.find((m) => m.path === AUTH_CONFIG_MODULE) ?? null };
+}
+
+/** The latest deployed version, loaded, or null. */
 export async function loadLatestCodeVersion(
   engine: Engine,
   store: BlobStore,
   env: Record<string, string> = {},
 ): Promise<CodeVersion | null> {
-  const stored = await storedModules(engine);
-  if (!stored) return null;
-  const sources = await readPackage(store, stored.pkg.storageKey);
-  const config = await udfConfig(engine);
-  return CodeVersion.load(sources, { seed: config.seed, timestamp: config.timestamp, env });
+  return (await loadLatestCode(engine, store, env))?.version ?? null;
 }
 
 export { moduleName };

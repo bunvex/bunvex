@@ -395,6 +395,20 @@ export class Tx {
     this.recordInterval(ix.metaRead);
   }
 
+  /**
+   * @internal Run `fn` without keeping the reads it records: for values read whole and then recorded one
+   * by one (the environment variables, STUDY-37).
+   */
+  async unrecorded<T>(fn: () => Promise<T>): Promise<T> {
+    const n = this.reads.length;
+    try {
+      return await fn();
+    } finally {
+      void this.reads; // settle the scans it made
+      this.readList.length = n;
+    }
+  }
+
   /** @internal (ScanReads) */
   recordInterval(i: Interval) {
     this.readList.push(i);
