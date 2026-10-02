@@ -10,9 +10,6 @@ const ALLOWED: Record<string, string> = {
   "files/screen.tsx": "a hidden file input behind the column's Upload button",
   "shell/section-column.tsx": "facet radios styled with accent-primary, one per row with its count",
   "schema/diagram.tsx": "the canvas toolbar's 'Group related tables' toggle",
-  // TODO(UX2-3, Authentication PR): move to ChoiceSelect, then drop these two lines
-  "auth/config.tsx": "Multi-factor 'Required for' — Authentication follow-up",
-  "auth/user-panel.tsx": "'Ban for' — Authentication follow-up",
 };
 
 function* sources(dir: string): Generator<string> {

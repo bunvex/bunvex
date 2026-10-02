@@ -2110,8 +2110,8 @@ every one. They land in five pull requests, one subsection each.
   system's Select), `ChoiceRadios` (Base UI RadioGroup with a label) and `FilePicker` (a button, the file's
   name and a drop zone over a hidden `<input type="file">`). The flag editor and Snapshots use them; a test
   (`test/native-controls.test.ts`) fails on any `<select>` or native file/radio/checkbox input outside an
-  explicit allow-list (the column's facet radios, Files' hidden upload input, the Schema toolbar's toggle, and
-  — until the Authentication pull request — two Authentication selects).
+  explicit allow-list (the column's facet radios, Files' hidden upload input and the Schema toolbar's toggle;
+  Authentication's two native selects use the design system's Select since its UX review 2 pull request).
 - **No error before typing** (UX2-5): the new-flag form says nothing until something is typed; Create stays
   disabled meanwhile (as the filters since UX-2).
 - **The Database bar keeps one row when narrow** (UX2-21): below a 42 rem table width (the panel open) "Index",
@@ -2177,3 +2177,13 @@ every one. They land in five pull requests, one subsection each.
   fragments, and its direct labels stay inside the plot (pushed up from the bottom, still a line apart).
 - **Analytics on a phone** (UX2-27): the visitors card, then the map (260 px), the breakdowns, and the live
   feed last — five items until "Show N more".
+
+### UX review 2 — Authentication (UX2-18, UX2-19, and the Authentication parts of UX2-3)
+
+- **One "Sessions"** (UX2-18): the configuration page is "Session lifetime"; "Sessions" is the list of who is
+  signed in.
+- **Sessions do what the page is for** (UX2-19): a search by email, device or IP in Bar 2 (Revoke per row
+  was already there); the Impersonated column only when some session was impersonated, "—" otherwise. The
+  Organizations detail panel (members, invitations) is the Authentication follow-up pull request (#188).
+- **No browser selects** (UX2-3): Multi-factor's "Required for" and the user panel's "Ban for" use the design
+  system's Select.
