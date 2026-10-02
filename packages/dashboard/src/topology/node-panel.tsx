@@ -28,11 +28,9 @@ export function NodePanel({
   return (
     <Panel kind="topology-node" title={<span className="font-mono">{n.id}</span>} onClose={onClose}>
       <Tabs defaultValue="overview">
-        <TabsList variant="line">
-          <TabsTrigger value="overview" className="text-sm">
-            Overview
-          </TabsTrigger>
-          <TabsTrigger value="cache" className="text-sm" disabled={!n.cache}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="cache" disabled={!n.cache}>
             Cache
           </TabsTrigger>
         </TabsList>

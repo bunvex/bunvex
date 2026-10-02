@@ -308,6 +308,9 @@ export type AuthSearch = {
   status?: "verified" | "unverified" | "banned";
   user?: string;
   tab?: "overview" | "logs" | "json";
+  /** Organizations: the open organization and its tab. */
+  org?: string;
+  orgTab?: "members" | "invitations";
 };
 export const validateAuthSearch = (input: Record<string, unknown>): AuthSearch => ({
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
@@ -319,6 +322,8 @@ export const validateAuthSearch = (input: Record<string, unknown>): AuthSearch =
       : undefined,
   user: str(input.user),
   tab: input.tab === "logs" || input.tab === "json" || input.tab === "overview" ? input.tab : undefined,
+  org: str(input.org),
+  orgTab: input.orgTab === "members" || input.orgTab === "invitations" ? input.orgTab : undefined,
 });
 
 /** `/auth` opens Users. */

@@ -51,7 +51,7 @@ export function DeleteSelected(props: {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button variant="destructive" size="sm" onClick={() => setOpen(true)}>
+      <Button variant="destructive-outline" size="sm" onClick={() => setOpen(true)}>
         Delete {formatCount(props.ids.length)}
       </Button>
       <DeleteDialog

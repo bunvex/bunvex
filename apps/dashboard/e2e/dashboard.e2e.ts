@@ -484,6 +484,72 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schema: a group's header drags the group and its tables; kept after a reload; Reset layout restores", async () => {
+    const { page, errors, close } = await open("/schema");
+    await heading(page, "Schema");
+    const tasks = page.locator('.react-flow__node-table[data-id="tasks"]');
+    const imports = page.locator('.react-flow__node-table[data-id="imports"]');
+    await tasks.waitFor();
+    await imports.waitFor();
+    // tasks (in a group) measured against imports (in none), in diagram units: a reload's fit does not matter
+    const rel = async () => {
+      const t = (await tasks.boundingBox())!;
+      const i = (await imports.boundingBox())!;
+      const scale = t.width / 272; // a card is 272 px wide at zoom 1
+      return { dx: (t.x - i.x) / scale, dy: (t.y - i.y) / scale };
+    };
+    const near = (a: { dx: number; dy: number }, b: { dx: number; dy: number }) =>
+      Math.abs(a.dx - b.dx) < 2 && Math.abs(a.dy - b.dy) < 2;
+    const rel0 = await rel();
+    const handle = page.locator(".schema-group-handle").first();
+    const h = (await handle.boundingBox())!;
+    await page.mouse.move(h.x + 12, h.y + h.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(h.x + 132, h.y + h.height / 2 + 90, { steps: 8 });
+    await page.mouse.up();
+    // the group's tables moved with it
+    const rel1 = await rel();
+    expect(rel1.dx - rel0.dx).toBeGreaterThan(20);
+    expect(rel1.dy - rel0.dy).toBeGreaterThan(10);
+    await page.reload();
+    await heading(page, "Schema");
+    await tasks.waitFor();
+    await expect_(async () => expect(near(await rel(), rel1)).toBe(true));
+    await page.getByRole("button", { name: "Reset layout" }).click();
+    await expect_(async () => expect(near(await rel(), rel0)).toBe(true));
+    expect(await page.evaluate(() => localStorage.getItem("bunvex:schema-layout:default"))).toBeNull();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Overview: the cache hit rate opens as a heatmap; axe with contrast on it, in both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/", { colorScheme });
+      await heading(page, "Overview");
+      // the charts mount when the Metrics section scrolls into view (they are lazy)
+      await page.getByRole("heading", { level: 2, name: "Metrics" }).scrollIntoViewIfNeeded();
+      await page.mouse.wheel(0, 400);
+      await page.getByRole("region", { name: "Cache hit rate" }).waitFor({ timeout: 20_000 });
+      await page.locator('[data-slot="heatmap"] td[data-step]').first().waitFor({ timeout: 20_000 });
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run('[data-slot="heatmap"]', { resultTypes: ["violations"] });
+        return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+      });
+      expect(violations).toEqual([]);
+      // the steps are the theme's tokens, painted
+      const bg = await page
+        .locator('[data-slot="heatmap"] td[data-step]')
+        .first()
+        .evaluate((td) => getComputedStyle(td).backgroundColor);
+      expect(bg).not.toBe("rgba(0, 0, 0, 0)");
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test("Database: the grid fills to the bottom, the bars line up with the panel's header, the panel follows the row", async () => {
     for (const [table, width] of [
       ["tasks", 1440],
@@ -737,8 +803,8 @@ describe("the dashboard in a browser", () => {
     const { page, errors, close } = await open("/settings/general", { viewport: { width: 390, height: 844 } });
     await heading(page, "General");
     expect(await page.locator('[data-slot="section-column"]').isVisible()).toBe(false);
-    await page.getByRole("button", { name: "Pages" }).click();
-    await page.getByRole("complementary", { name: "Pages" }).getByRole("link", { name: "Snapshots" }).click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("complementary", { name: "Settings" }).getByRole("link", { name: "Snapshots" }).click();
     await heading(page, "Snapshots");
     expect(errors).toEqual([]);
     await close();

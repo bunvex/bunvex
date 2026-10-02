@@ -3,12 +3,12 @@
 // kill switch; a flag's details dock beside it — what it serves now, how often each variant was served in the
 // last hour, its targeting with a "who gets what" preview, its history and the code to read it. New flags and
 // edits use the editor in the same panel. Live: a change made elsewhere shows up.
-import { Badge } from "@bunvex/ui/components/badge";
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Input } from "@bunvex/ui/components/input";
 import { LineChart } from "@bunvex/ui/components/line-chart";
+import { StatusBadge } from "@bunvex/ui/components/status-badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,6 +33,7 @@ import {
   SectionNav,
   useSectionSheet,
 } from "../../shell/section-column.tsx";
+import { formatTime } from "../../shell/time.tsx";
 import { useExtensionSearch } from "../search-state.ts";
 import { FlagEditor } from "./editor.tsx";
 import { evaluate, type FlagIdentity, ruleText, serveText } from "./logic.ts";
@@ -87,6 +88,7 @@ export function FlagsScreen() {
   const nav = (
     <SectionNav
       label="Flag views"
+      withFilters
       groups={[
         {
           items: VIEWS.map((v) => (
@@ -125,6 +127,7 @@ export function FlagsScreen() {
   );
   const sheet = useSectionSheet({
     kind: "flags-column",
+    label: "Feature flags",
     onReset: reset,
     children: (
       <>
@@ -264,9 +267,9 @@ export function FlagsScreen() {
   );
 }
 
+// a flag's state as every status is said (UX2-12): an icon and a word, never a solid pill
 function StateBadge({ flag }: { flag: FeatureFlag }) {
-  if (flag.archived) return <Badge variant="outline">Archived</Badge>;
-  return flag.enabled ? <Badge>On</Badge> : <Badge variant="secondary">Off</Badge>;
+  return <StatusBadge status={flag.archived ? "archived" : flag.enabled ? "on" : "off"} />;
 }
 
 // ------------------------------------------------------------------ a flag's details
@@ -572,7 +575,7 @@ function History({ flag }: { flag: FeatureFlag }) {
         <li key={c.id} className="flex items-baseline gap-3 px-3 py-1.5">
           <time
             dateTime={new Date(c.time).toISOString()}
-            title={new Date(c.time).toLocaleString()}
+            title={formatTime(c.time)}
             className="w-28 shrink-0 text-xs text-muted-foreground"
           >
             {timeAgo(c.time, Date.now())}

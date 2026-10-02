@@ -14,7 +14,9 @@ import {
 import { useEffect } from "react";
 import { feature } from "topojson-client";
 import countries110m from "world-atlas/countries-110m.json";
+import { useQueryScope } from "../../context.tsx";
 import type { LiveVisitor } from "./data-source.ts";
+import { readMapStyle } from "./map-style.ts";
 
 type Atlas = Parameters<typeof feature>[0] & { objects: { countries: Parameters<typeof feature>[1] } };
 const atlas = countries110m as unknown as Atlas;
@@ -94,9 +96,12 @@ function FitWorld() {
 export default function WorldMap({ live }: { live: LiveVisitor[] }) {
   const cities = citiesOf(live);
   const max = cities[0]?.visitors ?? 1;
+  const { scope } = useQueryScope();
+  // a style the reader chose in Settings → Map style, else the bundled basemap (no request leaves the page)
+  const style = readMapStyle(scope);
   return (
     <MapView
-      blank
+      {...(style ? { styles: { light: style, dark: style } } : { blank: true })}
       minZoom={0.3}
       maxZoom={6}
       renderWorldCopies={false}
@@ -104,7 +109,7 @@ export default function WorldMap({ live }: { live: LiveVisitor[] }) {
       className="h-full w-full"
     >
       <FitWorld />
-      <MapGeoJSON id="countries" data={WORLD as never} />
+      {!style && <MapGeoJSON id="countries" data={WORLD as never} />}
       {cities.map((c) => {
         const size = bubbleSize(c.visitors, max);
         return (

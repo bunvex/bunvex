@@ -44,7 +44,7 @@ describe("the section column", () => {
       within(pages)
         .getAllByRole("heading")
         .map((h) => h.textContent),
-    ).toEqual(["Configuration", "Data"]);
+    ).toEqual(["Configuration", "Data", "Extensions"]); // pages an extension adds: Analytics → Map style
     expect(within(pages).getByRole("link", { name: "Environment variables" }).getAttribute("aria-current")).toBe(
       "page",
     );
@@ -82,10 +82,22 @@ describe("the section column", () => {
   test("on a phone, the column's content is a sheet behind a button in Bar 1", async () => {
     mount("/settings/general");
     await screen.findByRole("heading", { level: 1, name: "General" });
-    await userEvent.setup().click(screen.getByRole("button", { name: "Pages" }));
-    const sheet = await screen.findByRole("complementary", { name: "Pages" });
+    // named after what it holds: the screen's pages here, "Filters" where it holds filters only (UX2-13)
+    await userEvent.setup().click(screen.getByRole("button", { name: "Settings" }));
+    const sheet = await screen.findByRole("complementary", { name: "Settings" });
     await userEvent.setup().click(within(sheet).getByRole("link", { name: "Snapshots" }));
     await screen.findByRole("heading", { level: 1, name: "Snapshots" });
-    expect(screen.queryByRole("complementary", { name: "Pages" })).toBeNull(); // a pick closes it
+    expect(screen.queryByRole("complementary", { name: "Settings" })).toBeNull(); // a pick closes it
+  });
+
+  test("the nav has a heading only with more than one group or filters below it (UX2-22)", async () => {
+    mount("/schedules/crons");
+    await screen.findByRole("heading", { level: 1, name: "Cron jobs" });
+    const nav = () => screen.getAllByRole("navigation", { name: "Schedules" })[0]!;
+    expect(within(nav()).queryByRole("heading")).toBeNull();
+    cleanup();
+    mount("/schedules/functions");
+    await screen.findByRole("heading", { level: 1, name: "Scheduled functions" });
+    expect(within(nav()).getByRole("heading", { name: "Views" })).toBeDefined();
   });
 });

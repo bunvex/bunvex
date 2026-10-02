@@ -86,7 +86,7 @@ export function WorkflowsScreen() {
   const filters = s === "runs" && !search.run ? <Filters search={search} set={set} /> : null;
   const sheet = useSectionSheet({
     kind: "workflows-pages",
-    label: "Pages",
+    label: "Workflows",
     children: (
       <>
         <Nav />

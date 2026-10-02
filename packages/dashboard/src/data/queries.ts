@@ -57,6 +57,8 @@ export const schemaQuery = ({ source, scope }: QueryScope) =>
   queryOptions({
     queryKey: dashboardKeys.schema(scope),
     queryFn: ({ signal }) => source.getSchema({ signal }),
+    // while a schema is being checked, its progress is asked again every 2 s (as Convex's query updates it)
+    refetchInterval: (q) => (q.state.data?.validation?.state === "validating" ? 2_000 : false),
   });
 
 export const tablesQuery = ({ source, scope }: QueryScope) =>

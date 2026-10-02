@@ -148,7 +148,18 @@ export type SchemaInfo = {
    * form, without the system fields; absent when the table is declared without one.
    */
   tables: { name: string; validator?: ValidatorJson }[];
+  /**
+   * A schema being checked against the documents already stored (STUDY-12 §14.7), as Convex's
+   * `getSchemas.schemaValidationProgress` (`numDocsValidated` / `totalDocs`, `totalDocs` unknown at first);
+   * absent when none is. `failed`: the documents that do not match, how many and a few of them — Convex reports
+   * the first one in the push's error; the count and the sample are a bunvex addition.
+   */
+  validation?: SchemaValidation;
 };
+
+export type SchemaValidation =
+  | { state: "validating"; numDocsValidated: number; totalDocs: number | null }
+  | { state: "failed"; failedDocs: number; sample: { table: string; id: string; error: string }[] };
 
 // ------------------------------------------------------------------ filters and pages
 
