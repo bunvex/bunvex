@@ -27,6 +27,10 @@ const source = new MockDataSource({
   ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
 });
 
+// ?validate=pass|fail: as if a schema had just been pushed, checked against the documents (UI-01 §21.4)
+const validate = params.get("validate");
+if (validate === "pass" || validate === "fail") source.simulateSchemaValidation(validate);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>

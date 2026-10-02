@@ -483,6 +483,44 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Schema: a group's header drags the group and its tables; kept after a reload; Reset layout restores", async () => {
+    const { page, errors, close } = await open("/schema");
+    await heading(page, "Schema");
+    const tasks = page.locator('.react-flow__node-table[data-id="tasks"]');
+    const imports = page.locator('.react-flow__node-table[data-id="imports"]');
+    await tasks.waitFor();
+    await imports.waitFor();
+    // tasks (in a group) measured against imports (in none), in diagram units: a reload's fit does not matter
+    const rel = async () => {
+      const t = (await tasks.boundingBox())!;
+      const i = (await imports.boundingBox())!;
+      const scale = t.width / 272; // a card is 272 px wide at zoom 1
+      return { dx: (t.x - i.x) / scale, dy: (t.y - i.y) / scale };
+    };
+    const near = (a: { dx: number; dy: number }, b: { dx: number; dy: number }) =>
+      Math.abs(a.dx - b.dx) < 2 && Math.abs(a.dy - b.dy) < 2;
+    const rel0 = await rel();
+    const handle = page.locator(".schema-group-handle").first();
+    const h = (await handle.boundingBox())!;
+    await page.mouse.move(h.x + 12, h.y + h.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(h.x + 132, h.y + h.height / 2 + 90, { steps: 8 });
+    await page.mouse.up();
+    // the group's tables moved with it
+    const rel1 = await rel();
+    expect(rel1.dx - rel0.dx).toBeGreaterThan(20);
+    expect(rel1.dy - rel0.dy).toBeGreaterThan(10);
+    await page.reload();
+    await heading(page, "Schema");
+    await tasks.waitFor();
+    await expect_(async () => expect(near(await rel(), rel1)).toBe(true));
+    await page.getByRole("button", { name: "Reset layout" }).click();
+    await expect_(async () => expect(near(await rel(), rel0)).toBe(true));
+    expect(await page.evaluate(() => localStorage.getItem("bunvex:schema-layout:default"))).toBeNull();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Overview: the cache hit rate opens as a heatmap; axe with contrast on it, in both themes", async () => {
     for (const colorScheme of ["light", "dark"] as const) {
       const { page, errors, close } = await open("/", { colorScheme });
