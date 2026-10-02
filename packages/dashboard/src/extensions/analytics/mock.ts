@@ -1,7 +1,11 @@
 // The Analytics extension's mock (UI-01 §26): sessions spread over the last 30 days from weighted cities, each
 // with page views and a few custom events, and a live set that moves — `step(ms)` brings new visitors, lets
 // some leave and adds events to the ones still here. Deterministic for a seed; time is the mock's own clock.
+
+import { PLATFORM_LABEL } from "../../clients/names.ts";
 import type { Page, Value } from "../../data-source.ts";
+import type { ClientInfo } from "../../data-source-clients.ts";
+import { clientFor } from "../../mock/clients.ts";
 import type { Random } from "../../mock/random.ts";
 import type {
   AnalyticsEvent,
@@ -40,7 +44,22 @@ const REFERRERS = [
   "reddit.com",
   "duckduckgo.com",
 ];
-const BROWSERS = ["Chrome", "Chrome", "Chrome", "Safari", "Safari", "Firefox", "Edge"];
+/**
+ * A session's device, browser and system, from what its client said (UI-01 §33): a browser's name and, for
+ * the web, a drawn device and system (a browser does not say); an app's platform, device and OS otherwise.
+ */
+export function deviceOf(c: ClientInfo, rnd: Random): { device: Device; browser: string; os: string } {
+  if (c.platform === "web") {
+    const device: Device = rnd.chance(0.6) ? "desktop" : rnd.chance(0.85) ? "mobile" : "tablet";
+    return { device, browser: c.runtime?.split(" ")[0] ?? "A browser", os: rnd.pick(OS[device]) };
+  }
+  const system = (c.runtime ?? "").split(" · ").at(-1)!.split(" ")[0] || PLATFORM_LABEL[c.platform];
+  return {
+    device: /iPad|Tab/.test(c.device ?? "") || system === "iPadOS" ? "tablet" : "mobile",
+    browser: `${PLATFORM_LABEL[c.platform]} app`,
+    os: system,
+  };
+}
 const OS: Record<Device, string[]> = {
   desktop: ["macOS", "Windows", "Linux"],
   mobile: ["iOS", "Android"],
@@ -120,7 +139,8 @@ export class MockAnalytics {
   private startSession(at: number, views: number, keepAlive = false) {
     const rnd = this.rnd;
     const place = pickWeighted(rnd);
-    const device: Device = rnd.chance(0.6) ? "desktop" : rnd.chance(0.85) ? "mobile" : "tablet";
+    const client = clientFor(rnd.int(0, 1_000_000_000), "people");
+    const { device, browser, os } = deviceOf(client, rnd);
     const profile = rnd.chance(0.7) ? rnd.pick(this.profiles) : null;
     const s: Session = {
       id: `s_${rnd.id().slice(0, 12)}`,
@@ -130,8 +150,9 @@ export class MockAnalytics {
       events: 0,
       pageViews: 0,
       device,
-      browser: rnd.pick(BROWSERS),
-      os: rnd.pick(OS[device]),
+      browser,
+      os,
+      client,
       referrer: rnd.pick(REFERRERS),
       entryPath: rnd.pick(PATHS),
       exitPath: "/",

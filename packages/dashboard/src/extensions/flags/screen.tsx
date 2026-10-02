@@ -524,7 +524,7 @@ function Targeting({ flag }: { flag: FeatureFlag }) {
 /** "Who gets what": an identity's attributes, one `name=value` per line, and what the flag serves them. */
 function Preview({ flag }: { flag: FeatureFlag }) {
   const id = useId();
-  const [text, setText] = useState("email=ada@bunvex.dev\norg=acme");
+  const [text, setText] = useState("email=ada@bunvex.dev\norg=acme\nplatform=ios\nappVersion=2.3.1");
   const identity = useMemo<FlagIdentity>(() => {
     const out: FlagIdentity = {};
     for (const line of text.split("\n")) {

@@ -18,6 +18,8 @@ import {
   type Page,
   userStatus,
 } from "../data-source.ts";
+import type { ClientInfo } from "../data-source-clients.ts";
+import { clientFor } from "./clients.ts";
 import { createRandom, type Random } from "./random.ts";
 
 const FIRST = [
@@ -35,11 +37,18 @@ const FIRST = [
   "Hedy",
 ];
 const LAST = ["Lovelace", "Hopper", "Torvalds", "Hamilton", "Turing", "Liskov", "Thompson", "Perlman", "Lee", "Allen"];
-const AGENTS = [
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_1) AppleWebKit/605.1.15 Safari/605.1.15",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0 Safari/537.36",
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) Mobile/15E148",
-];
+const AGENTS: Record<string, string> = {
+  Safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_1) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15",
+  Chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36",
+  Firefox: "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0",
+  Edge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36 Edg/141.0",
+};
+/** The user agent a session's client sends: a browser's for the web, the SDK's own for an app. */
+const agentOf = (c: ClientInfo) =>
+  c.platform === "web"
+    ? (AGENTS[c.runtime?.split(" ")[0] ?? ""] ?? AGENTS.Chrome!)
+    : `${c.sdk.name}/${c.sdk.version} (${[c.runtime, c.device].filter(Boolean).join("; ")})`;
+const withClient = (client: ClientInfo) => ({ client, userAgent: agentOf(client) });
 const DAY = 86_400_000;
 
 export const DEFAULT_AUTH_CONFIG: AuthConfig = {
@@ -119,7 +128,7 @@ export class MockAuthAdmin {
             createdAt: at,
             expiresAt: at + this.config.sessions.expiresInSeconds * 1000,
             ipAddress: `203.0.113.${this.rnd.int(1, 254)}`,
-            userAgent: this.rnd.pick(AGENTS),
+            ...withClient(clientFor(this.rnd.int(0, 1_000_000_000), "people")),
             impersonatedBy: null,
           });
           u.lastSignInAt = Math.max(u.lastSignInAt ?? 0, at);

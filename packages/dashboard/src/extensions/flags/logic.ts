@@ -2,9 +2,13 @@
 // a rule reads in words. The mock evaluates with it; the screen previews with it ("who gets what").
 
 import type { Json } from "../../data-source.ts";
+import { compareVersions } from "../../data-source-clients.ts";
 import type { FeatureFlag, FlagCondition, FlagInput, FlagRollout, FlagRule } from "./types.ts";
 
-/** An identity's attributes, as the caller's token carries them (subject, email, org, custom claims). */
+/**
+ * An identity's attributes, as the caller's token carries them (subject, email, org, custom claims), with the
+ * client's `platform` and `appVersion` (UI-01 §33).
+ */
 export type FlagIdentity = Record<string, string | undefined>;
 
 /** A stable bucket in [0, 100) for this identity and flag: the same identity always lands in the same place. */
@@ -44,6 +48,10 @@ export function matches(c: FlagCondition, identity: FlagIdentity): boolean {
       return v !== undefined && c.values.some((x) => v.startsWith(x));
     case "endsWith":
       return v !== undefined && c.values.some((x) => v.endsWith(x));
+    case "versionAtLeast":
+      return v !== undefined && VERSION.test(v) && compareVersions(v, c.values[0] ?? "") >= 0;
+    case "versionBelow":
+      return v !== undefined && VERSION.test(v) && compareVersions(v, c.values[0] ?? "") < 0;
   }
 }
 
@@ -66,6 +74,9 @@ export function evaluate(
   const variant = serve(flag.fallthrough);
   return { variant, value: valueFor(variant), reason: "fallthrough" };
 }
+
+/** A version a rule can compare: "2", "2.3", "2.3.1", with an optional pre-release or build suffix. */
+export const VERSION = /^\d+(\.\d+)*([-+][\w.-]+)?$/;
 
 /** A flag key: lowercase letters, digits, "-", "_" and ".", starting with a letter. */
 export const KEY_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
@@ -98,6 +109,8 @@ export function flagProblem(f: FlagInput, existingKeys: readonly string[] = []):
     for (const c of r.conditions) {
       if (!c.attribute.trim()) return `Rule ${i + 1} has a condition without an attribute.`;
       if (c.operator !== "exists" && c.values.length === 0) return `Rule ${i + 1} has a condition without a value.`;
+      if ((c.operator === "versionAtLeast" || c.operator === "versionBelow") && !VERSION.test(c.values[0]!))
+        return `Rule ${i + 1} compares ${c.attribute} with "${c.values[0]}", which is not a version.`;
     }
     const p = checkServe(r.serve, `Rule ${i + 1}`);
     if (p) return p;
@@ -114,6 +127,8 @@ const OPERATOR_WORDS: Record<FlagCondition["operator"], string> = {
   startsWith: "starts with",
   endsWith: "ends with",
   exists: "is set",
+  versionAtLeast: "is at least version",
+  versionBelow: "is below version",
 };
 
 export function conditionText(c: FlagCondition): string {

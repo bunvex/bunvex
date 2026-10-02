@@ -52,7 +52,17 @@ function seedFlags(now: number): FeatureFlag[] {
         { key: "express", value: "express" },
       ],
       offVariant: "control",
-      rules: [],
+      rules: [
+        {
+          id: "r_mobile",
+          description: "The new app builds get express checkout",
+          conditions: [
+            { attribute: "platform", operator: "in", values: ["ios", "android"] },
+            { attribute: "appVersion", operator: "versionAtLeast", values: ["2.3.0"] },
+          ],
+          serve: { variant: "express" },
+        },
+      ],
       fallthrough: {
         rollout: [
           { variant: "control", weight: 50 },

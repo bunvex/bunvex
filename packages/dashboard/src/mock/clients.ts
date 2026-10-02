@@ -152,17 +152,19 @@ const POLICY: ClientPolicy = {
 };
 
 /** The client of the `n`th request: drawn by weight from `n` alone (no random stream), so fixtures stay put. */
-export function clientFor(n: number): ClientInfo {
-  const total = SEGMENTS.reduce((a, s) => a + s.weight, 0);
+export function clientFor(n: number, among: "all" | "people" = "all"): ClientInfo {
+  // people: the apps a person signs in to or browses with, not scripts and servers
+  const segments = among === "people" ? SEGMENTS.filter((s) => s.devices || s.platform === "web") : SEGMENTS;
+  const total = segments.reduce((a, s) => a + s.weight, 0);
   // a cheap integer hash: neighbouring requests come from different clients
   const h = Math.imul(n ^ 0x5bd1e995, 0x9e3779b1) >>> 0;
   const at = ((h % 10_000) / 10_000) * total;
   let acc = 0;
   const s =
-    SEGMENTS.find((x) => {
+    segments.find((x) => {
       acc += x.weight;
       return at < acc;
-    }) ?? SEGMENTS[0]!;
+    }) ?? segments[0]!;
   return {
     platform: s.platform,
     sdk: { name: s.sdk, version: s.sdkVersion },

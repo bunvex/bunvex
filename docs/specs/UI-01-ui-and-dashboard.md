@@ -2261,3 +2261,20 @@ to be registered. The real handshake and `@bunvex/client` come with a later serv
   client says who it is**: a per-platform snippet (TypeScript for the JS platforms, Swift for iOS, Kotlin for
   Android) marked **Planned API**, since `@bunvex/client` and the native SDKs are not released.
 
+### 33.3 Authentication, Analytics and Feature flags
+
+- **Authentication:** a session carries the `client` it signed in from (`AuthSession.client`, optional). The
+  Sessions grid's Device column and the user panel's sessions say it with its platform icon — "iPhone 16 ·
+  iOS 19.1 · Shop iOS 2.3.1", named by the registry — and fall back to the user agent ("Safari on macOS")
+  when the client is unknown. The mock draws sessions from the people-facing part of the client population
+  (web, iOS, Android, Expo; not scripts) and gives each the user agent its client would send.
+- **Analytics:** a session carries its `client`; its device, browser and system come from it — a browser's
+  name from its runtime, an app as "iOS app", "Android app", "Expo app" with its device class (an iPad is a
+  tablet) and OS. The breakdown is **Browsers and apps**; the Sessions list's Device column says the client.
+- **Feature flags:** two operators compare versions by number, `versionAtLeast` and `versionBelow`
+  ("2.10.0" is above "2.9.3"; a pre-release counts as its version; a value that is not a version never
+  matches, and a rule with one cannot be saved). The attribute box suggests `email`, `tokenIdentifier`,
+  `org`, `platform` and `appVersion` — the last two what the client said when it connected. The mock's
+  checkout test sends iOS and Android builds from 2.3.0 to express; the who-gets-what preview starts with a
+  platform and an app version.
+
