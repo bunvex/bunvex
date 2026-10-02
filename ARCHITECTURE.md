@@ -121,6 +121,7 @@ bunvex/
 │   │   └── screens                  health: metrics charts + engine counters (review open)        ✅
 │   │
 │   ├── cli/                         @bunvex/cli
+│   │   ├── admin-key                print an admin key (STUDY-34)                             ✅
 │   │   ├── dev                      watch files and push                                      M
 │   │   ├── codegen                  API types (or inferred types — open decision)             M
 │   │   ├── deploy                   publish functions (restart or hot swap — open decision)   M
@@ -228,6 +229,6 @@ ui ◄── apps/site
 Recorded in ARCH-01 §6, to be settled in their own specs:
 
 1. Types: code generation (as Convex) or type inference without a codegen step.
-2. Deploying functions: restart the server, or hot-swap the module.
+2. ~~Deploying functions~~ — decided: hot swap, a `vm` context per code version (STUDY-35, DV-164).
 3. Sandboxing functions: now, or later.
 4. Text and vector search: inside `core`, or a package of their own.

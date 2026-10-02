@@ -135,9 +135,11 @@ map and a README saying what will live there — so the map in ARCHITECTURE.md i
 ## 6. Open decisions (each gets its own spec)
 
 1. **Types**: code generation (`_generated/api`, like Convex) or inference without a codegen step.
-2. **Deploying functions**: restart the server, or hot-swap the functions module.
+2. ~~**Deploying functions**~~ — **decided 2 Oct 2026: hot swap**, one `vm` context per code version in the
+   server's process (STUDY-35 P1, DV-164).
 3. **Sandboxing functions**: in-process now with a sandbox later, or a sandbox from the start (Bun
-   workers, a separate process).
+   workers, a separate process). **2 Oct 2026:** in-process `vm` contexts now (not a security boundary); a
+   real sandbox stays open (STUDY-35 P1).
 4. **Search**: text and vector search inside `core`, or a package of their own.
 5. ~~Licence~~ — **decided 29 Sep 2026: Apache-2.0** (patent grant, the usual choice for infrastructure;
    Convex's backend uses FSL, which is not an OSI licence). `LICENSE` holds the official text and `NOTICE`

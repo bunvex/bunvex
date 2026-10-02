@@ -24,11 +24,18 @@ import {
   v,
 } from "@bunvex/values";
 import { ActionPermits } from "./action-permits.ts";
+import {
+  type AdminKeyIdentity,
+  allows,
+  BadDeployKeyError,
+  type DeploymentOp,
+  OperationNotPermittedError,
+} from "./admin-keys.ts";
 import { FunctionPathError } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
-import { SYSTEM_MUTATIONS, SYSTEM_QUERIES } from "./system-functions.ts";
+import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe). */
 const cacheKey = (name: string, args: unknown) => `${name}\u0000${stringifyValue(args ?? {})}`;
@@ -73,6 +80,29 @@ export type ActionCtx = {
 /** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
 export const callerOf = (identity: UserIdentity | null): Caller =>
   identity === null ? { identity: null, key: "" } : { identity, key: stringifyValue(identity) };
+
+/**
+ * A caller with an admin key (STUDY-34): the admin (or system) identity, and the user it acts as, if any.
+ * An admin is anonymous to `getUserIdentity()` (Convex: `user_identity()` is only a user's or an acting
+ * user's), and an acting user is cached as that user.
+ */
+export type AdminCaller = Caller & { admin?: AdminKeyIdentity };
+export const adminCallerOf = (admin: AdminKeyIdentity, actingAs: Record<string, unknown> | null): AdminCaller => ({
+  identity: actingAs,
+  // Its own key per kind of access, so a run one caller may see is never handed to a caller who may not
+  // (the query cache's per-caller entries, sync's shared runs). Convex keys an admin by its operations too.
+  key: `admin:${admin.kind}:${admin.kind === "admin" && admin.readOnly ? "ro" : "rw"}:${actingAs ? stringifyValue(actingAs as never) : ""}`,
+  admin,
+});
+const adminOf = (caller: Caller | undefined) => (caller as AdminCaller | undefined)?.admin;
+const INTERNAL_OPS = {
+  query: "RunInternalQueries",
+  mutation: "RunInternalMutations",
+  action: "RunInternalActions",
+} as const satisfies Record<string, DeploymentOp>;
+const isSystemPath = (name: string) => name.startsWith("_system/");
+const notFound = (name: string) =>
+  new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
 const copy = <T>(x: T): T => (x === null ? x : structuredClone(x));
 /** A transaction's `ctx.auth`: reading the identity marks the result as the caller's (the query cache). */
 const txAuth = (db: Tx): Auth => ({
@@ -171,13 +201,39 @@ export class Functions {
     return this;
   }
 
-  private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean) {
+  /**
+   * Convex's `require_operation`: the system may do anything, an admin what its key allows
+   * (`OperationNotPermitted`); anyone else is told the deploy key is invalid (`BadDeployKey`).
+   */
+  requireOperation(caller: Caller | undefined, op: DeploymentOp) {
+    const admin = adminOf(caller);
+    if (!admin) throw new BadDeployKeyError(this.engine.instanceName || undefined);
+    if (!allows(admin, op)) throw new OperationNotPermittedError(op);
+  }
+
+  /**
+   * Convex's `check_visibility_access` (crates/udf/src/validation.rs) for a client's call: acting as a user
+   * needs `ActAsUser`; an internal function is open to an admin with `RunInternal*`, and missing to
+   * everyone else.
+   */
+  private checkAccess(f: FunctionDef | undefined, name: string, kind: FunctionDef["kind"], caller?: Caller) {
+    const admin = adminOf(caller);
+    if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
+    if (!f) throw notFound(name);
+    if (f.visibility === "internal") {
+      if (!admin) throw notFound(name);
+      this.requireOperation(caller, INTERNAL_OPS[kind]);
+    }
+  }
+
+  private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
     const f = this.fns.get(name);
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
     // names the canonical path (`module.js:name`) and both kinds.
-    if (!f || (fromClient && f.visibility === "internal"))
-      throw new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+    if (fromClient) this.checkAccess(f, name, kind, caller);
+    else if (!f) throw notFound(name);
+    if (!f) throw notFound(name);
     if (f.kind !== kind) {
       const i = name.lastIndexOf(":");
       const kindName = (k: string) => k[0].toUpperCase() + k.slice(1);
@@ -213,8 +269,9 @@ export class Functions {
   }
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
-  queryBody(name: string, args: unknown, fromClient = true) {
-    const f = this.fn(name, "query", fromClient);
+  queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
+    if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
+    const f = this.fn(name, "query", fromClient, caller);
     return async (db: Tx) =>
       this.checkReturns(
         f,
@@ -263,31 +320,66 @@ export class Functions {
     return `${module}.js:${fn}`;
   }
 
-  /**
-   * A dashboard system query (`_system/frontend/*`, system-functions.ts), as an admin: Convex's names,
-   * argument checks and result shapes. Not reachable from clients (no `_system` name is public).
-   */
-  async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
-    const q = SYSTEM_QUERIES[name.replace(/:default$/, "")];
-    if (!q) throw new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+  /** A system function's arguments, checked as Convex's validators. */
+  private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
     const a = args ?? {};
     if (!isSimpleObject(a))
       throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
-    const msg = checkValue(v.object(q.args), a as Value, this.tableOf);
+    const msg = checkValue(v.object(validators), a as Value, this.tableOf);
     if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
-    return this.engine.query((db) => q.handler(db, a as never, { files: this.fileStorage }));
+    return a as never;
   }
 
-  /** A dashboard system mutation (`_system/frontend/*`), as an admin; one transaction, as Convex's. */
+  /**
+   * A system query's body (`_system/frontend/*`, system-functions.ts): Convex's names, argument checks and
+   * result shapes. From a client, only an admin (or the system) finds it, and its key must allow the
+   * function's operation (Convex's `queryPrivateSystem("ViewData")`).
+   */
+  /** A client's access to a system function: only an admin finds it, and needs its operation. */
+  private systemAccess(n: string, f: SystemQuery | undefined, fallback: DeploymentOp, caller?: Caller) {
+    const admin = adminOf(caller);
+    if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
+    if (!f || !admin) throw notFound(n);
+    this.requireOperation(caller, f.op ?? fallback);
+  }
+
+  /**
+   * Whether `caller` may run the query `name` from a client (throws as running it would). Sync checks it
+   * before it reuses another session's run of the same query, as Convex checks visibility before its cache.
+   */
+  checkQueryAccess(name: string, caller?: Caller) {
+    if (isSystemPath(name)) {
+      const n = name.replace(/:default$/, "");
+      this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", caller);
+    } else this.checkAccess(this.fns.get(name), name, "query", caller);
+  }
+
+  private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+    const n = name.replace(/:default$/, "");
+    const q = SYSTEM_QUERIES[n];
+    if (fromClient) this.systemAccess(n, q, "ViewData", caller);
+    else if (!q) throw notFound(n);
+    const a = this.systemArgs(args, q!.args);
+    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage });
+  }
+
+  private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+    const n = name.replace(/:default$/, "");
+    const m = SYSTEM_MUTATIONS[n];
+    if (fromClient) this.systemAccess(n, m, "WriteData", caller);
+    else if (!m) throw notFound(n);
+    const a = this.systemArgs(args, m!.args);
+    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage });
+  }
+
+  /** A dashboard system query, in process (as the system: no key involved). */
+  async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
+    return this.engine.query(this.systemQueryBody(name, args, false));
+  }
+
+  /** A dashboard system mutation, in process; one transaction, as Convex's. */
   async runSystemMutation(name: string, args: unknown = {}): Promise<unknown> {
-    const m = SYSTEM_MUTATIONS[name];
-    if (!m) throw new FunctionPathError(`Could not find public function for '${name}'.`);
-    const a = args ?? {};
-    if (!isSimpleObject(a))
-      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
-    const msg = checkValue(v.object(m.args), a as Value, this.tableOf);
-    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
-    return this.engine.mutation((db) => m.handler(db, a as never, { files: this.fileStorage }), name);
+    return this.engine.mutation(this.systemMutationBody(name, args, false), name);
   }
 
   /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
@@ -328,11 +420,21 @@ export class Functions {
   }
 
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
-    return this.engine.query(this.queryBody(name, args, fromClient), cacheKey(name, args), cachedQueryLogs, caller);
+    return this.engine.query(
+      this.queryBody(name, args, fromClient, caller),
+      cacheKey(name, args),
+      cachedQueryLogs,
+      caller,
+    );
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored, with its log lines). */
   async runQueryJson(name: string, args: unknown, caller?: Caller): Promise<string> {
-    return this.engine.queryJson(this.queryBody(name, args, true), cacheKey(name, args), cachedQueryLogs, caller);
+    return this.engine.queryJson(
+      this.queryBody(name, args, true, caller),
+      cacheKey(name, args),
+      cachedQueryLogs,
+      caller,
+    );
   }
 
   /**
@@ -343,7 +445,7 @@ export class Functions {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
-    const body = this.queryBody(name, args, true);
+    const body = this.queryBody(name, args, true, caller);
     return this.engine.queryJson(body, cacheKey(name, args), cachedQueryLogs, caller, ts);
   }
 
@@ -358,8 +460,10 @@ export class Functions {
     fromClient = true,
     caller?: Caller,
   ): Promise<{ value: unknown; ts: number }> {
-    const f = this.fn(name, "mutation", fromClient);
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
+    if (isSystemPath(name))
+      return this.engine.mutationWithTs(this.systemMutationBody(name, args, fromClient, caller), name, caller);
+    const f = this.fn(name, "mutation", fromClient, caller);
     return this.engine.mutationWithTs(this.mutationBody(f, args), name, caller);
   }
 
@@ -373,9 +477,11 @@ export class Functions {
     request: SessionRequestId,
     caller?: Caller,
   ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
-    const f = this.fn(name, "mutation", true);
+    const body = isSystemPath(name)
+      ? this.systemMutationBody(name, args, true, caller)
+      : this.mutationBody(this.fn(name, "mutation", true, caller), args);
     return this.engine.sessionMutation(
-      this.mutationBody(f, args),
+      body,
       name,
       request,
       // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
@@ -394,7 +500,7 @@ export class Functions {
     caller?: Caller,
     opts: { job?: string; internal?: boolean } = {},
   ): Promise<unknown> {
-    const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal);
+    const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
     const ctx = this.actionCtx(caller, null, opts.job);
     const a = this.checkArgs(f, args);
     return this.actionPermits.run(() => Promise.resolve(f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
