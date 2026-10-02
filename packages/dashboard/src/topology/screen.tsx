@@ -9,6 +9,7 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronUp } from "lucide-react";
 import { lazy, Suspense, useId, useMemo, useState } from "react";
+import { useClientApps } from "../clients/queries.ts";
 import { type ClientsBy, groupClients } from "../clients/words.tsx";
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
@@ -62,11 +63,7 @@ export function TopologyScreen() {
       replace: true,
     });
   // who the clients are (UI-01 §33), when the source says: the registry names them by app, the policy grades SDKs
-  const apps = useQuery({
-    queryKey: [...dashboardKeys.all(scope.scope), "client-apps"],
-    queryFn: ({ signal }) => source.listClientApps!({ signal }),
-    enabled: typeof source.listClientApps === "function" && canView,
-  });
+  const apps = useClientApps();
   const summaryQuery = useQuery({
     queryKey: [...dashboardKeys.all(scope.scope), "client-summary"],
     queryFn: ({ signal }) => source.getClientSummary!({ signal }),

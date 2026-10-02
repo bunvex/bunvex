@@ -35,6 +35,13 @@ function SettingsNav() {
                   Environment variables
                 </DashLink>
               </li>
+              {typeof source.listClientApps === "function" && (
+                <li>
+                  <DashLink link={{ to: "/settings/apps" }} className={SECTION_ITEM}>
+                    Apps
+                  </DashLink>
+                </li>
+              )}
             </>
           ),
         },

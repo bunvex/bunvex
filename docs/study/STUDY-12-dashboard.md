@@ -1042,7 +1042,9 @@ observe the policy, if a future server refuses an unsupported SDK, as Convex's d
   they agree; a few SDKs sit past the policy. Registering an app re-labels its clients at once.
 - **Screens:** Topology's client cards by platform (or by app, `?clientsBy=app`), each linked to the nodes
   serving it, a group's panel with its app and SDK versions (UI-01 §33.1); the Overview's Clients block and an
-  outdated-SDK item in Needs attention.
+  outdated-SDK item in Needs attention. Logs filter by platform and app version and show a line's client;
+  Functions → Statistics shows a function's calls and errors by platform (`functionClients`); Settings → Apps
+  edits the registry, with a setup snippet marked as the planned `@bunvex/client` API (UI-01 §33.2).
 
 ### 21.4 Additions and calls the owner can veto
 
@@ -1052,3 +1054,5 @@ observe the policy, if a future server refuses an unsupported SDK, as Convex's d
 | C2 | The SDK policy has Convex's two thresholds per platform (upgrade required, unsupported) | the same states as `ClientVersionState` | my call, matches Convex |
 | C3 | Reading who the clients are needs `viewMetrics`; registering apps `writeData` | no dedicated operation, as for Topology (T5) | my call, the owner can veto |
 | C4 | Group links in the diagram are labelled only while lit | many groups × followers would bury the canvas in labels | my call, the owner can veto |
+| C5 | The setup snippet shows an API that does not exist yet (`new BunvexClient(url, { app })`, `bunvex-swift`, `bunvex-kotlin`), marked "Planned API" | the owner asked for a per-platform snippet; the SDK study will fix the real names | my call, the owner can veto; to revisit with the SDK study |
+| C6 | Choosing a platform or app version in Logs leaves out lines no client made (crons, scheduled runs) | a facet keeps only what matches, as the function facet does | my call, the owner can veto |

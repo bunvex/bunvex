@@ -134,7 +134,14 @@ describe("the dashboard in a browser", () => {
     const phone = { viewport: { width: 390, height: 800 } };
     const { page, errors, close } = await open("/", phone);
     await heading(page, "Overview");
-    for (const path of ["/database/users", "/functions?function=tasks:list", "/logs", "/settings/general", "/files"]) {
+    for (const path of [
+      "/database/users",
+      "/functions?function=tasks:list",
+      "/logs",
+      "/settings/general",
+      "/settings/apps",
+      "/files",
+    ]) {
       await page.goto(`${ORIGIN}${path}`);
       await page.locator("main h1").first().waitFor();
       const overflow = await page.evaluate(() => document.scrollingElement!.scrollWidth - innerWidth);
@@ -482,6 +489,26 @@ describe("the dashboard in a browser", () => {
     await canvas.locator('.react-flow__node[data-id="group:unregistered:node"]').click();
     const panel = page.getByRole("complementary", { name: "Unregistered · Node" });
     await panel.getByText("Upgrade required").waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Clients: Logs filtered by platform, a line's client; calls by platform; Settings → Apps", async () => {
+    const { page, errors, close } = await open("/logs");
+    await heading(page, "Logs");
+    const filters = page.getByRole("navigation", { name: "Log filters" });
+    await filters.getByRole("region", { name: "Platform" }).getByRole("button", { name: "Only ios" }).click();
+    await expect_(async () => expect(page.url()).toContain("platform=ios"));
+    await page.getByRole("grid", { name: "Log lines" }).getByRole("row").nth(1).getByRole("gridcell").nth(5).click();
+    await expect_(async () => expect(await page.getByTestId("log-client").textContent()).toContain("bunvex-swift"));
+    await page.goto(`${ORIGIN}/functions?function=tasks:list`);
+    await page.getByRole("table", { name: "Calls and errors by platform" }).waitFor();
+    await page.goto(`${ORIGIN}/settings/apps`);
+    await heading(page, "Apps");
+    expect(await page.getByTestId("client-app").count()).toBe(3);
+    await page.getByTestId("client-app").nth(1).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Keep it" }).click();
+    expect(await page.getByTestId("client-app").count()).toBe(3);
     expect(errors).toEqual([]);
     await close();
   });
@@ -1045,6 +1072,8 @@ describe("the dashboard in a browser", () => {
         ["/settings/general", "General"],
         ["/settings/authentication", "Sign in / Providers"], // moved to Authentication (UI-01 §25)
         ["/settings/snapshots", "Snapshots"],
+        ["/settings/apps", "Apps"],
+        ["/logs?platform=ios", "Logs"],
         ["/auth/users", "Users"],
         ["/auth/providers", "Sign in / Providers"],
         ["/topology?nodes=4", "Topology"],

@@ -1,6 +1,7 @@
 // The contract suite's part for who the clients are (UI-01 §33, data-source-clients.ts). The reads run whenever
 // the source offers them and the credential may see metrics: a summary that adds up, SDK states that follow
-// its own policy, and topology buckets that add up to each node's connections. The registry's writes run only
+// its own policy, topology buckets that add up to each node's connections, and a function's calls by platform
+// that add up to its calls. The registry's writes run only
 // when the suite is given `writes` (they change what the deployment says about its apps).
 import { expect } from "bun:test";
 import type { DashboardDataSource } from "./data-source.ts";
@@ -31,6 +32,22 @@ export function describeClientsContract({ make, test, writes }: Ctx) {
     if (!src.getTopology || !(await canSee(src))) return;
     for (const n of (await src.getTopology()).nodes)
       if (n.clients) expect(n.clients.reduce((a, b) => a + b.connections, 0)).toBe(n.connections);
+  });
+
+  test("clients (when offered): a function's calls by platform add up to its calls", async () => {
+    const src = await make();
+    if (!src.functionClients || !src.functionRate || !src.listFunctions || !(await canSee(src))) return;
+    const fn = (await src.listFunctions())[0];
+    if (!fn) return;
+    const now = Date.now();
+    const w = { start: now - 3_600_000, end: now, numBuckets: 60 };
+    const by = await src.functionClients(fn.path, w);
+    const calls = (await src.functionRate(fn.path, "invocations", w)).reduce((a, b) => a + (b.value ?? 0), 0);
+    expect(by.byPlatform.reduce((a, p) => a + p.calls, 0) + by.withoutClient.calls).toBe(calls);
+    for (const p of by.byPlatform) {
+      expect(CLIENT_PLATFORMS).toContain(p.platform);
+      expect(p.errors).toBeLessThanOrEqual(p.calls);
+    }
   });
 
   if (writes)
