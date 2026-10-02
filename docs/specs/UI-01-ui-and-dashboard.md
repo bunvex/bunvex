@@ -1956,3 +1956,29 @@ reshaped (STUDY-12 §6 item 3). Not an extension — a core screen (`screens/ove
 - **Metrics**: the charts of §18.1 (top functions, failure and cache rates, scheduler lag).
 - **Engine**, collapsed: the commit clock with commits/s and the engine counters (`screens/engine.tsx`, the
   former Health content); they stream only while the section is open.
+
+## 28. Feature flags (an extension, §26; a bunvex addition, STUDY-12 §16; 1 Oct 2026)
+
+`extensions/flags/` — declaration (`/flags`, under Manage, shown when the source has `listFlags`), contract
+types (`FlagsFeatures`), pure logic (`evaluate`, `bucketOf`, `pickFromRollout`, `flagProblem`, `ruleText`), the
+mock part (five flags: a 25 % rollout with a staff rule, an A/B/C test, a JSON config that is off, a targeted
+rule, an archived flag; their history; exposures following each flag's rollout), the contract part (shape;
+writes when on), the screen and the editor.
+
+- **Column**: the views (All flags, On, Off, Archived, with counts) and the Type filter; "New flag" on top.
+- **Grid** (full-bleed): key, name, type, state (On / Off / Archived, in words), what it serves now, rules,
+  updated. Search by key or name in Bar 2. The details follow the current row (click, arrows).
+- **Details** (docked panel): the kill switch ("Turn off" asks first: everyone gets the off variant at once),
+  Edit, Archive / Restore (asks first); tabs **Overview** (serving now — a rollout as a bar with its shares in
+  words —, the variants, "Served, last hour" per variant), **Targeting** (the rules in words, in order; the
+  default and the off variant; **who gets what**: an identity's attributes, `name=value` per line, and the
+  variant it gets with why), **History**, **Code** (`useFlag("x")`, `ctx.flags.get("x")`).
+- **Editor** (the same panel): key (new flags only, `^[a-z][a-z0-9_.-]{0,63}$`), name, description, type
+  (fixed after creation), variants (true/false for boolean; names; names + JavaScript-literal JSON values), the
+  off variant, the default (one variant or a percentage rollout), rules (conditions: attribute, operator,
+  comma-separated values; serve a variant), "Turn it on now" for a new flag. Checked as typed (`flagProblem`),
+  checked again by the source on save.
+- **Who may change**: a credential that can write data and is not read-only (STUDY-12 FF2). Every change is in
+  the flag's history and the audit log (`create_feature_flag`, `update_feature_flag`, `enable_…`, `disable_…`,
+  `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
+- URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
