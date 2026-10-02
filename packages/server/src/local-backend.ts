@@ -11,7 +11,7 @@
 // - `--instance-name` (default bunvex-self-hosted) and `--instance-secret` (required; 32 hex bytes): the
 //   executable never generates a secret — the Docker scripts and `bunvex dev` do;
 // - files and pushed code under `--local-storage` (default `bunvex_local_storage`), or S3 (`--s3-storage`,
-//   from the environment's S3 variables);
+//   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`.
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
@@ -180,9 +180,9 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
   }).init();
   const storage = (useCase: "files" | "modules") => {
-    if (!f.s3) return new LocalBlobStore(resolve(io.cwd, f.localStorage), useCase);
-    if (!s3OptionsFromEnv(io.env, useCase))
-      throw new Error(`--s3-storage needs S3_STORAGE_${useCase.toUpperCase()}_BUCKET`);
+    // With --s3-storage, each use case whose bucket is set is in S3, the others stay local (STUDY-38 K4).
+    if (!f.s3 || !s3OptionsFromEnv(io.env, useCase))
+      return new LocalBlobStore(resolve(io.cwd, f.localStorage), useCase);
     return blobStoreFromEnv(io.env, {
       useCase,
       s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),

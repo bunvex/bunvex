@@ -26,7 +26,7 @@ SECRET=$(compose exec -T backend cat /bunvex/data/credentials/instance_secret)
 want=sqlite
 [ -n "${SMOKE_POSTGRES:-}" ] && want=postgres
 LOGS=$(compose logs backend)
-[[ "$LOGS" == *"bunvex: instance bunvex-self-hosted, $want in"* ]] || fail "not on $want"
+[[ "$LOGS" == *"instance bunvex-self-hosted, $want"* ]] || fail "not on $want"
 
 APP=$(mktemp -d)
 mkdir "$APP/bunvex"

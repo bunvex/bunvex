@@ -1,7 +1,8 @@
 # Self-hosting bunvex with Docker
 
 A bunvex deployment in a container, brought up as a Convex self-hosted backend is
-([STUDY-38](../docs/study/STUDY-38-docker.md)). By default it keeps everything (the database, files, pushed
+([STUDY-38](../docs/study/STUDY-38-docker.md)): the image runs `bunvex-local-backend` (the backend executable,
+see below) through the same scripts Convex's image uses. By default it keeps everything (the database, files, pushed
 code and its credentials) in a Docker volume, in SQLite. Point it at Postgres or MySQL when you need to.
 
 ## Start it
