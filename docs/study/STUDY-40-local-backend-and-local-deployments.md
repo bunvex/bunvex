@@ -124,6 +124,18 @@ The binary never generates a secret. The Docker scripts do that (`read_credentia
   - Released with changesets (already in the repository).
   - The CLI needs Bun, since the server it embeds uses Bun's APIs, so it runs as `bunx bunvex`. `engines.bun` is set, and the library's client and React parts stay usable from Node bundlers.
 
+**What happened, and the plan for the names** (owner, 2026-10-02)
+
+npm refused `bunvex@0.0.1`: "403 Package name too similar to existing package convex". npm blocks names close to popular packages, and `bunvex` is two letters from `convex`. The owner asked npm's support to allow it (a request from `danielmartinsdev`, 2026-10-02). The `@bunvex` scope is already the owner's.
+
+Until npm answers, two ways in, with one documented at a time:
+- **`@bunvex/*`** (published first): `@bunvex/server`, `@bunvex/values`, `@bunvex/react`, …, and `@bunvex/cli`, whose binary is still `bunvex`. That gives `bunx bunvex dev` with `@bunvex/cli` installed, or `bunx @bunvex/cli dev`.
+- **`bunvex`**, once allowed: the umbrella that re-exports the `@bunvex/*` packages, as today in the repository. Apps may move from one to the other at any time.
+- **One copy of each module:** every package is released at the same version (a changesets "fixed" group), and `bunvex` depends on exact versions. An app then never holds two copies of `@bunvex/server` or `@bunvex/react`. Two copies would not recognize each other's functions (the registry's `WeakSet`) or React provider.
+- **Codegen:** it imports from whichever the app depends on (`bunvex` when its `package.json` has it, else `@bunvex/*`).
+- **A preview first:** `0.1.0-alpha.*`, published from the TypeScript sources, which Bun runs from `node_modules`. It is enough to try the whole flow in a new directory with Bun. It needs `allowImportingTsExtensions`, which `codegen --init` writes (STUDY-36 G5), and frameworks such as Next.js need to transpile the dependencies.
+- **The built package** (JS and `.d.ts`) remains the roadmap item.
+
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
