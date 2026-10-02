@@ -25,7 +25,95 @@ type Execution = {
   monotonicStart: number;
   /** What the body observed, for the caller (the query cache expires a result that read the clock). */
   observed: Observed;
+  /** The running function's time budget (STUDY-41), when a user function runs. */
+  timer?: UserTimer;
 };
+
+/**
+ * A query's or mutation's time budget, as Convex's (crates/isolate/src/timeout.rs): user time is the wall
+ * time minus the time paused — awaiting the store, or a nested call (which has its own budget). Over
+ * `userMs`, the function fails with Convex's message; over `systemMs` of paused time, with Convex's system
+ * timeout. In one process running JS cannot be interrupted: the budget is checked at every store call and
+ * when the function ends (STUDY-41 N5), and once exceeded it cannot be caught.
+ */
+export type UserTimer = {
+  start: number;
+  paused: number;
+  pausedSince: number | null;
+  userMs: number;
+  systemMs: number;
+  /** The timeout, once hit: thrown again at every store call and at the end. */
+  failed: Error | null;
+};
+
+/** Rust's `Duration` Debug form, as Convex's message prints the limit (`1s`, `1.5s`, `500ms`). */
+export function formatDuration(ms: number): string {
+  if (ms >= 1000) return `${Number((ms / 1000).toFixed(9))}s`;
+  if (ms >= 1) return `${Number(ms.toFixed(6))}ms`;
+  return `${Number((ms * 1000).toFixed(3))}µs`;
+}
+
+export const SYSTEM_TIMEOUT_MESSAGE = "Your request timed out performing too many system operations.";
+
+export function newUserTimer(userMs: number, systemMs: number): UserTimer {
+  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null };
+}
+
+const pausedNow = (t: UserTimer) => t.paused + (t.pausedSince === null ? 0 : realPerformanceNow() - t.pausedSince);
+
+/** Throw if the running function is over its budget (and remember it: the timeout cannot be caught). */
+export function checkUserTime() {
+  const t = executions.getStore()?.timer;
+  if (!t) return;
+  if (t.failed) throw t.failed;
+  const paused = pausedNow(t);
+  if (realPerformanceNow() - t.start - paused > t.userMs)
+    t.failed = new Error(`Function execution timed out (maximum duration: ${formatDuration(t.userMs)})`);
+  else if (paused > t.systemMs) t.failed = new Error(SYSTEM_TIMEOUT_MESSAGE);
+  if (t.failed) throw t.failed;
+}
+
+/** Run `fn` with the running function's clock paused (a nested call: it has its own budget). */
+export async function pausingUserTime<T>(fn: () => Promise<T>): Promise<T> {
+  const t = executions.getStore()?.timer;
+  if (!t || t.pausedSince !== null) return fn();
+  t.pausedSince = realPerformanceNow();
+  try {
+    return await fn();
+  } finally {
+    t.paused += realPerformanceNow() - t.pausedSince;
+    t.pausedSince = null;
+  }
+}
+
+/**
+ * Run a function's body under `timer` (replacing any, restored after); its timeout, once hit, is thrown
+ * when the body ends even if the body caught it.
+ */
+export async function withUserTimer<T>(timer: UserTimer, fn: () => T): Promise<Awaited<T>> {
+  const e = executions.getStore();
+  if (!e) return await fn();
+  const outer = e.timer;
+  e.timer = timer;
+  try {
+    const value = await fn();
+    checkUserTime();
+    return value;
+  } catch (err) {
+    if (timer.failed) throw timer.failed;
+    throw err;
+  } finally {
+    e.timer = outer;
+  }
+}
+
+/** A store call from a function (`Tx`): outside the execution, its time paused, the budget checked around it. */
+export async function storeCall<T>(fn: () => T | Promise<T>): Promise<T> {
+  checkUserTime();
+  const value = await pausingUserTime(async () => outsideExecution(fn));
+  checkUserTime();
+  return value;
+}
 
 /** What an execution read that makes its result depend on more than its reads. */
 export type Observed = {

@@ -33,7 +33,7 @@ import {
 } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
 import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { nextUp, outsideExecution, wallClock } from "./determinism.ts";
+import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
@@ -221,6 +221,19 @@ export type PaginationResult = {
   pageStatus: "SplitRecommended" | "SplitRequired" | null;
 };
 
+/** A transaction's read and write limits, and its usage against them. */
+export type TxLimits = { documentsRead: number; bytesRead: number; documentsWritten: number; bytesWritten: number };
+
+/** What `Tx.rollback` restores (see `Tx.begin`). */
+export type Savepoint = {
+  writes: Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>;
+  pending: Map<number, BTree<Uint8Array, Doc | null>>;
+  createdTables: Tx["createdTables"];
+  docsWritten: number;
+  bytesWritten: number;
+  pendingViolation: { table: string; error: string } | null;
+};
+
 export class Tx {
   private readList: Interval[] = [];
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
@@ -250,6 +263,25 @@ export class Tx {
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
+  /**
+   * The transaction's read and write ceilings: Convex's limits, lowered for a nested call by its
+   * `transactionLimits` (STUDY-41) and restored after it.
+   */
+  limits: TxLimits = {
+    documentsRead: TRANSACTION_MAX_READ_SIZE_ROWS,
+    bytesRead: TRANSACTION_MAX_READ_SIZE_BYTES,
+    documentsWritten: TRANSACTION_MAX_NUM_USER_WRITES,
+    bytesWritten: TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+  };
+  /** What has been read and written so far, against the limits. */
+  get usage(): TxLimits {
+    return {
+      documentsRead: this.docsRead,
+      bytesRead: this.bytesRead,
+      documentsWritten: this.docsWritten,
+      bytesWritten: this.bytesWritten,
+    };
+  }
   private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
@@ -423,13 +455,13 @@ export class Tx {
     this.docsRead++;
     this.bytesRead += json.length;
     if (this.systemTx) return;
-    if (this.docsRead > TRANSACTION_MAX_READ_SIZE_ROWS)
+    if (this.docsRead > this.limits.documentsRead)
       throw new Error(
-        `Too many documents read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_ROWS}). ${OVER_LIMIT_HELP}`,
+        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
       );
-    if (this.bytesRead > TRANSACTION_MAX_READ_SIZE_BYTES)
+    if (this.bytesRead > this.limits.bytesRead)
       throw new Error(
-        `Too many bytes read in a single function execution (limit: ${TRANSACTION_MAX_READ_SIZE_BYTES} bytes). ${OVER_LIMIT_HELP}`,
+        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
       );
   }
 
@@ -501,7 +533,7 @@ export class Tx {
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
-    const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+    const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
     if (json) this.recordDoc(json);
     return json ? decodeDoc(json) : null;
@@ -553,15 +585,15 @@ export class Tx {
     this.retention?.check(this.snapshot);
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
-      const rows = await outsideExecution(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
+      const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
       this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
       return rows.map(decodeDoc);
     }
-    const ids = await outsideExecution(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
+    const ids = await storeCall(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
     const out: Doc[] = [];
     for (const id of ids) {
-      const json = await outsideExecution(() => this.persistence.get(t.id, id, this.snapshot));
+      const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
       if (json) {
         this.recordDoc(json);
         out.push(decodeDoc(json));
@@ -710,7 +742,7 @@ export class Tx {
 
   /** @internal (QueryImpl) The row limit of a `collect()`: one past the read limit raises its error. */
   collectLimit() {
-    return this.systemTx ? 1_000_000 : TRANSACTION_MAX_READ_SIZE_ROWS - this.docsRead + 1;
+    return this.systemTx ? 1_000_000 : this.limits.documentsRead - this.docsRead + 1;
   }
 
   /** @internal (QueryImpl) */
@@ -784,11 +816,11 @@ export class Tx {
       this.bytesWritten += size;
     }
     this.docsWritten++;
-    if (this.docsWritten > TRANSACTION_MAX_NUM_USER_WRITES)
-      throw new Error(`Too many writes in a single function execution (limit: ${TRANSACTION_MAX_NUM_USER_WRITES})`);
-    if (this.bytesWritten > TRANSACTION_MAX_USER_WRITE_SIZE_BYTES)
+    if (this.docsWritten > this.limits.documentsWritten)
+      throw new Error(`Too many writes in a single function execution (limit: ${this.limits.documentsWritten})`);
+    if (this.bytesWritten > this.limits.bytesWritten)
       throw new Error(
-        `Too many bytes written in a single function execution (limit: ${formatBytes(TRANSACTION_MAX_USER_WRITE_SIZE_BYTES)})`,
+        `Too many bytes written in a single function execution (limit: ${formatBytes(this.limits.bytesWritten)})`,
       );
   }
 
@@ -922,6 +954,34 @@ export class Tx {
     const cur = await this.read(table, id, "db.delete");
     if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
+  }
+
+  /**
+   * A savepoint (Convex's `begin_subtransaction`, STUDY-41): the writes, each index's pending entries (a
+   * copy-on-write clone), the tables created and the write counts. Reads are never rolled back.
+   */
+  begin(): Savepoint {
+    const pending = new Map<number, BTree<Uint8Array, Doc | null>>();
+    for (const [ix, tree] of this.pending) pending.set(ix, tree.clone());
+    return {
+      writes: new Map(this.writes),
+      pending,
+      createdTables: new Map(this.createdTables) as Tx["createdTables"],
+      docsWritten: this.docsWritten,
+      bytesWritten: this.bytesWritten,
+      pendingViolation: this.pendingViolation,
+    };
+  }
+
+  /** Undo every write since `sp` (a nested mutation that failed). */
+  rollback(sp: Savepoint) {
+    this.writes = sp.writes;
+    this.pending = sp.pending;
+    this.createdTables.clear();
+    for (const [k, v] of sp.createdTables) this.createdTables.set(k, v);
+    this.docsWritten = sp.docsWritten;
+    this.bytesWritten = sp.bytesWritten;
+    this.pendingViolation = sp.pendingViolation;
   }
 
   /** The writes as persistence rows: the new version of each doc and the index entries that changed. */

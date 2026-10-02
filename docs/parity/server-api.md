@@ -12,7 +12,7 @@ Key bunvex facts behind the statuses:
 - Documents are stored as `JSON.stringify` output.
 - Ids are `crypto.randomUUID()`.
 - Function definitions are bare handlers (`query(handler, internal?)`).
-- Contexts carry only `db` (queries and mutations) or `runQuery`/`runMutation` (actions).
+- Queries and mutations carry `runQuery` (and mutations `runMutation`) in their transaction since STUDY-41.
 
 ---
 
@@ -126,16 +126,16 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | partial | Only `db`. |
-| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | `db`, `auth`, `scheduler`. |
+| QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | partial | `db`, `auth`, `storage`, `runQuery` (STUDY-41). No `meta`. |
+| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | `db`, `auth`, `storage`, `scheduler`, `runQuery`, `runMutation` (STUDY-41). No `meta`. |
 | ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`. |
-| `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | missing | |
-| `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | missing | |
+| `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | done (STUDY-41) | In the caller's transaction (its writes, identity, time; reads joining its read set), after the path, kind and arguments are checked with Convex's messages; internal functions allowed; returns checked after; errors catchable (`BunvexError` data kept; no appended stack text, DV-205). Nested calls from one function run one at a time (DV-207). |
+| `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | done (STUDY-41) | `Tx.begin` / `rollback` (copy-on-write index trees): a failed nested mutation's writes and created tables are undone, its reads kept; the caller may catch and commit. A failed returns check keeps the writes, as Convex. |
 | `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Strings instead of references, and internal functions are allowed. |
 | `ctx.runAction` from an action | impl/actions_impl.ts | missing | |
-| `runQuery` option `useStaleSnapshot` (mutations only) | server/registration.ts (`AdvancedRunQueryOptions`) | missing | |
-| `transactionLimits` option on `runQuery` / `runMutation` (bytesRead, documentsRead/Written, databaseQueries, functionsScheduled, files…) | server/meta.ts, registration.ts | missing | |
-| Maximum nesting of `runQuery`/`runMutation` calls (`MAX_REACTOR_CALL_DEPTH` = 8) | knobs.rs | missing | |
+| `runQuery` option `useStaleSnapshot` (mutations only) | server/registration.ts (`AdvancedRunQueryOptions`) | done (STUDY-41) | A query at the transaction's snapshot, without its pending writes, its reads discarded; refused from a query with Convex's message. |
+| `transactionLimits` option on `runQuery` / `runMutation` (bytesRead, documentsRead/Written, databaseQueries, functionsScheduled, files…) | server/meta.ts, registration.ts | partial (STUDY-41) | Documents and bytes read and written, as Convex (usage so far plus the budget, never above the current limit; restored after). The other limits are accepted and ignored (DV-206, to build). |
+| Maximum nesting of `runQuery`/`runMutation` calls (`MAX_REACTOR_CALL_DEPTH` = 8) | knobs.rs | done (STUDY-41) | 8 levels below the top function; Convex's message. |
 | `ctx.meta.getFunctionMetadata()` (name, componentPath, type, visibility) | server/meta.ts | missing | |
 | `ctx.meta.getTransactionMetrics()` (used/remaining per limit) | server/meta.ts | missing | |
 | `ctx.meta.getDeploymentMetadata()` | server/meta.ts | missing | |
@@ -340,14 +340,14 @@ Key bunvex facts behind the statuses:
 | Reads per transaction ≤ 32,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_READ_SIZE_ROWS/BYTES`) | missing | `collect()` silently truncates at 8192 instead. |
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | missing | |
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
-| Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | missing | No timeout at all. |
+| Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | done (STUDY-41) | User time is wall time minus the time awaiting the store and nested calls (each nested call has its own budget); Convex's message ("Function execution timed out (maximum duration: 1s)"), not catchable, a mutation commits nothing; the 15 s system budget with Convex's message; `DATABASE_UDF_USER_TIMEOUT_SECONDS` / `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS`. Checked at store calls and at the end: a synchronous loop that never reaches the store is not interrupted (DV-208). |
 | Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
 | Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | missing | |
 | Log lines ≤ 256 per execution, ≤ 32 KiB each | isolate/src/environment/helpers/mod.rs | missing | |
 | Scheduling: 1000 per transaction, 4 MiB per job, 16 MiB total | knobs.rs | missing | |
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | missing | |
 | Search: 16 terms, ≤1024 results; vector: ≤256 results, 2–4096 dimensions, ≤64 filter length | crates/search/src/constants.rs; crates/vector/src/lib.rs | missing | |
-| `runQuery` / `runMutation` call depth ≤ 8 | knobs.rs (`MAX_REACTOR_CALL_DEPTH`) | missing | |
+| `runQuery` / `runMutation` call depth ≤ 8 | knobs.rs (`MAX_REACTOR_CALL_DEPTH`) | done (STUDY-41) | See §6: Convex's limit and message. |
 | OCC retries for mutations (4 by default) | knobs.rs | done (STUDY-21) | |
 
 ---
