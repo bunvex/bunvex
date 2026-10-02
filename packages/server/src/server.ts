@@ -65,6 +65,8 @@ export type ServerOptions = {
   engine: Engine;
   functions: Functions;
   port?: number;
+  /** The interface both ports listen on (Convex's `--interface`; default Bun's, all interfaces). */
+  hostname?: string;
   label?: string;
   /** What to do when persistence fails and the committer stops. Default: log and exit(1), as Convex does, so
    *  a supervisor restarts the process and it recovers from what persistence durably holds. */
@@ -439,6 +441,7 @@ export function createServer(opts: ServerOptions) {
 
   server = Bun.serve<WsData, never>({
     port: opts.port ?? 3210,
+    ...(opts.hostname ? { hostname: opts.hostname } : {}),
     idleTimeout: 120,
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
@@ -588,6 +591,7 @@ export function createServer(opts: ServerOptions) {
       ? null
       : Bun.serve({
           port: sitePort,
+          ...(opts.hostname ? { hostname: opts.hostname } : {}),
           idleTimeout: 120,
           ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
           fetch(req, srv) {

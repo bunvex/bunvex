@@ -1,4 +1,4 @@
-// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env` and `run` (STUDY-37); dev, run, codegen
+// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `start` (STUDY-37); dev, run, codegen
 // and import/export follow (roadmap Phase 3 items 7–9).
 import { adminKeyCommand } from "./admin-key.ts";
 import { codegenCommand } from "./codegen-command.ts";
@@ -6,6 +6,7 @@ import { deployCommand } from "./deploy.ts";
 import { envCommand } from "./env.ts";
 import { type Io, processIo } from "./io.ts";
 import { runCommand } from "./run.ts";
+import { startCommand } from "./start.ts";
 
 export type { Io } from "./io.ts";
 
@@ -17,6 +18,7 @@ Commands:
   deploy      bundle the functions and push them to a deployment
   env         set and view the deployment's environment variables
   run         run a function (query, mutation or action) on the deployment
+  start       run the self-hosted server
 
 Run \`bunvex <command> --help\` for a command's options.`;
 
@@ -26,6 +28,7 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   deploy: deployCommand,
   env: envCommand,
   run: runCommand,
+  start: startCommand,
 };
 
 /** Run the command line; resolves to the exit code. */
