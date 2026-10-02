@@ -1,6 +1,6 @@
 # STUDY-42 — Snapshot export and import (`bunvex export`, `bunvex import`)
 
-- **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) accepted as recommended (owner, 2026-10-02), X6 and X7 built in #209
+- **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) accepted as recommended (owner, 2026-10-02), X6 and X7 built in #210
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - roadmap item 14 ([parity README](../parity/README.md));
@@ -147,7 +147,7 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 - **CLI:** `bunvex import <path> [--table] [--format] [--replace|--append|--replace-all] [-y]`, the upload
   in 5 MiB parts (`BUNVEX_IMPORT_CHUNK_SIZE`), the summary and "Perform import?", progress by polling the
   row, "Added N documents to table "T"."
-- **Retries and resuming (#209):** a system error (the blob store, a server error, a conflict that outlasted its
+- **Retries and resuming (#210):** a system error (the blob store, a server error, a conflict that outlasted its
   retries) is retried with Convex's backoff (30 s doubling to 5 minutes, jittered) up to 5 times, then fails
   with Convex's internal-error message; each attempt resumes into the hidden tables recorded in the row
   (`hidden_tables`, bunvex's own field, not returned by `queryImport`), skipping what they already hold. A
@@ -174,8 +174,8 @@ A one-shot `POST /api/import` does it all; `cancel_import` cancels.
 | X4 | No audit-log entries for exports and imports | bunvex has no audit log yet | accepted (owner, 2026-10-02) |
 | X5 | Import reads ZIPs in the current `"uniform"` encoding only. Convex also reads the legacy inferred-schema encoding of older Convex exports | the legacy one needs Convex's shape inference; it only matters for ZIPs exported by old Convex versions | accepted (owner, 2026-10-02) |
 
-| X6 | A failed step fails the import at once. Convex retries an error that is not the import's own (a bad request) up to 5 times, with a backoff from 30 s to 5 minutes | bunvex did not yet tell a transient system error from a content error | accepted, then built (owner, 2026-10-02; #209): resolved |
-| X7 | An import interrupted by a restart starts over (its hidden tables are dropped and written again). Convex resumes from its checkpoints, skipping the documents already in each hidden table (an append cannot resume in Convex either) | not built yet; only the time it takes differed | accepted, then built (owner, 2026-10-02; #209): resolved |
+| X6 | A failed step fails the import at once. Convex retries an error that is not the import's own (a bad request) up to 5 times, with a backoff from 30 s to 5 minutes | bunvex did not yet tell a transient system error from a content error | accepted, then built (owner, 2026-10-02; #210): resolved |
+| X7 | An import interrupted by a restart starts over (its hidden tables are dropped and written again). Convex resumes from its checkpoints, skipping the documents already in each hidden table (an append cannot resume in Convex either) | not built yet; only the time it takes differed | accepted, then built (owner, 2026-10-02; #210): resolved |
 | X8 | The parser's detail in "Row N wasn't valid JSON: …" and "Not valid JSON: …" is JavaScript's wording (serde_json's in Convex), and invalid UTF-8 in a CSV says "Failed to parse CSV row 1: invalid UTF-8" | bunvex parses with the runtime's JSON parser and its own CSV reader; the message structure is Convex's | accepted (owner, 2026-10-02) |
 
 **Follow-up:** X1, X3 and X4 are in the ledger's "Waiting on a dependency" (components, item 12, an audit log); X5 can be built any time.
