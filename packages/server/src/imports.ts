@@ -779,8 +779,7 @@ export class ImportService {
     let n = 0;
     for await (const r of t.rows()) {
       n++;
-      const bad = (msg: string) =>
-        new ImportError("InvalidValue", `Row ${n} wasn't a valid value: ${msg}`);
+      const bad = (msg: string) => new ImportError("InvalidValue", `Row ${n} wasn't a valid value: ${msg}`);
       const m = r.json as Record<string, unknown>;
       if (!m || typeof m !== "object" || typeof m._id !== "string") throw bad("missing field `_id`");
       let number: number;
