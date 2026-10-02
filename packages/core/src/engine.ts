@@ -47,6 +47,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
+import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
   hasLease,
   hasRetention,
@@ -69,6 +70,9 @@ import {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 import { Tx } from "./tx.ts";
+
+/** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
+export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
 
 export { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions };
 
@@ -137,6 +141,8 @@ export class Engine {
   catalog: Catalog = bootstrapCatalog();
   /** Signs pagination cursors: INSTANCE_SECRET, or the one stored in `_instance` (set by init()). */
   private instanceSecret = "";
+  /** The deployment's name (Convex's INSTANCE_NAME): admin keys carry it (STUDY-34). Set by `init()`. */
+  instanceName = "";
   /** Document validators of the declared tables (empty when `schemaValidation` is off). */
   private readonly docValidators = new Map<string, GenericValidator>();
   /** Query results by function, arguments and (when read) identity: an LRU bounded by bytes (STUDY-08 D8). */
@@ -164,6 +170,11 @@ export class Engine {
       occMaxBackoffMs?: number;
       /** Signs pagination cursors (STUDY-17); the deployment's secret, as Convex's INSTANCE_SECRET. */
       instanceSecret?: string;
+      /**
+       * The deployment's name, as Convex's INSTANCE_NAME: an admin key is valid for one name (STUDY-34).
+       * Default: the one stored with the data, else `bunvex-self-hosted`, stored (DV-159).
+       */
+      instanceName?: string;
       /**
        * The store's lease (PERSIST-01 C7), for drivers that have one. `ttlMs` (default 5000): how long the
        * lease outlives this process if it dies. `waitMs` (default 0): how long `init()` waits for a lease
@@ -216,6 +227,7 @@ export class Engine {
     this.committer.resume(m);
     const backfilling = await this.reconcileCatalog();
     await this.loadInstanceSecret();
+    await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) {
       this.indexWorker = new IndexWorker(this.workerHost(), this.opts.indexBackfill);
@@ -336,6 +348,29 @@ export class Engine {
   secretKey(purpose: string): Uint8Array {
     if (!this.instanceSecret) throw new Error("secretKey: the engine is not initialized");
     return new Uint8Array(new Bun.CryptoHasher("sha256", this.instanceSecret).update(purpose).digest());
+  }
+
+  /**
+   * The deployment's name: the configured one wins; otherwise the one stored with the data; otherwise
+   * `bunvex-self-hosted`, stored (Convex's self-hosted image defaults to its own name and persists it).
+   */
+  private async loadInstanceName() {
+    const name = this.opts.instanceName || (await this.instanceSetting("instanceName", () => DEFAULT_INSTANCE_NAME));
+    if (!/^[^|:\s]+$/.test(name))
+      throw new Error(
+        `invalid instance name ${JSON.stringify(name)}: it may not be empty or contain "|", ":" or spaces`,
+      );
+    this.instanceName = name;
+  }
+
+  /**
+   * A 16-byte key for one purpose, derived from the instance secret by KBKDF-CTR-HMAC-SHA256 exactly as
+   * Convex's keybroker derives it (`Encryptor::derive_from_secret`): the admin key cipher's key is
+   * `derivedKey("admin key")`, so keys are interchangeable with Convex's for the same name and secret.
+   */
+  derivedKey(purpose: string, length = 16): Uint8Array {
+    if (!this.instanceSecret) throw new Error("derivedKey: the engine is not initialized");
+    return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
   }
 
   /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */

@@ -316,6 +316,8 @@ export function createServer(opts: ServerOptions) {
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");
+      // Convex's health route: the deployment's name, as plain text (STUDY-34).
+      if (url.pathname === "/instance_name") return new Response(engine.instanceName);
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
