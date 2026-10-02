@@ -1,6 +1,6 @@
-// The standalone executables (STUDY-39), as Convex's precompiled `convex-local-backend`: `bunvex` compiled
-// with `bun build --compile` for each platform Convex ships, zipped as `bunvex-<target>.zip` (Convex's
-// `convex-local-backend-<target>.zip`, the same Rust target names).
+// The backend executables (STUDY-39, STUDY-40 L1), as Convex's precompiled `convex-local-backend`:
+// `bunvex-local-backend` compiled with `bun build --compile` for each platform Convex ships, zipped as
+// `bunvex-local-backend-<target>.zip` (Convex's `convex-local-backend-<target>.zip`, the same target names).
 //
 //   bun scripts/build-binary.ts                        every target, into dist/bin
 //   bun scripts/build-binary.ts --target x86_64-unknown-linux-gnu --version 2026-10-02-abc1234
@@ -9,7 +9,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const ENTRY = join(ROOT, "packages/bunvex/bin/standalone.ts");
+const ENTRY = join(ROOT, "packages/bunvex/bin/local-backend.ts");
+export const EXE = "bunvex-local-backend";
 
 /** Convex's targets, and the Bun target that builds each. */
 export const TARGETS: Record<string, string> = {
@@ -48,7 +49,7 @@ const out = resolve(ROOT, opt("--out") ?? "dist/bin");
 for (const t of targets) if (!TARGETS[t]) throw new Error(`unknown target ${t} (${Object.keys(TARGETS).join(", ")})`);
 mkdirSync(out, { recursive: true });
 for (const target of targets) {
-  const exe = target.includes("windows") ? "bunvex.exe" : "bunvex";
+  const exe = target.includes("windows") ? `${EXE}.exe` : EXE;
   const dir = join(out, target);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -63,7 +64,7 @@ for (const target of targets) {
     "--outfile",
     join(dir, exe),
   ]);
-  const zip = join(out, `bunvex-${target}.zip`);
+  const zip = join(out, `${EXE}-${target}.zip`);
   rmSync(zip, { force: true });
   await run(["zip", "-q", "-j", zip, join(dir, exe)]);
   console.log(`built ${zip}`);

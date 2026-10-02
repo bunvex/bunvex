@@ -134,6 +134,10 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-161 | Read-only admin keys can be issued (`--read-only`) | supported by the format, issued only by the cloud | operational | as recommended | owner, 2026-10-01 | [STUDY-34 AK4](../study/STUDY-34-admin-keys.md#4-divergences) |
 | DV-162 | `/stats` (bunvex-only) requires an admin key with `ViewMetrics` | (no such endpoint; metrics need `ViewMetrics`) | yes (it is open today) | as recommended | owner, 2026-10-01 | [STUDY-34 AK5](../study/STUDY-34-admin-keys.md#4-divergences) |
 | DV-163 | An admin identity on a WebSocket does not expire | revalidated after 2000 s | no | as recommended | owner, 2026-10-01 | [STUDY-34 AK6](../study/STUDY-34-admin-keys.md#4-divergences) |
+| DV-193 | The backend alone as `bunvex-local-backend-<target>.zip`, as Convex (the CLI comes from npm) | `convex-local-backend-<target>.zip` | no (the same shape) | the owner chose Convex's shape (B1 answered 2026-10-02) | owner, 2026-10-02 (as recommended) | [STUDY-39 B1](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-194 | No `dashboard.zip` until item 12 | `dashboard.zip` in every release | yes | accept | owner, 2026-10-02 (as recommended) | [STUDY-39 B2](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-195 | The Windows executable is built but not run in CI yet | — | no | accept, smoke it later | owner, 2026-10-02 (as recommended) | [STUDY-39 B3](../study/STUDY-39-standalone-binary.md#4-divergences) |
+| DV-196 | `bunvex dev` downloads and runs `bunvex-local-backend` for a local deployment, as Convex (STUDY-40) | the same | no | the owner chose Convex's way (B4 answered 2026-10-02) | owner, 2026-10-02 (as recommended) | [STUDY-39 B4](../study/STUDY-39-standalone-binary.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -234,15 +238,7 @@ DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-div
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-126 and DV-127 (STUDY-29 B1/B2) were decided the same day (owner, #115) and are in
 [Decided divergences](#decided-divergences). DV-143–DV-147 (STUDY-31 H1–H5) were accepted the same day, DV-152 (STUDY-06 D13) and DV-153 (STUDY-08 §3.6) too.
-
-STUDY-39 (the standalone executable), awaiting the owner:
-
-| ID | bunvex | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-193 | The executable is the whole `bunvex` CLI (`start`, `deploy`, …), released as `bunvex-<target>.zip` | the backend alone, `convex-local-backend-<target>.zip` | yes (asset names) | accept | [STUDY-39 B1](../study/STUDY-39-standalone-binary.md#4-divergences) |
-| DV-194 | No `dashboard.zip` until item 12 | `dashboard.zip` in every release | yes | accept | [STUDY-39 B2](../study/STUDY-39-standalone-binary.md#4-divergences) |
-| DV-195 | The Windows executable is built but not run in CI yet | — | no | accept, smoke it later | [STUDY-39 B3](../study/STUDY-39-standalone-binary.md#4-divergences) |
-| DV-196 | `bunvex dev` runs a local deployment in process; it never downloads the executable | the CLI downloads the latest release | no | accept | [STUDY-39 B4](../study/STUDY-39-standalone-binary.md#4-divergences) |
+DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 and B4 Convex's way, B2 and B3 as recommended) and are in [Decided divergences](#decided-divergences).
 
 ## Gaps recorded in studies
 

@@ -1,6 +1,6 @@
 # STUDY-39 — The standalone executable (Convex's precompiled `convex-local-backend`)
 
-- **Status:** draft (B1–B4 await the owner; the owner asked for it "as Convex does", 2026-10-02)
+- **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-37](STUDY-37-cli-and-environment-variables.md) (`bunvex start`, E1; `bunvex dev`'s local deployment, E6);
@@ -36,11 +36,11 @@
 
 **The executable**
 - `bun build --compile` turns the `bunvex` CLI into one file per platform, from Bun's cross-compiling targets: `bun-darwin-arm64`, `-x64`, `bun-linux-arm64`, `-x64`, `bun-windows-x64`.
-- The entry is `packages/bunvex/bin/standalone.ts`.
+- The entry is `packages/bunvex/bin/local-backend.ts` (it was the CLI's `standalone.ts` until B1 was decided: STUDY-40).
   - It carries the persistence drivers and their database clients (`postgres`, `mysql2`, `mongodb`), which the bundler cannot reach through their computed imports.
   - It registers them in a small registry in `@bunvex/core` that the loaders check first.
 
-**Building:** `scripts/build-binary.ts` builds every target, or one, or the host's, into `dist/bin/bunvex-<target>.zip` with Convex's target names. `bunvex --version` prints the build's name.
+**Building:** `scripts/build-binary.ts` builds every target, or one, or the host's, into `dist/bin/bunvex-local-backend-<target>.zip` with Convex's target names. `bunvex-local-backend --version` prints the build's name.
 
 **Workflows**
 - `binaries.yml`: on PRs, every target is built, and the Linux (SQLite and Postgres) and macOS ones are run end to end by `scripts/smoke-binary.sh`.
@@ -61,10 +61,10 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| B1 | The executable is the whole `bunvex` CLI, so `bunvex start` runs the server and the same file deploys, runs and generates code. The zip is `bunvex-<target>.zip`. Convex's is the backend alone (`convex-local-backend-<target>.zip`); its CLI is npm's | bunvex's server and CLI are one program; one file covers the guide's every step | pending |
-| B2 | No `dashboard.zip` in the release until the dashboard runs on a real deployment (item 12) | as STUDY-38 K3 | pending |
-| B3 | The Windows executable is built and released but not yet run in CI. Linux and macOS are | a Windows smoke run is to come (the script is bash) | pending |
-| B4 | `bunvex dev` does not download the executable for a local deployment: it runs one in its own process (STUDY-37 E6) | the CLI already is the server | pending |
+| B1 | The owner chose Convex's shape: the backend alone, `bunvex-local-backend-<target>.zip` (STUDY-40 L1); the CLI comes from npm | as Convex | accepted (owner, 2026-10-02) |
+| B2 | No `dashboard.zip` in the release until the dashboard runs on a real deployment (item 12) | as STUDY-38 K3 | accepted (owner, 2026-10-02) |
+| B3 | The Windows executable is built and released but not yet run in CI. Linux and macOS are | a Windows smoke run is to come (the script is bash) | accepted (owner, 2026-10-02) |
+| B4 | The owner chose Convex's way: `bunvex dev` downloads and runs `bunvex-local-backend` for a local deployment (STUDY-40 L3–L5) | as Convex | accepted (owner, 2026-10-02) |
 
 ## 5. Tests
 

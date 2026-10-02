@@ -1,6 +1,6 @@
 name: Binaries
 
-# The standalone executables (STUDY-39): every target built (cross-compiled), and the Linux and macOS ones
+# The backend executables (STUDY-39, STUDY-40: bunvex-local-backend): every target built (cross-compiled), and the Linux and macOS ones
 # run end to end (scripts/smoke-binary.sh), the Linux one on SQLite and on Postgres.
 
 on:
@@ -55,7 +55,7 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --target x86_64-unknown-linux-gnu
-      - run: scripts/smoke-binary.sh dist/bin/x86_64-unknown-linux-gnu/bunvex
+      - run: scripts/smoke-binary.sh dist/bin/x86_64-unknown-linux-gnu/bunvex-local-backend
         env:
           SMOKE_POSTGRES_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:smoke@127.0.0.1:5432/bunvex' || '' }}
 
@@ -69,4 +69,4 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --host
-      - run: scripts/smoke-binary.sh dist/bin/aarch64-apple-darwin/bunvex
+      - run: scripts/smoke-binary.sh dist/bin/aarch64-apple-darwin/bunvex-local-backend

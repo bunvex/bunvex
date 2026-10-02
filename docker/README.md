@@ -57,17 +57,20 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 
 ## Without Docker: the executable
 
-Each release on GitHub has `bunvex-<target>.zip` for macOS (arm64, x64), Linux (arm64, x64) and Windows (x64):
-one file that needs nothing installed, as Convex's precompiled `convex-local-backend`
-([STUDY-39](../docs/study/STUDY-39-standalone-binary.md)). In an empty directory:
+Each release on GitHub has `bunvex-local-backend-<target>.zip` for macOS (arm64, x64), Linux (arm64, x64) and
+Windows (x64): the backend as one file that needs nothing installed, as Convex's precompiled
+`convex-local-backend` ([STUDY-40](../docs/study/STUDY-40-local-backend-and-local-deployments.md)). As
+Convex's "running the binary directly" guide:
 
 ```sh
-./bunvex start                 # SQLite and credentials in ./.data (POSTGRES_URL=… for Postgres)
-./bunvex admin-key             # an admin key for the CLI
+export INSTANCE_SECRET=$(openssl rand -hex 32)
+./bunvex-local-backend keygen admin-key --instance-name bunvex-self-hosted --instance-secret "$INSTANCE_SECRET"
+./bunvex-local-backend --instance-name bunvex-self-hosted --instance-secret "$INSTANCE_SECRET"
 ```
 
-The same file is the CLI: `./bunvex deploy`, `./bunvex dev`, `./bunvex run …`. To build one yourself:
-`bun scripts/build-binary.ts --host` (into `dist/bin/`).
+The database is `bunvex_local_backend.sqlite3` in the current directory; for Postgres,
+`--db postgres postgres://…/<database>` (the URL names the database). `--help` lists the other options (ports,
+public origins, storage). To build it yourself: `bun scripts/build-binary.ts --host` (into `dist/bin/`).
 
 ## Build the image
 

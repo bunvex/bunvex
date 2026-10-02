@@ -34,7 +34,7 @@ const ALLOWED: Record<string, string[]> = {
   testing: ["server", "core", "values"],
   // Test-only, never published: end-to-end sync tests (a server and clients in one process, STUDY-26).
   "sync-e2e": ["client", "react", "server", "core", "protocol", "values"],
-  // bin/standalone.ts (STUDY-39) also carries the persistence drivers into the executable.
+  // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
   bunvex: ["server", "values", "client", "react", "nextjs", "cli", "core", "persistence"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.
