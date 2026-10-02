@@ -156,3 +156,20 @@ test("a hidden table survives a restart as hidden, beside the active table of it
   expect(await names(again)).toEqual(["active"]);
   await again.close();
 });
+
+test("stale hidden tables (a crashed import's) are dropped after their age, as Convex's cleanup; others stay", async () => {
+  const e = await memory();
+  await e.mutation((db) => db.insert("items", { n: 1 }));
+  const left = await e.createHiddenTable("items", { copyIndexesOf: "items" });
+  await sys(e, (db) => db.importInsert(left, { n: 2 }));
+  const day = 24 * 60 * 60 * 1000;
+  // Young: kept.
+  expect(await e.dropStaleHiddenTables(14 * day)).toBe(0);
+  expect(e.catalog.hidden.size).toBe(1);
+  // Past the age: dropped and emptied; the active table is untouched.
+  expect(await e.dropStaleHiddenTables(14 * day, Date.now() + 15 * day)).toBe(1);
+  await deleted(e);
+  expect(e.catalog.hidden.size).toBe(0);
+  expect(await names(e)).toEqual([1]);
+  await e.close();
+});

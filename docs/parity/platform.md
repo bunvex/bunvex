@@ -254,7 +254,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | Reads below the minimum snapshot timestamp fail (snapshot invalid) | `retention.rs` `validate_snapshot` | done (STUDY-33) | Checked before and after every store read: `OutOfRetentionError`, "Index snapshot timestamp out of leader retention window: {ts} < {min}" (HTTP 503, close 1013). |
 | Purging deleted tables | `retention.rs` `delete_documents_in_tablets` | done (STUDY-42) | A `deleting` table is emptied by a background worker in batches of 1000 ordinary deletes (retention then removes their history), then its `_index` and `_tables` documents; resumed after a restart. Convex purges a deleted tablet's documents directly. |
 | Checkpointing and rate limits (`RETENTION_*` knobs) | `knobs.rs:667-822` | done (STUDY-33) | Convex's defaults: windows advanced every 30 s and recorded first (`min_snapshot_ts`, `document_min_snapshot_ts`), cursors checkpointed every 300 s, 256 documents/s, backoff 50 ms to 60 s. |
-| System table cleanup: scheduled jobs (7 d), sessions (2 w), expired exports (30 d), import age (7 d) | `crates/application/system_table_cleanup` | missing | |
+| System table cleanup: scheduled jobs (7 d), sessions (2 w), expired exports (30 d), import age (7 d) | `crates/application/system_table_cleanup` | partial | Sessions' requests (`session-cleanup.ts`); expired exports and their ZIPs 30 days past expiration (STUDY-42); hidden tables older than twice the import age (14 d), a crashed import's, every 30 minutes, at most 1000 a run (`Engine.dropStaleHiddenTables`, STUDY-42). An import older than 7 days fails ("Import took too long. Try again."). As Convex, `_snapshot_imports` rows and their uploads are not deleted. |
 
 ### 17. System tables (complete list)
 

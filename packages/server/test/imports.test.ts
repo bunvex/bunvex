@@ -535,6 +535,48 @@ describe("Convex's ZIPs", () => {
   });
 });
 
+describe("a Convex ZIP with files", () => {
+  test("its `_storage` ids carry Convex's fixed number (540): the files import, and file storage keeps working", async () => {
+    const t = await setup();
+    // As a Convex export lays it out: `_storage/documents.jsonl`, then each file named by its id.
+    const fileId = encodeId(540, new Uint8Array(16).fill(7));
+    const user = encodeId(10001, new Uint8Array(16).fill(1));
+    const sha = new Bun.CryptoHasher("sha256").update("hi there").digest("base64");
+    const zip = await zipOf([
+      ["README.md", "readme\n"],
+      ["_tables/documents.jsonl", '{"name":"users","id":10001}\n'],
+      [
+        "users/documents.jsonl",
+        `{"_creationTime":1700000000000.5,"_id":"${user}","avatar":"${fileId}","name":"Ada"}\n`,
+      ],
+      ["users/generated_schema.jsonl", '"uniform"\n'],
+      [
+        "_storage/documents.jsonl",
+        `{"_id":"${fileId}","_creationTime":1700000000000.25,"sha256":"${sha}","size":8,"contentType":"text/plain","internalId":"0b0f2c46-9d5c-4e2a-8f3a-3c1a2b4c5d6e"}\n`,
+      ],
+      [`_storage/${fileId}.txt`, "hi there"],
+    ]);
+    expect((await t.importNow(zip, "format=zip")).body).toEqual({ numWritten: 1 });
+    expect(t.engine.catalog.tables.get("_storage")!.number).toBe(540);
+    const [file] = (await t.engine.query((db) => db.asSystem(() => db.query("_storage").collect()))) as Doc[];
+    expect(file).toMatchObject({
+      _id: fileId,
+      _creationTime: 1700000000000.25,
+      storageId: "0b0f2c46-9d5c-4e2a-8f3a-3c1a2b4c5d6e",
+      sha256: sha,
+      size: 8,
+      contentType: "text/plain",
+    });
+    // Served by its URL, and new uploads still work.
+    const served = await fetch(`${t.api}/api/storage/0b0f2c46-9d5c-4e2a-8f3a-3c1a2b4c5d6e`);
+    expect(await served.text()).toBe("hi there");
+    const url = (await t.functions.runMutation("m:uploadUrl", {})) as string;
+    const up = (await (await fetch(url, { method: "POST", body: "more" })).json()) as { storageId: string };
+    expect(up.storageId.length).toBeGreaterThan(0);
+    expect((await t.docs("users"))[0]!.avatar).toBe(fileId);
+  });
+});
+
 describe("round trip", () => {
   test("export → import into an empty deployment: the same documents, ids, numbers and files", async () => {
     const src = await setup();
@@ -605,4 +647,24 @@ describe("round trip", () => {
     expect({ ...dstFile!, storageKey: null }).toEqual({ ...srcFile!, storageKey: null });
     expect(await new Response(await dst.files.get(dstFile!.storageKey as string)).text()).toBe("hello");
   });
+});
+
+test("the import service's cleanup drops hidden tables older than twice the import age limit", async () => {
+  const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false }), {
+    instanceName: NAME,
+    instanceSecret: SECRET,
+  }).init();
+  const { ImportService, MAX_IMPORT_AGE_MS } = await import("../src/imports.ts");
+  let now = Date.now();
+  const service = new ImportService(engine, new MemoryBlobStore(), null, { now: () => now });
+  await engine.createHiddenTable("orphan");
+  expect(await service.cleanup()).toBe(0);
+  // Past the import age limit, but not twice it: kept.
+  now += MAX_IMPORT_AGE_MS + 1000;
+  expect(await service.cleanup()).toBe(0);
+  now += MAX_IMPORT_AGE_MS;
+  expect(await service.cleanup()).toBe(1);
+  await engine.tablesDeleted();
+  expect(engine.catalog.hidden.size).toBe(0);
+  await engine.close();
 });
