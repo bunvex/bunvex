@@ -7,7 +7,10 @@ import type { BlobStore } from "./store.ts";
 
 export function blobStoreFromEnv(
   env = process.env,
-  opts: { s3Prefix?: string | (() => Promise<string>); useCase?: "files" | "modules" } = {},
+  opts: {
+    s3Prefix?: string | (() => Promise<string>);
+    useCase?: "files" | "modules" | "exports" | "snapshot_imports";
+  } = {},
 ): BlobStore {
   const useCase = opts.useCase ?? "files";
   const s3 = s3OptionsFromEnv(env, useCase);

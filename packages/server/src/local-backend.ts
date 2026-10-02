@@ -179,7 +179,7 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     storedSchema: true,
     lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
   }).init();
-  const storage = (useCase: "files" | "modules") => {
+  const storage = (useCase: "files" | "modules" | "exports") => {
     // With --s3-storage, each use case whose bucket is set is in S3, the others stay local (STUDY-38 K4).
     if (!f.s3 || !s3OptionsFromEnv(io.env, useCase))
       return new LocalBlobStore(resolve(io.cwd, f.localStorage), useCase);
@@ -198,6 +198,7 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     ...(f.redact ? { redactLogsToClient: true } : {}),
     fileStorage: storage("files"),
     moduleStorage: storage("modules"),
+    exportStorage: storage("exports"),
     deployable: true,
     label: f.db,
   });

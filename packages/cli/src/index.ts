@@ -5,6 +5,7 @@ import { codegenCommand } from "./codegen-command.ts";
 import { deployCommand } from "./deploy.ts";
 import { devCommand } from "./dev.ts";
 import { envCommand } from "./env.ts";
+import { exportCommand } from "./export.ts";
 import { type Io, processIo } from "./io.ts";
 import { runCommand } from "./run.ts";
 
@@ -18,6 +19,7 @@ Commands:
   deploy      bundle the functions and push them to a deployment
   dev         push the functions, and again whenever they change
   env         set and view the deployment's environment variables
+  export      export the deployment's data into a ZIP file
   run         run a function (query, mutation or action) on the deployment
 
 Run \`bunvex <command> --help\` for a command's options, \`bunvex --version\` for the version.`;
@@ -28,6 +30,7 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   deploy: deployCommand,
   dev: (args, io) => devCommand(args, io),
   env: envCommand,
+  export: (args, io) => exportCommand(args, io),
   run: runCommand,
 };
 

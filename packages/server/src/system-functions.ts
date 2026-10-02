@@ -13,6 +13,7 @@ import {
   cancelJob,
   ENVIRONMENT_VARIABLES_TABLE,
   type Engine,
+  EXPORTS_TABLE,
   type JobDoc,
   type PaginationOptions,
   type PaginationResult,
@@ -117,6 +118,19 @@ const withUrl = (files: FileStorage, d: Record<string, unknown>, row: { storageI
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  // The CLI's `export` waits on it (Convex's `_system/cli/exports:getLatest`): the newest export, or null.
+  "_system/cli/exports:getLatest": {
+    args: {},
+    op: "ViewBackups",
+    handler: async (db) =>
+      db.asSystem(() =>
+        db
+          .query(EXPORTS_TABLE)
+          .withIndex("by_requestor", (q) => q.eq("requestor", "snapshotExport"))
+          .order("desc")
+          .first(),
+      ),
+  },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
     args: { componentId },

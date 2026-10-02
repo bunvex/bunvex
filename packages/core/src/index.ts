@@ -6,6 +6,7 @@ export {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
+  EXPORTS_TABLE,
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,

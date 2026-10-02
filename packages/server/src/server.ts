@@ -37,6 +37,7 @@ import {
   isTryAgainError,
   withRequestId,
 } from "./errors.ts";
+import { ExportError, ExportService } from "./exports.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -132,6 +133,11 @@ export type ServerOptions = {
   deployable?: boolean;
   /** Where pushed code packages are kept (default: the `modules` use case of the blob store, STUDY-35). */
   moduleStorage?: BlobStore;
+  /**
+   * Where snapshot exports are kept (STUDY-42): default the `exports` use case of the environment's blob
+   * store (`storage/exports`, or S3_STORAGE_EXPORTS_BUCKET); null turns exports off.
+   */
+  exportStorage?: BlobStore | null;
   fileStorage?: BlobStore | null;
   /**
    * The public origins (F2): the API's, which file URLs start with (Convex's `CONVEX_CLOUD_ORIGIN`), and the
@@ -384,6 +390,8 @@ export function createServer(opts: ServerOptions) {
   };
 
   /** The push routes (set below, once the code store exists). */
+  let exportRoute: (url: URL, req: Request) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
   /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
@@ -481,6 +489,8 @@ export function createServer(opts: ServerOptions) {
         srv.timeout(req, 0);
         return serveHttpAction(capped(req), url.pathname.slice(5) || "/", url.search);
       }
+      // Snapshot exports (STUDY-42).
+      if (url.pathname.startsWith("/api/export/")) return exportRoute(url, req);
       // Pushes (STUDY-35): Convex's deploy2 protocol, the Deploy operation.
       if (
         req.method === "POST" &&
@@ -633,6 +643,72 @@ export function createServer(opts: ServerOptions) {
       useCase: "modules",
       s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
     });
+  /** Snapshot exports (STUDY-42). */
+  const exportStore =
+    opts.exportStorage === undefined
+      ? blobStoreFromEnv(process.env, {
+          useCase: "exports",
+          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+        })
+      : opts.exportStorage;
+  const exportService = exportStore
+    ? new ExportService(engine, exportStore, blobs ?? null, {
+        deploymentName: engine.instanceName,
+        ...(process.env.TMPDIR ? { tmpDir: process.env.TMPDIR } : {}),
+      })
+    : null;
+  exportService?.start();
+  exportRoute = async (url: URL, req: Request): Promise<Response> => {
+    if (!exportService) return requestError(404, "NotFound", "Snapshot exports are not configured on this server.");
+    const parts = url.pathname.replace(/^\/api\/export\//, "").split("/");
+    try {
+      // A download by token (a browser's) needs no admin key.
+      const token = url.searchParams.get("token");
+      if (req.method === "GET" && parts[0] === "zip" && parts.length === 2) {
+        if (token !== null) {
+          if (!exportService.checkToken(parts[1]!, token))
+            return requestError(403, "InvalidExportToken", "The export download token is invalid or expired.");
+          return await exportService.download(parts[1]!);
+        }
+        const caller = await callerOfRequest(req);
+        if (caller instanceof Response) return caller;
+        functions.requireOperation(caller, "DownloadBackups");
+        return await exportService.download(parts[1]!);
+      }
+      if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      const caller = await callerOfRequest(req);
+      if (caller instanceof Response) return caller;
+      if (parts[0] === "request" && parts[1] === "zip" && parts.length === 2) {
+        functions.requireOperation(caller, "CreateBackups");
+        await exportService.request(url.searchParams.get("includeStorage") === "true");
+        return new Response(null, { status: 200 });
+      }
+      if (parts[0] === "zip" && parts[2] === "token" && parts.length === 3) {
+        functions.requireOperation(caller, "DownloadBackups");
+        return json({ token: await exportService.token(parts[1]!) });
+      }
+      if (parts[0] === "set_expiration" && parts.length === 2) {
+        functions.requireOperation(caller, "DeleteBackups");
+        const body = JSON.parse((await new Response(capped(req).body).text()) || "{}") as { expirationTsNs?: unknown };
+        if (typeof body.expirationTsNs !== "number" && typeof body.expirationTsNs !== "string")
+          return requestError(400, "BadJsonBody", "missing field `expirationTsNs`");
+        await exportService.setExpiration(parts[1]!, BigInt(body.expirationTsNs));
+        return new Response(null, { status: 200 });
+      }
+      if (parts[0] === "cancel" && parts.length === 2) {
+        // Convex checks ImportBackups here.
+        functions.requireOperation(caller, "ImportBackups");
+        await exportService.cancel(parts[1]!);
+        return new Response(null, { status: 200 });
+      }
+      return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    } catch (e) {
+      if (e instanceof ExportError) return requestError(e.status, e.code, e.message);
+      const denied = accessError(e);
+      if (denied) return denied;
+      throw e;
+    }
+  };
   /**
    * Deploy a push's modules (STUDY-35): load and analyze them (nothing changes if that fails), store the
    * package, commit the module rows, then make the version live. Unused packages are deleted after.
@@ -811,6 +887,7 @@ export function createServer(opts: ServerOptions) {
     scheduler,
     cronsReady,
     stop: () => {
+      void exportService?.stop();
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();
@@ -822,6 +899,7 @@ export function createServer(opts: ServerOptions) {
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      await exportService?.stop();
       await scheduler.stop();
       await cronExecutor.stop();
       sync.stop();

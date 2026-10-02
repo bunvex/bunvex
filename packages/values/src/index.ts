@@ -2,6 +2,7 @@
 
 export { checkValue, displayValidator, displayValue, type TableOfId } from "./check.ts";
 export { BunvexError, isBunvexError } from "./errors.ts";
+export { formatExportFloat, fromExportJson, toExportJson } from "./export-json.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
 export { valuesToKey } from "./sorting.ts";
 export {

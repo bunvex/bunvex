@@ -27,7 +27,7 @@ else
 fi
 
 # Storage: S3 for each use case whose bucket is set (with AWS_REGION), else the volume (STUDY-38 K4).
-if [ -n "$S3_STORAGE_FILES_BUCKET$S3_STORAGE_MODULES_BUCKET" ]; then
+if [ -n "$S3_STORAGE_FILES_BUCKET$S3_STORAGE_MODULES_BUCKET$S3_STORAGE_EXPORTS_BUCKET" ]; then
   [ -n "$AWS_REGION" ] || echo "Warning: an S3 bucket is set but AWS_REGION is not." >&2
   STORAGE_FLAGS=(--s3-storage)
 else

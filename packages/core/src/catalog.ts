@@ -30,6 +30,8 @@ export const UDF_CONFIG_TABLE = "_udf_config";
 export const SCHEMAS_TABLE = "_schemas";
 /** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
+/** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
+export const EXPORTS_TABLE = "_exports";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
 export const CRON_JOBS_TABLE = "_cron_jobs";
 export const CRON_NEXT_RUN_TABLE = "_cron_next_run";
