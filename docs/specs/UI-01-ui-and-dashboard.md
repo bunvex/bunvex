@@ -2096,6 +2096,21 @@ writes when on), the screen and the editor.
   `archive_…`, `restore_…`); the History screen words unknown actions generically (`describeEvent`'s fallback).
 - URL: `?view=&type=&q=&flag=&tab=&editor=new|edit`.
 
+## 31. Signing in (STUDY-12 §19; 2 Oct 2026)
+
+- `apps/dashboard` opens on a **sign-in page** (`src/login/login-screen.tsx`, lazy): deployment URL (validated
+  and made canonical by `normalizeDeploymentUrl`), admin key (masked, show/hide), **Sign in**, and **Use the
+  demo data**. Prefilled from `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY`.
+- `AdminKeyVerifier` (`src/login/credentials.ts`) checks the key; only `mockVerifier` exists — the dashboard
+  does not talk to a real server yet. A checked key's operations become the mock's `Capabilities`
+  (`capabilitiesOf`): a read-only key opens the screens read-only.
+- The key stays in memory: a reload asks again (as Convex). The demo choice is kept for the tab; `?demo=1`
+  opens it directly (the e2e suite does).
+- The header's account entry (`account-entry.tsx`: a plain button until first used, then the menu is
+  fetched, so the first load does not grow) shows the deployment or "Demo data" and signs out.
+- An embedding page can hand credentials over (`embedded.ts`, Convex's message shapes).
+- Next: the real verifier (`GET /api/check_admin_key`) and a real data source.
+
 ## UX review 2 (the owner approved all 28 findings, 2 Oct 2026)
 
 The second design review (after the design language of §23–§28) found 28 inconsistencies; the owner approved
