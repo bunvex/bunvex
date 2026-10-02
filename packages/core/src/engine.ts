@@ -352,15 +352,26 @@ export class Engine {
 
   /**
    * The deployment's name: the configured one wins; otherwise the one stored with the data; otherwise
-   * `bunvex-self-hosted`, stored (Convex's self-hosted image defaults to its own name and persists it).
+   * `bunvex-self-hosted` (Convex's self-hosted image defaults to its own name and persists it). It is stored.
    */
   private async loadInstanceName() {
-    const name = this.opts.instanceName || (await this.instanceSetting("instanceName", () => DEFAULT_INSTANCE_NAME));
-    if (!/^[^|:\s]+$/.test(name))
+    const configured = this.opts.instanceName;
+    if (configured !== undefined && !/^[^|:\s]+$/.test(configured))
       throw new Error(
-        `invalid instance name ${JSON.stringify(name)}: it may not be empty or contain "|", ":" or spaces`,
+        `invalid instance name ${JSON.stringify(configured)}: it may not be empty or contain "|", ":" or spaces`,
       );
-    this.instanceName = name;
+    // The name the deployment runs with is the one recorded, so tools reading the store (`bunvex admin-key`)
+    // issue keys for it.
+    this.instanceName = await this.runMutation(async (db) => {
+      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
+      const stored = typeof doc?.instanceName === "string" ? doc.instanceName : undefined;
+      const name = configured || stored || DEFAULT_INSTANCE_NAME;
+      if (name !== stored) {
+        if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { instanceName: name });
+        else await db.insert(INSTANCE_TABLE, { instanceName: name });
+      }
+      return name;
+    }, true);
   }
 
   /**
@@ -855,6 +866,20 @@ async function readCatalog(db: Tx) {
     tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
     indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
   };
+}
+
+/**
+ * The `_instance` record (the instance secret and name, the deployment's settings) read straight from a
+ * store at its latest commit, without the lease and without writing: what `bunvex admin-key` needs while
+ * the server holds the store (STUDY-34, DV-160). Null when the store has none yet.
+ */
+export async function readInstanceRecord(persistence: Persistence): Promise<Record<string, unknown> | null> {
+  const ts = (await persistence.maxTs?.()) ?? 0;
+  const read = (catalog: Catalog) => new Tx(catalog, persistence, ts, false, wallClock(), true);
+  const { tables, indexes } = await readCatalog(read(bootstrapCatalog()));
+  if (!tables.some((t) => t.name === INSTANCE_TABLE)) return null;
+  const doc = await read(buildCatalog(tables, indexes)).query(INSTANCE_TABLE).first();
+  return (doc as Record<string, unknown> | null) ?? null;
 }
 
 /** Drop the backfill checkpoint of a dropped index, if it has one. */
