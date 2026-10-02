@@ -70,7 +70,11 @@ export function describeEvent(e: AuditEvent): string {
       return "Resumed the deployment";
     case "build_indexes":
       return "Built indexes";
-    default:
-      return e.action;
+    default: {
+      // an action no screen describes (an extension's, a newer server's): its words, and what it was about
+      const words = e.action.replace(/_/g, " ");
+      const about = [m.flag, m.name, m.table].find((v) => typeof v === "string");
+      return `${words.charAt(0).toUpperCase()}${words.slice(1)}${about ? ` ${about}` : ""}`;
+    }
   }
 }
