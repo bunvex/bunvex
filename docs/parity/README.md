@@ -125,7 +125,7 @@ containers up, deploy functions, see them work) before the remaining platform it
   1 partial, §7);
 - components (1 of 7, §11);
 - Node actions;
-- log streaming (STUDY-47) and metrics (4 done, 1 partial, 7 missing, §20);
+- log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (7 done, 2 partial, 2 missing, §20);
 - streaming export;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
   it needs the server's admin API and admin-key login.

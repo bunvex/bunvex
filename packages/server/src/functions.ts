@@ -35,6 +35,7 @@ import {
   isSimpleObject,
   type ObjectType,
   type PropertyValidators,
+  toJsonValue,
   type Value,
   v,
   valueSize,
@@ -62,7 +63,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
-import type { FunctionSource, LogEvent, RunReason } from "./log-events.ts";
+import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
   cachedQueryLogs,
@@ -504,6 +505,8 @@ export class Functions {
       wallClock(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
+    r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
+    r.ip = caller?.request?.ip ?? null;
     if (udfType === "Action" || udfType === "HttpAction")
       r.onLine = (line) => {
         log.append({
@@ -534,7 +537,7 @@ export class Functions {
       this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
     }
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false));
+    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false), o.error);
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -548,7 +551,7 @@ export class Functions {
   logOccRetry(error: OccError) {
     const r = currentOwner();
     if (this.functionLog && r instanceof Running)
-      this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true));
+      this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true), error);
   }
 
   private metricsNames = new Map<string, string>();
@@ -596,7 +599,7 @@ export class Functions {
   logManager: LogManager | null = null;
 
   /** Convex's events for a completion: its lines (not an action's, already sent), the execution, an exception. */
-  private streamCompletion(r: Running, c: Completion) {
+  private streamCompletion(r: Running, c: Completion, error: unknown) {
     const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null);
     const at = c.timestamp * 1000;
     const events: LogEvent[] = [];
@@ -620,17 +623,37 @@ export class Functions {
         runReason: runReason(c.caller, c.udfType),
       },
     });
-    if (c.error !== null)
-      events.push({ timestamp: at, event: { topic: "exception", source, message: c.error, userIdentifier: null } });
+    if (c.error !== null) {
+      // Convex's `Exception` event: the error's message, its frames, a `BunvexError`'s data (STUDY-70).
+      const e = error instanceof Error ? error : null;
+      let customData: unknown = null;
+      if (isBunvexError(error))
+        try {
+          customData = toJsonValue((error as { data: Value }).data);
+        } catch {}
+      events.push({
+        timestamp: at,
+        event: {
+          topic: "exception",
+          source,
+          message: e?.message ?? c.error,
+          userIdentifier: r.tokenIdentifier,
+          frames: stackFrames(e?.stack),
+          customData,
+          ip: r.ip,
+          runtime: r.environment === "node" ? "node" : "default",
+        },
+      });
+    }
     this.logManager!.send(events);
   }
 
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
 
-  private logCompletion(log: FunctionLog, r: Running, c: Completion) {
+  private logCompletion(log: FunctionLog, r: Running, c: Completion, error?: unknown) {
     log.append(c);
-    if (this.logManager?.active) this.streamCompletion(r, c);
+    if (this.logManager?.active) this.streamCompletion(r, c, error);
     this.appMetrics?.recordExecution({
       udfType: c.udfType,
       name: r.metricsName,
