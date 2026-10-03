@@ -28,4 +28,18 @@ export function prefixEnd(prefix: Uint8Array): Uint8Array {
   return Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 }
 
+/**
+ * The smallest key above every key whose leading components are exactly the values encoded in `key`
+ * (DV-310). What follows a complete value in an index key is the next value's type tag (at most 0x15) — or,
+ * for a longer value that merely starts with these bytes ("\0…" after "", {"": x} after {}), the 0xFF
+ * escape. So `key + [0xFF]` ends the values equal to it and nothing more, where `prefixEnd` (Convex's
+ * `BinaryKey::increment`) would also take in those longer values.
+ */
+export function afterValues(key: Uint8Array): Uint8Array {
+  const out = new Uint8Array(key.length + 1);
+  out.set(key);
+  out[key.length] = 0xff;
+  return out;
+}
+
 export const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");

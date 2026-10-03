@@ -1,4 +1,4 @@
-// The TanStack Query integration in the browser (STUDY-48), against a real bunvex server: a cached
+// The TanStack Query integration in the browser (STUDY-55), against a real bunvex server: a cached
 // `bunvexQuery` is one live subscription, its new results are pushed into the cache with no refetch, and it is
 // dropped `gcTime` after its last observer leaves. The official `@convex-dev/react-query` runs the same
 // scenario on the same server.
