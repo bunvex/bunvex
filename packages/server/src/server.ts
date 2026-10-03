@@ -66,6 +66,15 @@ import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.
 import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
 import {
+  documentDeltas,
+  jsonSchemas,
+  listSnapshot,
+  STREAMING_EXPORT_ROUTE,
+  StreamingExportError,
+  streamingArgs,
+  tableColumnNames,
+} from "./streaming-export.ts";
+import {
   fromWireTs,
   MAX_PENDING_MUTATIONS,
   type SplayOptions,
@@ -580,6 +589,29 @@ export function createServer(opts: ServerOptions) {
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
       return canonicalRoute(url, req, caller);
+    const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
+    if (streaming) {
+      const route = streaming[1]!;
+      const getOnly =
+        route === "json_schemas" || route === "get_table_column_names" || route === "test_streaming_export_connection";
+      if (req.method === "GET" || (!getOnly && req.method === "POST")) {
+        // Convex's order: the streaming export entitlement (always on here), then `ViewData`.
+        functions.requireOperation(caller, "ViewData");
+        try {
+          if (route === "test_streaming_export_connection") return json(null);
+          if (route === "json_schemas") return json(await jsonSchemas({ engine }, url.searchParams));
+          if (route === "get_table_column_names") return json(await tableColumnNames({ engine }));
+          const args = await streamingArgs(req, url);
+          const text =
+            route === "list_snapshot" ? await listSnapshot({ engine }, args) : await documentDeltas({ engine }, args);
+          return new Response(text, { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          if (isSystemError(e)) throw e;
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        }
+      }
+    }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
       functions.requireOperation(caller, "ViewLogs");
@@ -723,6 +755,7 @@ export function createServer(opts: ServerOptions) {
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||
         STREAM_ROUTE.test(url.pathname) ||
+        STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {

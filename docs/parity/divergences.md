@@ -342,6 +342,13 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
+DV-306 and DV-307 (STUDY-60, streaming export) await the owner; the draft PR implements DV-306's recommendation and, for DV-307, the rule as it stands:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s; older is `SnapshotTooOld`), and each value's `_ts` is the snapshot | snapshots up to 5 days old (its table iterator rebuilds them from the document log); `_ts` is each document's revision | yes: a connector paging one snapshot for more than 4 minutes restarts; `_ts` differs (Convex says the snapshot gives the same guarantees) | Not done yet: needs a table iterator over the document log and a driver method for a revision's ts. Accept for now | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
+| DV-307 | The encoded value format is named `encoded_json`; `convex_encoded_json`, `convex_json` and `convex_clean_json` are `BadFormat` | those three names | yes: a connector asking for Convex's encoded form fails | Rule 5 refuses the names. Recommend an explicit rule-5 exception for these wire values, so connectors work unchanged | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
