@@ -29,6 +29,7 @@
     "@biomejs/biome": "^2.2.0",
     "@changesets/cli": "^2.29.0",
     "@types/bun": "^1.2.0",
+    "fast-check": "4.10.2",
     "typescript": "^5.9.0"
   }
 }

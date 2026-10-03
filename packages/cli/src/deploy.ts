@@ -23,6 +23,7 @@ Bundle the functions directory and push it to a self-hosted deployment.
 Options:
 ${TARGET_OPTIONS}
   --dry-run            analyze the push without changing the deployment
+  --message <message>  a message to attach to this deployment in the audit log
   --codegen <mode>     enable (default) or disable: regenerate _generated/
   --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
 
@@ -92,6 +93,7 @@ export function partitionModules(
 
 type Flags = TargetFlags & {
   dryRun: boolean;
+  message?: string;
   codegen: boolean;
   typecheck: TypecheckMode;
 };
@@ -104,7 +106,11 @@ function parseFlags(all: string[]): Flags | string {
     const a = args[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--dry-run") f.dryRun = true;
-    else if (name === "--codegen" || name === "--typecheck") {
+    else if (name === "--message") {
+      const v = inline ?? args[++i];
+      if (v === undefined) return "--message needs a value";
+      f.message = v;
+    } else if (name === "--codegen" || name === "--typecheck") {
       const v = inline ?? args[++i];
       if (name === "--codegen") {
         if (v !== "enable" && v !== "disable") return "--codegen must be enable or disable";
@@ -146,7 +152,8 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
   }
 }
 
-export type DeployOptions = { dryRun: boolean; codegen: boolean; typecheck: TypecheckMode };
+/** `message`: attached to the push's audit-log event (Convex's `--message`). */
+export type DeployOptions = { dryRun: boolean; codegen: boolean; typecheck: TypecheckMode; message?: string };
 /** The exit code, and whether a failure is worth retrying (`bunvex dev`'s backoff). */
 export type DeployResult = { code: number; transient?: boolean };
 
@@ -242,7 +249,11 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         `Backfilling indexes (${c?.indexesComplete ?? 0}/${c?.indexesTotal ?? 0} ready) and checking that documents match your schema...`,
       );
     }
-    const diff = (await post("/api/deploy2/finish_push", { startPush: start, dryRun: false })) as {
+    const diff = (await post("/api/deploy2/finish_push", {
+      startPush: start,
+      dryRun: false,
+      ...(flags.message === undefined ? {} : { message: flags.message }),
+    })) as {
       componentDiffs: Record<
         string,
         {
