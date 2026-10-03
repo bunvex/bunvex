@@ -101,11 +101,16 @@ test("list_snapshot: one table per page, by tablet then id, at one snapshot; the
     ["b", "b"],
   ]);
   expect(pages.at(-1)).toMatchObject({ cursor: null, hasMore: false });
-  // The fields in Convex's order; `_ts` the snapshot; int64 in clean JSON as a string.
+  // The fields in Convex's order; int64 in clean JSON as a string.
   const firstRaw = (await t.get("list_snapshot", { snapshot })).text;
-  expect(firstRaw).toMatch(
-    new RegExp(`^\\{"values":\\[\\{"_component":"","_table":"a","_ts":${snapshot},"_creationTime":`),
-  );
+  expect(firstRaw).toMatch(/^\{"values":\[\{"_component":"","_table":"a","_ts":\d+,"_creationTime":/);
+  // `_ts` is each document's revision (PERSIST-01 C16): one commit per table here, both before the snapshot.
+  const tsOf = (table: string) => [
+    ...new Set([...firstRaw.matchAll(new RegExp(`"_table":"${table}","_ts":(\\d+)`, "g"))].map((m) => m[1])),
+  ];
+  const [aTs] = tsOf("a");
+  expect(tsOf("a")).toHaveLength(1);
+  expect(BigInt(aTs!)).toBeLessThan(BigInt(snapshot));
   expect(values[0].k).toBe("1");
   expect(values.map((x) => x._id)).toContain(a1);
   // A single table, at the snapshot: a later insert is not in it.
