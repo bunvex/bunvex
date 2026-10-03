@@ -39,18 +39,24 @@ export type UsageStats = {
   memoryUsedMb: number;
 };
 
-export const usageStats = (
-  read: { bytes: number; documents: number },
-  written: { bytes: number; documents: number },
-): UsageStats => ({
-  databaseReadBytes: read.bytes,
-  databaseWriteBytes: written.bytes,
-  // bunvex does not meter the store's own I/O apart from what the transaction read and wrote (DV-251).
-  databaseIoReadBytes: read.bytes,
-  databaseIoWriteBytes: written.bytes,
-  databaseReadDocuments: read.documents,
-  databaseWriteDocuments: written.documents,
-  databaseWriteIndexRows: 0,
+/**
+ * A run's usage from its transaction's metered I/O (STUDY-71): Convex's v1 and v2 database counters are
+ * equal for a function, so both carry the same bytes.
+ */
+export const usageStats = (io: {
+  readBytes: number;
+  readDocuments: number;
+  writeBytes: number;
+  writeDocuments: number;
+  writeIndexRows: number;
+}): UsageStats => ({
+  databaseReadBytes: io.readBytes,
+  databaseWriteBytes: io.writeBytes,
+  databaseIoReadBytes: io.readBytes,
+  databaseIoWriteBytes: io.writeBytes,
+  databaseReadDocuments: io.readDocuments,
+  databaseWriteDocuments: io.writeDocuments,
+  databaseWriteIndexRows: io.writeIndexRows,
   storageReadBytes: 0,
   storageWriteBytes: 0,
   vectorIndexReadBytes: 0,
@@ -63,7 +69,13 @@ export const usageStats = (
   memoryUsedMb: 0,
 });
 
-export const NO_USAGE: UsageStats = usageStats({ bytes: 0, documents: 0 }, { bytes: 0, documents: 0 });
+export const NO_USAGE: UsageStats = usageStats({
+  readBytes: 0,
+  readDocuments: 0,
+  writeBytes: 0,
+  writeDocuments: 0,
+  writeIndexRows: 0,
+});
 
 /** Convex's `OccInfoJson`. */
 export type OccInfo = {

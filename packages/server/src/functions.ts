@@ -666,7 +666,8 @@ export class Functions {
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
     const end = wallClock();
     const e = o.error;
-    const used = (r.tx as Tx | null)?.usage;
+    // A mutation's writes count once it committed (Convex meters them in `track_commit`).
+    const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
     const seconds = (end - r.start) / 1000;
     return {
       kind: "Completion",
@@ -685,12 +686,7 @@ export class Functions {
       requestId: r.requestId,
       executionId: r.executionId,
       usageStats: {
-        ...(used
-          ? usageStats(
-              { bytes: used.bytesRead, documents: used.documentsRead },
-              { bytes: used.bytesWritten, documents: used.documentsWritten },
-            )
-          : NO_USAGE),
+        ...(used ? usageStats(used) : NO_USAGE),
         // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
         // cached query (STUDY-61).
         memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
