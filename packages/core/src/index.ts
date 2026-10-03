@@ -129,6 +129,7 @@ export {
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
   type UserTimer,
+  userTimeMs,
   wallClock,
   withUserTimer,
 } from "./determinism.ts";

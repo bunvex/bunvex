@@ -138,6 +138,8 @@ export class Running implements LogOwner {
   /** Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path. */
   metricsName = "";
   tx: unknown = null;
+  /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
+  timer: unknown = null;
   constructor(
     readonly executionId: string,
     readonly requestId: string,

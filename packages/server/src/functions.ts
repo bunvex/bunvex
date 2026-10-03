@@ -22,6 +22,7 @@ import {
   TableReader,
   type Tx,
   type UserTimer,
+  userTimeMs,
   wallClock,
   withUserTimer,
 } from "@bunvex/core";
@@ -359,6 +360,13 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
+/** A query's or mutation's timer, for the log's user execution time (STUDY-71). */
+function timed(timer: UserTimer): UserTimer {
+  const owner = currentOwner();
+  if (owner) owner.timer = timer;
+  return timer;
+}
+
 /** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
 export const FUNCTION_MAX_ARGS_SIZE = 1 << 24;
 export const FUNCTION_MAX_RESULT_SIZE = 1 << 24;
@@ -679,8 +687,10 @@ export class Functions {
       caller: r.caller,
       parentExecutionId: r.parent?.executionId ?? null,
       executionTime: seconds,
-      // bunvex does not split user from system time in the log (DV-252).
-      userExecutionTime: seconds,
+      // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
+      // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
+      // Never above the wall time, which bunvex reads from a coarser clock.
+      userExecutionTime: r.timer ? Math.min(userTimeMs(r.timer as UserTimer) / 1000, seconds) : seconds,
       success: e === undefined ? (o.success ?? null) : null,
       error: e === undefined ? null : errorText(e),
       requestId: r.requestId,
@@ -894,7 +904,7 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
+      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0));
       // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
       return this.limits.query.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
     };
@@ -917,7 +927,7 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
+      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0, job));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => {
         const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
