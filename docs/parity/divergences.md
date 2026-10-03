@@ -286,6 +286,12 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 were built later (#213) and are in [Resolved to match Convex](#resolved-to-match-convex).
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
+
+Awaiting the owner:
+
+| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
+|---|---|---|---|---|---|
+| DV-226 | The system query that gives the CLI the API's URL is `_system/cli/deploymentUrl:cloudUrl` | `_system/cli/convexUrl:cloudUrl` | no (CLI and system functions only) | accept: rule 5 (no "convex" in shipped strings) | [platform §CLI](platform.md) |
 DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-02): DV-222 is in
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).

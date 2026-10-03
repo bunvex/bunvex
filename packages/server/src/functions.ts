@@ -279,6 +279,8 @@ export class Functions {
   private deployed = false;
   /** The built-in variables (the server's origins), read after the deployment's (which cannot hold them). */
   builtinEnv: Record<string, string> = {};
+  /** The HTTP routes served (method, path), for `apiSpec`; the server sets it. */
+  httpRoutes: () => readonly (readonly [string, string])[] = () => [];
 
   /** A query's or mutation's `process.env`: each read in `db`'s read set. */
   private async txEnv(db: Tx): Promise<EnvReader | null> {
@@ -386,10 +388,14 @@ export class Functions {
     return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.visibility === "internal";
   }
 
-  /** Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators. */
+  /**
+   * Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
+   * HTTP routes as `{ functionType: "HttpAction", method, path }`.
+   */
   apiSpec() {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
-    return [...this.fns].map(([key, f]) => {
+    const routes = this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
+    const fns = [...this.fns].map(([key, f]) => {
       const i = key.lastIndexOf(":");
       return {
         identifier: `${key.slice(0, i)}.js:${key.slice(i + 1)}`,
@@ -399,6 +405,7 @@ export class Functions {
         returns: (f.returns?.json ?? { type: "any" }) as unknown as Value,
       };
     });
+    return [...fns, ...routes];
   }
 
   /** An id's table, for `v.id` (the engine's catalog). */
