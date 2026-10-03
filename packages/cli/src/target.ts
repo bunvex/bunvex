@@ -15,18 +15,34 @@ export const TARGET_OPTIONS = `  --url <url>          the deployment (default: B
 export const NO_DEPLOYMENT =
   "no deployment: set BUNVEX_SELF_HOSTED_URL and BUNVEX_SELF_HOSTED_ADMIN_KEY (in the environment or .env.local), or pass --url and --admin-key";
 
-/** `KEY=value` lines (quotes stripped, `#` comments ignored), as dotenv reads them. */
+// One assignment of a .env file, read as dotenv 16's `parse` reads it (Convex's CLI uses dotenv for `.env`,
+// `.env.local` and `env set --from-file`): from the start of a line, an optional `export`, a name of word
+// characters, `.` and `-`, then `=` (or `:` and a space), then a value in single, double or backtick quotes
+// (which may span lines; an escaped quote does not end it) or an unquoted run up to `#` or the end of the
+// line, then an optional `# comment`.
+const ASSIGNMENT = new RegExp(
+  [
+    String.raw`^\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)`,
+    String.raw`(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*\x60(?:\\\x60|[^\x60])*\x60|[^#\r\n]+)?`,
+    String.raw`\s*(?:#.*)?$`,
+  ].join(""),
+  "gm",
+);
+
+/**
+ * A .env file's variables, as dotenv reads them: comments and lines that are not assignments skipped,
+ * the value trimmed, one pair of matching outer quotes removed, `\n` and `\r` expanded in double quotes,
+ * multi-line quoted values kept whole, the last assignment of a name winning.
+ */
 export function parseEnvFile(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (!m) continue;
-    let value = m[2]!;
-    const quoted = /^([\x22\x27])(.*?)\1(\s+#.*)?$/.exec(value); // a value in single or double quotes
-    if (quoted) value = quoted[2]!;
-    else value = value.replace(/\s+#.*$/, "");
+  const src = text.replace(/\r\n?/g, "\n");
+  for (const m of src.matchAll(ASSIGNMENT)) {
+    let value = (m[2] ?? "").trim();
+    const first = value[0];
+    if (value.length >= 2 && (first === "'" || first === '"' || first === "\x60") && value.endsWith(first))
+      value = value.slice(1, -1);
+    if (first === '"') value = value.replaceAll("\\n", "\n").replaceAll("\\r", "\r");
     out[m[1]!] = value;
   }
   return out;
