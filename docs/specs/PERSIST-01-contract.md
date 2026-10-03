@@ -321,7 +321,7 @@ reference", "Index reference to deleted document"; STUDY-09 §1.6):
   for an id `scan` returned, unless retention passed the snapshot meanwhile (then the read is out of the
   window, C13).
 
-Documents are keyed by (table, id): one id in two tables is two documents.
+Documents are keyed by (table, id): one id in two tables is two documents. Conformance K30–K31.
 
 
 | # | property | how |
@@ -353,6 +353,8 @@ Documents are keyed by (table, id): one id in two tables is two documents.
 | K27 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order |
 | K28 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
 | K29 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
+| K30 | index references (C15) | an index entry whose document was never written and one whose document was deleted while the entry stayed, among live ones: `scan` returns every entry (asc and desc), `get` is null for both (and the deleted one reads below its delete); `scanDocs` over the whole index (both directions), over each broken entry alone and below the delete rejects with `DanglingReferenceError` carrying the right `deleted` flag, and reads ranges with no broken entry. From Convex's `query_dangling_reference` and `query_reference_deleted_doc` |
+| K31 | one id in two tables (C15) | the same id written in two tables in one commit (different documents, one index each), then replaced in one and deleted in the other: `get`, `scan` and `scanDocs` answer each table's own document at every snapshot. From Convex's `same_internal_id_multiple_tables` |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
@@ -382,5 +384,8 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   the committer; on a real MySQL with `max_allowed_packet` = 1 MiB the same group fails with the packet error);
   a commit torn across two batches (red: "torn commit"); batches flushed in swapped pairs (red: `maxTs` below
   the last acknowledged commit, flushed commits missing below `maxTs`).
+- K30 went red on Postgres, MySQL and MongoDB before C15 (their `scanDocs` dropped the broken entries and
+  returned the rest); K31 was sabotaged with a Postgres `get` that ignores the table (red: table B read
+  table A's document).
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.

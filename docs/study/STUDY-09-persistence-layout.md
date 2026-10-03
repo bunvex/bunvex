@@ -187,6 +187,11 @@ Common to all drivers:
   reference model, in both directions.
 - **Long keys:** index a 1 000-byte and a 100 KB string on every driver, then insert, patch and
   query them.
+- **Index references (§1.6):** conformance K30 (an entry whose document was never written, one whose
+  document was deleted: `scan` returns them, `get` is null, `scanDocs` rejects) and K31 (one id in two
+  tables), from Convex's `query_dangling_reference`, `query_reference_deleted_doc` and
+  `same_internal_id_multiple_tables`. Before the C15 fix, K30's `scanDocs` checks failed on Postgres,
+  MySQL and MongoDB (the entries were dropped); K31 passed on every driver.
 - **Retention (when added):** old versions are removed while every snapshot still inside the window
   answers the same.
 
