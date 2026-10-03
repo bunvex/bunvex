@@ -9,7 +9,7 @@ import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
-import { FunctionLog, wsRequestId } from "../src/function-log.ts";
+import { FunctionLog, type Part, wsRequestId } from "../src/function-log.ts";
 import { action, Functions, internalMutation, mutation, query } from "../src/functions.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
@@ -49,9 +49,9 @@ async function setup() {
     // Loses its first attempt: a rival write lands between its read and its commit.
     contended: mutation(async ({ db }) => {
       console.log(`attempt ${attempts}`);
-      await db.get(id);
-      if (attempts++ === 0) await engine.mutation((d) => d.patch(id, { n: 2 }), "m:rival");
-      await db.patch(id, { n: 3 });
+      await db.get(id as never);
+      if (attempts++ === 0) await engine.mutation((d) => d.patch(id as never, { n: 2 }), "m:rival");
+      await db.patch(id as never, { n: 3 });
     }),
     worker: action(async (ctx) => {
       console.log("working");
@@ -296,17 +296,16 @@ test("the long poll: a waiting request answers as soon as something is logged", 
 
 test("FunctionLog: strictly increasing cursors, the newest parts kept, an empty answer after the timeout", async () => {
   const log = new FunctionLog(3);
-  const part = (identifier: string) =>
-    ({
-      kind: "Progress",
-      udfType: "Action",
-      identifier,
-      timestamp: 0,
-      logLines: [],
-      requestId: "r",
-      executionId: "e",
-      root: true,
-    }) as const;
+  const part = (identifier: string): Part => ({
+    kind: "Progress",
+    udfType: "Action",
+    identifier,
+    timestamp: 0,
+    logLines: [],
+    requestId: "r",
+    executionId: "e",
+    root: true,
+  });
   for (const id of ["a", "b", "c", "d"]) log.append(part(id));
   const { parts, newCursor } = await log.after(0, 10);
   expect(parts.map((p) => p.identifier)).toEqual(["b", "c", "d"]);
