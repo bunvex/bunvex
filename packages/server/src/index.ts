@@ -33,7 +33,14 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "@bunvex/core";
-export { defineSchema, defineTable } from "@bunvex/core";
+export {
+  type DocValidator,
+  defineSchema,
+  defineTable,
+  docValidator,
+  type SchemaValidators,
+  type SystemFieldValidators,
+} from "@bunvex/core";
 // Function references, as Convex's `convex/server` exports them (STUDY-26 C3).
 export {
   type AnyApi,

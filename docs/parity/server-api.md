@@ -234,7 +234,8 @@ Key bunvex facts behind the statuses:
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
 | `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
 | `strictTableNameTypes` option (type-level) | server/schema.ts | done (STUDY-36) | `false` adds `AnyDataModel` to the data model: any other table name is allowed. |
-| `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
+| `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | done (STUDY-66) | Convex's validators and types (`DocValidator`), and its error for a table the schema does not have; `TableDefinition.validator` too. |
+| `schema.tables` is the record of `TableDefinition`s (`schema.tables.messages.validator`) | server/schema.ts | missing (STUDY-66 §6) | bunvex's `schema.tables` is a `Map` of the engine's declared tables, so Convex's `docValidator("messages", schema.tables.messages)` does not work; `schema.doc("messages")` does. |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | done (STUDY-35) | A pushed schema is pending until existing documents are checked: the first that does not match fails the push, named as Convex's; writes meanwhile fail the pending schema. |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | done (STUDY-29) | In the background, as Convex: a worker, `backfilling` → `backfilled` → `enabled`, checkpoints and resume (DV-54 resolved; DV-126, DV-127). |
 | Table names: identifier ≤64, starts with a letter, `[A-Za-z0-9_]`; `_` prefix reserved | sync_types/identifier.rs; index_validation_error.rs | done (#6) | Convex's identifier rule; a leading `_` is reserved for system tables. |
@@ -355,7 +356,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 206 |
+| done | 207 |
 | partial | 10 |
 | missing | 23 |
-| **total** | **239** |
+| **total** | **240** |
