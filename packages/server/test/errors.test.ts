@@ -25,7 +25,7 @@ async function serve(fns: Record<string, FunctionDef>, opts: Partial<ServerOptio
     const r = await fetch(`${base}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path, args }),
+      body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
     });
     return { status: r.status, body: (await r.json()) as any };
   };

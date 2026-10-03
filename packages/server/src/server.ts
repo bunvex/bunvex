@@ -95,6 +95,7 @@ import {
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
+import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -437,9 +438,11 @@ export function createServer(opts: ServerOptions) {
   /**
    * The response to a function call, as Convex's `UdfResponse`: `{status:"success", value, logLines?}`, or
    * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
-   * A system failure is a 500 with the fixed internal message.
+   * A system failure is a 500 with the fixed internal message. `value` and `errorData` are in the request's
+   * `format`, else its client's default (STUDY-67 H3); a bad format is a 400 once the function has run, as
+   * Convex parses it after the run.
    */
-  const udfResponse = (r: WithLogLines<string>, kind: string) => {
+  const udfResponse = (r: WithLogLines<string>, kind: string, req: { format?: unknown; client: string | null }) => {
     // A mutation that exhausted its OCC retries is not the function's error in Convex: the request fails
     // with 503 and the OCC code (`ErrorCode::OCC` → SERVICE_UNAVAILABLE, crates/errors/src/lib.rs). Inside
     // an action, the same error is just an exception the action may catch.
@@ -453,11 +456,21 @@ export function createServer(opts: ServerOptions) {
       const denied = accessError(r.error);
       if (denied) return denied;
     }
-    if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
-    if (isSystemError(r.error))
+    if (!r.ok && isSystemError(r.error))
       return requestError(isTryAgainError(r.error) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+    let format: Format;
+    try {
+      format = typeof req.format === "string" ? parseFormat(req.format) : defaultFormat(req.client);
+    } catch (e) {
+      if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    if (r.ok)
+      return jsonText(
+        `{"status":"success","value":${reformat(r.value, format)}${linesField("logLines", r.logLines, redact)}}`,
+      );
     const e = formatError(r.error);
-    const data = e.data === undefined ? "" : `,"errorData":${e.data}`;
+    const data = e.data === undefined ? "" : `,"errorData":${reformat(e.data, format)}`;
     return jsonText(
       `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`,
     );
@@ -951,6 +964,7 @@ export function createServer(opts: ServerOptions) {
         if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
         throw e;
       }
+      const formatRequest = { format: body.format, client: req.headers.get("bunvex-client") };
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
       // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
@@ -974,6 +988,7 @@ export function createServer(opts: ServerOptions) {
               logLines: [],
             } as never,
             kind,
+            formatRequest,
           );
         kind = found;
       }
@@ -1000,6 +1015,7 @@ export function createServer(opts: ServerOptions) {
           return stringifyValue(value);
         }),
         kind,
+        formatRequest,
       );
     },
   });

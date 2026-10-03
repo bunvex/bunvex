@@ -56,7 +56,9 @@ async function setup() {
     });
   const latest = async () =>
     (
-      (await (await post("/api/query", { path: "_system/cli/exports:getLatest", args: {} })).json()) as {
+      (await (
+        await post("/api/query", { path: "_system/cli/exports:getLatest", args: {}, format: "convex_encoded_json" })
+      ).json()) as {
         value: Record<string, unknown> | null;
       }
     ).value;
