@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
+  applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
@@ -11,6 +12,7 @@ import {
   type EnvVarChange,
   insertAuditLogEvents,
   OccError,
+  orderEnvVarChanges,
   parseValue,
   readBackendState,
   SchemaEnforcementError,
@@ -1383,9 +1385,7 @@ export function createServer(opts: ServerOptions) {
       let providers: unknown[] | null = null;
       for (let attempt = 0; ; attempt++) {
         const base = await engine.query((db) => engine.environment.list(db));
-        const after = new Map(base.map((v) => [v.name, v.value]));
-        for (const c of changes) if (c.value === null) after.delete(c.name);
-        for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
+        const after = applyEnvVarChanges(new Map(base.map((v) => [v.name, v.value])), changes);
         // The batch's own checks first, so that a bad name is reported as such, not as an auth config error.
         await engine.query(async (db) => engine.environment.check(db, changes, Object.keys(builtinEnv)));
         if (authModule)
@@ -1399,20 +1399,21 @@ export function createServer(opts: ServerOptions) {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
-          // Convex's events (lib.rs `update_environment_variables`): a set creates or updates, an unset
-          // of an existing variable deletes; in the update's transaction.
+          // Convex's events (lib.rs `update_environment_variables`), one per change in the order it is applied:
+          // a set creates or updates, an unset of an existing variable deletes (so an unset and a set of one
+          // name are a delete and a create); in the update's transaction.
           const existing = new Set(now.map((x) => x.name));
-          const events = changes.flatMap((c) =>
-            c.value === null
-              ? existing.has(c.name)
-                ? [auditEvents.deleteEnvironmentVariable(c.name)]
-                : []
-              : [
-                  existing.has(c.name)
-                    ? auditEvents.updateEnvironmentVariable(c.name)
-                    : auditEvents.createEnvironmentVariable(c.name),
-                ],
-          );
+          const events = orderEnvVarChanges(changes).flatMap((c) => {
+            const had = existing.has(c.name);
+            if (c.value === null) {
+              existing.delete(c.name);
+              return had ? [auditEvents.deleteEnvironmentVariable(c.name)] : [];
+            }
+            existing.add(c.name);
+            return [
+              had ? auditEvents.updateEnvironmentVariable(c.name) : auditEvents.createEnvironmentVariable(c.name),
+            ];
+          });
           await insertAuditLogEvents(db, events, auditActor(caller));
           return true;
         }, "update_env_vars");

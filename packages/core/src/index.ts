@@ -150,6 +150,7 @@ export {
   type TxBody,
 } from "./engine.ts";
 export {
+  applyEnvVarChanges,
   checkEnvVarName,
   checkEnvVarValue,
   ENV_VAR_LIMIT,
@@ -159,6 +160,7 @@ export {
   EnvironmentVariableError,
   EnvironmentVariables,
   type EnvVarChange,
+  orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
