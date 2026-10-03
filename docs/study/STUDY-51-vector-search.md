@@ -1,6 +1,6 @@
 # STUDY-51 — Vector search
 
-- **Status:** V1–V2 decided by the owner (2026-10-02: exact, in memory); V3–V5 decision pending (owner)
+- **Status:** V1–V2 decided by the owner (2026-10-02: exact, in memory); V3–V5 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-45](STUDY-45-text-search.md) (the search index structure this reuses), [STUDY-29](STUDY-29-index-backfill.md)
 
