@@ -24,7 +24,7 @@ test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STU
     (
       await fetch(`http://127.0.0.1:${server!.port}/api/${kind}`, {
         method: "POST",
-        body: JSON.stringify({ path, args }),
+        body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
       })
     ).json();
   const big = { $integer: Buffer.from(new BigInt64Array([2n ** 40n]).buffer).toString("base64") };

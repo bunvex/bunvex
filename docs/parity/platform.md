@@ -375,7 +375,7 @@ journal, with cancel / rerun / restart from a step, and work pools — an extens
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
+| `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). `format` and the client's default as Convex (STUDY-67 H3). |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; `POST /api/function` done (STUDY-37: any kind; internal ones for an admin; Convex's "Could not find function for …" otherwise); the others missing. |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)

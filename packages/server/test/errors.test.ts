@@ -22,7 +22,10 @@ async function serve(fns: Record<string, FunctionDef>, opts: Partial<ServerOptio
   stops.push(stop);
   const base = `http://127.0.0.1:${server!.port}`;
   const call = async (kind: string, path: string, args: unknown = {}) => {
-    const r = await fetch(`${base}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) });
+    const r = await fetch(`${base}/api/${kind}`, {
+      method: "POST",
+      body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
+    });
     return { status: r.status, body: (await r.json()) as any };
   };
   return { call, base, engine, persistence, port: server!.port };
