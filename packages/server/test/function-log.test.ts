@@ -355,18 +355,20 @@ test("cron runs: the Cron caller, unknown identity, lines captured", async () =>
 
 test("a function's lines are not printed to the server's own output (as Convex); others still are", async () => {
   const root = new URL("..", import.meta.url).pathname;
+  // The modules come by environment variable, so the script holds no import of a path.
   const script = `
-    import { defineSchema, Engine } from "@bunvex/core";
-    import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-    import { Functions, query } from "${root}src/functions.ts";
-    import { collectLogs } from "${root}src/logs.ts";
+    const { defineSchema, Engine } = await import("@bunvex/core");
+    const { MemoryPersistence } = await import("@bunvex/core/persistence/memory");
+    const { Functions, query } = await import(process.env.FUNCTIONS);
+    const { collectLogs } = await import(process.env.LOGS);
     const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
     const functions = new Functions(engine).register("m", { q: query(() => { console.log("INSIDE-FUNCTION"); console.trace("INSIDE-TRACE"); return 1; }) });
     const r = await collectLogs(() => functions.runQuery("m:q", {}));
     console.log("OUTSIDE", JSON.stringify(r.logLines.length));
     process.exit(0);
   `;
-  const p = Bun.spawn(["bun", "-e", script], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const env = { ...process.env, FUNCTIONS: `${root}src/functions.ts`, LOGS: `${root}src/logs.ts` };
+  const p = Bun.spawn(["bun", "-e", script], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   await p.exited;
   expect(out + err).not.toContain("INSIDE-");
