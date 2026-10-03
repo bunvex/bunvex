@@ -476,6 +476,36 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
+  /**
+   * `GET /api/query` (Convex's `public_query_get`): the query string's `path`, `args` (JSON text) and `format`,
+   * answered as `POST /api/query`. Convex declares this route but cannot read `args` from a query string, so
+   * every request there is a 400 (STUDY-67 §1.7); bunvex's works (DV-313, pending the owner).
+   */
+  const getQuery = async (url: URL, req: Request): Promise<Response> => {
+    const badHeader = authHeaderSyntaxError(req);
+    if (badHeader) return badHeader;
+    const q = url.searchParams;
+    const path = q.get("path");
+    const argsText = q.get("args");
+    const bad = (why: string) => requestError(400, "BadQueryArgs", `Failed to deserialize query string: ${why}`);
+    if (path === null) return bad("missing field `path`");
+    if (argsText === null) return bad("missing field `args`");
+    let args: unknown;
+    try {
+      args = JSON.parse(argsText);
+    } catch (e) {
+      return bad(`args: ${(e as Error).message}`);
+    }
+    const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
+    const caller = await callerOfRequest(req);
+    if (caller instanceof Response) return caller;
+    return udfResponse(
+      await collectLogs(async () => functions.runQueryJson(path, fromWire(args, path), caller)),
+      "query",
+      formatRequest,
+    );
+  };
+
   const sync = new SyncHub({
     engine,
     functions,
@@ -939,6 +969,8 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313 pending): `args` is the arguments' JSON.
+      if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
       const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
