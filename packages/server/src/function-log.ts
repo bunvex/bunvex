@@ -123,6 +123,8 @@ export type Part = Completion | Progress;
 export class Running implements LogOwner {
   onLine: ((line: LogLine) => void) | null = null;
   cached = false;
+  /** Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path. */
+  metricsName = "";
   tx: unknown = null;
   constructor(
     readonly executionId: string,

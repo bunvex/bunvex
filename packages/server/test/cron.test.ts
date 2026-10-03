@@ -1,6 +1,13 @@
 // Cron jobs (STUDY-30 §1.5): cronJobs(), the server's checks, the next run, the startup diff and the executor.
 import { afterEach, describe, expect, test } from "bun:test";
-import { CRON_JOB_LOGS_TABLE, CRON_NEXT_RUN_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
+import {
+  CRON_JOB_LOGS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  defineSchema,
+  defineTable,
+  Engine,
+  setUserStopState,
+} from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { makeFunctionReference } from "@bunvex/protocol";
 import { BunvexError, v } from "@bunvex/values";
@@ -376,4 +383,19 @@ describe("createServer({ crons })", () => {
       'The cron spec "0 0 30 2 *" will never match any time',
     );
   });
+});
+
+test("a paused deployment's crons wait; unpausing wakes the executor (STUDY-63)", async () => {
+  const c = cronJobs();
+  c.interval("t", { seconds: 1 }, "m:tick" as never);
+  const t = await setup(c, { start: false });
+  await t.engine.mutation((db) => setUserStopState(db, "paused"));
+  await t.executor.start();
+  await Bun.sleep(200);
+  // Not even attempted (an attempt would fail, and be logged: user functions fail while paused).
+  expect(t.ran).toEqual([]);
+  expect(await t.logs()).toEqual([]);
+  await t.engine.mutation((db) => setUserStopState(db, "none"));
+  await until(() => t.ran.length > 0, "the cron to run");
+  expect(t.ran).toEqual(["tick"]);
 });

@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   newUserTimer,
+  notRunningMessage,
   OccError,
   observeTime,
   pausingUserTime,
@@ -45,6 +46,7 @@ import {
   type DeploymentOp,
   OperationNotPermittedError,
 } from "./admin-keys.ts";
+import type { AppMetrics } from "./app-metrics.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
@@ -59,6 +61,8 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import type { FunctionSource, LogEvent, RunReason } from "./log-events.ts";
+import type { LogManager } from "./log-sinks.ts";
 import {
   cachedQueryLogs,
   currentLogLines,
@@ -80,6 +84,7 @@ import type {
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
+import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
  *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result. */
@@ -286,7 +291,43 @@ export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
+/** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
+const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
+/**
+ * A query run inside a mutation's transaction (`ctx.runQuery`) sees it as a reader, as Convex's: no writes
+ * and no `db.vars` (STUDY-53, DV-267).
+ */
+function readerView(db: Tx): Tx {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 /** A function's path as the function log names it (Convex's stripped `UdfPath`): no `.js`, no `:default`. */
+/** Convex's `FunctionRunReason` from the caller (a subscription's query reads as its first run). */
+function runReason(caller: CallerName, udfType: UdfType): RunReason {
+  switch (caller) {
+    case "SyncWorker":
+      return udfType === "Query" ? "initialSubscription" : "webSocket";
+    case "HttpApi":
+      return "httpApi";
+    case "HttpEndpoint":
+      return "httpEndpoint";
+    case "Cron":
+      return "cron";
+    case "Scheduler":
+      return "scheduler";
+    case "Action":
+      return "action";
+    case "Tester":
+      return "tester";
+  }
+}
+
 const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
 
 /** The transaction the current logged execution runs in, for its usage. */
@@ -418,6 +459,8 @@ export class Functions {
     caller: Caller | undefined,
     run: () => Promise<T>,
     outcome?: (value: T) => Outcome,
+    /** An HTTP action's route path, its name in the app metrics. */
+    routePath?: string,
   ): Promise<T> {
     const log = this.functionLog;
     if (!log || isSystemPath(name)) return run();
@@ -435,7 +478,7 @@ export class Functions {
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
     if (udfType === "Action" || udfType === "HttpAction")
-      r.onLine = (line) =>
+      r.onLine = (line) => {
         log.append({
           kind: "Progress",
           udfType,
@@ -446,9 +489,25 @@ export class Functions {
           executionId: r.executionId,
           root: parent === null,
         });
+        // An action's lines stream out as they come (Convex's progress Console events).
+        if (this.logManager?.active)
+          this.logManager.send([
+            { timestamp: line.timestamp, event: { topic: "console", source: this.eventSource(r, null), line } },
+          ]);
+      };
+    r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
+    const inflight = udfType === "Query" || udfType === "Mutation" ? this.inflight[udfType] : null;
+    if (inflight) {
+      inflight.running++;
+      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
+    }
     const res = await withOwner(r, run);
+    if (inflight) {
+      inflight.running--;
+      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
+    }
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) log.append(this.completion(r, res.lines, o, false));
+    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false));
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -462,7 +521,106 @@ export class Functions {
   logOccRetry(error: OccError) {
     const r = currentOwner();
     if (this.functionLog && r instanceof Running)
-      this.functionLog.append(this.completion(r, currentOwnLines(), { error }, true));
+      this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true));
+  }
+
+  private metricsNames = new Map<string, string>();
+  /** A function's canonical path, its app metrics name (cached: names come from code). */
+  private metricsNameOf(identifier: string): string {
+    let n = this.metricsNames.get(identifier);
+    if (n === undefined) {
+      if (this.metricsNames.size >= 10_000) this.metricsNames.clear();
+      n = canonicalPath(identifier);
+      this.metricsNames.set(identifier, n);
+    }
+    return n;
+  }
+
+  /** The app metrics (STUDY-58); set by `createServer`. */
+  appMetrics: AppMetrics | null = null;
+  /** Queries and mutations running now, for the metrics' `function_concurrency`. */
+  private inflight = { Query: { running: 0 }, Mutation: { running: 0 } };
+
+  /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
+  /** Where an event of `r` comes from (Convex's `FunctionEventSource`). */
+  private eventSource(r: Running, cached: boolean | null): FunctionSource {
+    return {
+      path: r.udfType === "HttpAction" ? r.identifier : this.metricsNameOf(r.identifier),
+      udfType: r.udfType,
+      cached,
+      requestId: r.requestId,
+      mutationRetryCount: null,
+    };
+  }
+
+  /** Running and queued executions per kind, for the log streams' `concurrency_stats`. */
+  concurrency() {
+    const p = this.actionPermits.outstanding;
+    return {
+      query: { running: this.inflight.Query.running, queued: 0 },
+      mutation: { running: this.inflight.Mutation.running, queued: 0 },
+      action: { ...p.Action },
+      nodeAction: { running: 0, queued: 0 },
+      httpAction: { ...p.HttpAction },
+    };
+  }
+
+  /** Log streams (STUDY-59); set by `createServer`. */
+  logManager: LogManager | null = null;
+
+  /** Convex's events for a completion: its lines (not an action's, already sent), the execution, an exception. */
+  private streamCompletion(r: Running, c: Completion) {
+    const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null);
+    const at = c.timestamp * 1000;
+    const events: LogEvent[] = [];
+    if (c.udfType !== "Action" && c.udfType !== "HttpAction")
+      for (const line of c.logLines)
+        events.push({ timestamp: line.timestamp, event: { topic: "console", source, line } });
+    events.push({
+      timestamp: at,
+      event: {
+        topic: "function_execution",
+        source,
+        error: c.error,
+        executionTime: c.executionTime,
+        userExecutionTime: c.userExecutionTime,
+        usage: c.usageStats,
+        argsBytes: null,
+        returnBytes: c.returnBytes,
+        occInfo: c.occInfo,
+        willRetry: c.willRetry,
+        schedulerJobId: null,
+        runReason: runReason(c.caller, c.udfType),
+      },
+    });
+    if (c.error !== null)
+      events.push({ timestamp: at, event: { topic: "exception", source, message: c.error, userIdentifier: null } });
+    this.logManager!.send(events);
+  }
+
+  /** The usage meter (STUDY-61); set by `createServer`. */
+  usageMeter: UsageMeter | null = null;
+
+  private logCompletion(log: FunctionLog, r: Running, c: Completion) {
+    log.append(c);
+    if (this.logManager?.active) this.streamCompletion(r, c);
+    this.appMetrics?.recordExecution({
+      udfType: c.udfType,
+      name: r.metricsName,
+      at: c.timestamp * 1000,
+      failed: c.error !== null,
+      cached: c.cachedResult,
+      executionTime: c.executionTime,
+      ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
+    });
+    this.usageMeter?.recordExecution({
+      udfType: c.udfType,
+      environment: c.environment,
+      executionTime: c.cachedResult ? 0 : c.executionTime,
+      userExecutionTime: c.userExecutionTime,
+      memoryMb: c.usageStats.memoryUsedMb,
+      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
+    });
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
@@ -486,12 +644,17 @@ export class Functions {
       error: e === undefined ? null : errorText(e),
       requestId: r.requestId,
       executionId: r.executionId,
-      usageStats: used
-        ? usageStats(
-            { bytes: used.bytesRead, documents: used.documentsRead },
-            { bytes: used.bytesWritten, documents: used.documentsWritten },
-          )
-        : NO_USAGE,
+      usageStats: {
+        ...(used
+          ? usageStats(
+              { bytes: used.bytesRead, documents: used.documentsRead },
+              { bytes: used.bytesWritten, documents: used.documentsWritten },
+            )
+          : NO_USAGE),
+        // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
+        // cached query (STUDY-61).
+        memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
+      },
       returnBytes: e === undefined ? (o.returnBytes ?? null) : null,
       occInfo:
         e instanceof OccError
@@ -649,9 +812,11 @@ export class Functions {
 
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
-    const f = this.fn(name, "query", fromClient, caller);
+    const resolved = this.fnLater(name, "query", fromClient, caller);
     return async (db: Tx) => {
       noteTx(db);
+      await this.failWhileNotRunning(db);
+      const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
@@ -663,14 +828,45 @@ export class Functions {
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
    */
-  private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
+  private mutationBody(resolved: () => FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
     return perAttempt(async (db: Tx) => {
       noteTx(db);
+      await this.failWhileNotRunning(db);
+      const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
       return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     });
+  }
+
+  /**
+   * A function to run, resolved now; when that fails, the error is thrown when the body runs, after
+   * `failWhileNotRunning` — Convex checks the run state before it resolves the path.
+   */
+  private fnLater<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
+    try {
+      const f = this.fn(name, kind, fromClient, caller);
+      return () => f;
+    } catch (e) {
+      return (): Extract<FunctionDef, { kind: K }> => {
+        throw e;
+      };
+    }
+  }
+
+  /**
+   * Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-63): a user function fails while
+   * the deployment is paused. Read in the function's transaction, so a subscribed query reruns on unpause.
+   */
+  private async failWhileNotRunning(db: Tx): Promise<void> {
+    const message = notRunningMessage(await this.engine.backendState.read(db));
+    if (message !== null) throw new FunctionPathError(message);
+  }
+
+  /** The same, for an action or HTTP action: in a transaction of its own. */
+  private async failActionWhileNotRunning(): Promise<void> {
+    await this.engine.query((db) => this.failWhileNotRunning(db));
   }
 
   /**
@@ -688,7 +884,7 @@ export class Functions {
     const ctx =
       f.kind === "query"
         ? {
-            db: db as unknown as QueryCtx["db"],
+            db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
             storage: this.fileStorage?.reader(db) ?? noStorage,
             runQuery: nested.runQuery,
@@ -711,6 +907,11 @@ export class Functions {
   /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
   engineOf(): Engine {
     return this.engine;
+  }
+
+  /** The active user tables' names (`tableSize:sizeOfAllTables`). */
+  userTableNames(): string[] {
+    return [...this.engine.catalog.tables.keys()].filter((n) => !n.startsWith("_"));
   }
 
   /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
@@ -923,7 +1124,7 @@ export class Functions {
     const admin = adminOf(caller);
     if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
     if (!f || !admin) throw notFound(n);
-    this.requireOperation(caller, f.op ?? fallback);
+    if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
   /**
@@ -999,7 +1200,8 @@ export class Functions {
 
   /** @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction. */
   scheduledMutationBody(canonical: string, args: unknown, job?: string) {
-    return this.mutationBody(this.fn(registryKey(canonical), "mutation", false), args, job);
+    const f = this.fn(registryKey(canonical), "mutation", false);
+    return this.mutationBody(() => f, args, job);
   }
 
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
@@ -1072,7 +1274,7 @@ export class Functions {
       caller,
       () =>
         this.engine.mutationWithTs(
-          this.mutationBody(this.fn(name, "mutation", fromClient, caller), args),
+          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args),
           name,
           caller,
         ),
@@ -1094,7 +1296,7 @@ export class Functions {
       this.engine.sessionMutation(
         isSystemPath(name)
           ? this.systemMutationBody(name, args, true, caller)
-          : this.mutationBody(this.fn(name, "mutation", true, caller), args),
+          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args),
         name,
         request,
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
@@ -1120,6 +1322,7 @@ export class Functions {
       name,
       caller,
       async () => {
+        await this.failActionWhileNotRunning();
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
         const ctx = this.actionCtx(caller, null, opts.job, f);
         const a = this.checkArgs(f, args);
@@ -1180,6 +1383,8 @@ export class Functions {
     request: Request,
     caller: Caller,
     authError: Error | null,
+    /** The route matched (its `path` or `pathPrefix`): the app metrics' name for it, as Convex's. */
+    routePath?: string,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
     // Logged under its route, as Convex's `HttpActionRoute` (`<METHOD> <path>`).
@@ -1188,11 +1393,16 @@ export class Functions {
       "HttpAction",
       route,
       caller,
-      () =>
-        this.actionPermits.run(async () =>
-          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
-        ),
+      async () => {
+        await this.failActionWhileNotRunning();
+        return this.actionPermits.run(
+          async () =>
+            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+          "HttpAction",
+        );
+      },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
+      routePath ?? new URL(request.url).pathname,
     );
   }
 }

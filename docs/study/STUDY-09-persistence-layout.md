@@ -89,6 +89,18 @@ Read for D6 on 2026-10-01 (same commit).
   persistence snapshot (`new_write_log(*ts)`, `crates/database/src/database.rs:1106`), as bunvex's
   `Committer.resume(maxTs)` does.
 
+### 1.6 Index references to missing documents (added 2026-10-03)
+
+- An index entry always names its document; Convex's range read joins each live entry to the
+  document version at the entry's ts (`crates/postgres/src/lib.rs:1144, 1271`; `crates/sqlite/src/lib.rs:204-209`;
+  `crates/mysql/src/v6/persistence.rs:633-636`).
+- If that document row is missing, the read fails with "Dangling index reference for {key} {ts}"; if
+  the row is a tombstone, with "Index reference to deleted document {key} {ts}". It is never skipped.
+- The persistence test suite pins it (`crates/common/src/testing/persistence_test_suite.rs`:
+  `query_dangling_reference`, `query_reference_deleted_doc`), along with one internal id stored in two
+  tables as two documents (`same_internal_id_multiple_tables`).
+- The error is an internal one: the function fails as a system error, as any other persistence error.
+
 ## 2. What an app can observe
 
 This layer is internal, except through:
@@ -147,6 +159,13 @@ Common to all drivers:
 - The conformance suite (`packages/persistence-conformance/src/index.ts`, K1/K2) scans with limits of
   1 000 or more over at most 60 ids, so the over-fetch bugs never trigger in it.
 
+- **Index references to missing documents (§1.6), until 2026-10-03:** the engine read `scan` then `get`
+  each id and skipped an id whose document was null; `scanDocs` (Postgres, MySQL, MongoDB) dropped such
+  rows in the join. On a corrupt store a query returned fewer documents, silently, and a short page ended
+  the whole range (one bad entry among the first 64 returned 63 of 200). **Fixed as Convex** (PERSIST-01
+  C15): the engine and every `scanDocs` raise `DanglingReferenceError`; a read whose snapshot retention
+  passed meanwhile still fails as out of the window. Conformance K30/K31.
+
 ## 4. Divergences
 
 | # | Divergence | Class | Why / impact | Decision |
@@ -168,6 +187,11 @@ Common to all drivers:
   reference model, in both directions.
 - **Long keys:** index a 1 000-byte and a 100 KB string on every driver, then insert, patch and
   query them.
+- **Index references (§1.6):** conformance K30 (an entry whose document was never written, one whose
+  document was deleted: `scan` returns them, `get` is null, `scanDocs` rejects) and K31 (one id in two
+  tables), from Convex's `query_dangling_reference`, `query_reference_deleted_doc` and
+  `same_internal_id_multiple_tables`. Before the C15 fix, K30's `scanDocs` checks failed on Postgres,
+  MySQL and MongoDB (the entries were dropped); K31 passed on every driver.
 - **Retention (when added):** old versions are removed while every snapshot still inside the window
   answers the same.
 

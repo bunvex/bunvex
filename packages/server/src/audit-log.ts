@@ -42,8 +42,42 @@ export const auditEvents = {
   updateCanonicalUrl: (destination: string, url: string) =>
     event("update_canonical_url", { request_destination: destination, url }),
   deleteCanonicalUrl: (destination: string) => event("delete_canonical_url", { request_destination: destination }),
+  /** Convex's `PushConfigWithComponents` (finish_push), for the root component (bunvex has no others). */
+  pushConfigWithComponents: (o: {
+    authDiff: { added: string[]; removed: string[] };
+    create: boolean;
+    moduleDiff: { added: string[]; removed: string[] };
+    cronDiff: { added: string[]; updated: string[]; deleted: string[] };
+    indexDiff: Record<"added_indexes" | "removed_indexes" | "enabled_indexes" | "disabled_indexes", Value[]>;
+    schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
+    message: string | null;
+  }) =>
+    event("push_config_with_components", {
+      auth_diff: o.authDiff,
+      component_diffs: [
+        {
+          component_path: null,
+          component_diff: {
+            diffType: { type: o.create ? "create" : "modify" },
+            moduleDiff: o.moduleDiff,
+            udfConfigDiff: null,
+            cronDiff: o.cronDiff,
+            indexDiff: o.indexDiff,
+            schemaDiff: o.schemaDiff,
+          },
+        },
+      ],
+      message: o.message,
+      node_version_diff: null,
+    }),
   deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
   generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),
+  /** Log streams (STUDY-59): the sink's id and type. */
+  createIntegration: (id: string, type: string) => event("create_integration", { id, type }),
+  updateIntegration: (id: string, type: string) => event("update_integration", { id, type }),
+  deleteIntegration: (id: string, type: string) => event("delete_integration", { id, type }),
+  pauseDeployment: () => event("pause_deployment", {}),
+  unpauseDeployment: () => event("unpause_deployment", {}),
 };
 
 /** A value as Convex's clean JSON (`ValueFormat::ConvexCleanJSON`): int64 as a decimal string. */
