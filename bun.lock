@@ -86,6 +86,8 @@
       },
       "dependencies": {
         "@bunvex/cli": "workspace:*",
+        "@bunvex/client": "workspace:*",
+        "@bunvex/react": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
@@ -96,6 +98,12 @@
         "mysql2": "^3.24.4",
         "postgres": "^3.4.9",
       },
+      "peerDependencies": {
+        "react": "^19.3.0",
+      },
+      "optionalPeers": [
+        "react",
+      ],
     },
     "packages/cli": {
       "name": "@bunvex/cli",
@@ -160,6 +168,15 @@
     "packages/file-storage": {
       "name": "@bunvex/file-storage",
       "version": "0.1.0-alpha.0",
+    },
+    "packages/nextjs": {
+      "name": "@bunvex/nextjs",
+      "version": "0.1.0-alpha.0",
+      "dependencies": {
+        "@bunvex/client": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
     },
     "packages/persistence": {
       "name": "@bunvex/persistence",
@@ -269,6 +286,7 @@
       "dependencies": {
         "@bunvex/client": "workspace:*",
         "@bunvex/core": "workspace:*",
+        "@bunvex/nextjs": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/react": "workspace:*",
         "@bunvex/react-auth0": "workspace:*",
@@ -432,6 +450,8 @@
     "@bunvex/dashboard-app": ["@bunvex/dashboard-app@workspace:apps/dashboard"],
 
     "@bunvex/file-storage": ["@bunvex/file-storage@workspace:packages/file-storage"],
+
+    "@bunvex/nextjs": ["@bunvex/nextjs@workspace:packages/nextjs"],
 
     "@bunvex/persistence": ["@bunvex/persistence@workspace:packages/persistence"],
 

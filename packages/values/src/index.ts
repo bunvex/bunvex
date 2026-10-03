@@ -1,6 +1,15 @@
 // Package @bunvex/values — Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.
 
 export { checkValue, displayValidator, displayValue, type TableOfId } from "./check.ts";
+export {
+  CommitTsPlaceholder,
+  commitTsPlaceholder,
+  hasCommitTs,
+  isCommitTsPlaceholder,
+  MAX_COMMIT_TS,
+  resolveCommitTs,
+  resolveCommitTsJson,
+} from "./commit-ts.ts";
 export { BunvexError, isBunvexError } from "./errors.ts";
 export { formatExportFloat, fromExportJson, toExportJson } from "./export-json.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
@@ -18,6 +27,7 @@ export {
   type ValidatorJSON,
   VBoolean,
   VBytes,
+  VCommitTs,
   VFloat64,
   VId,
   VInt64,

@@ -1,6 +1,8 @@
 // Sort keys (STUDY-18): an order-preserving, self-delimiting byte encoding of values, in the layout Convex
 // uses for index keys (`crates/value/src/sorting.rs`, after FoundationDB's tuple layer). Comparing two keys
 // byte-wise compares the values in Convex's order; a tuple is the concatenation of its values' keys.
+
+import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { isBytes, type Value } from "./value.ts";
 
 const UNDEFINED = 0x01;
@@ -69,6 +71,8 @@ function writeFloat(w: Writer, x: number) {
 }
 
 function write(w: Writer, v: Value | undefined) {
+  // A commit timestamp before the commit sorts as the largest int64 (Convex's max view, STUDY-53).
+  if (isCommitTsPlaceholder(v)) v = MAX_COMMIT_TS;
   if (v === undefined) return w.byte(UNDEFINED);
   if (v === null) return w.byte(NULL);
   switch (typeof v) {

@@ -5,8 +5,19 @@
 //
 // JSON: bigint → {"$integer": base64 LE}, special float → {"$float": base64 LE}, bytes → {"$bytes": base64};
 // object fields are sorted and `undefined` fields are dropped. Anything else is refused.
+import { type CommitTsPlaceholder, isCommitTsPlaceholder } from "./commit-ts.ts";
 
-export type Value = null | bigint | number | boolean | string | ArrayBuffer | Value[] | { [field: string]: Value };
+/** A Convex value; `CommitTsPlaceholder` is `db.vars.commitTs` before its mutation commits (STUDY-53). */
+export type Value =
+  | null
+  | bigint
+  | number
+  | boolean
+  | string
+  | ArrayBuffer
+  | CommitTsPlaceholder
+  | Value[]
+  | { [field: string]: Value };
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [field: string]: JSONValue };
 
 const MIN_INT64 = -(2n ** 63n);
@@ -72,6 +83,8 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
     throw new Error(`undefined is not a valid value${where}.`);
   }
   if (value === null) return null;
+  // Convex's wire token for an unresolved commit timestamp (STUDY-53); resolved before any client sees it.
+  if (isCommitTsPlaceholder(value)) return { $commitTs: null };
   if (typeof value === "bigint") {
     if (value < MIN_INT64 || MAX_INT64 < value)
       throw new Error(`BigInt ${value} does not fit into a 64-bit signed integer.`);

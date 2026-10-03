@@ -54,6 +54,7 @@ export async function startServer() {
     logged: mutation(() => {
       console.log("hello from a mutation");
     }),
+    echoQuery: query((_ctx, { x }: { x: unknown }) => x),
     echo: action(async (_ctx, { x }: { x: unknown }) => {
       await gates.get("action");
       return x;
