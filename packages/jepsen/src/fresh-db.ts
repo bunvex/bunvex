@@ -7,12 +7,20 @@ export async function freshDatabase(kind: string, url: string, name: string): Pr
   if (!SAFE.test(name)) throw new Error(`not a safe database name: ${name}`);
   const fresh = new URL(url);
   fresh.pathname = `/${name}`;
-  if (kind === "postgres" || kind === "mysql") {
-    const sql = new Bun.SQL(url, kind === "mysql" ? { adapter: "mysql" } : {});
+  if (kind === "mysql") {
+    // mysql2, as the driver: Bun.SQL refuses MySQL 8's RSA key exchange without TLS
+    const { createConnection } = await import("mysql2/promise");
+    const conn = await createConnection(url);
     try {
-      await sql.unsafe(
-        kind === "postgres" ? `DROP DATABASE IF EXISTS ${name} WITH (FORCE)` : `DROP DATABASE IF EXISTS ${name}`,
-      );
+      await conn.query(`DROP DATABASE IF EXISTS ${name}`);
+      await conn.query(`CREATE DATABASE ${name}`);
+    } finally {
+      await conn.end();
+    }
+  } else if (kind === "postgres") {
+    const sql = new Bun.SQL(url);
+    try {
+      await sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       await sql.unsafe(`CREATE DATABASE ${name}`);
     } finally {
       await sql.close();

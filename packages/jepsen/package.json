@@ -20,6 +20,7 @@
     "directory": "packages/jepsen"
   },
   "devDependencies": {
-    "mongodb": "^7.7.0"
+    "mongodb": "^7.7.0",
+    "mysql2": "^3.24.4"
   }
 }
