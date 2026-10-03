@@ -1,6 +1,6 @@
 # @bunvex/react-query
 
-TanStack Query integration (STUDY-48), the counterpart of Convex's `@convex-dev/react-query`. Each cached
+TanStack Query integration (STUDY-55), the counterpart of Convex's `@convex-dev/react-query`. Each cached
 `bunvexQuery` is one live subscription: new results are pushed into the `QueryClient`'s cache (no refetch, so
 `staleTime` is `Infinity`), and the subscription is dropped `gcTime` after the last `useQuery` using it unmounts.
 

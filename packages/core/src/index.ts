@@ -7,8 +7,18 @@ export {
   insertAuditLogEvents,
   SYSTEM_ACTOR,
 } from "./audit-log.ts";
+export {
+  BackendIsNotRunningError,
+  type BackendState,
+  isStopped,
+  notRunningMessage,
+  readBackendState,
+  setUsageLimitStopState,
+  setUserStopState,
+} from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
@@ -20,6 +30,7 @@ export {
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
+  LOG_SINKS_TABLE,
   MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,
@@ -28,6 +39,7 @@ export {
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
   UDF_CONFIG_TABLE,
+  USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 export {
   Committer,
@@ -113,6 +125,7 @@ export {
   wallClock,
   withUserTimer,
 } from "./determinism.ts";
+export type { IndexChange, IndexPrediction, SchemaPrediction, TableOutcome, TablePrediction } from "./engine.ts";
 export {
   type CacheCompanion,
   type Caller,
@@ -150,6 +163,7 @@ export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DanglingReferenceError,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -232,12 +246,15 @@ export {
   type DashboardShape,
   isSubtype,
   reduceShape,
+  removeValue,
   type Shape,
+  ShapeRemovalError,
   shapeOf,
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   ImportIdError,
   type PaginationOptions,
