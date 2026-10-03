@@ -363,7 +363,7 @@ first.
 | P5 | Idempotency storage | `_session_requests` system table in the engine, transactional (Convex) / an in-memory map | **system table**: exactly-once must survive a server restart |
 | P6 | Retention of `_session_requests` | Convex's 2 weeks / other | **2 weeks** |
 | P7 | Timestamps on the wire | commit counter (today) / Convex-like nanosecond wall-clock ts (STUDY-06 D9) | the counter works for the protocol; decide D9 separately, before `db.vars.commitTs` or import/export |
-| P8 | `TransitionChunk` for > 5 MB transitions | implement now / later | **later** (after the client), with the client-version gate |
+| P8 | `TransitionChunk` for > 5 MB transitions | implement now / later | **later** (after the client), with the client-version gate; built in #220 (Convex's gate: npm ≥ 1.28.0) |
 | P9 | Auth before `@bunvex/auth` | accept only `None` / accept any token unverified | **only `None`** (never trust an unverified token) |
 | P10 | Identity in execution keys | per-query (only those that read `ctx.auth`, needs tracking) / all queries | **all queries** first (correct and simple), refine later |
 | P11 | Client telemetry `Event` messages | accept and ignore / log | **accept and ignore** |
