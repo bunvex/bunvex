@@ -200,7 +200,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `useConvexConnectionState()` | `react/client.ts` | done (STUDY-26) | `useBunvexConnectionState()` (R1). |
 | Accepting a function reference or a plain string name (`makeFunctionReference`) | `react/client.ts` | done (STUDY-26) | `anyApi` / `makeFunctionReference`, untyped until the typed API (ARCH open decision 1). |
 | `convexQueryOptions({ query, args })`: an identity function typing a query and its args, for `prewarmQuery` and the object form of `useQuery` (`@internal`) | `browser/query_options.ts` | missing | Not the TanStack integration (next row). Low priority. |
-| TanStack Query: `ConvexQueryClient` (live cache entries, server-side reads at one snapshot), `convexQuery` / `convexAction`, the hooks re-exported | `@convex-dev/react-query` (separate package) | done (STUDY-48) | `@bunvex/react-query` (DV-260, DV-261); args JSON-encoded in keys (DV-262); paginated queries to come (DV-263). Checked against the official package on the same server. |
+| TanStack Query: `ConvexQueryClient` (live cache entries, server-side reads at one snapshot), `convexQuery` / `convexAction`, the hooks re-exported | `@convex-dev/react-query` (separate package) | done (STUDY-55) | `@bunvex/react-query` (DV-260, DV-261); args JSON-encoded in keys (DV-262); paginated queries through the re-exported `useBunvexPaginatedQuery`, as Convex (a TanStack-cached form deferred: DV-263). Checked against the official package on the same server. |
 | Guard: helpful errors when used outside a provider / when called with an event object by mistake (`assertNotAccidentalArgument`) | `react/client.ts` | done (STUDY-26) | Same messages, naming bunvex and `BunvexProvider`, without the docs link. |
 
 ### 12. React auth helpers and providers
@@ -211,8 +211,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | done (STUDY-27) | Tested: a query never runs signed out, on mount or on sign-out. |
 | `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | done (STUDY-27) | `useBunvexAuth()`. |
 | `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | done (STUDY-27) | |
-| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | done (STUDY-47) | `BunvexProviderWithClerk` in `@bunvex/react-clerk` (DV-243); template and audience "bunvex" (DV-242). Differential test against Convex's provider. |
-| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | done (STUDY-47) | `BunvexProviderWithAuth0` in `@bunvex/react-auth0` (DV-243). Differential test against Convex's provider. |
+| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | done (STUDY-54) | `BunvexProviderWithClerk` in `@bunvex/react-clerk` (DV-243); template and audience "bunvex" (DV-242). Differential test against Convex's provider. |
+| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | done (STUDY-54) | `BunvexProviderWithAuth0` in `@bunvex/react-auth0` (DV-243). Differential test against Convex's provider. |
 
 ### 13. HTTP client and HTTP API
 
