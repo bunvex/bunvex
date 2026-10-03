@@ -1,6 +1,6 @@
 # STUDY-64 — The sync worker under load and outages
 
-- **Status:** draft; W1 pending (owner)
+- **Status:** W1 decided (owner, 2026-10-03: accept)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-22](STUDY-22-ws-mutation-order.md): one connection's mutation queue and its 1000 cap.
@@ -11,7 +11,7 @@
   - [STUDY-24](STUDY-24-horizontal-scaling.md): Usher and the remote subscription stream (why §1.6 does not apply).
   - Parity rows: [client-sync.md](../parity/client-sync.md) §4, §5, §6 and §16.
   - Implementation, one PR per concern: #284 (mutation timeout and caps), #285 (single flight), #286 (rerun
-    concurrency and retries), #287 (W0 fix, W1 pending), #280 (result and argument sizes).
+    concurrency and retries), #287 (W0 fix; W1 accepted), #280 (result and argument sizes).
 
 This study covers the parts of Convex's sync worker that only matter when something is slow or failing:
 a mutation that never finishes, a client that reads slower than the server writes, a query that hits a
@@ -263,7 +263,7 @@ reason. Convex never drops a frame.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| W1 | A socket whose unsent data would pass 2³² − 1 bytes (4 GiB) is closed; Convex buffers without limit | Bun's `backpressureLimit` is a 32-bit count and cannot be off; past it Bun either drops frames (the W0 bug) or closes. Closing loses nothing: the client reconnects and resends. With single flight, reaching it takes gigabytes of responses to a client that does not read | **pending (owner)**: DV-311, recommend accept |
+| W1 | A socket whose unsent data would pass 2³² − 1 bytes (4 GiB) is closed; Convex buffers without limit | Bun's `backpressureLimit` is a 32-bit count and cannot be off; past it Bun either drops frames (the W0 bug) or closes. Closing loses nothing: the client reconnects and resends. With single flight, reaching it takes gigabytes of responses to a client that does not read | **accepted** (owner, 2026-10-03): DV-311 |
 
 Not divergences:
 
@@ -296,7 +296,6 @@ Not divergences:
 
 ## 6. Open questions
 
-- W1 (owner).
 - `CLIENT_TIMEOUT` (120 s without a pong closes the socket) and Bun's `idleTimeout` of 960 s differ; the
   parity row "WS-level ping every 5 s; client considered dead after 120 s" stays *partial*.
 - Convex negotiates `permessage-deflate` on the sync socket (its `tungstenite` fork); bunvex does not
