@@ -1,4 +1,4 @@
-// The client's bookkeeping between sockets, as Convex's client unit tests check it (STUDY-64 G-C8, G-C24,
+// The client's bookkeeping between sockets, as Convex's client unit tests check it (STUDY-65 G-C8, G-C24,
 // G-C25, G-C26; Convex's react/auth_websocket.test.tsx pause cases, browser/sync/local_state.test.ts,
 // optimistic_query_set.test.ts and request_manager.test.ts). A wrong query set after a pause is a base
 // version mismatch, which the server answers with a fatal error.
