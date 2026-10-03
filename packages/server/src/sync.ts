@@ -463,7 +463,7 @@ export class SyncHub {
     const run = r.ok
       ? r.value
       : { ok: false as const, error: r.error, reads: [], ts, journal: {} as QueryJournal, identityObserved: false };
-    // No permit (STUDY-64): not the query's result; the session ends with "try again", as Convex's.
+    // No permit (STUDY-68): not the query's result; the session ends with "try again", as Convex's.
     if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
     const lines = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
@@ -579,7 +579,7 @@ export class SyncSession {
   private internalError(e: unknown) {
     console.error("bunvex sync:", e);
     // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
-    // Too many functions at once (STUDY-64): Convex's rate-limited close, "try again", with its code.
+    // Too many functions at once (STUDY-68): Convex's rate-limited close, "try again", with its code.
     if (e instanceof TooManyConcurrentRequestsError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
     this.fail({
       code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,

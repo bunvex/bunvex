@@ -673,7 +673,7 @@ export class Functions {
   fileStorage: FileStorage | null = null;
 
   /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
-  /** How many functions of each kind run at once (STUDY-64). */
+  /** How many functions of each kind run at once (STUDY-68). */
   readonly limits: FunctionLimits;
   /** The action limiter (STUDY-31), `limits.action`. */
   readonly actionPermits: ConcurrencyLimiter;
@@ -820,7 +820,7 @@ export class Functions {
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
-      // A permit for the run, once it is validated (STUDY-64); a cached result never gets here.
+      // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
       return this.limits.query.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
     };
   }
@@ -837,7 +837,7 @@ export class Functions {
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
-      // A permit per attempt (STUDY-64), with the timeout even for a scheduled mutation, as in Convex.
+      // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
     });
   }
@@ -1328,7 +1328,7 @@ export class Functions {
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
         const ctx = this.actionCtx(caller, null, opts.job, f);
         const a = this.checkArgs(f, args);
-        // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-64).
+        // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const limiter = NODE_FUNCTIONS.has(f) ? this.limits.nodeAction : this.limits.action;
         return limiter.run(
           () =>

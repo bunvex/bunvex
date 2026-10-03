@@ -1,4 +1,4 @@
-// Per-kind concurrency limits (STUDY-64), as Convex's limiters: queries and mutations have their own
+// Per-kind concurrency limits (STUDY-68), as Convex's limiters: queries and mutations have their own
 // (a run waits up to the timeout, then `TooManyConcurrentRequests`, HTTP 429; the sync protocol closes with
 // "try again"); a cached query and a call inside another function's transaction take no permit; actions and
 // HTTP actions share one; scheduled actions wait as long as it takes.

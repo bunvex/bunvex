@@ -1,4 +1,4 @@
-// How many functions run at once (STUDY-31, STUDY-64), as Convex's limiters
+// How many functions run at once (STUDY-31, STUDY-68), as Convex's limiters
 // (crates/application/src/application_function_runner/mod.rs `Limiter`): one per kind — queries, mutations,
 // actions (HTTP actions included) and Node actions. A query or mutation run (each attempt), an action and an
 // HTTP action take a permit; a cached query and a call inside another function's transaction do not. A
@@ -112,7 +112,7 @@ function knob(env: NodeJS.ProcessEnv, k: string, d: number): number {
   return n;
 }
 
-/** Every limiter of a deployment (STUDY-64). */
+/** Every limiter of a deployment (STUDY-68). */
 export type FunctionLimits = {
   query: ConcurrencyLimiter;
   mutation: ConcurrencyLimiter;

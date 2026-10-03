@@ -95,7 +95,7 @@ to a spec.
 | [STUDY-61](STUDY-61-usage-limits.md) | Usage tracking and usage limits: the meter, `/api/v1/*usage*`, the enforcement worker | implemented; DV-308 resolved, DV-309 accepted (owner, 2026-10-03) |
 | [STUDY-62](STUDY-62-components.md) | Components: how Convex does them, bunvex's touch points, the plan | K1–K9 accepted as recommended (owner, 2026-10-03) |
 | [STUDY-63](STUDY-63-pause-deployment.md) | Pausing a deployment: `_backend_state`, pause / unpause, what stops while paused | implemented, no divergence an app can reach |
-| [STUDY-64](STUDY-64-function-limits.md) | Concurrency limits per function kind (queries, mutations, actions, Node actions) | implemented; closes DV-302 |
+| [STUDY-68](STUDY-68-function-limits.md) | Concurrency limits per function kind (queries, mutations, actions, Node actions) | implemented; closes DV-302 |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |

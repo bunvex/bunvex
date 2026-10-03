@@ -1,4 +1,4 @@
-# STUDY-64 — Concurrency limits per function kind
+# STUDY-68 — Concurrency limits per function kind
 
 - **Status:** implemented; closes DV-302 (owner, 2026-10-03: "fechar")
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
