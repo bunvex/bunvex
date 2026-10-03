@@ -29,6 +29,11 @@ export async function startServer() {
     broken: query(() => {
       throw new BunvexError("query says no");
     }),
+    // Fine while there are no messages, an error once there is one: an error that arrives live.
+    fragile: query(async ({ db }) => {
+      if (await db.query("messages").first()) throw new BunvexError("now broken");
+      return "ok";
+    }),
     // Newest first. `tight` caps the rows a page may read, so a growing page is split (STUDY-26 §8).
     paged: query(({ db }, { paginationOpts, tight }: { paginationOpts: PaginationOptions; tight?: boolean }) =>
       db
@@ -54,6 +59,7 @@ export async function startServer() {
     logged: mutation(() => {
       console.log("hello from a mutation");
     }),
+    echoQuery: query((_ctx, { x }: { x: unknown }) => x),
     echo: action(async (_ctx, { x }: { x: unknown }) => {
       await gates.get("action");
       return x;

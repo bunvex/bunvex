@@ -487,6 +487,29 @@ describe("environment variables (STUDY-37)", () => {
     ]);
   });
 
+  test('the function log names a "use node" action\'s environment (STUDY-47)', async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([
+      envMod,
+      {
+        path: "nodeAct.js",
+        environment: "node",
+        source: `"use node";
+         import { action } from "@bunvex/server";
+         export const go = action(async () => 1);`,
+      },
+    ]);
+    await d.call("action", "nodeAct:go");
+    await d.call("action", "env:inAction", { name: "X" });
+    const { parts } = await d.s.functionLog.after(0, 1000);
+    const done = parts.filter((p) => p.kind === "Completion") as { identifier: string; environment: string }[];
+    expect(done.map((p) => [p.identifier, p.environment])).toEqual([
+      ["nodeAct:go", "node"],
+      ["env:inAction", "isolate"],
+    ]);
+  });
+
   test("a subscription re-runs when a variable it read changes", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

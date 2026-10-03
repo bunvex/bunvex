@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   newUserTimer,
+  OccError,
   observeTime,
   pausingUserTime,
   type SessionRequestId,
@@ -17,6 +18,7 @@ import {
   stringifyValue,
   type Tx,
   type UserTimer,
+  wallClock,
   withUserTimer,
 } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
@@ -25,6 +27,7 @@ import {
   checkValue,
   displayValue,
   type GenericValidator,
+  hasCommitTs,
   type Infer,
   isBunvexError,
   isSimpleObject,
@@ -32,6 +35,7 @@ import {
   type PropertyValidators,
   type Value,
   v,
+  valueSize,
 } from "@bunvex/values";
 import { ActionPermits } from "./action-permits.ts";
 import {
@@ -44,7 +48,26 @@ import {
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
-import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
+import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
+import {
+  type CallerName,
+  type Completion,
+  type FunctionLog,
+  type IdentityType,
+  NO_USAGE,
+  Running,
+  type UdfType,
+  usageStats,
+} from "./function-log.ts";
+import {
+  cachedQueryLogs,
+  currentLogLines,
+  currentOwner,
+  currentOwnLines,
+  type LogLine,
+  perAttempt,
+  withOwner,
+} from "./logs.ts";
 import type {
   ActionBuilder,
   GenericActionCtx,
@@ -208,6 +231,9 @@ const asObjectValidator = (a: ArgsValidator): GenericValidator =>
 
 /** Every function a builder made: how a code version's analysis tells its functions from other exports. */
 const DEFINED = new WeakSet<object>();
+/** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
+export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
+
 export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
 
 const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
@@ -258,6 +284,36 @@ export const mutation = mutationGeneric;
 export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
+
+/** A function's path as the function log names it (Convex's stripped `UdfPath`): no `.js`, no `:default`. */
+const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
+
+/** The transaction the current logged execution runs in, for its usage. */
+function noteTx(db: Tx) {
+  const owner = currentOwner();
+  if (owner) owner.tx = db;
+}
+
+/** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
+const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
+/** The same for a result already as JSON: its length. */
+const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
+
+/** A caller with who runs the call, for the function log (STUDY-47); `HttpApi` when unset. */
+export type SourcedCaller = Caller & { source?: CallerName };
+
+/** What a logged execution's result tells the log. `skip`: nothing ran (a replayed session request). */
+type Outcome = { returnBytes?: number | null; success?: { status: string } | null; error?: unknown; skip?: boolean };
+
+/** Convex's `Identity::tag()` for a caller: scheduled and cron runs are `unknown`, as anonymous calls. */
+function identityTypeOf(caller: Caller | undefined): IdentityType {
+  if ((caller as AdminCaller | undefined)?.admin) return caller!.identity ? "member_acting_user" : "instance_admin";
+  return caller?.identity ? "user" : "unknown";
+}
+
+/** An error as the log shows it: a function's as Convex's `JsError` display, the server's own as its message. */
+const errorText = (e: unknown) =>
+  e instanceof OccError || isSystemError(e) ? (e as Error).message : describeUncaught(e).message;
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
@@ -335,6 +391,112 @@ export class Functions {
    * keeps everything, null means no audit log access. Set by `createServer`.
    */
   auditLogRetentionDays: number | null = -1;
+
+  /** The function execution log (STUDY-47); set by `createServer`. */
+  functionLog: FunctionLog | null = null;
+
+  /**
+   * @internal Run one execution of `name` and log it (STUDY-47): a Completion when it ends, and for an
+   * action or HTTP action each line as a Progress event as it is printed. A function an action calls is
+   * logged with the action as its parent, in its request. System functions are not logged, as in Convex.
+   */
+  async logged<T>(
+    udfType: UdfType,
+    name: string,
+    caller: Caller | undefined,
+    run: () => Promise<T>,
+    outcome?: (value: T) => Outcome,
+  ): Promise<T> {
+    const log = this.functionLog;
+    if (!log || isSystemPath(name)) return run();
+    const up = currentOwner();
+    const parent = up instanceof Running ? up : null;
+    const r = new Running(
+      crypto.randomUUID(),
+      parent?.requestId ?? caller?.request?.requestId ?? newRequestId(),
+      parent,
+      udfType,
+      udfType === "HttpAction" ? name : strippedPath(name),
+      parent ? "Action" : udfType === "HttpAction" ? "HttpEndpoint" : ((caller as SourcedCaller)?.source ?? "HttpApi"),
+      identityTypeOf(caller),
+      wallClock(),
+      udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
+    );
+    if (udfType === "Action" || udfType === "HttpAction")
+      r.onLine = (line) =>
+        log.append({
+          kind: "Progress",
+          udfType,
+          identifier: r.identifier,
+          timestamp: r.start / 1000,
+          logLines: [line],
+          requestId: r.requestId,
+          executionId: r.executionId,
+          root: parent === null,
+        });
+    const res = await withOwner(r, run);
+    const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
+    if (!o.skip) log.append(this.completion(r, res.lines, o, false));
+    if (!res.ok) throw res.error;
+    return res.value;
+  }
+
+  private isNodeAction(name: string): boolean {
+    const f = this.fns.get(registryKey(name)) ?? this.fns.get(name);
+    return f !== undefined && NODE_FUNCTIONS.has(f);
+  }
+
+  /** The current mutation attempt lost an OCC conflict and runs again: log it (the engine's `onOccRetry`). */
+  logOccRetry(error: OccError) {
+    const r = currentOwner();
+    if (this.functionLog && r instanceof Running)
+      this.functionLog.append(this.completion(r, currentOwnLines(), { error }, true));
+  }
+
+  private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
+    const end = wallClock();
+    const e = o.error;
+    const used = (r.tx as Tx | null)?.usage;
+    const seconds = (end - r.start) / 1000;
+    return {
+      kind: "Completion",
+      udfType: r.udfType,
+      identifier: r.identifier,
+      logLines: lines,
+      timestamp: end / 1000,
+      cachedResult: r.cached,
+      caller: r.caller,
+      parentExecutionId: r.parent?.executionId ?? null,
+      executionTime: seconds,
+      // bunvex does not split user from system time in the log (DV-252).
+      userExecutionTime: seconds,
+      success: e === undefined ? (o.success ?? null) : null,
+      error: e === undefined ? null : errorText(e),
+      requestId: r.requestId,
+      executionId: r.executionId,
+      usageStats: used
+        ? usageStats(
+            { bytes: used.bytesRead, documents: used.documentsRead },
+            { bytes: used.bytesWritten, documents: used.documentsWritten },
+          )
+        : NO_USAGE,
+      returnBytes: e === undefined ? (o.returnBytes ?? null) : null,
+      occInfo:
+        e instanceof OccError
+          ? {
+              tableName: e.info.table ?? null,
+              documentId: e.info.documentId ?? null,
+              writeSource: e.info.writeSource ?? null,
+              componentPath: null,
+              retryCount: e.info.retries,
+            }
+          : null,
+      willRetry,
+      executionTimestamp: r.start / 1000,
+      identityType: r.identityType,
+      environment: r.environment,
+    };
+  }
 
   /** Where files go (STUDY-32); set by `createServer`. */
   fileStorage: FileStorage | null = null;
@@ -463,9 +625,21 @@ export class Functions {
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
+    const body = this.queryBodyOf(name, args, fromClient, caller);
+    return async (db: Tx) => {
+      const value = await body(db);
+      // Convex's check: only a mutation's result may hold `db.vars.commitTs` (STUDY-53).
+      if (hasCommitTs(value))
+        throw new Error(`Function ${name} return value invalid: queries cannot return an unresolved commit timestamp`);
+      return value;
+    };
+  }
+
+  private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const f = this.fn(name, "query", fromClient, caller);
     return async (db: Tx) => {
+      noteTx(db);
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
@@ -479,6 +653,7 @@ export class Functions {
    */
   private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
     return perAttempt(async (db: Tx) => {
+      noteTx(db);
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
@@ -516,7 +691,19 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args);
+    return inHandleScope({ db, engine: this.engine }, () =>
+      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    );
+  }
+
+  /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
+  engineOf(): Engine {
+    return this.engine;
+  }
+
+  /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
+  functionPaths(): string[] {
+    return [...this.fns.keys()].map(canonicalPath);
   }
 
   /**
@@ -607,7 +794,7 @@ export class Functions {
     opts: NestedOptions | undefined,
     depth: number,
   ): Promise<unknown> {
-    const name = registryKey(getFunctionName(ref));
+    const name = registryKey(await functionNameOf(ref, db, this.engine));
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -804,20 +991,34 @@ export class Functions {
   }
 
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
-    return this.engine.query(
-      this.queryBody(name, args, fromClient, caller),
-      this.cacheKey(name, args),
-      cachedQueryLogs,
+    return this.logged(
+      "Query",
+      name,
       caller,
+      () =>
+        this.engine.query(
+          this.queryBody(name, args, fromClient, caller),
+          this.cacheKey(name, args),
+          cachedQueryLogs,
+          caller,
+        ),
+      returned,
     );
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored, with its log lines). */
   async runQueryJson(name: string, args: unknown, caller?: Caller): Promise<string> {
-    return this.engine.queryJson(
-      this.queryBody(name, args, true, caller),
-      this.cacheKey(name, args),
-      cachedQueryLogs,
+    return this.logged(
+      "Query",
+      name,
       caller,
+      () =>
+        this.engine.queryJson(
+          this.queryBody(name, args, true, caller),
+          this.cacheKey(name, args),
+          cachedQueryLogs,
+          caller,
+        ),
+      returnedJson,
     );
   }
 
@@ -830,7 +1031,13 @@ export class Functions {
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
     const body = this.queryBody(name, args, true, caller);
-    return this.engine.queryJson(body, this.cacheKey(name, args), cachedQueryLogs, caller, ts);
+    return this.logged(
+      "Query",
+      name,
+      caller,
+      () => this.engine.queryJson(body, this.cacheKey(name, args), cachedQueryLogs, caller, ts),
+      returnedJson,
+    );
   }
 
   async runMutation(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
@@ -847,8 +1054,18 @@ export class Functions {
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
     if (isSystemPath(name))
       return this.engine.mutationWithTs(this.systemMutationBody(name, args, fromClient, caller), name, caller);
-    const f = this.fn(name, "mutation", fromClient, caller);
-    return this.engine.mutationWithTs(this.mutationBody(f, args), name, caller);
+    return this.logged(
+      "Mutation",
+      name,
+      caller,
+      () =>
+        this.engine.mutationWithTs(
+          this.mutationBody(this.fn(name, "mutation", fromClient, caller), args),
+          name,
+          caller,
+        ),
+      (r) => returned(r.value),
+    );
   }
 
   /**
@@ -861,17 +1078,19 @@ export class Functions {
     request: SessionRequestId,
     caller?: Caller,
   ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
-    const body = isSystemPath(name)
-      ? this.systemMutationBody(name, args, true, caller)
-      : this.mutationBody(this.fn(name, "mutation", true, caller), args);
-    return this.engine.sessionMutation(
-      body,
-      name,
-      request,
-      // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
-      (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
-      caller,
-    );
+    const run = () =>
+      this.engine.sessionMutation(
+        isSystemPath(name)
+          ? this.systemMutationBody(name, args, true, caller)
+          : this.mutationBody(this.fn(name, "mutation", true, caller), args),
+        name,
+        request,
+        // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
+        (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
+        caller,
+      );
+    // A replayed request did not run: nothing to log.
+    return this.logged("Mutation", name, caller, run, (r) => ("value" in r ? returned(r.value) : { skip: true }));
   }
 
   /**
@@ -884,10 +1103,22 @@ export class Functions {
     caller?: Caller,
     opts: { job?: string; internal?: boolean } = {},
   ): Promise<unknown> {
-    const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-    const ctx = this.actionCtx(caller, null, opts.job, f);
-    const a = this.checkArgs(f, args);
-    return this.actionPermits.run(() => this.inActionEnv(() => f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
+    return this.logged(
+      "Action",
+      name,
+      caller,
+      async () => {
+        const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
+        const ctx = this.actionCtx(caller, null, opts.job, f);
+        const a = this.checkArgs(f, args);
+        return this.actionPermits.run(() =>
+          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then((r) =>
+            this.checkReturns(f, r),
+          ),
+        );
+      },
+      returned,
+    );
   }
 
   /**
@@ -903,9 +1134,12 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: (n: FunctionRef, a?: unknown) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
-      runMutation: (n: FunctionRef, a?: unknown) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
-      runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      runQuery: async (n: FunctionRef, a?: unknown) =>
+        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runMutation: async (n: FunctionRef, a?: unknown) =>
+        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runAction: async (n: FunctionRef, a?: unknown) =>
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
@@ -920,6 +1154,17 @@ export class Functions {
     authError: Error | null,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
-    return this.actionPermits.run(async () => this.inActionEnv(() => handler(ctx, request)));
+    // Logged under its route, as Convex's `HttpActionRoute` (`<METHOD> <path>`).
+    const route = `${request.method} ${new URL(request.url).pathname}`;
+    return this.logged(
+      "HttpAction",
+      route,
+      caller,
+      () =>
+        this.actionPermits.run(async () =>
+          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+        ),
+      (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
+    );
   }
 }

@@ -35,9 +35,10 @@ import {
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
-import { type GenericId, isSimpleObject, type Value } from "@bunvex/values";
+import { type GenericId, isSimpleObject, type Value, valueSize } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
-import type { Functions } from "./functions.ts";
+import { functionNameOf } from "./function-handles.ts";
+import type { Functions, SourcedCaller } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
 export type SchedulableFunction = AnyFunctionReference | string;
@@ -103,7 +104,10 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the future`);
     if (tsMs - now < -FIVE_YEARS_MS)
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the past`);
-    const name = functions.scheduledTarget(getFunctionName(fn as AnyFunctionReference));
+    // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
+    const name = functions.scheduledTarget(
+      await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
+    );
     return write(async (db) => {
       // What a canceled running action schedules is born canceled (Convex's parent check).
       const parent = target.job ? await getJob(db, target.job) : null;
@@ -174,8 +178,9 @@ const backoff = (failures: number, initialMs: number, maxMs: number) =>
 
 const NO_ONE: Caller = { identity: null, key: "" };
 /** A scheduled function runs with no identity, for a request of its own that names it (STUDY-44). */
-const asJob = (jobId: string): Caller => ({
+const asJob = (jobId: string): SourcedCaller => ({
   ...NO_ONE,
+  source: "Scheduler",
   request: { ip: null, userAgent: null, requestId: newRequestId(), authToken: null, scheduledFunctionId: jobId },
 });
 const randomId = () => crypto.randomUUID().replaceAll("-", "");
@@ -321,18 +326,28 @@ export class ScheduledJobExecutor {
     for (let occFailures = 0; ; ) {
       try {
         // Exactly once: the job is finished in the transaction that commits the mutation's writes.
-        const ran = await this.engine.mutation(
-          async (db) => {
-            if (!(await this.unchanged(db, job))) return false;
-            await patchJob(db, job._id, {
-              state: { kind: "inProgress", requestId: randomId(), executionId: randomId() },
-            });
-            await body(db);
-            await completeJob(db, job._id, { kind: "success" }, Date.now());
-            return true;
-          },
+        const caller = asJob(job._id);
+        let value: unknown;
+        const ran = await this.functions.logged(
+          "Mutation",
           job.name,
-          asJob(job._id),
+          caller,
+          () =>
+            this.engine.mutation(
+              async (db) => {
+                if (!(await this.unchanged(db, job))) return false;
+                await patchJob(db, job._id, {
+                  state: { kind: "inProgress", requestId: randomId(), executionId: randomId() },
+                });
+                value = await body(db);
+                await completeJob(db, job._id, { kind: "success" }, Date.now());
+                return true;
+              },
+              job.name,
+              caller,
+            ),
+          // A job that changed meanwhile did not run.
+          (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
         );
         if (ran) this.stats.succeeded++;
         return;

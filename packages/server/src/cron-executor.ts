@@ -4,7 +4,7 @@
 // - An action runs at most once: in progress is committed first; one found in progress that no one runs
 //   was cut short, so it is logged as "Transient error while executing action" and the cron moves on.
 import { CommitterStoppedError, type Engine, OccError, stringifyValue, type Tx, wallClock } from "@bunvex/core";
-import { displayValue, type Value } from "@bunvex/values";
+import { displayValue, type Value, valueSize } from "@bunvex/values";
 import type { CronSpec } from "./cron.ts";
 import {
   applyCrons,
@@ -21,7 +21,7 @@ import {
   truncateLogLines,
 } from "./cron-model.ts";
 import { describeUncaught } from "./errors.ts";
-import type { Functions } from "./functions.ts";
+import type { Functions, SourcedCaller } from "./functions.ts";
 import { collectLogs, currentLogLines } from "./logs.ts";
 
 export type CronExecutorOptions = NextOpts & {
@@ -35,7 +35,8 @@ export type CronExecutorOptions = NextOpts & {
 const backoff = (failures: number, initialMs: number, maxMs: number) =>
   Math.random() * Math.min(maxMs, initialMs * 2 ** Math.max(0, failures - 1));
 const randomId = () => crypto.randomUUID().replaceAll("-", "");
-const NO_ONE = { identity: null, key: "" };
+/** A cron runs with no identity (Convex's `Identity::Unknown`), logged as the `Cron` caller (STUDY-47). */
+const NO_ONE: SourcedCaller = { identity: null, key: "", source: "Cron" };
 
 function resultStatus(value: unknown): CronStatus {
   const v = (value ?? null) as Value;
@@ -201,19 +202,28 @@ export class CronJobExecutor {
     const body = this.functions.scheduledMutationBody(job.cronSpec.udfPath, job.cronSpec.udfArgs[0]);
     for (let occ = 0; ; ) {
       const t0 = performance.now();
+      let value: unknown;
       const r = await collectLogs(() =>
-        this.engine.mutation(
-          async (db) => {
-            if (!(await this.unchanged(db, job))) return false;
-            const value = await body(db);
-            // The log of this run, with its lines so far, and the next run: in the run's own transaction.
-            const lines = truncateLogLines(currentLogLines());
-            await insertLog(db, job, job.nextTs, resultStatus(value), lines, (performance.now() - t0) / 1000);
-            await completeRun(db, job, Date.now(), this.o);
-            return true;
-          },
+        this.functions.logged(
+          "Mutation",
           job.cronSpec.udfPath,
           NO_ONE,
+          () =>
+            this.engine.mutation(
+              async (db) => {
+                if (!(await this.unchanged(db, job))) return false;
+                value = await body(db);
+                // The log of this run, with its lines so far, and the next run: in the run's own transaction.
+                const lines = truncateLogLines(currentLogLines());
+                await insertLog(db, job, job.nextTs, resultStatus(value), lines, (performance.now() - t0) / 1000);
+                await completeRun(db, job, Date.now(), this.o);
+                return true;
+              },
+              job.cronSpec.udfPath,
+              NO_ONE,
+            ),
+          // A cron that changed meanwhile did not run.
+          (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
         ),
       );
       if (r.ok) {

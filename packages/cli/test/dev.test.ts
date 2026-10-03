@@ -145,6 +145,31 @@ describe("bunvex dev", () => {
     expect(await dev(app, d.url, "--run", "a:b", "--start", "true").done).toBe(2);
   });
 
+  test("the deployment's function logs on stderr (pause-on-deploy by default); --tail-logs disable", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, {
+      "bunvex/hello.ts": `import { query } from ${JSON.stringify(SERVER)};\nexport const hi = query(async () => { console.log("from app"); return 1; });`,
+    });
+    // As Convex's, the tail's first poll only finds the head: with an empty log it waits for the first
+    // execution and skips it. One has run before here.
+    expect(await dev(app, d.url, "--once").done).toBe(0);
+    await d.query("hello:hi");
+    const w = dev(app, d.url);
+    await w.until(() => w.ready() === 1);
+    await Bun.sleep(200);
+    await d.query("hello:hi");
+    await w.until(() => w.err.some((l) => / \[BUNVEX Q\(hello:hi\)\] \[LOG\] 'from app'$/.test(l)));
+    w.stop();
+    expect(await w.done).toBe(0);
+    const quiet = dev(app, d.url, "--tail-logs", "disable");
+    await quiet.until(() => quiet.ready() === 1);
+    await Bun.sleep(200);
+    await d.query("hello:hi");
+    await Bun.sleep(300);
+    expect(quiet.err.some((l) => l.includes("[BUNVEX "))).toBe(false);
+  }, 30_000);
+
   test("an unreachable deployment: backoff and retry; with --once, exit 1", async () => {
     const app = tmp();
     write(app, { "bunvex/hello.ts": hello("x") });

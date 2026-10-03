@@ -11,7 +11,8 @@
 // - `--once` pushes once; `--until-success` until one succeeds;
 // - without a configured deployment, the project's local deployment: `bunvex-local-backend` downloaded and
 //   run as a child, its state in `.bunvex/local/default/`, `.env.local` naming it (STUDY-40, as Convex).
-// Log tailing needs log streaming (item 12): `--tail-logs` is accepted and off until then (E7).
+// - the deployment's function logs are tailed to stderr (`--tail-logs`, default `pause-on-deploy`: held back
+//   while a push runs), as `bunvex logs` prints them (STUDY-47).
 import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
 import { join, sep } from "node:path";
 import type { TypecheckMode } from "./codegen.ts";
@@ -24,6 +25,7 @@ import {
   urlVariables,
   writeEnvLocal,
 } from "./local-deployment.ts";
+import { COLORS, LogManager, type LogMode, NO_COLORS, watchLogs } from "./logs.ts";
 import { runCommand } from "./run.ts";
 import { resolveTarget, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 
@@ -40,7 +42,8 @@ ${TARGET_OPTIONS}
   --start <command>    after the first successful push, start this shell command
   --typecheck <mode>   enable, try (default) or disable
   --codegen <mode>     enable (default) or disable
-  --tail-logs <mode>   always, pause-on-deploy or disable (logs come with log streaming; off until then)
+  --tail-logs <mode>   print the deployment's function logs: always, pause-on-deploy (the default: not during
+                       a push) or disable
   --local-cloud-port <n>       the local deployment's API port (default: its saved one, else the first free from 3210)
   --local-site-port <n>        its HTTP actions' port (default: its saved one, else the next free)
   --local-backend-version <v>  run this bunvex-local-backend release (a precompiled-… tag) instead of the latest
@@ -53,7 +56,7 @@ type Flags = {
   start?: string;
   typecheck: TypecheckMode;
   codegen: boolean;
-  tailLogs: string;
+  tailLogs: LogMode;
   local: LocalOptions;
 };
 
@@ -63,7 +66,7 @@ function parseFlags(args: string[]): Flags | string {
     untilSuccess: false,
     typecheck: "try",
     codegen: true,
-    tailLogs: "disable",
+    tailLogs: "pause-on-deploy",
     local: {},
   };
   for (let i = 0; i < args.length; i++) {
@@ -97,7 +100,7 @@ function parseFlags(args: string[]): Flags | string {
       } else if (name === "--tail-logs") {
         if (!["always", "pause-on-deploy", "disable"].includes(v))
           return "--tail-logs must be always, pause-on-deploy or disable";
-        f.tailLogs = v;
+        f.tailLogs = v as LogMode;
       } else if (name === "--local-backend-version") f.local.backendVersion = v;
       else {
         const n = Number(v);
@@ -268,7 +271,19 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       );
     }
     io.err(`Developing against deployment: ${target.url}`);
-    if (flags.tailLogs !== "disable") io.err("Log tailing comes with log streaming; --tail-logs is off for now.");
+    // Convex's `watchLogs` to stderr, beside the pushes; a deployment that refuses it is reported once.
+    const logManager = new LogManager(flags.tailLogs);
+    if (flags.tailLogs !== "disable") {
+      const t = target;
+      void watchLogs(t, io.err, io.err, {
+        success: false,
+        colors: io.isTTY ? COLORS : NO_COLORS,
+        logManager,
+        signal: stop.signal,
+      }).then((denied) => {
+        if (denied !== null) io.err(`bunvex dev: cannot watch logs: ${denied}`);
+      });
+    }
     const dir = functionsDir(io.cwd);
     const watcher = flags.once ? null : new DirWatcher(dir);
     if (watcher) cleanup.push(() => watcher.close());
@@ -280,7 +295,9 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       watcher?.reset();
       const t0 = performance.now();
       io.err("Preparing bunvex functions...");
+      logManager.beginDeploy();
       const r = await deploy(target, { dryRun: false, codegen: flags.codegen, typecheck: flags.typecheck }, pushIo);
+      logManager.endDeploy();
       if (stop.signal.aborted) break;
       if (r.code === 0) {
         backoff = 500;
@@ -330,6 +347,8 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
     }
     return exitCode;
   } finally {
+    // Ends the log tailing too.
+    stop.abort();
     if (!opts.signal) for (const s of ["SIGINT", "SIGTERM"] as const) process.off(s, onSignal);
     for (const c of cleanup.reverse()) await c();
   }
