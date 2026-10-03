@@ -216,6 +216,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-276 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR | owner, 2026-10-03 (as recommended) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-277 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-278 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL` | owner, 2026-10-03 (as recommended) | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
+| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s; older is `SnapshotTooOld`), and each value's `_ts` is the snapshot | snapshots up to 5 days old (its table iterator rebuilds them from the document log); `_ts` is each document's revision | yes: a connector paging one snapshot for more than 4 minutes restarts; `_ts` differs (Convex says the snapshot gives the same guarantees) | Not done yet: needs a table iterator over the document log and a driver method for a revision's ts. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -290,6 +291,7 @@ Kept so the history is in one place.
 | DV-141 | Scheduled and cron runs' log lines went only to the server's output | As Convex: every execution, scheduled and cron runs included, is in the function execution log with its lines (`function-log.ts`), read by the log stream routes | yes (dashboard logs) | owner, 2026-10-01 (STUDY-30 S3: until log streaming) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-184 | `dev --tail-logs` defaulted to `disable` | As Convex: `pause-on-deploy` by default, the deployment's function logs on stderr, held back during a push | yes | owner, 2026-10-02 (STUDY-37 E7: until log streaming) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-218 | No audit-log entries for exports and imports | As Convex: `request_export`, `set_export_expiration`, `cancel_export` and `snapshot_import`, in the change's transaction (`_deployment_audit_log`) | dashboard only | owner, 2026-10-02 (STUDY-42 X4: until an audit log) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences), [STUDY-48](../study/STUDY-48-audit-log.md) |
+| DV-307 | The encoded value format is named `encoded_json`; `convex_encoded_json`, `convex_json` and `convex_clean_json` are `BadFormat` | As Convex: `convex_encoded_json`, `convex_json` and `convex_clean_json`, by a rule-5 exception for wire names (`scripts/check-deps.ts` `WIRE_NAMES`) | yes: a connector asking for Convex's encoded form fails | owner, 2026-10-03 (as recommended) | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -342,12 +344,8 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
-DV-306 and DV-307 (STUDY-60, streaming export) await the owner; the draft PR implements DV-306's recommendation and, for DV-307, the rule as it stands:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s; older is `SnapshotTooOld`), and each value's `_ts` is the snapshot | snapshots up to 5 days old (its table iterator rebuilds them from the document log); `_ts` is each document's revision | yes: a connector paging one snapshot for more than 4 minutes restarts; `_ts` differs (Convex says the snapshot gives the same guarantees) | Not done yet: needs a table iterator over the document log and a driver method for a revision's ts. Accept for now | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
-| DV-307 | The encoded value format is named `encoded_json`; `convex_encoded_json`, `convex_json` and `convex_clean_json` are `BadFormat` | those three names | yes: a connector asking for Convex's encoded form fails | Rule 5 refuses the names. Recommend an explicit rule-5 exception for these wire values, so connectors work unchanged | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
+DV-306 was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
+DV-307 was resolved as recommended (owner, 2026-10-03), by a rule-5 exception for wire names: it is in [Resolved to match Convex](#resolved-to-match-convex).
 
 ## Waiting on a dependency
 

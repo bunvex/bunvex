@@ -116,7 +116,7 @@ test("list_snapshot: one table per page, by tablet then id, at one snapshot; the
   await t.call("m:put", { table: "b", n: 1, doc: { k: 2n } });
   await t.call("m:patch", { id: a1, doc: { k: 3n } });
   await t.call("m:del", { id: a1 });
-  const d = await t.get("document_deltas", { cursor: snapshot, format: "encoded_json" });
+  const d = await t.get("document_deltas", { cursor: snapshot, format: "convex_encoded_json" });
   expect(d.body.hasMore).toBe(false);
   expect(d.body.values.map((x: any) => [x._table, x._deleted, x.k ?? null])).toEqual([
     ["b", false, null],
@@ -210,6 +210,9 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
     code: "BadFormat",
     message: "format param must be one of [`json`]. Got xml",
   });
+  // Convex's legacy names for the clean and encoded forms (DV-307).
+  expect((await t.get("list_snapshot", { format: "convex_clean_json" })).status).toBe(200);
+  expect((await t.get("list_snapshot", { format: "convex_json" })).status).toBe(200);
   expect((await t.get("list_snapshot", { cursor: "nope" })).body.code).toBe("InvalidListSnapshotCursor");
   const future = (BigInt(Date.now()) * 1_000_000n + 10n ** 15n).toString();
   expect((await t.get("list_snapshot", { snapshot: future })).body).toEqual({

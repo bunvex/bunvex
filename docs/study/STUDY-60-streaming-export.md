@@ -1,6 +1,6 @@
 # STUDY-60 — Streaming export (`list_snapshot`, `document_deltas`, `json_schemas`)
 
-- **Status:** implemented (the legacy routes); decisions pending (owner): DV-306, DV-307
+- **Status:** implemented (the legacy routes); DV-306 accepted, DV-307 resolved to match Convex (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-52](STUDY-52-shape-inference.md) (shapes), STUDY-33 (retention and the document log,
   PERSIST-01 C12), [STUDY-42](STUDY-42-import-export.md) (the export encoding)
@@ -84,7 +84,7 @@ A connector's view: pages, cursors, value encodings, field order, errors.
 
 - **`server/src/streaming-export.ts`** holds the routes, the selections and the three encoders, written
   as JSON text so int64 and nanosecond values stay exact.
-- **`format`** accepts `json`, `encoded_json` (DV-307) and `export_json`.
+- **`format`** accepts Convex's names (`json`, `convex_clean_json`, `convex_encoded_json`, `convex_json`, `export_json`), by rule 5's wire-name exception (DV-307).
 - **Arguments**: POST bodies read `snapshot` and `cursor` as written, since they exceed 2^53. bunvex's
   microsecond timestamps are multiplied by 1000 on the way out.
 - **`list_snapshot`**:
@@ -108,8 +108,8 @@ A connector's view: pages, cursors, value encodings, field order, errors.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-307 | The encoded format is named `encoded_json`. Convex's `convex_encoded_json` (and the legacy `convex_json`, `convex_clean_json`) get `BadFormat`. | Rule 5: the name carries "convex", and `check:deps` refuses it in shipped strings. Não dá pra fazer sem uma exceção à regra. Connectors that ask for Convex's encoded form (the pre-2026 Fivetran connector did) would fail. | pending (recommend: an explicit rule-5 exception for these three wire values, so the names match Convex) |
-| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s); older gives `SnapshotTooOld`. Each value's `_ts` is the snapshot. | Ainda não fizemos: Convex's table iterator rebuilds old snapshots from the document log, and bunvex's drivers do not expose a revision's ts. A connector paging one snapshot for more than 4 minutes would restart. | pending (recommend: accept for now) |
+| DV-307 | ~~The encoded format renamed `encoded_json`~~ — resolved: Convex's names, by an explicit rule-5 exception for wire names (`WIRE_NAMES` in `scripts/check-deps.ts`). | — | owner, 2026-10-03 |
+| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s); older gives `SnapshotTooOld`. Each value's `_ts` is the snapshot. | Ainda não fizemos: Convex's table iterator rebuilds old snapshots from the document log, and bunvex's drivers do not expose a revision's ts. A connector paging one snapshot for more than 4 minutes would restart. | accepted (owner, 2026-10-03) |
 
 Not built yet (not a divergence): `/api/v1/data/sync`, `list_active_syncs`, `data_sync_cursor_from_deltas`,
 `_data_sync_progress`. These are the current Fivetran connector's API.

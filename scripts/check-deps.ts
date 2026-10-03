@@ -114,6 +114,18 @@ function withoutComments(text: string): string {
   return out;
 }
 
+/**
+ * Rule 5's exceptions (owner, 2026-10-03): wire names Convex clients and connectors send or read, matched as
+ * exact string literals. Each needs the decision that allows it; messages and API names never qualify.
+ */
+const WIRE_NAMES: Record<string, string> = {
+  convex_encoded_json: "DV-307: streaming export `format`",
+  convex_json: "DV-307: streaming export `format` (legacy alias)",
+  convex_clean_json: "DV-307: streaming export `format` (legacy alias)",
+  actionComputeConvexGbHours: "DV-308: usage limit metric",
+};
+const wireNameRe = new RegExp(`(["'\`])(?:${Object.keys(WIRE_NAMES).join("|")})\\1`, "g");
+
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
@@ -148,7 +160,7 @@ for (const [name, dir] of dirOfName) {
     if (/^packages\/[^/]+\/src\//.test(rel)) {
       const code = withoutComments(text).split("\n");
       code.forEach((line, n) => {
-        if (/convex/i.test(line))
+        if (/convex/i.test(line.replace(wireNameRe, "")))
           errors.push(
             `${rel}:${n + 1}: "convex" in shipped code outside a comment — use bunvex's own names and messages (rule 5)`,
           );
