@@ -119,7 +119,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Backoff resets only once the client has "synced past the last reconnect" (all re-sent queries answered, auth confirmed, old requests done) | `browser/sync/client.ts` (`hasSyncedPastLastReconnect`), `browser/sync/local_state.ts` | done (STUDY-26) |  |
 | Close codes 1000/1001/1005/4040 treated as normal (4040 = not-found during a push, retried) | `browser/sync/web_socket_manager.ts` | done (STUDY-26) |  |
 | Browser `online` event → reconnect immediately, cancelling a pending backoff | `browser/sync/web_socket_manager.ts` (`tryReconnectImmediately`) | done (STUDY-26) |  |
-| Server-side reconnect rate limiter weighted by query-set size (avoid thundering herd after an outage) | `crates/sync/src/subscription_reconnect.rs` | missing | Useful once there are many clients. |
+| Server-side reconnect rate limiter weighted by query-set size (avoid thundering herd after an outage) | `crates/sync/src/subscription_reconnect.rs` | n/a (STUDY-64 §1.6) | Only for Usher's remote subscription stream (closed source); self-hosted Convex builds the worker with no limiter (`crates/local_backend/src/router.rs`), and bunvex has no remote stream. Revisit with a multi-node sync tier (STUDY-24). |
 | `ConnectionState` {isWebSocketConnected, hasEverConnected, connectionCount, connectionRetries, hasInflightRequests, timeOfOldestInflightRequest, inflightMutations, inflightActions} | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `subscribeToConnectionState(cb)` (published once per microtask, only on change) | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `onServerDisconnectError` callback for abnormal close reasons | `browser/sync/client.ts` | done (STUDY-26) |  |
