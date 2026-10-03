@@ -169,8 +169,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `InvalidCursor` error (or `paginationError` in ConvexError data) → reset to the first page | `react/use_paginated_query.ts` | done (STUDY-26) | By its data (`isBunvexSystemError`, P1) or its message; the server sends the data since STUDY-26 P1. |
 | Per-hook pagination `id` in the args as a cache-buster (independent journals per hook instance) | `react/use_paginated_query.ts` (`nextPaginationId`), `browser/sync/udf_path_utils.ts` (`serializePaginatedPathAndArgs`) | done (STUDY-26) |  |
 | `usePaginatedQuery(query, args \| "skip", {initialNumItems})` → `{results, status: LoadingFirstPage \| CanLoadMore \| LoadingMore \| Exhausted, isLoading, loadMore(n)}` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
-| `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | missing | — |
-| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | missing | Later (STUDY-26 P2). |
+| `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | done (STUDY-26 §8.4) | Both forms, over the paginated query client. A failed page reaches the hook (DV-250, pending). |
+| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | done (STUDY-26 §8.4) | One `PaginatedQueryClient` under both, as Convex. Checked step by step against the official client. A failed page reaches `onError` (DV-250, pending). |
 
 ### 10. Base client API (`BaseConvexClient`, `ConvexClient`)
 
@@ -189,7 +189,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but the paginated client (with `usePaginatedQuery`); `setAuth` since STUDY-27; `baseClient` injection included. |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | done (STUDY-26) | `BunvexReactClient` (R1); the paginated client since STUDY-26 §8.4; `setAuth` since STUDY-27; `baseClient` injection included. |
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
