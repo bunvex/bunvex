@@ -87,7 +87,7 @@ errors of a misused query; the index states while a search index is built.
 ### As built
 
 - **PR 1** (#225): the schema.
-- **PR 2** (#PR2): `@bunvex/search`, a package of its own (owner, 2026-10-02):
+- **PR 2** (#): `@bunvex/search`, a package of its own (owner, 2026-10-02):
   - `tokenize`;
   - tantivy's fieldnorm code, its table generated from tantivy's documented formula and checked equal entry by entry;
   - BM25 in 32-bit floats;
