@@ -4,8 +4,9 @@
 //
 // Convex gives each function its own isolate and its own `console`. bunvex shares one process, so the
 // console methods are replaced once and each call looks up the current invocation in an
-// AsyncLocalStorage; outside an invocation they are the originals. Lines are still printed to the server's
-// own console as before: capturing only adds the copy the client gets back.
+// AsyncLocalStorage; outside an invocation they are the originals. As in Convex, a function's lines are not
+// printed to the server's own output: they reach the caller, the function log and the log stream
+// (`bunvex logs`, `dev`, the dashboard; STUDY-47).
 //
 // Lines are kept structured, as Convex's `LogLineStructured`: clients get them as `[LEVEL] message`
 // strings, the function log (function-log.ts, STUDY-47) as they are.
@@ -258,7 +259,7 @@ export function installLogCapture() {
     c[method] = (...args: unknown[]) => {
       const e = current.getStore();
       if (e) emit(e, level, render(args));
-      original(...args);
+      else original(...args);
     };
   }
   const originalTrace = c.trace.bind(console);
@@ -268,8 +269,7 @@ export function installLogCapture() {
       // The frames below this wrapper, under the message, as a browser prints them.
       const frames = (new Error().stack ?? "").split("\n").slice(2).join("\n");
       emit(e, "LOG", [...render(args), `\n${frames}`]);
-    }
-    originalTrace(...args);
+    } else originalTrace(...args);
   };
   const label = (l: unknown) => (l === undefined ? "default" : String(l));
   const originalTime = c.time.bind(console);

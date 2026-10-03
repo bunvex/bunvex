@@ -352,3 +352,23 @@ test("cron runs: the Cron caller, unknown identity, lines captured", async () =>
     logLines: [expect.objectContaining({ level: "LOG", messages: ["'cron tick'"] })],
   });
 });
+
+test("a function's lines are not printed to the server's own output (as Convex); others still are", async () => {
+  const root = new URL("..", import.meta.url).pathname;
+  const script = `
+    import { defineSchema, Engine } from "@bunvex/core";
+    import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+    import { Functions, query } from "${root}src/functions.ts";
+    import { collectLogs } from "${root}src/logs.ts";
+    const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
+    const functions = new Functions(engine).register("m", { q: query(() => { console.log("INSIDE-FUNCTION"); console.trace("INSIDE-TRACE"); return 1; }) });
+    const r = await collectLogs(() => functions.runQuery("m:q", {}));
+    console.log("OUTSIDE", JSON.stringify(r.logLines.length));
+    process.exit(0);
+  `;
+  const p = Bun.spawn(["bun", "-e", script], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  await p.exited;
+  expect(out + err).not.toContain("INSIDE-");
+  expect(out).toContain("OUTSIDE 2");
+});

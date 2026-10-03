@@ -1,6 +1,6 @@
 # STUDY-47 — Function log streaming
 
-- **Status:** decision pending (owner): L1–L5; PR 1 implements the recommendations
+- **Status:** decision pending (owner): L1–L6; PRs 1 and 2 implement the recommendations
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02
 - **Related:** [STUDY-20](STUDY-20-function-errors-and-logs.md) (log lines), [STUDY-30](STUDY-30-scheduler-and-crons.md)
   (scheduled and cron runs), [STUDY-37](STUDY-37-cli-and-environment-variables.md) (`dev --tail-logs`),
@@ -157,5 +157,14 @@ not flagging cache hits, the nested caller, an unbounded ring and missing query 
 | L3 | `userExecutionTime` equals `executionTime` | bunvex runs user code in-process; it does not split user time from system time in the log yet. **Not done yet** | DV-252, pending |
 | L4 | No `Tester` caller: the dashboard's function runner runs through `/api/function` and logs as `HttpApi` | Convex's runner calls `/api/run_test_function`, which bunvex has not built. **Not done yet** | DV-253, pending |
 | L5 | `environment` is always `"isolate"` | bunvex has no Node runtime for `"use node"` actions (DV recorded elsewhere). **Not possible** in one process | DV-254, pending |
+| L6 | `bunvex logs` does not print "Showing logs of deployment: …" first | Convex's `announceDeploymentTarget`; no bunvex command prints it yet. **Not done yet** | DV-255, pending |
 
 Everything else matches Convex.
+
+**As built (PR 2).** `packages/cli/src/logs.ts`: `bunvex logs` and the `watchLogs` loop `dev` runs to stderr
+with Convex's `LogManager`; `dev --tail-logs` defaults to `pause-on-deploy` (DV-184 resolved); the server no
+longer prints a function's lines (DV-77 resolved). The CLI sends `bunvex-client: npm-cli-<version>`, so it gets
+structured lines. As in Convex, the first poll only finds the head: on a deployment whose log is still
+empty it waits for the first execution and does not print it. Sabotage checks: printing again, `dev`'s
+tail off by default, `--history n` ignored, the history always printed and a missing client header each
+fail a test.
