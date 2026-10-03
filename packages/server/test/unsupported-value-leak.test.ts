@@ -33,6 +33,8 @@ async function setup() {
     ctx: query((ctx) => ctx as never),
     instance: query(() => ({ v: new Vault() }) as never),
     returnsQuery: query({ args: {}, returns: v.string(), handler: ({ db }) => db.query("items") as never }),
+    withArgs: query({ args: {}, handler: () => null }),
+    returnsDb: query({ args: {}, returns: v.string(), handler: ({ db }) => db as never }),
     returnsInstance: query({
       args: {},
       returns: v.object({ a: v.string() }),
@@ -45,7 +47,7 @@ async function setup() {
       await db.insert("items", { v: new Vault() } as never);
     }),
     argsNotObject: mutation(async (ctx) => {
-      await ctx.runQuery("m:instance" as never, new Vault() as never);
+      await ctx.runQuery("m:withArgs" as never, new Vault() as never);
     }),
     filterLiteral: query(({ db }) =>
       db
@@ -60,6 +62,7 @@ async function setup() {
   const call = async (kind: string, path: string) => {
     const r = await fetch(`http://127.0.0.1:${server!.port}/api/${kind}`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path, args: {} }),
     });
     return (await r.json()) as { status: string; errorMessage: string };
@@ -79,15 +82,21 @@ describe("an unsupported value in a function's result, write or arguments", () =
       ["query", "m:db", "Tx {…} is not a supported value type."],
       ["query", "m:ctx", '"db":Tx {…}'],
       ["query", "m:instance", "Vault {…} is not a supported value type (present at path .v"],
+      // A query object is refused before the validator, as Convex (its own message).
+      ["query", "m:returnsQuery", "Return value is a Query."],
       [
         "query",
-        "m:returnsQuery",
-        "ReturnsValidationError: Value does not match validator.\n\nValue: QueryImpl {…}\nValidator: v.string()",
+        "m:returnsDb",
+        "ReturnsValidationError: Value does not match validator.\n\nValue: Tx {…}\nValidator: v.string()",
       ],
       ["query", "m:returnsInstance", "Value: Vault {…}\nValidator: v.string()"],
       ["mutation", "m:insertDb", "Tx {…} is not a supported value type (present at path .db"],
       ["mutation", "m:insertInstance", "Vault {…} is not a supported value type (present at path .v"],
-      ["mutation", "m:argsNotObject", "ArgumentValidationError: Arguments must be an object, got Vault {…}."],
+      [
+        "mutation",
+        "m:argsNotObject",
+        "Expected to receive an object as the function's argument. Instead received: Vault {…}",
+      ],
       ["query", "m:filterLiteral", "Vault {…} (type object)"],
       ["action", "m:actionCtx", "is not a supported value type"],
     ];
