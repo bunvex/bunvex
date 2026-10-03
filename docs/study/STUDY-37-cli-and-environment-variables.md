@@ -26,7 +26,7 @@
 | Value size | at most 8 KiB | `EnvironmentVariableValueTooLarge`: "The environment variable value is {len} bytes, which is too large. (max size: 8192" (the closing paren is missing in Convex too) |
 | Count | `ENV_VAR_LIMIT` = 512 | `EnvVarLimitMet`: "The environment variable limit (512) has been met." |
 | Total size | `ENV_VAR_TOTAL_SIZE_LIMIT` = 512 KiB of names plus values | `EnvVarTotalSizeLimitMet`: "The total size of all environment variables ({n} bytes) exceeds the limit (524288 bytes)." |
-| Uniqueness | one variable per name | `EnvVarNameNotUnique` |
+| Uniqueness | one variable per name | `EnvVarNameNotUnique` from the create and modify APIs. The update batch checks no uniqueness: the route sorts it (removals first, then sets by name and value; `EnvVarChange` derives `Ord`) and applies it in that order, so a removal and a set of one name leave the set (a delete and a create in the audit log), and two sets leave the greater value (Convex test `test_env_variable_delete_and_create`; bunvex matches since STUDY-65) |
 | Built-in names | may not be set | `EnvVarNameForbidden`: "Environment variable with name \"{name}\" is built-in and cannot be overridden" |
 
 **HTTP API** (`crates/local_backend/src/environment_variables.rs`, also under `/api/v1/`)
