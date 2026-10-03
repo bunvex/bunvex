@@ -19,8 +19,10 @@ import {
   EXPORTS_TABLE,
   insertAuditLogEvents,
   type JobDoc,
+  LOG_SINKS_TABLE,
   type PaginationOptions,
   type PaginationResult,
+  readBackendState,
   SCHEDULED_FUNCTIONS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
@@ -128,6 +130,8 @@ export type SystemQuery = {
   /** The operation a key needs (Convex's `queryPrivateSystem(op)` / `mutationGeneric(op)`); default
    *  `ViewData` for a query, `WriteData` for a mutation. */
   op?: DeploymentOp;
+  /** Any admin may run it (Convex's `noPermissionRequired`). */
+  noPermissionRequired?: true;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
 export type SystemMutation = SystemQuery;
@@ -143,6 +147,45 @@ const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: s
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  // The dashboard's integrations page (STUDY-59), as Convex's: every `_log_sinks` row, S3 export's secret
+  // key left out.
+  "_system/frontend/listConfiguredSinks": {
+    args: {},
+    op: "ViewIntegrations",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(LOG_SINKS_TABLE).collect())) as unknown as {
+        config: Record<string, unknown>;
+      }[];
+      return rows.map((r) => {
+        if (r.config.type !== "s3Export") return r;
+        const { secretAccessKey: _, ...config } = r.config;
+        return { ...r, config };
+      });
+    },
+  },
+  // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
+  "_system/frontend/backendState": {
+    args: {},
+    noPermissionRequired: true,
+    handler: (db) => readBackendState(db),
+  },
+  // Convex's lossy older form: a usage-limit stop reads as running.
+  "_system/frontend/deploymentState": {
+    args: {},
+    noPermissionRequired: true,
+    handler: async (db) => {
+      const s = await readBackendState(db);
+      const state =
+        s.system === "disabled"
+          ? "disabled"
+          : s.system === "suspended"
+            ? "suspended"
+            : s.user === "paused"
+              ? "paused"
+              : "running";
+      return { state };
+    },
+  },
   // The CLI's `export` waits on it (Convex's `_system/cli/exports:getLatest`): the newest export, or null.
   "_system/cli/exports:getLatest": {
     args: {},
@@ -337,6 +380,24 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       if (!a) return b;
       if (!b) return a;
       return (a._creationTime as number) > (b._creationTime as number) ? a : b;
+    },
+  },
+  // Convex's `tableSize` system functions (STUDY-52 PR 2): a table's document count, from the summaries.
+  "_system/cli/tableSize": {
+    args: { tableName: v.string() },
+    handler: async (db, { tableName }: { tableName: string }) => db.asSystem(() => db.countTable(tableName)),
+  },
+  "_system/frontend/tableSize": {
+    args: { tableName: v.string(), componentId },
+    handler: async (db, { tableName }: { tableName: string }) =>
+      tableName ? db.asSystem(() => db.countTable(tableName)) : 0,
+  },
+  "_system/frontend/tableSize:sizeOfAllTables": {
+    args: { componentId },
+    handler: async (db, _args, env) => {
+      let total = 0;
+      for (const name of env.functions?.userTableNames() ?? []) total += await db.asSystem(() => db.countTable(name));
+      return total;
     },
   },
   "_system/frontend/listCronJobs": {

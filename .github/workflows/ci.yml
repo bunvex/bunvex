@@ -71,6 +71,22 @@ jobs:
       - if: needs.changes.outputs.code == 'false'
         run: bun run --cwd apps/site test
 
+  # Line coverage of the root `bun test`, a table per package and per critical file, and a failure when a
+  # critical file drops below its floor (scripts/coverage-floors.ts, TEST-01 §4). Its own job, in parallel
+  # with `check`, so the suite's time is not paid twice on the critical path.
+  coverage:
+    name: coverage · critical-file floors
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run coverage
+
   # The dashboard in a real browser (UI-01 §12.5.10): Monaco, layout, contrast, reduced motion — what the
   # DOM tests cannot see. Not a required check (yet): the owner decides once it has proved stable.
   e2e:

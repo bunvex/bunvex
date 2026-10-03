@@ -6,11 +6,11 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 145 | 26 | 62 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 118 | 14 | 27 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 108 | 38 | 100 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 206 | 10 | 23 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 136 | 10 | 14 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 133 | 49 | 64 |
 
-These counts were taken on 2026-10-03 (main at #222) from each row's status column: a row counts as done,
+These counts were taken on 2026-10-03 (main at #245; server-api.md rechecked against the code) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. A few rows have no single status and are not
 counted.
 
@@ -121,10 +121,11 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 ### Phase 4 — the rest
 
-- full-text and vector search;
-- components;
+- full-text search (STUDY-45: 6 done, 3 partial, 1 missing, platform §6) and vector search (STUDY-51: 5 done,
+  1 partial, §7);
+- components (1 of 7, §11);
 - Node actions;
-- log streaming and metrics;
+- log streaming (STUDY-47) and metrics (4 done, 1 partial, 7 missing, §20);
 - streaming export;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
   it needs the server's admin API and admin-key login.
