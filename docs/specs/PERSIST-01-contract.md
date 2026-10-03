@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -87,7 +87,7 @@ rebuilds it from its log, ignoring a torn trailing record.
 ## C6 — optional fast paths
 
 - `scanDocs(table, index, lo, hi, T, limit, desc)` (interface `ScanDocs`): the documents (JSON) for what `scan` would return,
-  in one round trip. Same semantics as `scan` + `get` for each id.
+  in one round trip. Same semantics as `scan` + `get` for each id; an id whose `get` would be null rejects (C15).
 
 ## C7 — single writer (lease and fencing)
 
@@ -307,7 +307,22 @@ memory driver as records of its log. Retention keeps its windows and cursors the
 C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
 required of the first-party drivers, which all implement them. Conformance K27–K29.
 
-## Conformance (`@bunvex/persistence-conformance`)
+## C15 — index references
+
+An index entry and its document are written in the same commit, so at any snapshot each live entry
+names a document that exists there. A store where one does not (the document never written, or deleted
+while the entry stayed) is corrupt, and reads say so instead of hiding it, as Convex's do ("Dangling index
+reference", "Index reference to deleted document"; STUDY-09 §1.6):
+
+- `scan` reads the index alone: it returns the entry's id whatever its document (it does not join).
+- `get` returns null for such a document, as for any missing one.
+- `scanDocs` rejects with `DanglingReferenceError` (its `deleted` flag tells the two cases apart); it never
+  returns fewer documents than the range holds. The engine raises the same error when `get` returns null
+  for an id `scan` returned, unless retention passed the snapshot meanwhile (then the read is out of the
+  window, C13).
+
+Documents are keyed by (table, id): one id in two tables is two documents.
+
 
 | # | property | how |
 |---|---|---|

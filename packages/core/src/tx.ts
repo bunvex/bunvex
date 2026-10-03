@@ -41,7 +41,13 @@ import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, quer
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
-import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
+import {
+  DanglingReferenceError,
+  type DocWrite,
+  type IndexWrite,
+  type Persistence,
+  type ScanDocs,
+} from "./persistence/index.ts";
 import {
   checkIdentifier,
   type Doc,
@@ -788,14 +794,25 @@ export class Tx {
   }
 
   private async snapshotRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    this.retention?.check(this.snapshot);
+    try {
+      const out = await this.storeRange(st, lo, hi, limit);
+      this.retention?.check(this.snapshot);
+      return out;
+    } catch (e) {
+      // A reference whose document retention pruned during the read is a snapshot too old, not a corrupt store.
+      if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
+      throw e;
+    }
+  }
+
+  private async storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     const p = this.persistence as Persistence & Partial<ScanDocs>;
-    this.retention?.check(this.snapshot);
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
       const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
-      this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
       return rows.map(decodeDoc);
     }
@@ -803,12 +820,11 @@ export class Tx {
     const out: Doc[] = [];
     for (const id of ids) {
       const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
-      if (json) {
-        this.recordDoc(json);
-        out.push(decodeDoc(json));
-      }
+      // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
+      if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
+      this.recordDoc(json);
+      out.push(decodeDoc(json));
     }
-    this.retention?.check(this.snapshot);
     return out;
   }
 
