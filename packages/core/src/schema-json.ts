@@ -6,6 +6,13 @@ import type { DeclaredTable, SchemaDefinition } from "./schema.ts";
 export type IndexJson = { indexDescriptor: string; fields: string[] };
 /** A search index, as Convex's schema JSON (`filterFields` sorted, as Convex serializes its set). */
 export type SearchIndexJson = { indexDescriptor: string; searchField: string; filterFields: string[] };
+/** A vector index, as Convex's schema JSON (`filterFields` sorted). */
+export type VectorIndexJson = {
+  indexDescriptor: string;
+  vectorField: string;
+  dimensions: number;
+  filterFields: string[];
+};
 export type TableJson = {
   tableName: string;
   indexes: IndexJson[];
@@ -13,6 +20,8 @@ export type TableJson = {
   /** Optional, as in Convex's schema JSON. */
   searchIndexes?: SearchIndexJson[];
   stagedSearchIndexes?: SearchIndexJson[];
+  vectorIndexes?: VectorIndexJson[];
+  stagedVectorIndexes?: VectorIndexJson[];
   documentType: ValidatorJSON | null;
 };
 export type SchemaJson = { tables: TableJson[]; schemaValidation: boolean };
@@ -33,6 +42,7 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
           .filter((n) => staged.has(n))
           .map(index),
         ...searchJson(t),
+        ...vectorJson(t),
         documentType: anyJson(t.document),
       };
     }),
@@ -59,6 +69,26 @@ function searchJson(t: DeclaredTable): Pick<TableJson, "searchIndexes" | "staged
   };
 }
 
+function vectorJson(t: DeclaredTable): Pick<TableJson, "vectorIndexes" | "stagedVectorIndexes"> {
+  const all = t.vectorIndexes ?? {};
+  if (!Object.keys(all).length) return {};
+  const staged = new Set(t.stagedVector ?? []);
+  const one = (name: string): VectorIndexJson => ({
+    indexDescriptor: name,
+    vectorField: all[name]!.vectorField,
+    dimensions: all[name]!.dimensions,
+    filterFields: [...all[name]!.filterFields].sort(),
+  });
+  return {
+    vectorIndexes: Object.keys(all)
+      .filter((n) => !staged.has(n))
+      .map(one),
+    stagedVectorIndexes: Object.keys(all)
+      .filter((n) => staged.has(n))
+      .map(one),
+  };
+}
+
 export function schemaFromJson(j: SchemaJson): SchemaDefinition {
   const tables = new Map<string, DeclaredTable>();
   for (const t of j.tables) {
@@ -78,6 +108,17 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
               ]),
             ),
             stagedSearch: (t.stagedSearchIndexes ?? []).map((i) => i.indexDescriptor),
+          }
+        : {}),
+      ...(t.vectorIndexes?.length || t.stagedVectorIndexes?.length
+        ? {
+            vectorIndexes: Object.fromEntries(
+              [...(t.vectorIndexes ?? []), ...(t.stagedVectorIndexes ?? [])].map((i) => [
+                i.indexDescriptor,
+                { vectorField: i.vectorField, dimensions: i.dimensions, filterFields: [...i.filterFields] },
+              ]),
+            ),
+            stagedVector: (t.stagedVectorIndexes ?? []).map((i) => i.indexDescriptor),
           }
         : {}),
     });

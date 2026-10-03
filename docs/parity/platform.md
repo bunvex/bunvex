@@ -129,19 +129,19 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `vectorIndex(name, {vectorField, dimensions, filterFields?, staged?})` | `npm/convex/server/schema.ts` | missing | Dimensions 2–4096. |
-| `ctx.vectorSearch(table, index, {vector, limit, filter})` in actions only | `crates/isolate/environment/action/async_syscall.rs` | missing | Not reactive or transactional. |
-| Limit up to 256 (default 10); filter only `q.eq` / `q.or`, 64 values max | `crates/vector/lib.rs`, `query.rs` | missing | |
-| Cosine `_score`, results `{_id, _score}` | `crates/vector/qdrant_segments.rs` | missing | Convex uses Qdrant: HNSW m=16, with plain brute force for small segments. bunvex could brute-force first. |
-| Dimension mismatch error | `crates/vector/qdrant_index.rs` | missing | |
-| Backfill, compaction, 100 MiB hard limit | `crates/search_index_workers/vector_index_worker` | missing | |
+| `vectorIndex(name, {vectorField, dimensions, filterFields?, staged?})` | `npm/convex/server/schema.ts` | done (STUDY-51) | Convex's push checks and JSON; the document-schema check is not yet (DV-272). |
+| `ctx.vectorSearch(table, index, {vector, limit, filter})` in actions only | `crates/isolate/environment/action/async_syscall.rs` | done (STUDY-51) | Latest visible state; Convex's argument checks and filter builder. |
+| Limit up to 256 (default 10); filter only `q.eq` / `q.or`, 64 values max | `crates/vector/lib.rs`, `query.rs` | done (STUDY-51) | Fields ORed; values compared by sort key. |
+| Cosine `_score`, results `{_id, _score}` | `crates/vector/qdrant_segments.rs` | done (STUDY-51) | Exact (DV-269, owner): f32 over normalized vectors; ties by internal id, descending. |
+| Dimension mismatch error | `crates/vector/qdrant_index.rs` | done (STUDY-51) | And Convex's other query errors, in its order. |
+| Backfill, compaction, 100 MiB hard limit | `crates/search_index_workers/vector_index_worker` | partial (STUDY-51) | In memory: backfilled at start and on schema change (DV-270); no segments, so no compaction or segment limit. |
 
 ### 8. HTTP actions
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
 | `httpRouter()` and `route({path \| pathPrefix, method, handler})` in `convex/http.ts` | `npm/convex/server/router.ts` | done (STUDY-31) | Passed as `createServer({ http })`, checked at start (H1, DV-143). |
-| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | partial (STUDY-31) | ctx: runQuery, runMutation, runAction, scheduler, auth; storage and vectorSearch come with their features. |
+| `httpAction(handler(ctx, Request) => Response)` | `npm/convex/server/impl/registration_impl.ts` | partial (STUDY-31) | ctx: runQuery, runMutation, runAction, scheduler, auth, storage, vectorSearch (STUDY-51). |
 | Served under `/http/*` and a separate site origin (port 3211 proxy, `CONVEX_SITE_URL`) | `crates/local_backend/router.rs`, `proxy.rs`, `http_actions.rs` | done (STUDY-31) | `/http/*` on the API port and the site port (`sitePort`, default the API port + 1; DV-86). The URL a handler sees is rebuilt from Host / X-Forwarded-Proto / Forwarded. |
 | Streaming request and response bodies; 20 MiB body limit | `crates/udf/http_action.rs` `HTTP_ACTION_BODY_LIMIT` | done (STUDY-31) | Responses cut past 20 MiB (logged), as Convex; requests capped by `maxRequestBodySize` (H3, DV-145). No body on GET, HEAD, OPTIONS. |
 | CORS is left to the app (no backend CORS on `/http`) | `router.rs` | done (STUDY-31) | |

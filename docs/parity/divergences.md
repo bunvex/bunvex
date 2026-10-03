@@ -301,6 +301,16 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
+DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were decided by the owner (2026-10-02). DV-271–DV-273 (STUDY-51 V3–V5) await the owner; the draft PR implements each recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-269 | Vector search is exact over every document | HNSW disk segments (approximate) plus an exact memory index | yes (results at least as accurate) | owner, 2026-10-02: exact in memory | [STUDY-51 V1](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-270 | Vector indexes live in memory, rebuilt at start | persisted segments | operational (memory, start time) | owner, 2026-10-02 | [STUDY-51 V2](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-271 | A search while the index is being built fails at once (`IndexBackfillingError`) | retried up to 5 times during bootstrap | yes (just after a start) | Not done yet. Accept for now | [STUDY-51 V3](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-272 | The vector field is not checked against the document schema at push | must be able to hold `array(float64)` | yes (a schema Convex refuses) | Not done yet. Accept for now | [STUDY-51 V4](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-273 | A negative or non-integer `limit` gets bunvex's message | serde's message | yes (an error message) | Not possible exactly. Accept | [STUDY-51 V5](../study/STUDY-51-vector-search.md#4-divergences) |
+
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 

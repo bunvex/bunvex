@@ -51,6 +51,7 @@ import type {
   GenericQueryCtx,
   MutationBuilder,
   QueryBuilder,
+  VectorSearchQuery,
 } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
@@ -257,6 +258,17 @@ export const mutation = mutationGeneric;
 export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
+
+/** Convex's vector filter builder: `q.eq(field, value)` and `q.or(...)`, as the expression JSON it sends. */
+const VECTOR_FILTER_BUILDER = {
+  eq(field: unknown, value: unknown) {
+    if (typeof field !== "string") throw new Error("The first argument to `q.eq` must be a field name.");
+    return { $eq: [{ $field: field }, { $literal: value }] };
+  },
+  or(...exprs: unknown[]) {
+    return { $or: exprs };
+  },
+};
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
@@ -897,6 +909,22 @@ export class Functions {
       runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
+      vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+        // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
+        const args = [tableName, indexName, query];
+        const argNames = ["tableName", "indexName", "query"];
+        for (let i = 0; i < 3; i++)
+          if (args[i] === undefined)
+            throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
+        if (!Array.isArray(query.vector) || query.vector.length === 0)
+          throw new Error("`vector` must be a non-empty Array in vectorSearch");
+        const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+        return this.engine.vectorSearch(tableName, indexName, {
+          vector: query.vector,
+          ...(query.limit === undefined ? {} : { limit: query.limit }),
+          ...(filter === undefined ? {} : { filter }),
+        });
+      },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx;
   }

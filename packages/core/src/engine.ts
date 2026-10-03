@@ -21,8 +21,10 @@ import {
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
   INSTANCE_TABLE,
+  IndexBackfillingError,
   type IndexBackfillMeta,
   type IndexMeta,
+  IndexStagedError,
   MODULES_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
@@ -72,13 +74,14 @@ import {
   type DeclaredTable,
   type Doc,
   documentValidator,
+  MAX_VECTOR_DIMENSIONS,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
-import { type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import { filterKey, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -89,6 +92,14 @@ import {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 import { Tx } from "./tx.ts";
+import {
+  DEFAULT_VECTOR_LIMIT,
+  MAX_VECTOR_FILTER_CONDITIONS,
+  MAX_VECTOR_RESULTS,
+  type VectorFilter,
+  type VectorIndexEntry,
+  VectorIndexes,
+} from "./vector-indexes.ts";
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -186,6 +197,8 @@ export class Engine {
   private cacheEpoch = 0;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
   readonly searchIndexes = new SearchIndexes();
+  /** Vector indexes (STUDY-51): exact, in memory. */
+  readonly vectorIndexes = new VectorIndexes();
   private searchBackfills = new Set<Promise<void>>();
   /**
    * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
@@ -284,6 +297,7 @@ export class Engine {
     }
     const backfilling = await this.reconcileCatalog();
     this.reconcileSearch();
+    this.reconcileVector();
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -574,6 +588,7 @@ export class Engine {
       onVisible: (ts: number) => {
         own?.(ts);
         this.searchIndexes.apply(ts, writes, indexed);
+        this.vectorIndexes.apply(writes);
       },
       ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
       ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
@@ -600,6 +615,104 @@ export class Engine {
       this.searchBackfills.add(p);
       void p.finally(() => this.searchBackfills.delete(p));
     }
+  }
+
+  /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
+  private reconcileVector() {
+    const wanted = [];
+    for (const [name, declared] of this.schema.tables) {
+      const t = this.catalog.tables.get(name);
+      if (!t || !declared.vectorIndexes) continue;
+      const staged = new Set(declared.stagedVector ?? []);
+      for (const [index, def] of Object.entries(declared.vectorIndexes))
+        wanted.push({ table: t, name: index, def, staged: staged.has(index) });
+    }
+    for (const e of this.vectorIndexes.reconcile(wanted)) {
+      const p = this.backfillVector(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: vector index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+  }
+
+  private async backfillVector(e: VectorIndexEntry) {
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return;
+    const at = this.committer.visibleTs;
+    let last: string | null = null;
+    for (;;) {
+      if (this.closed) return;
+      const page = (await this.query(
+        (db) =>
+          db.asSystem(() =>
+            db
+              .queryDef(t)
+              .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+              .take(1000),
+          ),
+        undefined,
+        undefined,
+        undefined,
+        at,
+      )) as Doc[];
+      for (const d of page) this.vectorIndexes.backfill(e, d);
+      if (page.length < 1000) break;
+      last = page[page.length - 1]!._id as string;
+      await new Promise((r) => setImmediate(r));
+    }
+    this.vectorIndexes.done(e);
+  }
+
+  /**
+   * Convex's vector search (`Database::vector_search`, STUDY-51): the `limit` (default 10, at most 256)
+   * documents of `table` nearest `vector` in index `index`, among those matching `filter` (an OR of `q.eq`s on
+   * the index's filter fields), as `{_id, _score}`, best first. Against the latest visible state; a missing
+   * table has no results.
+   */
+  vectorSearch(
+    table: string,
+    index: string,
+    query: { vector: number[]; limit?: number; filter?: unknown },
+  ): { _id: string; _score: number }[] {
+    const t = this.catalog.tables.get(table);
+    if (!t) return [];
+    const name = `${table}.${index}`;
+    const declared = this.schema.tables.get(table);
+    const e = this.vectorIndexes.get(t, index);
+    if (!e) {
+      if (t.indexes.has(index) || declared?.searchIndexes?.[index])
+        throw new Error(`Index ${name} is not a vector index`);
+      throw new Error(`Index ${name} not found.`);
+    }
+    if (e.staged) throw new IndexStagedError(name);
+    if (!e.ready) throw new IndexBackfillingError(name);
+    const v = query.vector;
+    const limit = query.limit ?? DEFAULT_VECTOR_LIMIT;
+    if (!Number.isInteger(limit) || limit < 0)
+      throw new Error(`InvalidVectorQuery: limit: invalid value: ${limit}, expected u32`);
+    if (v.length > MAX_VECTOR_DIMENSIONS)
+      throw new Error(`Expected a vector with dimensions ${MAX_VECTOR_DIMENSIONS}, received ${v.length}.`);
+    if (limit > MAX_VECTOR_RESULTS)
+      throw new Error(`Vector queries can fetch at most ${MAX_VECTOR_RESULTS} results, requested ${limit}.`);
+    const filter = query.filter === undefined ? null : vectorFilter(query.filter);
+    if (filter) {
+      let conditions = 0;
+      for (const [field, keys] of filter) {
+        if (!e.def.filterFields.includes(field))
+          throw new Error(
+            `Vector query against ${name} contains a filter on ${JSON.stringify(field)} but that field isn't indexed for filtering in \`filterFields\`.`,
+          );
+        conditions += keys.size;
+      }
+      if (conditions > MAX_VECTOR_FILTER_CONDITIONS)
+        throw new Error(
+          `Vector query against ${name} has too many conditions. Max: ${MAX_VECTOR_FILTER_CONDITIONS} Actual: ${conditions}`,
+        );
+    }
+    if (v.length !== e.def.dimensions)
+      throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
+    return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
   }
 
   private async backfillSearch(e: SearchIndexEntry) {
@@ -849,6 +962,7 @@ export class Engine {
           this.schema = pending.schema;
           this.installValidators(pending.schema);
           this.reconcileSearch();
+          this.reconcileVector();
           if (this.pendingPush?.id === schemaId) {
             this.pendingPush = null;
             this.pendingValidators = null;
@@ -961,6 +1075,7 @@ export class Engine {
           this.cache.clear();
           this.cacheEpoch++;
           this.reconcileSearch();
+          this.reconcileVector();
         };
       },
       true,
@@ -1545,4 +1660,26 @@ async function deleteBackfillProgress(db: Tx, indexMetaId: string) {
     .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexMetaId))
     .first()) as unknown as IndexBackfillMeta | null;
   if (p) await db.delete(INDEX_BACKFILLS_TABLE, p._id);
+}
+
+/**
+ * A vector search filter (Convex's `VectorSearchExpression`, STUDY-51): `{$eq: [{$field}, {$literal}]}`
+ * and `{$or: [...]}`, flattened to each field's set of values (their sort keys).
+ */
+function vectorFilter(x: unknown, out: VectorFilter = new Map()): VectorFilter {
+  const o = x as Record<string, unknown>;
+  if (o && typeof o === "object" && Array.isArray(o.$or) && Object.keys(o).length === 1) {
+    for (const e of o.$or) vectorFilter(e, out);
+    return out;
+  }
+  if (o && typeof o === "object" && Array.isArray(o.$eq) && Object.keys(o).length === 1) {
+    const [f, l] = o.$eq as [Record<string, unknown>, Record<string, unknown>];
+    if (!f || typeof f.$field !== "string" || !l || !("$literal" in l))
+      throw new Error("`q.eq` must take a field path as its first argument and a value as its second");
+    const keys = out.get(f.$field) ?? new Set<string>();
+    keys.add(filterKey(l.$literal as never));
+    out.set(f.$field, keys);
+    return out;
+  }
+  throw new Error("Filters should be a combination of `q.eq` and `q.or`.");
 }
