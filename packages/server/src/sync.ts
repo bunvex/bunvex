@@ -29,7 +29,7 @@ import {
 import { v1 } from "@bunvex/protocol";
 import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
-import { isSystemError, isTryAgainError, withRequestId } from "./errors.ts";
+import { isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { callerOf, Functions } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
@@ -533,6 +533,21 @@ export class SyncSession {
    * The caller to run as now, or null once its token has expired, which ends the connection with
    * `TokenExpired` (Convex's `SyncState::identity`, checked before every use of the identity).
    */
+  /** Where the connection comes from (STUDY-44): set by the server when it upgrades the request. */
+  peer: { ip: string | null; userAgent: string | null } = { ip: null, userAgent: null };
+  /** The user's raw token, for `ctx.meta.getRequestMetadata()`; null for an admin key or none. */
+  private token: string | null = null;
+
+  /** The current caller with the request a mutation or action runs for: a new request id each. */
+  private requestCaller(): Caller | null {
+    const caller = this.currentCaller();
+    if (caller === null) return null;
+    return {
+      ...caller,
+      request: { ...this.peer, requestId: newRequestId(), authToken: this.token, scheduledFunctionId: null },
+    };
+  }
+
   private currentCaller(): Caller | null {
     if (this.expiresAt !== undefined && Date.now() / 1000 >= this.expiresAt) {
       this.authError("Token identity expired", false);
@@ -582,6 +597,7 @@ export class SyncSession {
           if (!make) return this.authError("The provided admin key was invalid for this instance", false);
           try {
             this.caller = make(m.value, m.impersonating);
+            this.token = null;
           } catch (e) {
             if (e instanceof BadAdminKeyError) return this.authError(e.message, false);
             return this.fail({ fatal: (e as Error).message });
@@ -597,9 +613,11 @@ export class SyncSession {
             return this.authError(e.message, true);
           }
           this.caller = callerOf(verified.identity);
+          this.token = m.value;
           this.expiresAt = verified.expiresAt;
         } else {
           this.caller = callerOf(null);
+          this.token = null;
           this.expiresAt = undefined;
         }
         this.received.identity++;
@@ -808,7 +826,7 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, fromWire } = this.hub.deps;
-        const caller = this.currentCaller();
+        const caller = this.requestCaller();
         if (caller === null) return;
         const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
@@ -848,7 +866,7 @@ export class SyncSession {
   private action(m: v1.ActionRequest) {
     if (this.inflightActions >= MAX_INFLIGHT_ACTIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
-    const caller = this.currentCaller();
+    const caller = this.requestCaller();
     if (caller === null) return;
     this.inflightActions++;
     void (async () => {

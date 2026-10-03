@@ -36,7 +36,7 @@ import {
   type OptionalRestArgs,
 } from "@bunvex/protocol";
 import { type GenericId, isSimpleObject, type Value } from "@bunvex/values";
-import { describeUncaught } from "./errors.ts";
+import { describeUncaught, newRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
@@ -173,6 +173,11 @@ const backoff = (failures: number, initialMs: number, maxMs: number) =>
   Math.random() * Math.min(maxMs, initialMs * 2 ** Math.max(0, failures - 1));
 
 const NO_ONE: Caller = { identity: null, key: "" };
+/** A scheduled function runs with no identity, for a request of its own that names it (STUDY-44). */
+const asJob = (jobId: string): Caller => ({
+  ...NO_ONE,
+  request: { ip: null, userAgent: null, requestId: newRequestId(), authToken: null, scheduledFunctionId: jobId },
+});
 const randomId = () => crypto.randomUUID().replaceAll("-", "");
 
 export class ScheduledJobExecutor {
@@ -327,7 +332,7 @@ export class ScheduledJobExecutor {
             return true;
           },
           job.name,
-          NO_ONE,
+          asJob(job._id),
         );
         if (ran) this.stats.succeeded++;
         return;
@@ -356,7 +361,7 @@ export class ScheduledJobExecutor {
     if (!started) return;
     let state: JobDoc["state"];
     try {
-      await this.functions.runAction(job.name, job.args[0], NO_ONE, { job: job._id, internal: true });
+      await this.functions.runAction(job.name, job.args[0], asJob(job._id), { job: job._id, internal: true });
       state = { kind: "success" };
     } catch (e) {
       state = { kind: "failed", error: describeUncaught(e).message };
