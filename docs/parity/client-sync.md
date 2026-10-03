@@ -199,7 +199,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `useAction(ref)` | `react/client.ts` | done (STUDY-26) |  |
 | `useConvexConnectionState()` | `react/client.ts` | done (STUDY-26) | `useBunvexConnectionState()` (R1). |
 | Accepting a function reference or a plain string name (`makeFunctionReference`) | `react/client.ts` | done (STUDY-26) | `anyApi` / `makeFunctionReference`, untyped until the typed API (ARCH open decision 1). |
-| `convexQueryOptions` for TanStack Query-style integration | `browser/query_options.ts` | missing | Low priority. |
+| `convexQueryOptions({ query, args })`: an identity function typing a query and its args, for `prewarmQuery` and the object form of `useQuery` (`@internal`) | `browser/query_options.ts` | missing | Not the TanStack integration (next row). Low priority. |
+| TanStack Query: `ConvexQueryClient` (live cache entries, server-side reads at one snapshot), `convexQuery` / `convexAction`, the hooks re-exported | `@convex-dev/react-query` (separate package) | done (STUDY-48) | `@bunvex/react-query` (DV-260, DV-261); args JSON-encoded in keys (DV-262); paginated queries to come (DV-263). Checked against the official package on the same server. |
 | Guard: helpful errors when used outside a provider / when called with an event object by mistake (`assertNotAccidentalArgument`) | `react/client.ts` | done (STUDY-26) | Same messages, naming bunvex and `BunvexProvider`, without the docs link. |
 
 ### 12. React auth helpers and providers

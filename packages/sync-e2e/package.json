@@ -11,7 +11,8 @@
     "@bunvex/protocol": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "@bunvex/react": "workspace:*"
+    "@bunvex/react": "workspace:*",
+    "@bunvex/react-query": "workspace:*"
   },
   "repository": {
     "type": "git",
@@ -19,7 +20,9 @@
     "directory": "packages/sync-e2e"
   },
   "devDependencies": {
+    "@convex-dev/react-query": "0.1.0",
     "@happy-dom/global-registrator": "^20.14.5",
+    "@tanstack/react-query": "5.104.1",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",

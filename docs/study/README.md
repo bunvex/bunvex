@@ -81,6 +81,7 @@ to a spec.
 | [STUDY-44](STUDY-44-ctx-meta.md) | `ctx.meta`: function, transaction, deployment, snapshot and request metadata | built; no divergence |
 | [STUDY-45](STUDY-45-text-search.md) | Full-text search: `searchIndex`, `withSearchIndex`, tokens, BM25, limits, reactivity | accepted: S1–S6 as recommended (owner, 2026-10-02) |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
+| [STUDY-48](STUDY-48-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
