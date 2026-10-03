@@ -690,6 +690,7 @@ export class Functions {
       memoryMb: c.usageStats.memoryUsedMb,
       databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
       dataEgressBytes: r.io.networkEgressBytes + r.io.storageReadBytes,
+      searchQueryBytes: c.usageStats.textIndexQueryBytes + c.usageStats.vectorIndexReadQueryBytes,
       storageCalls: r.io.storageCalls,
       tracked,
     });
@@ -739,6 +740,13 @@ export class Functions {
         storageReadBytes: r.io.storageReadBytes,
         storageWriteBytes: r.io.storageWriteBytes,
         networkEgressBytes: r.io.networkEgressBytes,
+        // An action's vector searches (a transaction has none): Convex's v1 database egress includes their
+        // results, its v2 (`databaseIo*`) does not.
+        vectorIndexReadQueryBytes: r.io.vectorQueryBytes,
+        vectorIndexReadBytes: r.io.vectorReadBytes,
+        ...(r.io.vectorReadBytes > 0 && {
+          databaseReadBytes: (used?.readBytes ?? 0) + r.io.vectorReadBytes,
+        }),
         // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
         // cached query (STUDY-61).
         memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
@@ -1547,11 +1555,22 @@ export class Functions {
         if (!Array.isArray(query.vector) || query.vector.length === 0)
           throw new Error("`vector` must be a non-empty Array in vectorSearch");
         const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
-        return this.engine.vectorSearch(tableName, indexName, {
-          vector: query.vector,
-          ...(query.limit === undefined ? {} : { limit: query.limit }),
-          ...(filter === undefined ? {} : { filter }),
-        });
+        const r = meteredAction();
+        const results = this.engine.vectorSearch(
+          tableName,
+          indexName,
+          {
+            vector: query.vector,
+            ...(query.limit === undefined ? {} : { limit: query.limit }),
+            ...(filter === undefined ? {} : { filter }),
+          },
+          (bytes) => {
+            if (r) r.io.vectorQueryBytes += bytes;
+          },
+        );
+        // Each result is Convex's vector egress: its id's 33 bytes and its 4-byte score.
+        if (r) r.io.vectorReadBytes += results.length * 37;
+        return results;
       },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx;

@@ -49,6 +49,10 @@ export const usageStats = (io: {
   writeBytes: number;
   writeDocuments: number;
   writeIndexRows: number;
+  textQueryBytes?: number;
+  textWriteBytes?: number;
+  vectorWriteBytes?: number;
+  vectorWriteQueryBytes?: number;
 }): UsageStats => ({
   databaseReadBytes: io.readBytes,
   databaseWriteBytes: io.writeBytes,
@@ -60,11 +64,11 @@ export const usageStats = (io: {
   storageReadBytes: 0,
   storageWriteBytes: 0,
   vectorIndexReadBytes: 0,
-  vectorIndexWriteBytes: 0,
-  textIndexQueryBytes: 0,
-  textIndexWriteQueryBytes: 0,
+  vectorIndexWriteBytes: io.vectorWriteBytes ?? 0,
+  textIndexQueryBytes: io.textQueryBytes ?? 0,
+  textIndexWriteQueryBytes: io.textWriteBytes ?? 0,
   vectorIndexReadQueryBytes: 0,
-  vectorIndexWriteQueryBytes: 0,
+  vectorIndexWriteQueryBytes: io.vectorWriteQueryBytes ?? 0,
   networkEgressBytes: 0,
   memoryUsedMb: 0,
 });
@@ -144,7 +148,15 @@ export class Running implements LogOwner {
    * An action's metered calls (STUDY-71), as Convex's function usage tracker: its `fetch` request bodies,
    * and its file storage calls with the bytes they read and wrote.
    */
-  readonly io = { networkEgressBytes: 0, storageCalls: 0, storageReadBytes: 0, storageWriteBytes: 0 };
+  readonly io = {
+    networkEgressBytes: 0,
+    storageCalls: 0,
+    storageReadBytes: 0,
+    storageWriteBytes: 0,
+    /** Its vector searches' `bytes_searched`, and their results' bytes. */
+    vectorQueryBytes: 0,
+    vectorReadBytes: 0,
+  };
   constructor(
     readonly executionId: string,
     readonly requestId: string,

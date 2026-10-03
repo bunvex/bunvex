@@ -62,9 +62,10 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
+import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
 
@@ -376,6 +377,8 @@ export class Tx {
    * its size, plus its index key's bytes when a user-defined index returned it.
    */
   private egress = { bytes: 0, documents: 0 };
+  /** The bytes this transaction's text searches were charged (STUDY-71). */
+  private textQueryBytes = 0;
 
   private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
     if (t.name.startsWith("_")) return;
@@ -396,8 +399,15 @@ export class Tx {
     writeBytes: number;
     writeDocuments: number;
     writeIndexRows: number;
+    textQueryBytes: number;
+    textWriteBytes: number;
+    vectorWriteBytes: number;
+    vectorWriteQueryBytes: number;
   } {
     let writeBytes = 0;
+    let textWriteBytes = 0;
+    let vectorWriteBytes = 0;
+    let vectorWriteQueryBytes = 0;
     let writeDocuments = 0;
     let writeIndexRows = 0;
     if (committed)
@@ -411,7 +421,20 @@ export class Tx {
             oldKey && newKey && compareKeys(oldKey, newKey) === 0 ? 1 : (oldKey ? 1 : 0) + (newKey ? 1 : 0);
           if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
         }
-        if (next) writeBytes += valueSize(next as unknown as Value);
+        if (!next) continue;
+        const size = valueSize(next as unknown as Value);
+        writeBytes += size;
+        // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
+        // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
+        // then the document's size once.
+        for (const e of this.searchIndexes?.forTablet(t.id) ?? []) textWriteBytes += indexedDocBytes(e.def, next);
+        let vectors = 0;
+        for (const e of this.vectorIndexes?.forTablet(t.id) ?? [])
+          if (inVectorIndex(e.def, next)) vectors += e.def.dimensions * 4 + 33;
+        if (vectors > 0) {
+          vectorWriteQueryBytes += vectors;
+          vectorWriteBytes += size;
+        }
       }
     return {
       readBytes: this.egress.bytes,
@@ -419,6 +442,10 @@ export class Tx {
       writeBytes,
       writeDocuments,
       writeIndexRows,
+      textQueryBytes: this.textQueryBytes,
+      textWriteBytes,
+      vectorWriteBytes,
+      vectorWriteQueryBytes,
     };
   }
 
@@ -1464,6 +1491,8 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
+  vectorIndexes: VectorIndexes | null = null;
   /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
   tableCount: ((tablet: number) => number) | null = null;
 
@@ -1549,6 +1578,9 @@ export class Tx {
     else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
     const pending = new Map<string, Doc | null>();
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
+    // Convex charges a search its whole index's bytes (DV-317: bunvex's indexed bytes for its segments');
+    // an empty search string, nothing.
+    if (text !== "" && !t.name.startsWith("_")) this.textQueryBytes += e.index.indexedBytes;
     const hits = this.searchIndexes!.search(e, { tokens, prefixLast: true, filters: eqs }, this.snapshot, pending);
     return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
   }

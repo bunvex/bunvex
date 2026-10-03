@@ -750,6 +750,8 @@ export class Engine {
     table: string,
     index: string,
     query: { vector: number[]; limit?: number; filter?: unknown },
+    /** Told what the search was charged, as Convex's `bytes_searched`: its vectors × dimensions × 4 (STUDY-71). */
+    charge?: (bytesSearched: number) => void,
   ): { _id: string; _score: number }[] {
     const t = this.catalog.tables.get(table);
     if (!t) return [];
@@ -788,6 +790,7 @@ export class Engine {
     }
     if (v.length !== e.def.dimensions)
       throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
+    charge?.(e.docs.size * v.length * 4);
     return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
   }
 
@@ -1483,6 +1486,7 @@ export class Engine {
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
+    tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
@@ -1672,6 +1676,7 @@ export class Engine {
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
+    tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).

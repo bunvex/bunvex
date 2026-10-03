@@ -1,8 +1,7 @@
 # STUDY-71 — Usage metering: database I/O, user time, egress, storage and search bytes
 
 - **Status:** decisions taken (owner, 2026-10-03): text search bytes estimated from the index (U1); Node
-  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); PRs 1–3 (database I/O,
-  user time, egress and storage) are implemented.
+  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); all four PRs are implemented.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-61](STUDY-61-usage-limits.md) (the meter and limits; DV-309),
   [STUDY-47](STUDY-47-log-streaming.md) (the function log's `usageStats`; DV-251, DV-252)
@@ -114,7 +113,18 @@ Sources: `crates/usage_tracking/src/lib.rs` (`FunctionUsageTracker`, `UsageCount
     bandwidth count, their call does not. Their transactions are now noted, so their reads of user tables
     count.
   - Cost: none on the database paths; a clone of a streamed `fetch` body.
-- **Later PR:** search bytes (PR 4); §5.
+- **Search (PR 4).**
+  - Each indexed document carries its metered bytes (`IndexedDoc.bytes`, Convex's `estimate_size`: the
+    search field's UTF-8 bytes, plus per filter field its sort key, capped at the 32-byte hash Convex stores
+    from 32 bytes on). The text index keeps their total.
+  - A text search with a non-empty string is charged that total (DV-317).
+  - A vector search is charged its index's vectors × the query's dimensions × 4; each result adds 37 bytes
+    (id and score) to the vector egress and to the v1 database read bytes, not the v2.
+  - Writes add the new version's text bytes per text index; per vector index it is in, its vector and id
+    (`dimensions × 4 + 33`), and then its size once.
+  - The meter's `searchQueryGb` sums both searches, in GB.
+  - Measured: 200 inserts into a text-indexed table, 4.4–4.6 ms before and after. The write path sizes the
+    text and checks the vector without tokenizing or normalising.
 
 ## 4. Divergences
 
@@ -187,3 +197,20 @@ Found while reading, not divergences of this study:
   - a system call counted;
   - system bandwidth not noted;
   - system functions not metered.
+
+### PR 4
+
+- `packages/server/test/usage-search-bytes.test.ts`:
+  - text: write bytes, a search charged the whole index, an empty search, an edit and a delete;
+  - vector: write bytes in and out of the index, a search's bytes, result egress (v1, not v2);
+  - `searchQueryGb` for both.
+- Sabotage checks, each failing a test:
+  - an empty search charged;
+  - filter bytes, UTF-8 bytes;
+  - a removal not subtracted;
+  - a document not in the vector index;
+  - the vector bytes searched;
+  - the result size;
+  - v1 against v2;
+  - the meter;
+  - text write bytes.
