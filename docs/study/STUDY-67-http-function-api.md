@@ -178,8 +178,8 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 | H8 | `/api/run/{path}` missing | gap | add (#299) |
 | H9 | `/api/query_batch` missing | gap | add (#301) |
 | H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **pending owner** (DV-313, draft #303): recommended, a working route (args as JSON text) |
-| H11 | `query_at_ts` with a bad or future `ts` answers 400 | bunvex chose clearer errors; Convex answers 500 | **pending owner** (DV-314, draft #300): recommended, keep 400 |
-| H12 | The client header is not validated (`InvalidClientVersion`, `ClientVersionUnsupported`, deprecation headers) | the deprecation headers' names hold "convex" | **pending owner** (DV-315, draft #300): recommended, validate as Convex (400s), deprecation headers as `x-bunvex-*` |
+| H11 | `query_at_ts` with a bad or future `ts` answers 400 | bunvex chose clearer errors; Convex answers 500 | **owner, 2026-10-03: option A** (DV-314, #300): keep the 400s |
+| H12 | The client header is not validated (`InvalidClientVersion`, `ClientVersionUnsupported`, deprecation headers) | the deprecation headers' names hold "convex" | **owner, 2026-10-03: option A** (DV-315, #300): validate as Convex (400s), deprecation headers as `x-bunvex-*`; built in #319 (§7) |
 | H13 | Error frames | source maps | DV-76 (decided: later) |
 
 ## 5. Tests
