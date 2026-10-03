@@ -216,6 +216,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-276 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR | owner, 2026-10-03 (as recommended) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-277 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-278 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL` | owner, 2026-10-03 (as recommended) | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
+| DV-309 | Usage is metered from the function log: database I/O as its byte counts (DV-251; no index key bytes), no search, fetch or action-storage bytes, no system-function bandwidth; action CPU equals action time (DV-252) | per-byte counts from the store, searches, fetches and storage calls | yes: `get_current_usage` and when limits trip | Not done yet: those counters are not measured. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -290,6 +291,7 @@ Kept so the history is in one place.
 | DV-141 | Scheduled and cron runs' log lines went only to the server's output | As Convex: every execution, scheduled and cron runs included, is in the function execution log with its lines (`function-log.ts`), read by the log stream routes | yes (dashboard logs) | owner, 2026-10-01 (STUDY-30 S3: until log streaming) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-184 | `dev --tail-logs` defaulted to `disable` | As Convex: `pause-on-deploy` by default, the deployment's function logs on stderr, held back during a push | yes | owner, 2026-10-02 (STUDY-37 E7: until log streaming) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-218 | No audit-log entries for exports and imports | As Convex: `request_export`, `set_export_expiration`, `cancel_export` and `snapshot_import`, in the change's transaction (`_deployment_audit_log`) | dashboard only | owner, 2026-10-02 (STUDY-42 X4: until an audit log) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences), [STUDY-48](../study/STUDY-48-audit-log.md) |
+| DV-308 | The metric `actionComputeConvexGbHours` is `actionComputeIsolateGbHours`; the usage-limit stop message says "in the deployment settings" (not "in the Convex dashboard in deployment settings") | As Convex for the metric (`actionComputeConvexGbHours`), by a rule-5 exception for wire names; the stop message stays reworded (rule 5: messages never qualify) | yes: API clients and the dashboard use the metric name; the function error's text | owner, 2026-10-03 (as recommended) | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -342,12 +344,8 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
-DV-308 and DV-309 (STUDY-61, usage limits) await the owner; the draft PR implements the recommendations:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-308 | The metric `actionComputeConvexGbHours` is `actionComputeIsolateGbHours`; the usage-limit stop message says "in the deployment settings" (not "in the Convex dashboard in deployment settings") | Convex's names and text | yes: API clients and the dashboard use the metric name; the function error's text | Rule 5. As DV-307: recommend an explicit rule-5 exception for wire names (the metric), keep the reworded message | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
-| DV-309 | Usage is metered from the function log: database I/O as its byte counts (DV-251; no index key bytes), no search, fetch or action-storage bytes, no system-function bandwidth; action CPU equals action time (DV-252) | per-byte counts from the store, searches, fetches and storage calls | yes: `get_current_usage` and when limits trip | Not done yet: those counters are not measured. Accept for now | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
+DV-309 was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
+DV-308 was resolved as recommended (owner, 2026-10-03), by a rule-5 exception for wire names: it is in [Resolved to match Convex](#resolved-to-match-convex).
 
 ## Waiting on a dependency
 

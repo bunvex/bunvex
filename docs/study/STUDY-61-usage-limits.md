@@ -1,6 +1,6 @@
 # STUDY-61 — Usage tracking and usage limits
 
-- **Status:** implemented; decisions pending (owner): DV-308, DV-309
+- **Status:** implemented; DV-308 resolved to match Convex, DV-309 accepted (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-57](STUDY-57-pause-deployment.md) (`_backend_state` and the stop checks this reuses),
   [STUDY-47](STUDY-47-log-streaming.md) (the function log's usage, DV-251 / DV-252),
@@ -114,8 +114,8 @@ with and without the meter, within the noise. A first version that formatted dat
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-308 | The metric `actionComputeConvexGbHours` is named `actionComputeIsolateGbHours`. The usage-limit stop message ends "in the deployment settings to resume function execution." | Rule 5. Não dá pra fazer sem uma exceção. | pending (recommend: an explicit rule-5 exception for the metric's wire name, as for DV-307; keep the message) |
-| DV-309 | Usage is metered from the function log. Database I/O uses its byte counts (DV-251: JSON lengths, no index key bytes). Search, fetch and action-storage bytes are not counted, nor system-function bandwidth. Action CPU equals action time (DV-252). | Ainda não fizemos: those counters are not measured. | pending (recommend: accept for now) |
+| DV-308 | ~~The metric renamed `actionComputeIsolateGbHours`~~ — resolved: Convex's name, by an explicit rule-5 exception for wire names (`WIRE_NAMES`). The stop message stays reworded (rule 5). | — | owner, 2026-10-03 |
+| DV-309 | Usage is metered from the function log. Database I/O uses its byte counts (DV-251: JSON lengths, no index key bytes). Search, fetch and action-storage bytes are not counted, nor system-function bandwidth. Action CPU equals action time (DV-252). | Ainda não fizemos: those counters are not measured. | accepted (owner, 2026-10-03) |
 
 ## 5. Tests
 

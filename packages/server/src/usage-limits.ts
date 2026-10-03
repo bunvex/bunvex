@@ -19,13 +19,13 @@ import type { Functions } from "./functions.ts";
 
 // ---------------------------------------------------------------- metrics
 
-/**
- * Convex's `UsageLimitMetric`, by wire name, its display unit and how a limit converts to raw units. The
- * Convex-runtime action compute is `actionComputeIsolateGbHours` here (rule 5, DV-308).
- */
+/** The isolate actions' compute metric: Convex's wire name (rule 5's wire-name exception, DV-308). */
+const ACTION_COMPUTE_ISOLATE = "actionComputeConvexGbHours";
+
+/** Convex's `UsageLimitMetric`, by wire name, its display unit and how a limit converts to raw units. */
 export const USAGE_METRICS = {
   actionComputeCpuGbHours: { unit: "GB-hours", raw: 3600 },
-  actionComputeIsolateGbHours: { unit: "GB-hours", raw: 3600 },
+  [ACTION_COMPUTE_ISOLATE]: { unit: "GB-hours", raw: 3600 },
   actionComputeNodeJsGbHours: { unit: "GB-hours", raw: 3600 },
   aiGatewayCostDollars: { unit: "dollars", raw: 1 },
   dataEgressGb: { unit: "GB", raw: 2 ** 30 },
@@ -125,7 +125,7 @@ export class UsageMeter {
     if (e.udfType === "Action" || e.udfType === "HttpAction") {
       if (e.environment === "node") this.record("actionComputeNodeJsGbHours", gbs(e.executionTime));
       else {
-        this.record("actionComputeIsolateGbHours", gbs(e.executionTime));
+        this.record(ACTION_COMPUTE_ISOLATE, gbs(e.executionTime));
         if (e.userExecutionTime !== null) this.record("actionComputeCpuGbHours", gbs(e.userExecutionTime));
       }
     } else this.record("queryMutationComputeGbHours", gbs(e.executionTime));

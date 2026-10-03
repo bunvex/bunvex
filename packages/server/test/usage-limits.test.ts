@@ -46,7 +46,7 @@ describe("the meter", () => {
       memoryMb: 64,
       databaseIoBytes: 0,
     });
-    expect([m.usage("actionComputeIsolateGbHours", "day"), m.usage("actionComputeCpuGbHours", "day")]).toEqual([
+    expect([m.usage("actionComputeConvexGbHours", "day"), m.usage("actionComputeCpuGbHours", "day")]).toEqual([
       0.0625, 0.03125,
     ]);
   });
@@ -107,8 +107,8 @@ test("get_current_usage: every metric with its unit, this process's day and mont
   const u = (await t.req("get_current_usage")).body;
   expect(u.seedStatus).toBe("pending");
   expect(Object.keys(u.metrics)).toEqual([
+    "actionComputeConvexGbHours",
     "actionComputeCpuGbHours",
-    "actionComputeIsolateGbHours",
     "actionComputeNodeJsGbHours",
     "aiGatewayCostDollars",
     "dataEgressGb",
