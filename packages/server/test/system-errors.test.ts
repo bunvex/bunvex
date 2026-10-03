@@ -156,6 +156,7 @@ describe("a store failure under a function is a system error (DV-80)", () => {
     const { port } = await setup();
     const r = await fetch(`http://127.0.0.1:${port}/api/query`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "m:pageOfNone", args: {} }),
     });
     expect(r.status).toBe(500);
