@@ -21,7 +21,7 @@ import {
 } from "./catalog.ts";
 import { type Committer, ConflictError } from "./committer.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
-import type { IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
+import { DanglingReferenceError, type IndexWrite, type Persistence, type ScanDocs } from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 import { decodeDoc, type Tx } from "./tx.ts";
 
@@ -301,7 +301,8 @@ export class IndexWorker {
         page = [];
         for (const id of ids) {
           const json = await p.get(t.id, id, snapshot);
-          if (json) page.push(decodeDoc(json));
+          if (!json) throw new DanglingReferenceError(t.byId.id, id, snapshot, false); // PERSIST-01 C15
+          page.push(decodeDoc(json));
         }
         if (ids.length) from = prefixEnd(encodeKey([ids[ids.length - 1]]));
       }

@@ -1,0 +1,89 @@
+name: Jepsen nightly
+
+# The long consistency runs (STUDY-57 §5, the owner's call): the Jepsen-style workload with faults on
+# Postgres, MySQL and MongoDB for a while every night. A failure opens (or comments on) a GitHub issue with
+# the seed, the findings and the smallest failing history; the full histories are the run's artifact.
+# A pull request that changes this file or the harness runs it briefly, so the workflow itself is tested.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutes of runs per store
+        default: "12"
+  pull_request:
+    paths:
+      - .github/workflows/jepsen-nightly.yml
+      - packages/jepsen/**
+
+concurrency:
+  group: jepsen-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  jepsen:
+    name: jepsen · ${{ matrix.store }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [postgres, mysql, mongodb]
+    env:
+      MINUTES: ${{ github.event_name == 'pull_request' && '1' || inputs.minutes || '12' }}
+      # the service containers have no verifiable TLS; bunvex requires it by default (STUDY-25 L8)
+      DO_NOT_REQUIRE_SSL: "1"
+    steps:
+      - name: Start ${{ matrix.store }}
+        run: |
+          case "${{ matrix.store }}" in
+            postgres)
+              docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=bunvex -e POSTGRES_DB=bunvex postgres:17
+              for i in $(seq 1 60); do docker exec db pg_isready -U postgres && break; sleep 2; done
+              echo "PERSISTENCE_URL=postgres://postgres:bunvex@127.0.0.1:5432/bunvex" >> "$GITHUB_ENV" ;;
+            mysql)
+              docker run -d --name db -p 3306:3306 -e MYSQL_ROOT_PASSWORD=bunvex -e MYSQL_DATABASE=bunvex mysql:8.4
+              for i in $(seq 1 90); do docker exec db mysqladmin ping -uroot -pbunvex --silent && break; sleep 2; done
+              echo "PERSISTENCE_URL=mysql://root:bunvex@127.0.0.1:3306/bunvex" >> "$GITHUB_ENV" ;;
+            mongodb)
+              # a flush is a transaction: MongoDB must be a replica set (PERSIST-01 C7)
+              docker run -d --name db -p 27017:27017 mongo:8 --replSet rs0 --bind_ip_all
+              for i in $(seq 1 60); do docker exec db mongosh --quiet --eval 'db.runCommand({ping:1}).ok' && break; sleep 2; done
+              docker exec db mongosh --quiet --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]})'
+              for i in $(seq 1 60); do docker exec db mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break; sleep 1; done
+              echo "PERSISTENCE_URL=mongodb://127.0.0.1:27017/bunvex?replicaSet=rs0" >> "$GITHUB_ENV" ;;
+          esac
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Runs with faults for ${{ env.MINUTES }} minutes
+        id: runs
+        run: >-
+          bun packages/jepsen/src/cli.ts --store ${{ matrix.store }} --minutes "$MINUTES" --seconds 20
+          --nemesis none,partition,kill,store,all --summary failures.md
+      - name: Histories
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jepsen-${{ matrix.store }}
+          path: .data/jepsen/
+      - name: Open or update an issue
+        if: failure() && steps.runs.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Jepsen nightly: ${{ matrix.store }} failed"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          { echo "The nightly consistency run on **${{ matrix.store }}** failed ([run]($run_url), commit ${{ github.sha }})."
+            echo "Reproduce with the \`reproduce:\` line below and \`PERSISTENCE_URL\` set; the full histories are the run's artifact."
+            echo; cat failures.md; } > body.md
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue comment "$existing" --body-file body.md
+          else gh issue create --title "$title" --body-file body.md; fi

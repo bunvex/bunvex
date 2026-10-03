@@ -8,7 +8,7 @@
 // A `BunvexError`'s data always goes to the client (`errorData`), redacted or not: it is the app's own
 // answer, not an internal detail.
 import { randomBytes } from "node:crypto";
-import { CommitterStoppedError, OutOfRetentionError } from "@bunvex/core";
+import { CommitterStoppedError, OutOfRetentionError, PersistenceReadError } from "@bunvex/core";
 import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 
 /** The message a client gets for a failure that is not the function's (Convex's INTERNAL_SERVER_ERROR_MSG). */
@@ -18,10 +18,12 @@ export const INTERNAL_SERVER_ERROR_MESSAGE = "Your request couldn't be completed
 export const newRequestId = () => randomBytes(8).toString("hex");
 
 /**
- * A failure of the server rather than of the function: the committer stopped after a persistence error, or
- * a timestamp fell out of the write log's retention (Convex's `OutOfRetention`, STUDY-06 D10).
+ * A failure of the server rather than of the function: the committer stopped after a persistence error, a
+ * store read failed under a function (STUDY-20 D8), or a timestamp fell out of the write log's retention
+ * (Convex's `OutOfRetention`, STUDY-06 D10).
  */
-export const isSystemError = (e: unknown) => e instanceof CommitterStoppedError || e instanceof OutOfRetentionError;
+export const isSystemError = (e: unknown) =>
+  e instanceof CommitterStoppedError || e instanceof OutOfRetentionError || e instanceof PersistenceReadError;
 
 /**
  * A system failure the client should simply retry: Convex's `ErrorCode::OutOfRetention` answers HTTP 503 and
