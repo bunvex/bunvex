@@ -42,6 +42,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
+import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -184,8 +185,15 @@ const envFlag = (v: string | undefined) => v !== undefined && v !== "";
 const linesField = (field: string, lines: string[], redact: boolean) =>
   redact || lines.length === 0 ? "" : `,${JSON.stringify(field)}:${JSON.stringify(lines)}`;
 
+/** The log stream routes (Convex mounts both under `/api/` and `/api/app_metrics/`). */
+const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
+
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
+  const functionLog = new FunctionLog();
+  functions.functionLog = functionLog;
+  engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
   const makeVerifier = (auth: AuthConfig | undefined) =>
     new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
@@ -449,6 +457,39 @@ export function createServer(opts: ServerOptions) {
   /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
   let envRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  /**
+   * Convex's log streams (`logs.rs`): `stream_function_logs` (Completions and Progress events, an action's
+   * lines only as Progress; for one WebSocket request with `sessionId` + `clientRequestCounter`) and
+   * `stream_udf_execution` (Completions with their lines). A long poll: entries after `cursor` as soon as
+   * there are any, or none and the same cursor after 60 s.
+   */
+  const streamLogs = async (url: URL, req: Request, parts: boolean): Promise<Response> => {
+    const q = url.searchParams;
+    const raw = q.get("cursor");
+    const cursor = raw === null ? Number.NaN : Number(raw);
+    if (raw === null) return requestError(400, "BadQueryArgs", "missing field `cursor`");
+    if (!Number.isFinite(cursor)) return requestError(400, "BadQueryArgs", "cursor: invalid float literal");
+    let requestId: string | null = null;
+    const session = q.get("sessionId");
+    const counter = q.get("clientRequestCounter");
+    if (parts && session !== null && counter !== null) {
+      if (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff)
+        return requestError(400, "BadQueryArgs", "clientRequestCounter: invalid digit found in string");
+      requestId = wsRequestId(session, Number(counter));
+    }
+    const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
+    const structured = parts && wantsStructuredLines(req.headers.get("bunvex-client"));
+    const entries = found
+      .filter((p) => parts || p.kind === "Completion")
+      .filter(
+        (p) =>
+          requestId === null ||
+          (p.requestId === requestId && (p.kind === "Progress" ? p.root : p.parentExecutionId === null)),
+      )
+      .map((p) => partJson(p, { structured, parts }));
+    return json({ entries, newCursor });
+  };
+
   /** The admin routes; the caller is already identified. */
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
@@ -472,6 +513,11 @@ export function createServer(opts: ServerOptions) {
       });
     }
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
+    const stream = STREAM_ROUTE.exec(url.pathname);
+    if (stream && req.method === "GET") {
+      functions.requireOperation(caller, "ViewLogs");
+      return streamLogs(url, req, stream[1] === "function_logs");
+    }
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -592,6 +638,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        STREAM_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -1092,7 +1139,10 @@ export function createServer(opts: ServerOptions) {
     sync,
     scheduler,
     cronsReady,
+    /** The function execution log (STUDY-47). */
+    functionLog,
     stop: () => {
+      functionLog.close();
       void exportService?.stop();
       void importService?.stop();
       void scheduler.stop();

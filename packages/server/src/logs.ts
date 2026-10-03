@@ -6,6 +6,9 @@
 // console methods are replaced once and each call looks up the current invocation in an
 // AsyncLocalStorage; outside an invocation they are the originals. Lines are still printed to the server's
 // own console as before: capturing only adds the copy the client gets back.
+//
+// Lines are kept structured, as Convex's `LogLineStructured`: clients get them as `[LEVEL] message`
+// strings, the function log (function-log.ts, STUDY-47) as they are.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { wallClock } from "@bunvex/core";
 import inspect from "object-inspect";
@@ -18,28 +21,68 @@ const TRUNCATED_LINE_SUFFIX = " (truncated due to length)";
 
 export type LogLevel = "DEBUG" | "ERROR" | "WARN" | "INFO" | "LOG";
 
+/** One line (Convex's `LogLineStructured`): `timestamp` in wall-clock ms, `isTruncated` when it was cut. */
+export type LogLine = { level: LogLevel; messages: string[]; isTruncated: boolean; timestamp: number };
+
+/**
+ * The function execution lines belong to, for the function log (STUDY-47). Set on the executions the
+ * server logs; every execution under one (attempts, cached runs) shares its owner, until a nested logged
+ * execution starts its own. `onLine` sees each line as it is logged (an action's lines stream out as
+ * they come); `cached` is set when a cached query result answered it; `tx` is the transaction it ran in.
+ */
+export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown };
+
 /**
  * The lines of one execution. A mutation re-run after a conflict replaces its previous attempt's lines (an
  * aborted attempt never happened, as far as the caller can tell); a function called from an action nests
  * its execution as an entry of the action's, the way Convex keeps sub-function lines in place.
  */
-type Execution = { entries: (string | Execution)[]; timers: Map<string, number> };
+type Execution = { entries: (LogLine | Execution)[]; timers: Map<string, number>; owner: LogOwner | null };
 
 const current = new AsyncLocalStorage<Execution>();
-const newExecution = (): Execution => ({ entries: [], timers: new Map() });
+const newExecution = (owner: LogOwner | null): Execution => ({ entries: [], timers: new Map(), owner });
+const isLine = (e: LogLine | Execution): e is LogLine => "level" in e;
 
 export type WithLogLines<T> = ({ ok: true; value: T } | { ok: false; error: unknown }) & { logLines: string[] };
 
 /** Run one invocation (an HTTP call, a WebSocket mutation) and collect the lines it logs. */
 export async function collectLogs<T>(run: () => Promise<T> | T): Promise<WithLogLines<T>> {
   installLogCapture();
-  const execution = newExecution();
+  const execution = newExecution(null);
   try {
     const value = await current.run(execution, run);
     return { ok: true, value, logLines: logLinesOf(execution) };
   } catch (error) {
     return { ok: false, error, logLines: logLinesOf(execution) };
   }
+}
+
+/**
+ * Run one logged function execution under `owner`. Its lines join the current invocation's, if any, as
+ * before; `lines` are its own — not those of a logged execution it started.
+ */
+export async function withOwner<T>(
+  owner: LogOwner,
+  run: () => Promise<T>,
+): Promise<({ ok: true; value: T } | { ok: false; error: unknown }) & { lines: LogLine[] }> {
+  installLogCapture();
+  const execution = newExecution(owner);
+  current.getStore()?.entries.push(execution);
+  try {
+    const value = await current.run(execution, run);
+    return { ok: true, value, lines: ownLinesOf(execution) };
+  } catch (error) {
+    return { ok: false, error, lines: ownLinesOf(execution) };
+  }
+}
+
+/** The owner of the current execution, if it runs under a logged one. */
+export const currentOwner = (): LogOwner | null => current.getStore()?.owner ?? null;
+
+/** The current execution's own lines so far (none outside a logged execution). */
+export function currentOwnLines(): LogLine[] {
+  const e = current.getStore();
+  return e?.owner ? ownLinesOf(e) : [];
 }
 
 /**
@@ -55,7 +98,7 @@ export function perAttempt<A extends unknown[], R>(body: (...args: A) => R): (..
       attempt.entries = [];
       attempt.timers.clear();
     } else {
-      attempt = newExecution();
+      attempt = newExecution(parent.owner);
       parent.entries.push(attempt);
     }
     return current.run(attempt, () => body(...args));
@@ -73,25 +116,28 @@ export function withoutLogs<T>(fn: () => T): T {
 /**
  * A query's lines kept with its cached result (STUDY-20 D2), for `Engine` queries: on a miss the body runs in
  * its own execution, whose lines are stored with the result; on a hit the stored lines join the current
- * invocation. One shared object, so a cache hit allocates nothing for it.
+ * invocation, and its logged execution is a cache hit. One shared object, so a cache hit allocates nothing
+ * for it.
  */
 export const cachedQueryLogs = {
-  wrap<A extends unknown[], R>(body: (...args: A) => R): { body: (...args: A) => R; capture(): string[] } {
+  wrap<A extends unknown[], R>(body: (...args: A) => R): { body: (...args: A) => R; capture(): LogLine[] } {
     let own: Execution | undefined;
     return {
       body: (...args) => {
         const parent = current.getStore();
         if (!parent) return body(...args);
-        own = newExecution();
+        own = newExecution(parent.owner);
         parent.entries.push(own);
         return current.run(own, () => body(...args));
       },
-      capture: () => (own ? logLinesOf(own) : []),
+      capture: () => (own ? capped(allLines(own)) : []),
     };
   },
   replay(extra: unknown) {
     const parent = current.getStore();
-    if (parent && Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as string[]));
+    if (!parent) return;
+    if (parent.owner) parent.owner.cached = true;
+    if (Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as LogLine[]));
   },
 };
 
@@ -101,20 +147,43 @@ export function currentLogLines(): string[] {
   return e ? logLinesOf(e) : [];
 }
 
-function logLinesOf(execution: Execution): string[] {
-  const lines: string[] = [];
+/** Every line of `execution`, nested executions included. */
+function allLines(execution: Execution): LogLine[] {
+  const lines: LogLine[] = [];
   const walk = (e: Execution) => {
-    for (const entry of e.entries) {
-      if (typeof entry === "string") lines.push(entry);
+    for (const entry of e.entries)
+      if (isLine(entry)) lines.push(entry);
       else walk(entry);
-    }
   };
   walk(execution);
-  if (lines.length < MAX_LOG_LINES) return lines;
-  // Convex keeps MAX_LOG_LINES - 1 lines and spends the last on an [ERROR] notice.
-  lines.length = MAX_LOG_LINES - 1;
-  lines.push(`[ERROR] Log overflow (maximum ${MAX_LOG_LINES}). Remaining log lines omitted.`);
   return lines;
+}
+
+/** The lines of `execution` that are its owner's: nested logged executions left out. */
+function ownLinesOf(execution: Execution): LogLine[] {
+  const lines: LogLine[] = [];
+  const walk = (e: Execution) => {
+    for (const entry of e.entries)
+      if (isLine(entry)) lines.push(entry);
+      else if (entry.owner === execution.owner) walk(entry);
+  };
+  walk(execution);
+  return capped(lines);
+}
+
+const logLinesOf = (execution: Execution): string[] => capped(allLines(execution)).map(prettyLogLine);
+
+/** Convex keeps MAX_LOG_LINES - 1 lines and spends the last on an [ERROR] notice. */
+function capped(lines: LogLine[]): LogLine[] {
+  if (lines.length < MAX_LOG_LINES) return lines;
+  const kept = lines.slice(0, MAX_LOG_LINES - 1);
+  kept.push({
+    level: "ERROR",
+    messages: [`Log overflow (maximum ${MAX_LOG_LINES}). Remaining log lines omitted.`],
+    isTruncated: false,
+    timestamp: kept[kept.length - 1]!.timestamp,
+  });
+  return kept;
 }
 
 const utf8 = new TextEncoder();
@@ -133,10 +202,10 @@ function cutToBytes(s: string, bytes: number): string {
   return s.slice(0, end);
 }
 
-/** One line as the client sees it: `[LEVEL] msg1 msg2…`, cut at MAX_LOG_LINE_LENGTH bytes. */
-export function formatLogLine(level: LogLevel, messages: string[]): string {
+/** A line of `messages`, cut at MAX_LOG_LINE_LENGTH bytes (Convex's `LogLineStructured::new_developer_log_line`). */
+export function makeLogLine(level: LogLevel, messages: string[], timestamp = wallClock()): LogLine {
   const total = messages.reduce((n, m) => n + byteLength(m) + 1, 0) - 1;
-  if (total <= MAX_LOG_LINE_LENGTH) return `[${level}] ${messages.join(" ")}`;
+  if (total <= MAX_LOG_LINE_LENGTH) return { level, messages, isTruncated: false, timestamp };
   const kept: string[] = [];
   let used = 0;
   for (const m of messages) {
@@ -150,15 +219,25 @@ export function formatLogLine(level: LogLevel, messages: string[]): string {
       break;
     }
   }
-  return `[${level}] ${kept.join(" ")}${TRUNCATED_LINE_SUFFIX}`;
+  return { level, messages: kept, isTruncated: true, timestamp };
 }
+
+/** A line as clients get it: `[LEVEL] msg1 msg2…`, with the truncation notice (Convex's `to_pretty_string`). */
+export const prettyLogLine = (l: LogLine): string =>
+  `[${l.level}] ${l.messages.join(" ")}${l.isTruncated ? TRUNCATED_LINE_SUFFIX : ""}`;
+
+/** One line as the client sees it, cut at MAX_LOG_LINE_LENGTH bytes. */
+export const formatLogLine = (level: LogLevel, messages: string[]): string =>
+  prettyLogLine(makeLogLine(level, messages));
 
 /** Each console argument as Convex renders it (object-inspect, strings quoted, nested objects indented). */
 const render = (args: unknown[]) =>
   args.map((a) => inspect(a, { maxStringLength: MAX_LOG_LINE_LENGTH, indent: 2, customInspect: true }));
 
 function emit(execution: Execution, level: LogLevel, messages: string[]) {
-  execution.entries.push(formatLogLine(level, messages));
+  const line = makeLogLine(level, messages);
+  execution.entries.push(line);
+  execution.owner?.onLine?.(line);
 }
 
 let installed = false;

@@ -125,7 +125,8 @@ export class OccError extends Error {
   readonly code = "OptimisticConcurrencyControlFailure";
   constructor(
     message: string,
-    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number },
+    /** `retries`: how many times the mutation had already been re-run. */
+    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number; retries: number },
   ) {
     super(message);
   }
@@ -187,6 +188,12 @@ export class Engine {
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
    */
   stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
+  /**
+   * Called when a mutation attempt lost an OCC conflict and will run again (`failures`: the attempts lost so
+   * far), in the mutation's own async context: the server logs each such attempt, as Convex's
+   * `log_mutation_occ_error` with `will_retry` (STUDY-47).
+   */
+  onOccRetry: ((error: OccError, failures: number) => void) | null = null;
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
@@ -1354,8 +1361,9 @@ export class Engine {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
         // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
-        if (failures >= maxRetries) throw this.occError(e.conflict, source);
+        if (failures >= maxRetries) throw this.occError(e.conflict, source, failures);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
+        this.onOccRetry?.(this.occError(e.conflict, source, failures), failures + 1);
         failures++;
         this.stats.retries++;
         await new Promise((r) => setTimeout(r, sleep));
@@ -1366,7 +1374,7 @@ export class Engine {
   }
 
   /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
-  private occError(conflict: Conflict, source: string | undefined): OccError {
+  private occError(conflict: Conflict, source: string | undefined, retries: number): OccError {
     let table: string | undefined;
     if (conflict.index !== undefined)
       for (const t of this.catalog.tables.values())
@@ -1382,7 +1390,7 @@ export class Engine {
     const where = table === undefined ? "some table" : `the "${table}" table`;
     return new OccError(
       `Documents read from or written to ${where} changed while this mutation was being run and on every subsequent retry.${changedBy}`,
-      { table, documentId, writeSource, writeTs: conflict.writeTs },
+      { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
 }

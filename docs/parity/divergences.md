@@ -110,7 +110,6 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-138 | Order: spike, then scheduler / HTTP actions / env / admin keys, then the phases | — | no | See STUDY-28 §3 | owner, 2026-10-01 (accepted as recommended) | [STUDY-28 B10](../study/STUDY-28-builtin-auth.md#4-divergences-and-decisions) |
 | DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
-| DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-142 | Cron `L-nW` (day of month) from certain Mondays: answered, the comparison taken as false | saffron underflows and the process aborts | yes (Convex crashes) | A crash is not behaviour to copy; every other saffron quirk is kept | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S4](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
 | DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
@@ -259,6 +258,7 @@ Kept so the history is in one place.
 | DV-78 | A system error during a WebSocket mutation is that mutation's error | As Convex on protocol v1: the connection closes with 1011 `InternalServerError`; v0 is gone | yes | owner, 2026-09-30 (#50, v0 deleted) | [STUDY-20 D6](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
 | DV-88 | Database selection read only bunvex's env names (`PERSISTENCE`, `PERSISTENCE_URL`) | As Convex's image: without `PERSISTENCE`, `POSTGRES_URL`, then `MYSQL_URL`, then `DATABASE_URL` (Postgres, deprecated, warns) select the driver; empty is unset. bunvex's names win when both are set. `PG_CA_FILE` / `MYSQL_CA_FILE` too. The database-name part is DV-110 | operational | owner, 2026-10-01 (#116) | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration), [STUDY-25 §3.7](../study/STUDY-25-persistence-lifecycle.md#37-database-selection-and-tls-l8-built) |
 | DV-109 | Postgres and MySQL URLs were used as given: no TLS or session defaults | As Convex: TLS required, chain and host name verified (system and bundled roots plus `PG_CA_FILE` / `MYSQL_CA_FILE`); a weaker `sslmode` in the URL does not lift it; `DO_NOT_REQUIRE_SSL` (any non-empty value) does, and Postgres then prefers TLS. Postgres sessions `target_session_attrs=read-write`; a read-only MySQL refused at open | operational | owner, 2026-10-01 (#116) | [STUDY-25 L8](../study/STUDY-25-persistence-lifecycle.md#4-divergences), [§1.6](../study/STUDY-25-persistence-lifecycle.md#16-database-selection-and-tls-l8) |
+| DV-141 | Scheduled and cron runs' log lines went only to the server's output | As Convex: every execution, scheduled and cron runs included, is in the function execution log with its lines (`function-log.ts`), read by the log stream routes | yes (dashboard logs) | owner, 2026-10-01 (STUDY-30 S3: until log streaming) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -304,6 +304,17 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
+DV-250–DV-254 (STUDY-47 L1–L5, the function execution log) await the owner. Until decided, the PR that
+builds the log implements the recommendation in each row:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-250 | A Completion's `returnBytes` is the value's size as bunvex counts it for limits (a JSON result's length on the HTTP API) | Rust's `heap_size()` of the value | yes (a number in the log) | Not possible: `heap_size` measures Rust memory. Accept | [STUDY-47 L1](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-251 | `usageStats`: the I/O bytes equal the read and written bytes; index rows, storage, vector, text, egress and memory are 0 | metered | yes (the log, the dashboard) | Not done yet: bunvex does not meter them. Accept until usage tracking | [STUDY-47 L2](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-252 | `userExecutionTime` equals `executionTime` | user time apart from system time | yes (the log) | Not done yet. Accept | [STUDY-47 L3](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-253 | No `Tester` caller: the dashboard's function runner logs as `HttpApi` | `/api/run_test_function` logs as `Tester` | yes (the log) | Not done yet: bunvex has no `run_test_function`. Accept | [STUDY-47 L4](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-254 | `environment` is always `"isolate"` | `"node"` for `"use node"` actions | yes (the log) | Not possible in one process without a Node runtime. Accept | [STUDY-47 L5](../study/STUDY-47-log-streaming.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
@@ -312,7 +323,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 | Waiting on | Rows | What to do then |
 |---|---|---|
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
-| **Log streaming** (item 12) | DV-77, DV-141, DV-184 | stop printing captured log lines to stdout; scheduled and cron runs' lines in the log stream; `dev --tail-logs` on by default (`pause-on-deploy`) |
+| **Log streaming** (item 12) | DV-77, DV-184 | stop printing captured log lines to stdout; `dev --tail-logs` on by default (`pause-on-deploy`). The server side is built (STUDY-47 PR 1, DV-141 resolved); these two come with `bunvex logs` (PR 2) |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
 | **An audit log** | DV-218 | audit-log entries for exports and imports (and Convex's other events) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |

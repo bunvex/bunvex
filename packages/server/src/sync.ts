@@ -27,10 +27,12 @@ import {
   stringifyValue,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
+import { type Value, valueSize } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import { isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
-import { callerOf, Functions } from "./functions.ts";
+import { wsRequestId } from "./function-log.ts";
+import { callerOf, Functions, type SourcedCaller } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
@@ -381,10 +383,18 @@ export class SyncHub {
     this.stats.executions++;
     const generation = this.generation;
     const { engine, functions, fromWire } = this.deps;
-    const r = await collectLogs(async () => {
-      const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
-      return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
-    });
+    const r = await collectLogs(() =>
+      functions.logged(
+        "Query",
+        q.udfPath,
+        { ...caller, source: "SyncWorker" } as SourcedCaller,
+        async () => {
+          const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
+          return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
+        },
+        (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
+      ),
+    );
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
       ? r.value
@@ -538,13 +548,19 @@ export class SyncSession {
   /** The user's raw token, for `ctx.meta.getRequestMetadata()`; null for an admin key or none. */
   private token: string | null = null;
 
-  /** The current caller with the request a mutation or action runs for: a new request id each. */
-  private requestCaller(): Caller | null {
+  /**
+   * The current caller with the request a mutation or action runs for. Its request id is Convex's for a
+   * WebSocket request (`RequestId::new_for_ws_session`), which the log stream filters by (STUDY-47); a new
+   * one before Connect.
+   */
+  private requestCaller(counter: number): SourcedCaller | null {
     const caller = this.currentCaller();
     if (caller === null) return null;
+    const requestId = this.sessionId === null ? newRequestId() : wsRequestId(this.sessionId, counter);
     return {
       ...caller,
-      request: { ...this.peer, requestId: newRequestId(), authToken: this.token, scheduledFunctionId: null },
+      source: "SyncWorker",
+      request: { ...this.peer, requestId, authToken: this.token, scheduledFunctionId: null },
     };
   }
 
@@ -826,7 +842,7 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, fromWire } = this.hub.deps;
-        const caller = this.requestCaller();
+        const caller = this.requestCaller(m.requestId);
         if (caller === null) return;
         const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
@@ -866,7 +882,7 @@ export class SyncSession {
   private action(m: v1.ActionRequest) {
     if (this.inflightActions >= MAX_INFLIGHT_ACTIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
-    const caller = this.requestCaller();
+    const caller = this.requestCaller(m.requestId);
     if (caller === null) return;
     this.inflightActions++;
     void (async () => {
