@@ -16,8 +16,10 @@ import {
   type GenericQueryCtx,
   internalMutationGeneric,
   type MutationBuilder,
+  type MutationBuilderWithTable,
   mutationGeneric,
   type QueryBuilder,
+  type QueryBuilderWithTable,
   queryGeneric,
 } from "../../src/index.ts";
 
@@ -126,3 +128,32 @@ test("functions carry Convex's markers, and `returns` may be an object of valida
   await expect(fns.runQuery("m:bad", {})).rejects.toThrow(/ReturnsValidationError/);
   await engine.close();
 });
+
+// The table-scoped API (STUDY-66 §2), with Convex's `…WithTable` builders.
+const queryWithTable = queryGeneric as unknown as QueryBuilderWithTable<DM, "public">;
+const mutationWithTable = mutationGeneric as unknown as MutationBuilderWithTable<DM, "public">;
+export const scoped = {
+  read: queryWithTable({
+    args: { id: v.id("messages") },
+    handler: async (ctx, { id }) => {
+      const doc = await ctx.db.table("messages").get(id);
+      check<
+        Equal<typeof doc, { _id: GenericId<"messages">; _creationTime: number; author: string; body: string } | null>
+      >(true);
+      // @ts-expect-error: a reader has no insert
+      ctx.db.table("messages").insert;
+      return ctx.db
+        .table("messages")
+        .query()
+        .withIndex("by_author", (q) => q.eq("author", "ada"))
+        .collect();
+    },
+  }),
+  write: mutationWithTable(async (ctx) => {
+    const id = await ctx.db.table("messages").insert({ author: "ada", body: "hi" });
+    check<Equal<typeof id, GenericId<"messages">>>(true);
+    await ctx.db.table("messages").patch(id, { body: "edited" });
+    // @ts-expect-error: not a table of the data model
+    ctx.db.table("nope");
+  }),
+};

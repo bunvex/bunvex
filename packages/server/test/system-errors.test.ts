@@ -49,6 +49,15 @@ async function setup() {
       await db.insert("counters", { n: 100 });
     }),
     read: query(async ({ db }) => (await db.query("counters").first())?.n ?? 0),
+    // Convex's "Cursor was None" (STUDY-66 §1): paginate over limit(0) has no cursor, a system error.
+    pageOfNone: query(async ({ db }) => {
+      try {
+        await (db.query("counters") as unknown as { limit(n: number): { paginate(o: unknown): Promise<unknown> } })
+          .limit(0)
+          .paginate({ numItems: 1, cursor: null });
+      } catch {}
+      return "caught";
+    }),
   });
   const { server, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false });
   stops.push(stop);
@@ -140,5 +149,15 @@ describe("a store failure under a function is a system error (DV-80)", () => {
     }
     store.failing = false;
     expect(await count()).toBe(0);
+  });
+
+  test("HTTP: paginate over limit(0) is a system error the query cannot catch", async () => {
+    const { port } = await setup();
+    const r = await fetch(`http://127.0.0.1:${port}/api/query`, {
+      method: "POST",
+      body: JSON.stringify({ path: "m:pageOfNone", args: {} }),
+    });
+    expect(r.status).toBe(500);
+    expect(await r.json()).toEqual({ code: "InternalServerError", message: INTERNAL_SERVER_ERROR_MESSAGE });
   });
 });
