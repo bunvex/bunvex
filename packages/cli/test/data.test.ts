@@ -102,10 +102,12 @@ test("bunvex data: tables, documents in each format, the limit warning, _storage
   const lines = docs.map((d) => stringify(d));
   expect((await t.run(["alpha", "--format", "jsonl"])).out).toBe(lines.join("\n"));
   expect((await t.run(["alpha", "--format", "json"])).out).toBe(`[\n${lines.join(",\n")}\n]`);
-  expect(lines[1]).toContain('"n": 1n');
+  // A bigint prints with its `n` (which document comes first depends on two same-millisecond inserts).
+  expect(lines.some((l) => l.includes('"n": 1n'))).toBe(true);
   // Oldest first, one of two: the warning.
   const one = await t.run(["alpha", "--order", "asc", "--limit", "1"]);
-  expect(one.out.split("\n")[2]).toContain(`"${ids[0]}"`);
+  const oldest = (await t.engine.query((db) => db.query("alpha").order("asc").first())) as { _id: string };
+  expect(one.out.split("\n")[2]).toContain(`"${oldest._id}"`);
   expect(one.err).toEqual(["Showing the 1 oldest created document. Use the --limit option to see more."]);
   expect((await t.run(["alpha", "--limit", "1"])).err).toEqual([
     "Showing the 1 most recently created document. Use the --limit option to see more.",
