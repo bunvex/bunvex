@@ -564,11 +564,18 @@ export class Engine {
   /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
   private validation: Promise<unknown> | null = null;
 
-  /** A commit hook that also brings the search indexes up to date with the commit, in commit order. */
-  private withSearchUpdate(tx: Tx, own: ((ts: number) => void) | undefined): (ts: number) => void {
-    return (ts) => {
-      own?.(ts);
-      this.searchIndexes.apply(ts, tx.writtenDocs());
+  /** A commit's search part (STUDY-45 PR 3): its searches to check, its versions and their read-set keys. */
+  private searchCommit(tx: Tx, own: ((ts: number) => void) | undefined) {
+    const writes = tx.writtenDocs();
+    const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
+    return {
+      // The search indexes are brought up to date with the commit as it becomes visible, in commit order.
+      onVisible: (ts: number) => {
+        own?.(ts);
+        this.searchIndexes.apply(ts, writes, indexed);
+      },
+      ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
+      ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
     };
   }
 
@@ -1388,7 +1395,7 @@ export class Engine {
           docs,
           idx,
           source,
-          onVisible: this.withSearchUpdate(tx, this.withPendingCheck(tx)),
+          ...this.searchCommit(tx, this.withPendingCheck(tx)),
         });
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).

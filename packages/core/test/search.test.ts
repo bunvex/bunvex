@@ -254,7 +254,9 @@ test("a restart backfills the index; queries meanwhile get IndexBackfillingError
   await e.searchReady();
   expect(bodies(await e.query((db) => search(db, "needle").collect())).sort()).toEqual(["needle", "needle too"]);
   expect(bodies(await e.query((db) => search(db, "changed").collect()))).toEqual(["changed"]);
-  // Its old text ("hay <n>") is gone from the index: its number finds nothing.
-  expect(await e.query((db) => search(db, (last.body as string).split(" ")[1]!).collect())).toEqual([]);
+  // Its old text ("hay <n>") is gone from the index: its number no longer finds it (other numbers may
+  // match it as a prefix).
+  const byNumber = await e.query((db) => search(db, (last.body as string).split(" ")[1]!).collect());
+  expect(byNumber.some((d) => d._id === last._id)).toBe(false);
   await e.close();
 });

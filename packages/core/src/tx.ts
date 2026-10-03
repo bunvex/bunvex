@@ -6,7 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
-import { MAX_CANDIDATE_REVISIONS, tokenize } from "@bunvex/search";
+import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
   checkValue,
   copyValue,
@@ -32,7 +32,7 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import type { Interval } from "./committer.ts";
+import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
@@ -48,7 +48,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { filterKey, type SearchIndexes } from "./search-indexes.ts";
+import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
@@ -1187,10 +1187,16 @@ export class Tx {
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
 
-  /** @internal (Engine) The documents this transaction wrote, in their new state, for the search indexes. */
-  writtenDocs(): { table: TableDef; id: string; next: Doc | null }[] {
-    return [...this.writes].map(([id, w]) => ({ table: w.table, id, next: w.next }));
+  /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
+  writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {
+    return [...this.writes].map(([id, w]) => ({ table: w.table, id, old: w.old, next: w.next }));
   }
+
+  /**
+   * A mutation's searches (STUDY-45 PR 3), checked at commit by Convex's OCC rule (every filter and one term
+   * of a version written since the snapshot). A query records them as read-set intervals instead.
+   */
+  readonly searchReads: SearchRead[] = [];
 
   /**
    * The ranked ids of a search (Convex's `SearchQuery`): Convex's checks of the index and the filters, then
@@ -1237,14 +1243,14 @@ export class Tx {
       throw new Error(
         `Search query against ${label} has too many filter conditions. Max: ${MAX_SEARCH_FILTER_CONDITIONS} Actual: ${eqs.length}`,
       );
+    const tokens = tokenize(text).slice(0, MAX_QUERY_TERMS);
+    // The read-set (Convex's `QueryReads`): each query term — the last also as a prefix — and each filter.
+    const terms = tokens.map((term, i) => ({ term, prefix: i === tokens.length - 1 }));
+    if (this.writable) this.searchReads.push({ index: e.readIndex, terms, filters: eqs });
+    else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
     const pending = new Map<string, Doc | null>();
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
-    const hits = this.searchIndexes!.search(
-      e,
-      { tokens: tokenize(text), prefixLast: true, filters: eqs },
-      this.snapshot,
-      pending,
-    );
+    const hits = this.searchIndexes!.search(e, { tokens, prefixLast: true, filters: eqs }, this.snapshot, pending);
     return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
   }
 
