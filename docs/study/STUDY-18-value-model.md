@@ -119,7 +119,7 @@
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | Public function names: `toJsonValue` / `fromJsonValue` instead of `convexToJson` / `jsonToConvex` | bunvex's public API carries no "convex" in its names (owner, 2026-09-30) | accepted |
-| D2 | An error message prints a class instance as `Name {…}` (Convex: `Name {"field":…}`, its JSON), a `Date` as `Date {…}` (Convex: its ISO string), and a cycle as `"[Circular]"` (Convex: a `TypeError` from `JSON.stringify`) | Opening a non-plain object leaked the transaction, catalog and store state of bunvex's engine objects to the client; naming it is the bounded form that cannot leak | owner (DV-316) |
+| D2 | An error message prints a class instance as `Name {…}` (Convex: `Name {"field":…}`, its JSON), a `Date` as `Date {…}` (Convex: its ISO string), and a cycle as `"[Circular]"` (Convex: a `TypeError` from `JSON.stringify`) | Opening a non-plain object leaked the transaction, catalog and store state of bunvex's engine objects to the client; naming it is the bounded form that cannot leak | owner, 2026-10-03 (#308): accepted, option 1 (DV-316) |
 
 ## 5. Tests
 
