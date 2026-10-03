@@ -147,7 +147,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `Date.now()` / `new Date()` frozen at the start of a query or mutation | crates/isolate/src/environment/udf/phase.rs | done | Via AsyncLocalStorage (determinism.ts). |
+| `Date.now()` / `new Date()` frozen at the start of a query or mutation | crates/isolate/src/environment/udf/phase.rs | done | Via AsyncLocalStorage (determinism.ts). Floored at the snapshot (rounded up to the ms), as `CreationTime::for_transaction`, so a clock behind the stored timestamps after a restart never gives a `Date.now()` or `_creationTime` below what the transaction read (STUDY-06 §3). |
 | `Math.random()` seeded per execution | isolate/src/environment/udf | done | sfc32 PRNG. |
 | `performance.now()` fixed in queries, incrementing in mutations, rounded down to 0.1 ms | isolate/src/environment/udf/phase.rs, helpers/performance.rs, ops/time.rs | done | `performance.timeOrigin` is the process's, not the module import time (STUDY-03 D3). |
 | `fetch`, timers and `crypto.getRandomValues` throw in queries and mutations ("NoXInQueriesOrMutations") | isolate/src/environment/udf/mod.rs (`not_allowed_in_udf`) | partial | Blocked, but `crypto.randomUUID` and `crypto.subtle` aren't. This is not a sandbox: captured globals escape. |

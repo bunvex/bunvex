@@ -267,6 +267,14 @@ it moves most of the work off the single committer thread.
 `packages/core/src/committer.ts`:
 
 - **Timestamps:** `appliedTs = max(appliedTs + 1, wall clock in µs)`, resumed from `maxTs()` (D9, as Convex).
+  - A transaction's first `_creationTime` (and its `Date.now()`, the floor of it) is the wall clock in ms
+    **floored at the snapshot rounded up to the ms** (`transactionStart` in `engine.ts`), as Convex's
+    `CreationTime::for_transaction` (`crates/common/src/document.rs`). Since timestamps resume from `maxTs()`,
+    a restart with the clock behind the last run's would otherwise give new documents a `_creationTime`
+    below documents the transaction read (found by the jepsen harness, clock-skew nemesis). Convex lets two
+    transactions in the same ms tie (`>=`, not `>`); bunvex also keeps each engine's starts distinct (the
+    floor would otherwise make same-ms transactions tie, against the sub-ms creation order of parity B5).
+    Not a divergence apps can rely on: Convex promises only `>=`.
 - **Validation:** `validate` checks the pending commit's intervals against each `LogEntry` with
   `ts > snapshot`, linearly (`overlaps`). The log holds commits already *applied* in the current or
   previous group, so it plays the role of Convex's `pending_writes` too. (Since D11, through the log
