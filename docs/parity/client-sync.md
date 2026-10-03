@@ -35,7 +35,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | WS-level ping every 5 s; client considered dead after 120 s of no pong | `crates/local_backend/src/subs/mod.rs` | partial | Bun sends pings by default; timeouts differ, and none is tuned. |
 | Client inactivity watchdog: reconnect if nothing arrives from the server for 60 s | `browser/sync/web_socket_manager.ts` (`serverInactivityThreshold`) | done (STUDY-26) |  |
 | Per-message size metrics / large-transition warnings (>20 MB or >20 s transit) | `browser/sync/web_socket_manager.ts` (`reportLargeTransition`) | missing | — |
-| Close frames with codes (Normal / Again / Error) and a ≤123-byte reason used by the client to classify backoff | `crates/errors/src/lib.rs` (`close_frame`), `browser/sync/web_socket_manager.ts` | partial (STUDY-23) | 1011 `InternalServerError`, 1013 with the error code (OCC, `TooManyConcurrentMutations`, `TooManyInflightActionsForSingleClient`); client errors get a `FatalError` and a plain close. |
+| Close frames with codes (Normal / Again / Error) and a ≤123-byte reason used by the client to classify backoff | `crates/errors/src/lib.rs` (`close_frame`), `browser/sync/web_socket_manager.ts` | partial (STUDY-23) | 1011 `InternalServerError` (also for a store failure under a mutation, action or subscribed query: STUDY-20 §4.1, DV-80), 1013 with the error code (OCC, `TooManyConcurrentMutations`, `TooManyInflightActionsForSingleClient`); client errors get a `FatalError` and a plain close. |
 
 ### 2. Client → server message types
 

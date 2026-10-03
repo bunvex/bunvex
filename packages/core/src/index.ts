@@ -106,6 +106,7 @@ export {
   installDeterminismIn,
   newUserTimer,
   observeTime,
+  PersistenceReadError,
   pausingUserTime,
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,

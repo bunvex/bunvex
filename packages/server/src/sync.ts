@@ -364,12 +364,18 @@ export class SyncHub {
     let f = this.inflight.get(key);
     if (!f) {
       const base = at.slice(0, at.lastIndexOf("\u0000"));
-      const p = this.execute(q, ts, caller).then((exec) => {
-        this.inflight.delete(key);
-        const idPart = exec.identityObserved ? mine : SHARED;
-        this.adopt(`${base}\u0000${idPart}`, exec);
-        return { exec, idPart };
-      });
+      const p = this.execute(q, ts, caller).then(
+        (exec) => {
+          this.inflight.delete(key);
+          const idPart = exec.identityObserved ? mine : SHARED;
+          this.adopt(`${base}\u0000${idPart}`, exec);
+          return { exec, idPart };
+        },
+        (e) => {
+          this.inflight.delete(key);
+          throw e;
+        },
+      );
       f = { p, owner: mine };
       this.inflight.set(key, f);
     }
@@ -395,6 +401,10 @@ export class SyncHub {
         (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
       ),
     );
+    // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
+    // fails with it; STUDY-20 D8).
+    if (!r.ok && isSystemError(r.error)) throw r.error;
+    if (r.ok && !r.value.ok && isSystemError(r.value.error)) throw r.value.error;
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
       ? r.value

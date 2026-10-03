@@ -122,10 +122,34 @@ export async function withUserTimer<T>(timer: UserTimer, fn: () => T): Promise<A
   }
 }
 
-/** A store call from a function (`Tx`): outside the execution, its time paused, the budget checked around it. */
+/**
+ * A store read that failed under a function: the system's failure, not the function's (STUDY-20 D8). As
+ * Convex's syscalls, whose non-user errors terminate the isolate with a system error
+ * (crates/isolate/src/request_scope.rs, environment/helpers/promise.rs), the function cannot catch it, and a
+ * client is never told its mutation failed when it may still commit: the sync connection closes and the
+ * client resends.
+ */
+export class PersistenceReadError extends Error {
+  constructor(cause: unknown) {
+    super(`persistence read failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "PersistenceReadError";
+  }
+}
+
+/**
+ * A store call from a function (`Tx`): outside the execution, its time paused, the budget checked around it.
+ * A failure is a `PersistenceReadError` the function cannot catch (`failExecution`).
+ */
 export async function storeCall<T>(fn: () => T | Promise<T>): Promise<T> {
   checkUserTime();
-  const value = await pausingUserTime(async () => outsideExecution(fn));
+  let value: T;
+  try {
+    value = await pausingUserTime(async () => outsideExecution(fn));
+  } catch (e) {
+    const failure = new PersistenceReadError(e);
+    failExecution(failure);
+    throw failure;
+  }
   checkUserTime();
   return value;
 }
