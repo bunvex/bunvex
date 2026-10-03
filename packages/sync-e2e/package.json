@@ -11,7 +11,9 @@
     "@bunvex/protocol": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "@bunvex/react": "workspace:*"
+    "@bunvex/react": "workspace:*",
+    "@bunvex/react-clerk": "workspace:*",
+    "@bunvex/react-auth0": "workspace:*"
   },
   "repository": {
     "type": "git",

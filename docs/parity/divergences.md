@@ -190,6 +190,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-242 | `BunvexProviderWithClerk` asks Clerk for the JWT template "bunvex", or uses the session token when its `aud` is "bunvex" | template and audience "convex" | yes (Clerk dashboard setup) | rule 5; a migrating app creates or renames its Clerk template | owner, 2026-10-03 (as recommended) | [STUDY-47 X1](../study/STUDY-47-react-clerk-auth0.md#4-divergences) |
+| DV-243 | The Clerk and Auth0 providers are imported from `@bunvex/react-clerk` and `@bunvex/react-auth0` | `convex/react-clerk`, `convex/react-auth0`: subpaths of one package | yes (import path) | the clients are scoped packages (as DV-241) | owner, 2026-10-03 (as recommended) | [STUDY-47 X2](../study/STUDY-47-react-clerk-auth0.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -339,4 +341,4 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: `usePreloadedQuery` (with `@bunvex/nextjs`); `usePaginatedQuery` and the auth helpers (STUDY-27) landed |
 | [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery` |
 | [STUDY-26 H3](../study/STUDY-26-sync-client.md#93-divergences) | HTTP client `function(name, componentPath, args)` and `/api/function` (with components) |
-| [STUDY-27 A5](../study/STUDY-27-auth.md#4-divergences) | React: `BunvexProviderWithClerk` / `BunvexProviderWithAuth0` (after `BunvexProviderWithAuth`) |
+| [STUDY-27 A5](../study/STUDY-27-auth.md#4-divergences) | ~~React: `BunvexProviderWithClerk` / `BunvexProviderWithAuth0` (after `BunvexProviderWithAuth`)~~ — closed by STUDY-47 |

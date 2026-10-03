@@ -210,8 +210,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | done (STUDY-27) | Tested: a query never runs signed out, on mount or on sign-out. |
 | `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | done (STUDY-27) | `useBunvexAuth()`. |
 | `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | done (STUDY-27) | |
-| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | missing | ARCHITECTURE: D. |
-| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | missing | ARCHITECTURE: D. |
+| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | done (STUDY-47) | `BunvexProviderWithClerk` in `@bunvex/react-clerk` (DV-243); template and audience "bunvex" (DV-242). Differential test against Convex's provider. |
+| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | done (STUDY-47) | `BunvexProviderWithAuth0` in `@bunvex/react-auth0` (DV-243). Differential test against Convex's provider. |
 
 ### 13. HTTP client and HTTP API
 
