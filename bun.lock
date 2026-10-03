@@ -124,6 +124,9 @@
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
+      "devDependencies": {
+        "fast-check": "4.10.2",
+      },
     },
     "packages/client": {
       "name": "@bunvex/client",

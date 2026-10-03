@@ -84,6 +84,21 @@ Compared with PERSIST-01's K1–K29:
 The two gaps are candidates for K30 and K31; they touch every driver, so they belong to the persistence
 track.
 
+### 3.2 The application, client and CLI tests
+
+[STUDY-65](../study/STUDY-65-convex-tests-application-client-cli.md) maps the rest of what applies:
+- `crates/application/src/tests`;
+- the React, browser and Next.js client tests;
+- the CLI tests.
+
+It found four bugs, each fixed with its test:
+- `.env` files not read as dotenv reads them (#277);
+- a repeated name refused in an environment-variable batch (#278);
+- `auth.config` losing the canonical URLs on an environment-variable update (#279);
+- a canceled job's callees still scheduling live jobs (#281).
+
+Its §6 is the prioritized list of what is still untested.
+
 ## 4. Coverage floors
 
 `bun run coverage` (`scripts/coverage.ts`) runs the root `bun test` with lcov coverage. It prints:
@@ -107,20 +122,22 @@ To change a floor:
 - **Add an entry** for a new critical file.
 - **Move or drop the entry** of a renamed or removed file.
 
-Coverage when the floors were set (main at `52141c8`) and with #255 and #259:
+The floors were set at main `52141c8`, then raised once #255 (property tests) and #259 (coverage gaps)
+merged. The files those PRs moved:
 
-| File | main | with #255 / #259 |
-|---|---|---|
-| values/src/commit-ts.ts | 72.2% | 100% |
-| core/src/system-reader.ts | 73.9% | 100% |
-| core/src/schema-json.ts | 76.9% | 100% |
-| core/src/persistence/scan.ts | 80.4% | 100% (#255) |
-| core/src/persistence/split.ts | 10.7% (exercised by the SQL drivers' jobs) | covered by #255's properties |
-| client/src/web-socket-manager.ts | 85.4% | 100% |
-| server/src/persistence.ts | 86.9% | 96.3% |
-| server/src/local-backend.ts | 84.2% | 100% |
+| File | at `52141c8` | after #255 / #259 | floor then → now |
+|---|---|---|---|
+| values/src/commit-ts.ts | 72.2% | 100% | 70 → 98 |
+| core/src/system-reader.ts | 73.9% | 100% | 71 → 98 |
+| core/src/schema-json.ts | 76.9% | 100% | 74 → 98 |
+| core/src/persistence/scan.ts | 80.4% | 98.3% | 78 → 96 |
+| core/src/persistence/split.ts | 10.7% (exercised by the SQL drivers' jobs) | 86.3% | 8 → 84 |
+| client/src/web-socket-manager.ts | 85.4% | 100% | 83 → 98 |
+| server/src/persistence.ts | 86.9% | 96.3% | 84 → 94 |
+| server/src/local-backend.ts | 84.2% | 100% | 82 → 98 |
 
-Raise those floors when the PRs merge.
+split.ts and scan.ts are covered by fast-check properties with a random seed; their coverage was the same
+over six runs, so a seed-dependent dip below the floor is not expected.
 
 ## 5. Bugs the property tests found
 
