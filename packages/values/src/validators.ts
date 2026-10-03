@@ -1,6 +1,8 @@
 // Validators (STUDY-13): `v.string()`, `v.id("tasks")`, `v.object({…})`… — the shapes an argument, a return
 // value or a document must have, with the same builders, parts, JSON form and checking rules as Convex's
 // (npm-packages/convex/src/values/validators.ts builds them; crates/common/src/schemas/validator.rs checks).
+
+import type { CommitTsPlaceholder } from "./commit-ts.ts";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "./value.ts";
 
 export type OptionalProperty = "required" | "optional";
@@ -12,7 +14,7 @@ export type OptionalProperty = "required" | "optional";
 export type GenericId<TableName extends string> = string & { __tableName: TableName };
 
 export type ValidatorJSON =
-  | { type: "null" | "number" | "bigint" | "boolean" | "string" | "bytes" | "any" }
+  | { type: "null" | "number" | "bigint" | "boolean" | "string" | "bytes" | "any" | "commitTs" }
   | { type: "id"; tableName: string }
   | { type: "literal"; value: JSONValue }
   | { type: "array"; value: ValidatorJSON }
@@ -37,6 +39,7 @@ export type Validator<Type, IsOptional extends OptionalProperty = OptionalProper
   | VString<Type, IsOptional>
   | VFloat64<Type, IsOptional>
   | VInt64<Type, IsOptional>
+  | VCommitTs<Type, IsOptional>
   | VBoolean<Type, IsOptional>
   | VNull<Type, IsOptional>
   | VBytes<Type, IsOptional>
@@ -114,6 +117,20 @@ export class VInt64<Type = bigint, IsOptional extends OptionalProperty = "requir
   }
   optional() {
     return new VInt64<Type | undefined, "optional">("optional");
+  }
+}
+
+/** Convex's `v.commitTs()` (STUDY-53): an int64 commit timestamp, or `db.vars.commitTs` before the commit. */
+export class VCommitTs<
+  Type = bigint | CommitTsPlaceholder,
+  IsOptional extends OptionalProperty = "required",
+> extends BaseValidator<Type, IsOptional> {
+  readonly kind = "commitTs" as const;
+  get json(): ValidatorJSON {
+    return { type: "commitTs" };
+  }
+  optional() {
+    return new VCommitTs<Type | undefined, "optional">("optional");
   }
 }
 
@@ -319,6 +336,7 @@ export const v = {
   float64: () => new VFloat64("required"),
   bigint: () => new VInt64("required"),
   int64: () => new VInt64("required"),
+  commitTs: () => new VCommitTs("required"),
   boolean: () => new VBoolean("required"),
   string: () => new VString("required"),
   bytes: () => new VBytes("required"),
@@ -345,6 +363,8 @@ export function validatorFromJson(j: ValidatorJSON): GenericValidator {
       return v.number();
     case "bigint":
       return v.int64();
+    case "commitTs":
+      return v.commitTs();
     case "boolean":
       return v.boolean();
     case "string":

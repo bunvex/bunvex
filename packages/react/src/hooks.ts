@@ -43,8 +43,10 @@ export function useQueries(queries: RequestForQueries): Record<string, unknown> 
   const client = useRequiredClient("useQuery");
   const createWatch = useMemo<CreateWatch>(
     () =>
-      (query, args, { journal }) =>
-        client.watchQuery(query, args, journal === undefined ? {} : { journal }),
+      (query, args, { journal, paginationOptions }) =>
+        paginationOptions !== undefined
+          ? client.watchPaginatedQuery(query, args, paginationOptions)
+          : client.watchQuery(query, args, journal === undefined ? {} : { journal }),
     [client],
   );
   const [observer] = useState(() => new QueriesObserver(createWatch));

@@ -23,6 +23,10 @@ export const PACKAGES = [
   "server",
   "client",
   "react",
+  "react-clerk",
+  "react-auth0",
+  "react-query",
+  "nextjs",
   "cli",
 ];
 
