@@ -34,6 +34,7 @@ import {
   checkLayoutVersion,
   checkUnversionedTables,
   chunkRows,
+  DanglingReferenceError,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -648,7 +649,9 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     const out: string[] = [];
     for (const id of ids) {
       const r = byId.get(id);
-      if (r && !r.deleted) out.push(r.json_value);
+      // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
+      if (!r || r.deleted) throw new DanglingReferenceError(index, id, ts, !!r);
+      out.push(r.json_value);
     }
     return out;
   }

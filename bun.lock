@@ -191,6 +191,10 @@
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
+      "devDependencies": {
+        "mongodb": "^7.7.0",
+        "mysql2": "^3.24.4",
+      },
     },
     "packages/nextjs": {
       "name": "@bunvex/nextjs",

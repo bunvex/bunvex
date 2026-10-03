@@ -1,6 +1,7 @@
-// A TCP proxy between the clients and the server (STUDY-57 §4): the network nemesis cuts every connection
-// through it, or refuses new ones for a while (a partition between the clients and the server); the crash
-// nemesis points it at the restarted server, so the clients keep one address.
+// A TCP proxy (STUDY-57 §4). Between the clients and the server: the network nemesis cuts every connection
+// through it, or refuses new ones for a while (a partition); the crash nemesis points it at the restarted
+// server, so the clients keep one address. Between the server and a remote store: the same faults, on the
+// store's connections.
 import type { Socket, TCPSocketListener } from "bun";
 
 type Pair = { client: Socket<Pair>; upstream: Socket<Pair> | null; pending: Uint8Array[] };
@@ -11,7 +12,10 @@ export class TcpProxy {
   /** While true, new connections are closed as soon as they open. */
   blocked = false;
 
-  constructor(public upstreamPort: number) {}
+  constructor(
+    public upstreamPort: number,
+    readonly upstreamHost = "127.0.0.1",
+  ) {}
 
   get port(): number {
     if (!this.listener) throw new Error("the proxy is not listening");
@@ -33,7 +37,7 @@ export class TcpProxy {
           client.data = pair;
           proxy.pairs.add(pair);
           Bun.connect<Pair>({
-            hostname: "127.0.0.1",
+            hostname: proxy.upstreamHost,
             port: proxy.upstreamPort,
             socket: {
               open(upstream) {
