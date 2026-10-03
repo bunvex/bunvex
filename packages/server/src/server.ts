@@ -214,7 +214,18 @@ export type ServerOptions = {
    * Convex's values (200 subscriptions, 5 ms). Tests inject `random` and `timers`.
    */
   subscriptionSplay?: Partial<SplayOptions>;
+  /**
+   * Bytes a WebSocket may have waiting to be sent before it is closed (STUDY-64 W1, DV-311). Default and most:
+   * Bun's largest, 2³² − 1. For tests.
+   */
+  wsBackpressureLimit?: number;
 };
+
+/**
+ * Bun's largest `backpressureLimit` (a 32-bit count). Past it Bun either drops frames or closes the socket;
+ * bunvex closes it (STUDY-64 W0/W1): Convex buffers without limit and never drops a frame.
+ */
+export const WS_BACKPRESSURE_LIMIT = 2 ** 32 - 1;
 
 /**
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
@@ -823,6 +834,11 @@ export function createServer(opts: ServerOptions) {
     websocket: {
       maxPayloadLength: 8 * 1024 * 1024,
       idleTimeout: 960,
+      // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
+      // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
+      // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
+      backpressureLimit: Math.min(opts.wsBackpressureLimit ?? WS_BACKPRESSURE_LIMIT, WS_BACKPRESSURE_LIMIT),
+      closeOnBackpressureLimit: true,
       open(ws) {
         ws.data.session.open(ws);
       },
