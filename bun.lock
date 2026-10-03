@@ -124,6 +124,9 @@
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
+      "devDependencies": {
+        "fast-check": "4.10.2",
+      },
     },
     "packages/client": {
       "name": "@bunvex/client",
@@ -190,6 +193,10 @@
         "@bunvex/core": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
+      },
+      "devDependencies": {
+        "mongodb": "^7.7.0",
+        "mysql2": "^3.24.4",
       },
     },
     "packages/nextjs": {

@@ -118,6 +118,7 @@ export {
   installDeterminismIn,
   newUserTimer,
   observeTime,
+  PersistenceReadError,
   pausingUserTime,
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
@@ -149,6 +150,7 @@ export {
   type TxBody,
 } from "./engine.ts";
 export {
+  applyEnvVarChanges,
   checkEnvVarName,
   checkEnvVarValue,
   ENV_VAR_LIMIT,
@@ -158,11 +160,13 @@ export {
   EnvironmentVariableError,
   EnvironmentVariables,
   type EnvVarChange,
+  orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
+  DanglingReferenceError,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -255,6 +259,7 @@ export {
 export { SystemReader } from "./system-reader.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
+  formatBytes,
   ImportIdError,
   type PaginationOptions,
   type PaginationResult,

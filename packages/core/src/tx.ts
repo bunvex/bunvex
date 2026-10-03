@@ -41,7 +41,13 @@ import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, quer
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
-import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
+import {
+  DanglingReferenceError,
+  type DocWrite,
+  type IndexWrite,
+  type Persistence,
+  type ScanDocs,
+} from "./persistence/index.ts";
 import {
   checkIdentifier,
   type Doc,
@@ -165,7 +171,7 @@ export const TRANSACTION_MAX_NUM_USER_WRITES = 16_000;
 export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   const units = ["B", "KiB", "MiB", "GiB"];
   let i = 0;
   let x = n;
@@ -380,6 +386,11 @@ export class Tx {
   /** Convex's `db.vars` (mutations): `commitTs`, the placeholder of this transaction's commit timestamp. */
   get vars(): { commitTs: CommitTsPlaceholder } | undefined {
     return this.writable ? { commitTs: commitTsPlaceholder } : undefined;
+  }
+
+  /** @internal The next `_creationTime` this transaction would hand out (the engine starts the next one past it). */
+  get creationCursor(): number {
+    return this.nextCreationTime;
   }
 
   /** Whether a write holds a commit timestamp to resolve at commit. */
@@ -812,14 +823,34 @@ export class Tx {
   }
 
   private async snapshotRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    this.retention?.check(this.snapshot);
+    try {
+      const out = await this.storeRange(st, lo, hi, limit);
+      this.retention?.check(this.snapshot);
+      return out;
+    } catch (e) {
+      // A reference whose document retention pruned during the read is a snapshot too old, not a corrupt store.
+      if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
+      throw e;
+    }
+  }
+
+  private async storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     const p = this.persistence as Persistence & Partial<ScanDocs>;
-    this.retention?.check(this.snapshot);
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
-      const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
-      this.retention?.check(this.snapshot);
+      const rows = await storeCall(async () => {
+        try {
+          return await p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
+        } catch (e) {
+          // As snapshotRange does for the engine path: a reference retention pruned during the read is a
+          // snapshot too old. Checked here, before storeCall makes the failure a PersistenceReadError.
+          if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
+          throw e;
+        }
+      });
       for (const j of rows) this.recordDoc(j);
       this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
@@ -828,13 +859,12 @@ export class Tx {
     const out: Doc[] = [];
     for (const id of ids) {
       const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
-      if (json) {
-        this.recordDoc(json);
-        out.push(decodeDoc(json));
-      }
+      // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
+      if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
+      this.recordDoc(json);
+      out.push(decodeDoc(json));
     }
     this.countRowsRead(t.name, out.length);
-    this.retention?.check(this.snapshot);
     return out;
   }
 
@@ -1079,6 +1109,11 @@ export class Tx {
 
   private countRowsRead(table: string, n: number) {
     if (n > 0) this.tableStat(table).rowsRead += n;
+  }
+
+  /** @internal Rows a cached read stands for (backend-state.ts): counted as the scan it replaces would be. */
+  countRowsReadOf(table: string, n: number) {
+    this.countRowsRead(table, n);
   }
 
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */

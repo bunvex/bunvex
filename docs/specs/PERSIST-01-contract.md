@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -87,7 +87,7 @@ rebuilds it from its log, ignoring a torn trailing record.
 ## C6 — optional fast paths
 
 - `scanDocs(table, index, lo, hi, T, limit, desc)` (interface `ScanDocs`): the documents (JSON) for what `scan` would return,
-  in one round trip. Same semantics as `scan` + `get` for each id.
+  in one round trip. Same semantics as `scan` + `get` for each id; an id whose `get` would be null rejects (C15).
 
 ## C7 — single writer (lease and fencing)
 
@@ -307,7 +307,22 @@ memory driver as records of its log. Retention keeps its windows and cursors the
 C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
 required of the first-party drivers, which all implement them. Conformance K27–K29.
 
-## Conformance (`@bunvex/persistence-conformance`)
+## C15 — index references
+
+An index entry and its document are written in the same commit, so at any snapshot each live entry
+names a document that exists there. A store where one does not (the document never written, or deleted
+while the entry stayed) is corrupt, and reads say so instead of hiding it, as Convex's do ("Dangling index
+reference", "Index reference to deleted document"; STUDY-09 §1.6):
+
+- `scan` reads the index alone: it returns the entry's id whatever its document (it does not join).
+- `get` returns null for such a document, as for any missing one.
+- `scanDocs` rejects with `DanglingReferenceError` (its `deleted` flag tells the two cases apart); it never
+  returns fewer documents than the range holds. The engine raises the same error when `get` returns null
+  for an id `scan` returned, unless retention passed the snapshot meanwhile (then the read is out of the
+  window, C13).
+
+Documents are keyed by (table, id): one id in two tables is two documents. Conformance K30–K31.
+
 
 | # | property | how |
 |---|---|---|
@@ -338,6 +353,8 @@ required of the first-party drivers, which all implement them. Conformance K27�
 | K27 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order |
 | K28 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
 | K29 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
+| K30 | index references (C15) | an index entry whose document was never written and one whose document was deleted while the entry stayed, among live ones: `scan` returns every entry (asc and desc), `get` is null for both (and the deleted one reads below its delete); `scanDocs` over the whole index (both directions), over each broken entry alone and below the delete rejects with `DanglingReferenceError` carrying the right `deleted` flag, and reads ranges with no broken entry. From Convex's `query_dangling_reference` and `query_reference_deleted_doc` |
+| K31 | one id in two tables (C15) | the same id written in two tables in one commit (different documents, one index each), then replaced in one and deleted in the other: `get`, `scan` and `scanDocs` answer each table's own document at every snapshot. From Convex's `same_internal_id_multiple_tables` |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
@@ -367,5 +384,8 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   the committer; on a real MySQL with `max_allowed_packet` = 1 MiB the same group fails with the packet error);
   a commit torn across two batches (red: "torn commit"); batches flushed in swapped pairs (red: `maxTs` below
   the last acknowledged commit, flushed commits missing below `maxTs`).
+- K30 went red on Postgres, MySQL and MongoDB before C15 (their `scanDocs` dropped the broken entries and
+  returned the rest); K31 was sabotaged with a Postgres `get` that ignores the table (red: table B read
+  table A's document).
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.
