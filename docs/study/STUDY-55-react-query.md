@@ -1,6 +1,6 @@
 # STUDY-55 — TanStack Query: `@bunvex/react-query`, as Convex's `@convex-dev/react-query`
 
-- **Status:** accepted: R1–R4 as recommended (owner, 2026-10-03); R4 (pagination) built in a follow-up PR
+- **Status:** accepted: R1–R3 as recommended (owner, 2026-10-03); R4 (pagination) deferred, to revisit (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
   (`npm-packages/@convex-dev/react-query`, published as `@convex-dev/react-query@0.1.0`; also on
   github.com/get-convex/convex-react-query)
@@ -83,7 +83,19 @@ change.
 | R1 | Names: `BunvexQueryClient`, `bunvexQuery`, `bunvexAction`, `useBunvexQuery`, `useBunvexQueries`, `useBunvexPaginatedQuery`, `useBunvexMutation`, `useBunvexAction` (plus `@bunvex/react`'s `useBunvex`, `useBunvexAuth`); the messages name `BunvexQueryClient` | rule 5 | accepted (owner, 2026-10-03): DV-260 |
 | R2 | The key prefixes are `"bunvexQuery"` / `"bunvexAction"`, so hashes start `bunvexQuery\|` | rule 5; visible in devtools and prefix invalidation | accepted (owner, 2026-10-03): DV-261 |
 | R3 | The args in a key are their JSON encoding (`toJsonValue`), decoded for the call: a bigint, bytes or a special float survives `dehydrate`, persisters and devtools. For plain JSON args the key is the same as Convex's | an extension: Convex's open TODO ("bigints are not serializable") | accepted (owner, 2026-10-03): DV-262 |
-| R4 | Paginated queries through TanStack Query (on the paginated client of STUDY-26 P2) | an extension: Convex's open TODO; built in a follow-up PR | accepted (owner, 2026-10-03): DV-263 |
+| R4 | Paginated queries through TanStack Query (on the paginated client of STUDY-26 P2) | an extension: Convex's open TODO | deferred (owner, 2026-10-03): DV-263, see below |
+
+**R4, why not now (owner, 2026-10-03).** Convex has no paginated TanStack integration: `@convex-dev/react-query`
+lists "paginated queries" as a TODO and only re-exports `usePaginatedQuery` as `useConvexPaginatedQuery` (the
+public repository, github.com/get-convex/convex-react-query, mirrors the monorepo; nothing more there or in
+`convex-helpers`). bunvex matches that today: `useBunvexPaginatedQuery` is re-exported. Building R4 would be API
+of our own with no model, and reactive pagination fits TanStack's cache poorly: pages split and their cursors
+change under the cache entry, `loadMore` is a function (not serializable for `dehydrate`), and
+`useInfiniteQuery`'s fixed pages fight the splitting. The shape considered, to start from when revisiting:
+`useQuery(bunvexPaginatedQuery(fn, args, { initialNumItems }))` with `data = { results, status, loadMore }`;
+on the server the first page as `{ results, status }` only (serializable), the live subscription adding
+`loadMore` once the client takes over. Revisit when apps ask for paginated data cached, or prefetched on the
+server, through TanStack.
 
 ## 5. Tests
 
