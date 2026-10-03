@@ -40,6 +40,7 @@
 import {
   checkLayoutVersion,
   checkUnversionedTables,
+  DanglingReferenceError,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -572,7 +573,9 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     const out: string[] = [];
     for (const id of ids) {
       const j = byId.get(id);
-      if (j) out.push(j);
+      // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
+      if (!j) throw new DanglingReferenceError(index, id, ts, byId.has(id));
+      out.push(j);
     }
     return out;
   }

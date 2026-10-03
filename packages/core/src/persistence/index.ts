@@ -81,6 +81,29 @@ export interface Lease {
 export const hasLease = (p: Persistence): p is Persistence & Lease =>
   typeof (p as Partial<Lease>).acquireLease === "function";
 
+/**
+ * An index entry whose document does not exist at the snapshot read (PERSIST-01 C15): never written
+ * (`deleted` false) or deleted while the entry stayed (`deleted` true). The engine writes an entry and its
+ * document in the same commit, so this means a corrupt store; a read raises it instead of returning fewer
+ * documents than the range holds, as Convex does ("Dangling index reference", "Index reference to
+ * deleted document", crates/postgres/src/lib.rs).
+ */
+export class DanglingReferenceError extends Error {
+  constructor(
+    readonly index: number,
+    readonly id: string,
+    readonly ts: number,
+    readonly deleted: boolean,
+  ) {
+    super(
+      deleted
+        ? `Index reference to deleted document: index ${index} points to ${id}, deleted at snapshot ${ts}`
+        : `Dangling index reference: index ${index} points to ${id}, which does not exist at snapshot ${ts}`,
+    );
+    this.name = "DanglingReferenceError";
+  }
+}
+
 /** Another process took the store's lease: this one must stop writing (its flushes are fenced). */
 export class LeaseLostError extends Error {
   constructor(message = "the store's lease was taken by another process; this one can no longer write") {
@@ -157,7 +180,8 @@ export interface RetentionStore {
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
   typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
-/** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). */
+/** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). An
+ *  entry whose document does not exist at `ts` rejects with `DanglingReferenceError` (C15), never skipped. */
 export interface ScanDocs {
   scanDocs(
     table: number,

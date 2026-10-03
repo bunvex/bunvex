@@ -34,9 +34,9 @@ describe("regressions", () => {
   // The skew nemesis (seed 1): after a restart with the clock behind, a document inserted by a transaction
   // that read another one got an earlier _creationTime, so the default order no longer followed commits.
   // Convex floors a transaction's first _creationTime at its snapshot (`CreationTime::for_transaction`,
-  // crates/common/src/document.rs: max(wall clock, snapshot ts rounded up to the ms)).
+  // crates/common/src/document.rs: max(wall clock, snapshot ts rounded up to the ms)). Fixed by #271.
   for (const store of ["memory", "sqlite"])
-    test.failing(`${store}: _creationTime follows commits across a restart with the clock behind`, async () => {
+    test(`${store}: _creationTime follows commits across a restart with the clock behind`, async () => {
       const server = serverOn(store);
       let c = client(await server.start({ JEPSEN_CLOCK_SKEW_MS: "3000" }));
       await c.mutation("log:append", { client: 0, seq: 0 });
@@ -52,8 +52,8 @@ describe("regressions", () => {
   // server; the client's resend failed on a store error, which the client was told as the mutation's failure
   // (DV-80: a store failure is a function error) — and the first attempt then committed. Convex treats a
   // store failure as a system error: the connection closes, the client resends again and gets the recorded
-  // answer, so a mutation the app was told failed never takes effect.
-  test.failing("a mutation reported failed never takes effect (a resend's store error)", async () => {
+  // answer, so a mutation the app was told failed never takes effect. Fixed by #273.
+  test("a mutation reported failed never takes effect (a resend's store error)", async () => {
     const server = serverOn("memory", {
       JEPSEN_STORE_FAULTS: "1",
       JEPSEN_STORE_RATES: JSON.stringify({
