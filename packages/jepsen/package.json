@@ -18,5 +18,8 @@
     "type": "git",
     "url": "https://github.com/bunvex/bunvex",
     "directory": "packages/jepsen"
+  },
+  "devDependencies": {
+    "mongodb": "^7.7.0"
   }
 }

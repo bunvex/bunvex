@@ -184,7 +184,14 @@ None: this is a test of bunvex's behaviour against Convex's guarantees, not a fe
 - `packages/jepsen/test/run.test.ts` also runs 2.5 s on memory with the `all` nemesis (about 10 faults).
 - `packages/jepsen/test/regressions.test.ts`: the findings, scripted (§3.8). `test/invariants.test.ts`: the
   invariants on hand-made histories.
-- The long runs: `bun packages/jepsen/src/cli.ts --store … --seconds … --runs …`; the nightly workflow on
+- **Nightly** (`.github/workflows/jepsen-nightly.yml`, the owner's call): 12 minutes per store on Postgres,
+  MySQL and MongoDB, 20 s runs taking turns through `none,partition,kill,store,all`, each on a fresh database.
+  On a remote store `all` also cuts the store's connections (a second proxy, in front of the database); a
+  lost-connection error a function sees is expected and makes a mutation indeterminate (DV-80 again: Convex
+  closes the client's connection instead). A failure opens an issue, or comments on the open one, with the
+  seed, the findings and the smallest failing history; the histories are the run's artifact. A pull request
+  touching the harness runs it for a minute per store.
+- Long runs by hand: `bun packages/jepsen/src/cli.ts --store … --minutes …|--runs … --nemesis a,b,…`.
   Postgres, MySQL and MongoDB comes with PR 3.
 
 ## 6. Open questions

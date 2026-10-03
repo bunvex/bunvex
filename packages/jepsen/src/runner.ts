@@ -23,8 +23,9 @@ export type RunOptions = {
 /** Something that injects faults during a run, and undoes them before the run quiesces. */
 export type Nemesis = {
   name: string;
-  /** Environment for the server process, from the run's seed (e.g. store faults). */
-  serverEnv?(seed: number): Record<string, string>;
+  /** Environment for the server process, from the run's seed and its environment (store faults, a proxy in
+   *  front of a remote store). */
+  serverEnv?(seed: number, env: Record<string, string | undefined>): Record<string, string>;
   /** A failure this nemesis causes on purpose (an injected store error), not a finding. */
   expected?(error: string): boolean;
   /** Called once the server is up; returns the URL clients should use (a proxy, for network faults). */
@@ -66,7 +67,10 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   const server = new ServerProcess({
     store: opts.store,
     dataDir,
-    env: { ...opts.env, ...opts.nemesis?.serverEnv?.(opts.seed) },
+    env: {
+      ...opts.env,
+      ...opts.nemesis?.serverEnv?.(opts.seed, { ...process.env, ...opts.env, PERSISTENCE: opts.store }),
+    },
   });
   const history = new History();
   const violations: string[] = [];
