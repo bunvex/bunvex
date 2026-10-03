@@ -189,6 +189,9 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-260 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit | owner, 2026-10-03 (as recommended) | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
+| DV-261 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR | owner, 2026-10-03 (as recommended) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
+| DV-262 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -301,13 +304,7 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
-DV-260–DV-262 (STUDY-48 A1–A3, the audit log) await the owner; the PR implements each recommendation:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-260 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit. Accept | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
-| DV-261 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR. Accept until then | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
-| DV-262 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42). Accept | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
+DV-260–DV-262 (STUDY-48 A1–A3, the audit log) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
