@@ -620,12 +620,17 @@ export class Engine {
   private searchCommit(tx: Tx, own: ((ts: number) => void) | undefined) {
     const writes = tx.writtenDocs();
     const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
+    // A commit timestamp (STUDY-53) is written into the documents at `atTs`, after this commit is built: the
+    // indexes then take the resolved versions. The OCC and log keys above keep the placeholder's, which no
+    // search can name before the commit has its timestamp.
+    const resolvesLater = tx.hasCommitTs;
     return {
       // The search indexes are brought up to date with the commit as it becomes visible, in commit order.
       onVisible: (ts: number) => {
         own?.(ts);
-        this.searchIndexes.apply(ts, writes, indexed);
-        this.vectorIndexes.apply(writes);
+        const final = resolvesLater ? tx.writtenDocs() : writes;
+        this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
+        this.vectorIndexes.apply(final);
       },
       ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
       ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),

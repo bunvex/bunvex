@@ -105,3 +105,22 @@ test("a session request's recorded result resolves on replay to the original com
   const replayed = (again as { replayed: { result: string } }).replayed.result;
   expect(replayed).toBe(stringifyValue({ at }));
 });
+
+test("a commit timestamp in a search filter field is indexed as resolved (with STUDY-45's search indexes)", async () => {
+  const e = await new Engine(
+    defineSchema({
+      messages: defineTable(v.any()).searchIndex("search_body", { searchField: "body", filterFields: ["at"] }),
+    }),
+    await MemoryPersistence.open(null, { durable: false }),
+  ).init();
+  await e.searchReady();
+  const { ts } = await e.mutationWithTs((db) => db.insert("messages", { body: "hello world", at: db.vars!.commitTs }));
+  const ns = BigInt(ts) * 1000n;
+  const hits = await e.query((db) =>
+    db
+      .query("messages")
+      .withSearchIndex("search_body", (q) => q.search("body", "hello").eq("at", ns))
+      .collect(),
+  );
+  expect(hits.map((d) => d.at)).toEqual([ns]);
+});
