@@ -72,6 +72,7 @@ import {
   type DeclaredTable,
   type Doc,
   documentValidator,
+  referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
   type TableDef,
@@ -1009,6 +1010,29 @@ export class Engine {
     this.startTableDeletion();
   }
 
+  /**
+   * Delete user tables in one commit (Convex's `delete_tables` / `delete_active_table`): a table that does
+   * not exist is skipped; a system table is refused; one the active schema declares, or points to with
+   * `v.id`, is refused with Convex's `SchemaEnforcementError` messages; a pending schema that does fails.
+   */
+  async deleteTables(names: string[]) {
+    for (const name of names) {
+      if (name.startsWith("_")) throw new Error(`cannot delete system table ${name}`);
+      const refusal = deletionRefusal(this.schema, name);
+      if (refusal) throw new SchemaEnforcementError(refusal);
+    }
+    const pending = this.pendingPush;
+    await this.activateTables([], names);
+    if (pending)
+      for (const name of names) {
+        const refusal = deletionRefusal(pending.schema, name);
+        if (refusal) {
+          await this.failSchemaPush(pending.id, refusal, name).catch(() => {});
+          break;
+        }
+      }
+  }
+
   /** Delete an active table: invisible at once, its documents removed in the background. */
   async deleteTable(name: string) {
     await this.activateTables([], [name]);
@@ -1451,6 +1475,20 @@ export class Engine {
 function cacheMaxBytesFromEnv(): number {
   const n = Number(process.env.UDF_CACHE_MAX_SIZE);
   return Number.isFinite(n) && n > 0 ? n : QUERY_CACHE_MAX_BYTES;
+}
+
+/** A schema refusing to lose a table (Convex's `SchemaEnforcementError`). */
+export class SchemaEnforcementError extends Error {
+  readonly code = "SchemaEnforcementError";
+}
+
+/** Why `schema` refuses the deletion of `table` (Convex's `check_delete_table`), or null. */
+function deletionRefusal(schema: SchemaDefinition, table: string): string | null {
+  if (schema.tables.has(table)) return `Failed to delete table "${table}" because it appears in the schema`;
+  for (const name of [...schema.tables.keys()].sort())
+    if (referencedTables(schema.tables.get(name)!.document.json).has(table))
+      return `Failed to delete table "${table}" because \`v.id("${table}")\` appears in the schema of table "${name}"`;
+  return null;
 }
 
 async function readCatalog(db: Tx) {

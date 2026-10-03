@@ -120,6 +120,7 @@ export {
   type QueryJournal,
   readInstanceRecord,
   readSystemRows,
+  SchemaEnforcementError,
   SchemaPushError,
   stringifyValue,
   type TxBody,
@@ -183,6 +184,7 @@ export {
   TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
 } from "./scheduled-jobs.ts";
 export {
+  checkIdentifier,
   type DeclaredTable,
   type Doc,
   defineSchema,
@@ -196,6 +198,7 @@ export {
   indexKey,
   MAX_INDEXES_PER_TABLE,
   MAX_SEARCH_FILTER_FIELDS,
+  referencedTables,
   type SchemaDefinition,
   type SearchIndexDef,
   type TableDef,
