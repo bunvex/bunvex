@@ -190,6 +190,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-250 | A page of a paginated query that failed (e.g. `InvalidCursor`) never escapes the paginated client's transition: the error reaches `onPaginatedUpdate_experimental`'s `onError` and `usePaginatedQuery_experimental` (reset, `status: "error"`, error boundary) | the failed page is read outside any `try` in the transition, so the error is thrown out of the WebSocket message handler: `onError` is never called and the hook never sees the error from a transition (checked with the official client) | yes (only when a page fails) | keep bunvex's: it is where Convex's own code means the error to go | owner, 2026-10-03 (as recommended) | [STUDY-26 P3](../study/STUDY-26-sync-client.md#83-divergences) |
 
 ## Resolved to match Convex
 
@@ -304,9 +305,7 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
-| ID | bunvex | Convex | Observable | Recommendation | Source |
-|---|---|---|---|---|---|
-| DV-250 | A page of a paginated query that failed (e.g. `InvalidCursor`) never escapes the paginated client's transition: the error reaches `onPaginatedUpdate_experimental`'s `onError` and `usePaginatedQuery_experimental` (reset, `status: "error"`, error boundary) | the failed page is read outside any `try` in the transition, so the error is thrown out of the WebSocket message handler: `onError` is never called and the hook never sees the error from a transition (checked with the official client) | yes (only when a page fails) | keep bunvex's: it is where Convex's own code means the error to go | [STUDY-26 P3](../study/STUDY-26-sync-client.md#83-divergences) |
+DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 

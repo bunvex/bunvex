@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30); P2 built (§8.4); P3 pending (owner)
+- **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30); P2 built (§8.4); P3 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -348,13 +348,13 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 ### 8.3 Divergences
 
 Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96 (decided), P2 closed by §8.4,
-P3 as DV-250 (pending).
+P3 as DV-250 (decided).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | P1 | The server's `InvalidCursor` for a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}` (Convex: `isConvexSystemError`); the client recognizes it by that data or by its message, as Convex's | Owner's naming rule for the key; it closes STUDY-17 D4. The official client still recognizes it by the message | **accepted**: option (a) |
 | P2 | ~~`onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later~~ | `usePaginatedQuery` does not use them, in Convex either | **accepted** later; **built** (§8.4) |
-| P3 | A page that failed never escapes the paginated client's transition: the transition still reaches the listeners, and the error comes out where it is read (`onError`, the hook's reset / `status: "error"` / error boundary). Convex reads the failed page outside any `try` in the transition, so the error is thrown out of the WebSocket message handler | Convex's path loses the error: `onError` is never called, and `usePaginatedQuery_experimental` never reaches its `InvalidCursor` reset or its error states from a transition (§8.4) | **pending** (owner): DV-250 |
+| P3 | A page that failed never escapes the paginated client's transition: the transition still reaches the listeners, and the error comes out where it is read (`onError`, the hook's reset / `status: "error"` / error boundary). Convex reads the failed page outside any `try` in the transition, so the error is thrown out of the WebSocket message handler | Convex's path loses the error: `onError` is never called, and `usePaginatedQuery_experimental` never reaches its `InvalidCursor` reset or its error states from a transition (§8.4) | accepted as recommended (owner, 2026-10-03): DV-250 |
 
 ### 8.4 The paginated query client (`onPaginatedUpdate_experimental`, `watchPaginatedQuery`, `usePaginatedQuery_experimental`)
 
