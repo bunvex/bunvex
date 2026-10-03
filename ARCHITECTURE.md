@@ -46,7 +46,7 @@ bunvex/
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
-│   │   ├── search                   text and vector search (or its own package)               D
+│   │   ├── search-indexes           the search indexes of the active tables (STUDY-45)        🟡
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
 │   │       ├── memory               memory + append-only log (no dependencies)                ✅
 │   │       └── sqlite               bun:sqlite (no dependencies)                              ✅
@@ -234,4 +234,5 @@ Recorded in ARCH-01 §6, to be settled in their own specs:
 1. Types: code generation (as Convex) or type inference without a codegen step.
 2. ~~Deploying functions~~ — decided: hot swap, a `vm` context per code version (STUDY-35, DV-164).
 3. Sandboxing functions: now, or later.
-4. Text and vector search: inside `core`, or a package of their own.
+4. ~~Text and vector search: inside `core`, or a package of their own~~ — decided: a package of their own,
+   `@bunvex/search` (the tokenizer, index and ranking), wired into transactions by `core` (owner, 2026-10-02).
