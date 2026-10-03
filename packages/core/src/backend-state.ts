@@ -52,6 +52,18 @@ export class BackendStateCache {
 /** Convex's `BackendState::is_stopped`. */
 export const isStopped = (s: BackendState) => s.system !== "none" || s.usage_limit !== "none" || s.user !== "none";
 
+/** Convex's `set_usage_limit_stop_state` (STUDY-61): the previous state, or null when unchanged. */
+export async function setUsageLimitStopState(db: Tx, usageLimit: "none" | "disabled"): Promise<BackendState | null> {
+  const row = (await db.asSystem(() => db.query(BACKEND_STATE_TABLE).first())) as
+    | (BackendState & { _id: string })
+    | null;
+  const current = row ? { system: row.system, usage_limit: row.usage_limit, user: row.user } : { ...RUNNING };
+  if (current.usage_limit === usageLimit) return null;
+  if (row) await db.asSystem(() => db.patch(BACKEND_STATE_TABLE, row._id, { usage_limit: usageLimit }));
+  else await db.asSystem(() => db.insert(BACKEND_STATE_TABLE, { ...RUNNING, usage_limit: usageLimit }));
+  return current;
+}
+
 /** Convex's `set_user_stop_state`: the previous state, or null when it was already `user`. */
 export async function setUserStopState(db: Tx, user: "none" | "paused"): Promise<BackendState | null> {
   const row = (await db.asSystem(() => db.query(BACKEND_STATE_TABLE).first())) as

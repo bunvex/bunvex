@@ -342,6 +342,13 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
+DV-308 and DV-309 (STUDY-61, usage limits) await the owner; the draft PR implements the recommendations:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-308 | The metric `actionComputeConvexGbHours` is `actionComputeIsolateGbHours`; the usage-limit stop message says "in the deployment settings" (not "in the Convex dashboard in deployment settings") | Convex's names and text | yes: API clients and the dashboard use the metric name; the function error's text | Rule 5. As DV-307: recommend an explicit rule-5 exception for wire names (the metric), keep the reworded message | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
+| DV-309 | Usage is metered from the function log: database I/O as its byte counts (DV-251; no index key bytes), no search, fetch or action-storage bytes, no system-function bandwidth; action CPU equals action time (DV-252) | per-byte counts from the store, searches, fetches and storage calls | yes: `get_current_usage` and when limits trip | Not done yet: those counters are not measured. Accept for now | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
@@ -351,7 +358,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 |---|---|---|
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
-| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
+| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |

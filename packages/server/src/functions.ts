@@ -81,6 +81,7 @@ import type {
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { FileStorage } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
+import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
  *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result. */
@@ -449,7 +450,7 @@ export class Functions {
         });
     const res = await withOwner(r, run);
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) log.append(this.completion(r, res.lines, o, false));
+    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false));
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -463,7 +464,23 @@ export class Functions {
   logOccRetry(error: OccError) {
     const r = currentOwner();
     if (this.functionLog && r instanceof Running)
-      this.functionLog.append(this.completion(r, currentOwnLines(), { error }, true));
+      this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true));
+  }
+
+  /** The usage meter (STUDY-61); set by `createServer`. */
+  usageMeter: UsageMeter | null = null;
+
+  /** Log a completion, and meter it as Convex's `UsageCounter::track_call`. */
+  private logCompletion(log: FunctionLog, r: Running, c: Completion) {
+    log.append(c);
+    this.usageMeter?.recordExecution({
+      udfType: c.udfType,
+      environment: c.environment,
+      executionTime: c.cachedResult ? 0 : c.executionTime,
+      userExecutionTime: c.userExecutionTime,
+      memoryMb: c.usageStats.memoryUsedMb,
+      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
+    });
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
@@ -487,12 +504,17 @@ export class Functions {
       error: e === undefined ? null : errorText(e),
       requestId: r.requestId,
       executionId: r.executionId,
-      usageStats: used
-        ? usageStats(
-            { bytes: used.bytesRead, documents: used.documentsRead },
-            { bytes: used.bytesWritten, documents: used.documentsWritten },
-          )
-        : NO_USAGE,
+      usageStats: {
+        ...(used
+          ? usageStats(
+              { bytes: used.bytesRead, documents: used.documentsRead },
+              { bytes: used.bytesWritten, documents: used.documentsWritten },
+            )
+          : NO_USAGE),
+        // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
+        // cached query (STUDY-61).
+        memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
+      },
       returnBytes: e === undefined ? (o.returnBytes ?? null) : null,
       occInfo:
         e instanceof OccError

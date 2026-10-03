@@ -36,6 +36,8 @@ export const EXPORTS_TABLE = "_exports";
 export const CANONICAL_URLS_TABLE = "_canonical_urls";
 /** The deployment's audit log (STUDY-48), as Convex's `_deployment_audit_log`: one document per event. */
 export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
+/** Usage limits (STUDY-61), as Convex's `_usage_limits`: `{metric, window, limitType, limit, enabled}`. */
+export const USAGE_LIMITS_TABLE = "_usage_limits";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
 export const FUNCTION_HANDLES_TABLE = "_function_handles";
 /** The deployment's run state (STUDY-57), as Convex's `_backend_state`: `{system, usage_limit, user}`. */
@@ -80,6 +82,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _canonical_urls: 546,
   _backend_state: 536,
   _cron_next_run: 547,
+  _usage_limits: 552,
   _index_backfills: 548,
   // bunvex's own.
   _instance: 9_999,

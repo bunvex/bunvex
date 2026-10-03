@@ -202,7 +202,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | `function-spec` (JSON of every function's args and returns) | `cli/functionSpec.ts` | done | `bunvex function-spec [--file]`: `{ url, functions }` with two-space indentation — `_system/cli/modules:apiSpec` (each function's identifier, kind, visibility, validators, then the HTTP routes as `HttpAction` entries, as Convex) and the API's URL from `_system/cli/deploymentUrl:cloudUrl` (Convex's `convexUrl:cloudUrl`, renamed by rule 5, DV-226); `--file` writes `function_spec_<ms>.json`. |
 | `typecheck`, `dashboard`, `docs`, `update`, `network-test` | `cli/*.ts` | missing | Low priority. |
 | `mcp start` (tools: data, env, functionSpec, logs, run, runOneoffQuery, status, tables) | `cli/mcp.ts`; `lib/mcp/tools` | missing | ARCHITECTURE marks mcp D. |
-| `deployment create/select/token/usage-limits`, `login`, `project` | `cli/deployment.ts` etc. | missing | Cloud-only; can be skipped. |
+| `deployment create/select/token/usage-limits`, `login`, `project` | `cli/deployment.ts` etc. | missing | Cloud-only, except `usage-limits` and `usage`: they call the deployment's `/api/v1/*usage*` routes, which self-hosted Convex serves (STUDY-61). |
 | Self-hosted selection via `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY`, `--url`, `--admin-key`, `--env-file` | `cli/lib/command.ts`, `lib/deployment.ts` | done (STUDY-35, STUDY-37) | `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171) from the environment, `.env.local`, `.env`, or `--url` / `--admin-key` / `--env-file`, for `deploy`, `env` and `run`. |
 
 ### 13. Codegen (`convex/_generated`)
@@ -278,7 +278,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_backend_state` | `crates/model/backend_state` | done (STUDY-57) | Number 536, `{system, usage_limit, user}`; bunvex sets `user` only. |
 | `_canonical_urls` | `crates/model/canonical_urls` | done (STUDY-49) | Number 546; `{requestDestination, url}`. |
 | `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | missing | |
-| `_usage_limits` | `crates/model/usage_limits` | missing | Usage caps; also exposed via `/api/v1`. |
+| `_usage_limits` | `crates/model/usage_limits` | done (STUDY-61) | Number 552, `by_selector`; `{metric, window, limitType, limit, enabled}`. |
 | `_data_sync_progress` | `crates/model/data_sync_progress` | missing | Streaming export / Fivetran. |
 | `_backend_info`, `_aws_lambda_versions`, `_next_persistence_index_id` | `crates/model/*` | missing | Internal bookkeeping (cloud entitlements, Lambda, id allocation); `_backend_info` can be skipped. |
 
@@ -318,8 +318,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Log stream API (`/api/v1/*_log_stream*`) | `crates/local_backend/log_sinks.rs` | missing | |
 | App metrics API (`/api/app_metrics/*`: udf_rate, failure %, cache hit %, latency percentiles, scheduled_job_lag, concurrency) | `crates/udf_metrics`; `local_backend` | missing | 1-minute buckets, 1-hour retention. Backs the dashboard's Health page. |
 | Prometheus `/metrics` (`DISABLE_METRICS_ENDPOINT`) | `crates/metrics`; `common/http/mod.rs` | partial | bunvex has `/stats` JSON (cache hits, retries, conflicts, subscriptions) but no Prometheus. ARCHITECTURE marks it D. |
-| Usage tracking (function calls, database/storage/vector bandwidth, storage gauges) | `crates/usage_tracking`; `crates/events/usage.rs`; `usage_gauges_tracking_worker` | missing | |
-| Usage limits (caps by metric and window, which can stop the deployment) | `crates/usage_limits`; `/api/v1/*usage_limit*` | missing | Newer feature. |
+| Usage tracking (function calls, database/storage/vector bandwidth, storage gauges) | `crates/usage_tracking`; `crates/events/usage.rs`; `usage_gauges_tracking_worker` | partial (STUDY-61) | Convex's open-source backend logs usage events to nowhere and meters them for usage limits; bunvex meters directly: calls (functions, HTTP storage calls), compute (64 MB isolate, 512 MB Node × duration), database I/O bytes, download egress. `memoryUsedMb` in the function log. The byte counts are approximate and search, fetch and action storage bytes are not counted (DV-309); no storage gauges. |
+| Usage limits (caps by metric and window, which can stop the deployment) | `crates/usage_limits`; `/api/v1/*usage_limit*` | done (STUDY-61) | Live in Convex's open-source backend too. `get_current_usage` (`seedStatus: "pending"`, as self-hosted), list / create / update / delete with Convex's checks and audit events; a 10 s worker that sets `_backend_state.usage_limit` (functions fail with Convex's message, the scheduler and crons wait, storage refuses) and audits `usage_limit_exceeded` / `change_usage_limit_stop_state`. The meter is this process's (resets on restart, as self-hosted Convex). A metric name and the message differ by rule 5 (DV-308). |
 | Insights (OCC and limit warnings) | `cli/lib/insights.ts` | missing | Cloud-only (Big Brain); can be skipped. |
 | Warning at 80 % of a limit | knob `FUNCTION_LIMIT_WARNING_RATIO` | missing | |
 

@@ -51,6 +51,7 @@ import {
   TABLES_TABLE,
   type TableMeta,
   UDF_CONFIG_TABLE,
+  USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 import {
   Committer,
@@ -549,6 +550,11 @@ export class Engine {
         document: v.any(),
       },
       { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
+      {
+        name: USAGE_LIMITS_TABLE,
+        indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },
+        document: v.any(),
+      },
     ];
     return [...systemTables, ...schema.tables.values()];
   }

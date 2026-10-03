@@ -88,6 +88,7 @@ to a spec.
 | [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | accepted: A1–A2 as recommended (owner, 2026-10-03) |
 | [STUDY-53](STUDY-53-commit-timestamp.md) | The commit timestamp: `db.vars.commitTs`, `v.commitTs()`, resolution at commit | accepted: T1–T2 as recommended (owner, 2026-10-03) |
 | [STUDY-57](STUDY-57-pause-deployment.md) | Pausing a deployment: `_backend_state`, pause / unpause, what stops while paused | implemented, no divergence an app can reach |
+| [STUDY-61](STUDY-61-usage-limits.md) | Usage tracking and usage limits: the meter, `/api/v1/*usage*`, the enforcement worker | implemented; DV-308, DV-309 pending |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-47](STUDY-47-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |

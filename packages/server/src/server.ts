@@ -79,6 +79,7 @@ import {
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -126,6 +127,8 @@ export type ServerOptions = {
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
    */
   scheduler?: SchedulerOptions;
+  /** How often usage limits are evaluated (Convex's `USAGE_LIMIT_EVALUATE_INTERVAL_SECS`, 10 s). */
+  usageLimitIntervalMs?: number;
   /**
    * The deployment's cron jobs (STUDY-30 S1): the default export of the app's `crons.ts`, as Convex's
    * `convex/crons.ts`. Checked at start (an invalid one throws here) and diffed with the stored ones by name.
@@ -216,6 +219,11 @@ export function createServer(opts: ServerOptions) {
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
   functions.functionLog = functionLog;
+  // Usage limits (STUDY-61): this process's usage, and the worker that enforces the limits.
+  const usageMeter = new UsageMeter();
+  functions.usageMeter = usageMeter;
+  const usageLimitWorker = new UsageLimitWorker(engine, usageMeter, opts.usageLimitIntervalMs);
+  usageLimitWorker.start();
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
   const makeVerifier = (auth: AuthConfig | undefined) =>
@@ -457,10 +465,18 @@ export function createServer(opts: ServerOptions) {
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     if (req.method === "OPTIONS") return fs.preflight(req);
     try {
-      if (url.pathname === "/api/storage/upload" && req.method === "POST")
-        return fs.cors(req, await fs.upload(req, url));
-      if (req.method === "GET" || req.method === "HEAD")
-        return fs.cors(req, await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length))));
+      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      if (url.pathname === "/api/storage/upload" && req.method === "POST") {
+        const r = await fs.upload(req, url);
+        usageMeter.record("functionCalls", 1);
+        return fs.cors(req, r);
+      }
+      if (req.method === "GET" || req.method === "HEAD") {
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        usageMeter.record("functionCalls", 1);
+        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
+        return fs.cors(req, r);
+      }
       return fs.cors(req, new Response(null, { status: 405 }));
     } catch (e) {
       if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
@@ -622,6 +638,21 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       return json(await tableShapes(engine));
     }
+    const usage = USAGE_LIMIT_ROUTE.exec(url.pathname);
+    if (usage)
+      try {
+        const r = await usageLimitRoute(
+          { engine, functions, meter: usageMeter, wake: () => void usageLimitWorker.wake() },
+          usage[1]!,
+          usage[2],
+          req,
+          caller,
+        );
+        if (r) return r;
+      } catch (e) {
+        if (e instanceof UsageLimitError) return requestError(e.status, e.code, e.message);
+        throw e;
+      }
     const pause = PAUSE_ROUTE.exec(url.pathname);
     if (pause && req.method === "POST") return pauseRoute(pause[1] === "unpause", caller);
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
@@ -756,6 +787,7 @@ export function createServer(opts: ServerOptions) {
         STREAM_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
+        USAGE_LIMIT_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -1343,8 +1375,12 @@ export function createServer(opts: ServerOptions) {
     cronsReady,
     /** The function execution log (STUDY-47). */
     functionLog,
+    /** Usage limits (STUDY-61). */
+    usageMeter,
+    usageLimitWorker,
     stop: () => {
       functionLog.close();
+      usageLimitWorker.stop();
       void exportService?.stop();
       void importService?.stop();
       void scheduler.stop();

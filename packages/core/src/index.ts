@@ -13,6 +13,7 @@ export {
   isStopped,
   notRunningMessage,
   readBackendState,
+  setUsageLimitStopState,
   setUserStopState,
 } from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
@@ -37,6 +38,7 @@ export {
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
   UDF_CONFIG_TABLE,
+  USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 export {
   Committer,
