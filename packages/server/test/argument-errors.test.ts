@@ -20,7 +20,10 @@ async function setup() {
   ).init();
   const functions = new Functions(engine).register("m", {
     typed: query({ args: { x: v.number() }, handler: async (_ctx, { x }) => x }),
-    untyped: query(async (_ctx, args: unknown) => ({ got: args === undefined ? "undefined" : args })),
+    // Convex hands an unvalidated handler whatever came, which the types do not allow for.
+    untyped: query((async (_ctx: unknown, args: unknown) => ({
+      got: args === undefined ? "undefined" : args,
+    })) as never),
     badReturn: query({ args: {}, returns: v.string(), handler: async () => 5 as never }),
     actRunsBad: action({
       args: {},
