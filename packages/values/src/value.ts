@@ -254,13 +254,29 @@ const utf8len = (s: string) => Buffer.byteLength(s, "utf8");
 
 /** Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. */
 export function valueSize(v: Value): number {
-  if (v === null || typeof v === "boolean") return 1;
-  if (typeof v === "number" || typeof v === "bigint") return 9;
-  if (typeof v === "string") return utf8len(v) + 2;
+  // Plain loops: this walks every result and argument (the 16 MiB limits, STUDY-64), so no per-field arrays.
+  switch (typeof v) {
+    case "string":
+      return utf8len(v) + 2;
+    case "number":
+    case "bigint":
+      return 9;
+    case "boolean":
+      return 1;
+  }
+  if (v === null) return 1;
+  if (Array.isArray(v)) {
+    let n = 2;
+    for (let i = 0; i < v.length; i++) n += valueSize(v[i]);
+    return n;
+  }
   if (isBytes(v)) return v.byteLength + 2;
-  if (Array.isArray(v)) return v.reduce<number>((n, e) => n + valueSize(e), 2);
+  const o = v as { [k: string]: Value | undefined };
   let n = 2;
-  for (const [k, e] of Object.entries(v)) if (e !== undefined) n += utf8len(k) + 1 + valueSize(e);
+  for (const k of Object.keys(o)) {
+    const e = o[k];
+    if (e !== undefined) n += utf8len(k) + 1 + valueSize(e);
+  }
   return n;
 }
 
