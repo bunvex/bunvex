@@ -161,6 +161,15 @@
       "name": "@bunvex/file-storage",
       "version": "0.1.0-alpha.0",
     },
+    "packages/nextjs": {
+      "name": "@bunvex/nextjs",
+      "version": "0.1.0-alpha.0",
+      "dependencies": {
+        "@bunvex/client": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
+    },
     "packages/persistence": {
       "name": "@bunvex/persistence",
       "version": "0.1.0-alpha.0",
@@ -239,6 +248,7 @@
       "dependencies": {
         "@bunvex/client": "workspace:*",
         "@bunvex/core": "workspace:*",
+        "@bunvex/nextjs": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/react": "workspace:*",
         "@bunvex/server": "workspace:*",
@@ -394,6 +404,8 @@
     "@bunvex/dashboard-app": ["@bunvex/dashboard-app@workspace:apps/dashboard"],
 
     "@bunvex/file-storage": ["@bunvex/file-storage@workspace:packages/file-storage"],
+
+    "@bunvex/nextjs": ["@bunvex/nextjs@workspace:packages/nextjs"],
 
     "@bunvex/persistence": ["@bunvex/persistence@workspace:packages/persistence"],
 

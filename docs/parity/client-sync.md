@@ -232,10 +232,10 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `fetchQuery / fetchMutation / fetchAction(ref, args, {token?, url?, adminToken?, skipConvexDeploymentUrlCheck?})` over the HTTP client with `cache: "no-store"` | `nextjs/index.ts` | missing | ARCHITECTURE: D. |
-| `preloadQuery` → `Preloaded` {_name, _argsJSON, _valueJSON}; `preloadedQueryResult` | `nextjs/index.ts` | missing | — |
-| `usePreloadedQuery(preloaded)`: renders the server value first, then switches to the live subscription | `react/hydration.tsx` | missing | — |
-| Default URL from `NEXT_PUBLIC_CONVEX_URL`, with warnings for an explicitly undefined URL | `nextjs/index.ts` | missing | bunvex would read its own env var name. |
+| `fetchQuery / fetchMutation / fetchAction(ref, args, {token?, url?, adminToken?, skipConvexDeploymentUrlCheck?})` over the HTTP client with `cache: "no-store"` | `nextjs/index.ts` | done (STUDY-46) | `@bunvex/nextjs` (DV-241); option `skipDeploymentUrlCheck` (DV-03). |
+| `preloadQuery` → `Preloaded` {_name, _argsJSON, _valueJSON}; `preloadedQueryResult` | `nextjs/index.ts` | done (STUDY-46) | The payload is checked equal to `convex/nextjs`'s on the same server. |
+| `usePreloadedQuery(preloaded)`: renders the server value first, then switches to the live subscription | `react/hydration.tsx` | done (STUDY-46) | In `@bunvex/react`. |
+| Default URL from `NEXT_PUBLIC_CONVEX_URL`, with warnings for an explicitly undefined URL | `nextjs/index.ts` | done (STUDY-46) | `NEXT_PUBLIC_BUNVEX_URL` (DV-240). |
 
 ### 15. Logging and errors surfaced to the client
 

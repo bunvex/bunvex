@@ -31,6 +31,7 @@ export {
   useQuery,
   useQuery_experimental,
 } from "./hooks.ts";
+export { type Preloaded, usePreloadedQuery } from "./hydration.ts";
 export type { RequestForQueries } from "./queries-observer.ts";
 export {
   insertAtBottomIfLoaded,

@@ -4,6 +4,7 @@
 export {
   type AnyApi,
   type AnyFunctionReference,
+  type ArgsAndOptions,
   anyApi,
   type EmptyObject,
   type FunctionArgs,

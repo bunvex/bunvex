@@ -11,7 +11,8 @@
     "@bunvex/protocol": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "@bunvex/react": "workspace:*"
+    "@bunvex/react": "workspace:*",
+    "@bunvex/nextjs": "workspace:*"
   },
   "repository": {
     "type": "git",

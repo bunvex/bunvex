@@ -20,6 +20,7 @@ export type RequestError = { code: string; message: string };
 export {
   type AnyApi,
   type AnyFunctionReference,
+  type ArgsAndOptions,
   anyApi,
   type DefaultFunctionArgs,
   type EmptyObject,
