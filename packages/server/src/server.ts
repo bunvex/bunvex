@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
+  applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
@@ -11,6 +12,7 @@ import {
   type EnvVarChange,
   insertAuditLogEvents,
   OccError,
+  orderEnvVarChanges,
   parseValue,
   readBackendState,
   SchemaEnforcementError,
@@ -46,6 +48,7 @@ import {
 } from "./canonical-urls.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
+import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import {
@@ -214,7 +217,18 @@ export type ServerOptions = {
    * Convex's values (200 subscriptions, 5 ms). Tests inject `random` and `timers`.
    */
   subscriptionSplay?: Partial<SplayOptions>;
+  /**
+   * Bytes a WebSocket may have waiting to be sent before it is closed (STUDY-64 W1, DV-311). Default and most:
+   * Bun's largest, 2³² − 1. For tests.
+   */
+  wsBackpressureLimit?: number;
 };
+
+/**
+ * Bun's largest `backpressureLimit` (a 32-bit count). Past it Bun either drops frames or closes the socket;
+ * bunvex closes it (STUDY-64 W0/W1): Convex buffers without limit and never drops a frame.
+ */
+export const WS_BACKPRESSURE_LIMIT = 2 ** 32 - 1;
 
 /**
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
@@ -520,26 +534,24 @@ export function createServer(opts: ServerOptions) {
   // ---------------------------------------------------------------- file storage (STUDY-32)
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
-    if (req.method === "OPTIONS") return fs.preflight(req);
     try {
       // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
-        return fs.cors(req, r);
+        return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
         const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
         usageMeter.record("functionCalls", 1);
         if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
-        return fs.cors(req, r);
+        return r;
       }
-      return fs.cors(req, new Response(null, { status: 405 }));
+      return new Response(null, { status: 405 });
     } catch (e) {
-      if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
-      if (e instanceof BackendIsNotRunningError) return fs.cors(req, requestError(400, e.code, e.message));
-      if (isSystemError(e))
-        return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
+      if (e instanceof StorageError) return requestError(e.status, e.code, e.message);
+      if (e instanceof BackendIsNotRunningError) return requestError(400, e.code, e.message);
+      if (isSystemError(e)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       throw e;
     }
   };
@@ -814,15 +826,21 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
-  server = Bun.serve<WsData, never>({
+  // Convex's CORS layer on `/api` (STUDY-67 H2).
+  const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
     ...(opts.hostname ? { hostname: opts.hostname } : {}),
     idleTimeout: 120,
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
-      maxPayloadLength: 8 * 1024 * 1024,
+      maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
       idleTimeout: 960,
+      // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
+      // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
+      // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
+      backpressureLimit: Math.min(opts.wsBackpressureLimit ?? WS_BACKPRESSURE_LIMIT, WS_BACKPRESSURE_LIMIT),
+      closeOnBackpressureLimit: true,
       open(ws) {
         ws.data.session.open(ws);
       },
@@ -831,6 +849,9 @@ export function createServer(opts: ServerOptions) {
       },
       close(ws) {
         ws.data.session.close();
+      },
+      drain(ws) {
+        ws.data.session.drained();
       },
     },
     async fetch(req, srv) {
@@ -966,7 +987,8 @@ export function createServer(opts: ServerOptions) {
         kind,
       );
     },
-  });
+  };
+  server = Bun.serve<WsData, never>(withApiCors(apiOptions));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1382,37 +1404,39 @@ export function createServer(opts: ServerOptions) {
       // deployment's (else it starts over).
       let providers: unknown[] | null = null;
       for (let attempt = 0; ; attempt++) {
-        const base = await engine.query((db) => engine.environment.list(db));
-        const after = new Map(base.map((v) => [v.name, v.value]));
-        for (const c of changes) if (c.value === null) after.delete(c.name);
-        for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
+        const [base, canonical] = await engine.query(
+          async (db) => [await engine.environment.list(db), await readCanonicalUrls(db)] as const,
+        );
+        const after = applyEnvVarChanges(new Map(base.map((v) => [v.name, v.value])), changes);
         // The batch's own checks first, so that a bad name is reported as such, not as an auth config error.
         await engine.query(async (db) => engine.environment.check(db, changes, Object.keys(builtinEnv)));
         if (authModule)
           providers = await evaluateAuthConfig(
             engine,
             authModule,
-            { ...builtinEnv, ...Object.fromEntries(after) },
+            // The built-ins as every other evaluation sees them: overridden by their canonical URLs.
+            { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
           );
         const same = await engine.mutation(async (db) => {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
-          // Convex's events (lib.rs `update_environment_variables`): a set creates or updates, an unset
-          // of an existing variable deletes; in the update's transaction.
+          // Convex's events (lib.rs `update_environment_variables`), one per change in the order it is applied:
+          // a set creates or updates, an unset of an existing variable deletes (so an unset and a set of one
+          // name are a delete and a create); in the update's transaction.
           const existing = new Set(now.map((x) => x.name));
-          const events = changes.flatMap((c) =>
-            c.value === null
-              ? existing.has(c.name)
-                ? [auditEvents.deleteEnvironmentVariable(c.name)]
-                : []
-              : [
-                  existing.has(c.name)
-                    ? auditEvents.updateEnvironmentVariable(c.name)
-                    : auditEvents.createEnvironmentVariable(c.name),
-                ],
-          );
+          const events = orderEnvVarChanges(changes).flatMap((c) => {
+            const had = existing.has(c.name);
+            if (c.value === null) {
+              existing.delete(c.name);
+              return had ? [auditEvents.deleteEnvironmentVariable(c.name)] : [];
+            }
+            existing.add(c.name);
+            return [
+              had ? auditEvents.updateEnvironmentVariable(c.name) : auditEvents.createEnvironmentVariable(c.name),
+            ];
+          });
           await insertAuditLogEvents(db, events, auditActor(caller));
           return true;
         }, "update_env_vars");

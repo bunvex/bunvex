@@ -52,8 +52,8 @@ Key bunvex facts behind the statuses:
 | Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
 | Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | done (#37) | Comparisons use `compareValues`, Convex's total order across types. |
-| At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | missing | |
-| `.limit(n)` (non-terminal operator on OrderedQuery) | server/query.ts | missing | |
+| At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | done (STUDY-66) | As Convex: `filter` refuses the 257th operator ("Can't construct query with more than 256 operators"); the start counts every operator, the terminal's limit included, and refuses more than 256 ("Invalid argument `query` for `queryStream`: Query has too many operators: N"). |
+| `.limit(n)` (non-terminal operator on OrderedQuery) | server/query.ts | done (STUDY-66) | In chain order with `filter`, in every reader (`take`, `collect`, `for await`, `paginate`, search); a full limit ends the scan and its read-set; `n` checked at the start with Convex's wording. Internal in Convex's published types, so not in bunvex's either. |
 | `.collect()` | impl/query_impl.ts | done (#12) | No cap: reads up to the transaction read limits (32k rows / 16 MiB), then Convex's error (B12). |
 | `.take(n)`, requiring a non-negative integer | impl/query_impl.ts | done (#40) | A non-integer or negative `n` throws ("must be a non-negative integer"); `take(0)` reads nothing. |
 | `.first()` | impl/query_impl.ts | done | |
@@ -335,7 +335,7 @@ Key bunvex facts behind the statuses:
 | Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | |
 | Object fields ≤ 1024 | crates/value/src/object.rs | done (#35) |  |
 | Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | done (#6, #21) |  |
-| Function args ≤ 16 MiB; function result ≤ 16 MiB | knobs.rs (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | missing | The WS frame cap of 8 MiB is incidental. |
+| Function args ≤ 16 MiB; function result ≤ 16 MiB | knobs.rs (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64 §1.7) | Convex's messages and order (args size before the validator; result size before `returns`); the same knobs. The WS frame cap is 16 MiB, as Convex's. No 80 % warnings yet. |
 | Reads per transaction ≤ 32,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_READ_SIZE_ROWS/BYTES`) | done (#12) | 32,000 documents and 16 MiB, Convex's messages. |
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | done (#12) | 4096, Convex's message. |
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
