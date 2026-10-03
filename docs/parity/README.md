@@ -6,11 +6,11 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 145 | 26 | 62 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 206 | 10 | 23 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 118 | 14 | 27 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 108 | 38 | 100 |
 
-These counts were taken on 2026-10-03 (main at #222) from each row's status column: a row counts as done,
+These counts were taken on 2026-10-03 (main at #222; server-api.md rechecked against the code at #245) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. A few rows have no single status and are not
 counted.
 
