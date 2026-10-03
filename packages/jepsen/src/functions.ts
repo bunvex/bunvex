@@ -89,4 +89,13 @@ export const log = {
   all: query(async ({ db }, _args: { nonce?: number }) =>
     (await db.query("opsLog").collect()).map((r) => [r.client as number, r.seq as number] as const),
   ),
+  /** A client's entries in the default order, with their `_creationTime` (the regression test of a clock step). */
+  rows: query(async ({ db }, { client }: { client: number; nonce?: number }) =>
+    (
+      await db
+        .query("opsLog")
+        .withIndex("by_client", (q) => q.eq("client", client))
+        .collect()
+    ).map((r) => [r.seq as number, r._creationTime as number] as const),
+  ),
 };

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Run the Jepsen-style workload (STUDY-57) from the command line:
 //   bun packages/jepsen/src/cli.ts [--store memory|sqlite|postgres|mysql|mongodb] [--seconds 10]
-//     [--clients 5] [--seed N] [--runs 1] [--nemesis none]
+//     [--clients 5] [--seed N] [--runs 1] [--nemesis none|partition|kill|skew|store|all]
 // Remote stores take the server's environment (PERSISTENCE_URL, DO_NOT_REQUIRE_SSL, …). Each run prints a
 // line; a failed one also prints its findings and writes .data/jepsen/<store>-<nemesis>-<seed>.json. Exits 1
 // if any run failed.

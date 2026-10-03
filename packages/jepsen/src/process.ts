@@ -1,5 +1,6 @@
 // The server under test, as a child process (STUDY-57 §3.1): started, killed (SIGKILL: no shutdown, no
-// flush beyond what was already acknowledged) and started again on the same port and the same data.
+// flush beyond what was already acknowledged) and started again on the same data, on a new port (a proxy
+// keeps the clients' address: proxy.ts).
 import type { Subprocess } from "bun";
 
 export type ServerOptions = {
@@ -19,20 +20,25 @@ export class ServerProcess {
 
   constructor(private readonly opts: ServerOptions) {}
 
-  async start(): Promise<number> {
-    const child = Bun.spawn(["bun", `${import.meta.dir}/server.ts`], {
+  /** Start the server; `env` adds to the options' environment for this start only (e.g. a clock skew). */
+  async start(env?: Record<string, string | undefined>): Promise<number> {
+    const child = Bun.spawn(["bun", "--preload", `${import.meta.dir}/skew.ts`, `${import.meta.dir}/server.ts`], {
       env: {
         ...process.env,
         PERSISTENCE: this.opts.store,
         DATA: this.opts.dataDir,
         DURABLE: "1",
-        PORT: String(this.port),
+        PORT: "0",
         ...this.opts.env,
+        ...env,
       },
       stdout: "pipe",
       stderr: "pipe",
     });
     this.child = child;
+    void child.exited.then((code) => {
+      if (this.child === child) this.output.push(`[exit] ${code}`);
+    });
     const ready = new Promise<number>((resolve, reject) => {
       const decoder = new TextDecoder();
       const read = async (stream: ReadableStream<Uint8Array>, name: string) => {
@@ -52,6 +58,18 @@ export class ServerProcess {
     });
     this.port = await ready;
     return this.port;
+  }
+
+  /** Whether the process is running: a store failure ends it (fail-stop) without anyone killing it. */
+  get alive(): boolean {
+    return this.child !== null && this.child.exitCode === null && this.child.signalCode === null;
+  }
+
+  /** Send a signal (the store fault switches: store-faults.ts); resolves once the server printed `expect`. */
+  async signal(sig: "SIGUSR1" | "SIGUSR2", expect: string) {
+    const seen = this.output.length;
+    if (this.child) process.kill(this.child.pid, sig); // (Subprocess.kill does not deliver SIGUSR1/2 here)
+    while (!this.output.slice(seen).some((l) => l.includes(expect))) await Bun.sleep(2);
   }
 
   /** SIGKILL: the process dies at once, as a crash would. */

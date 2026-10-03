@@ -24,17 +24,20 @@ export function checkSet(ops: readonly Op[], final: readonly string[]): string[]
   const out: string[] = [];
   const attempted = new Set<string>();
   const acked = new Set<string>();
+  const failed = new Set<string>();
   for (const op of ops) {
     if (op.f !== "set:add") continue;
     const token = (op.args as { token: string }).token;
     attempted.add(token);
     if (op.status === "ok") acked.add(token);
+    if (op.status === "fail") failed.add(token);
   }
   const counts = new Map<string, number>();
   for (const t of final) counts.set(t, (counts.get(t) ?? 0) + 1);
   for (const t of acked) if (!counts.has(t)) out.push(`set: ${t} was acknowledged but is lost`);
   for (const [t, n] of counts) {
     if (!attempted.has(t)) out.push(`set: ${t} is present but was never added`);
+    if (failed.has(t)) out.push(`set: ${t} is present, but its add was reported failed`);
     if (n > 1) out.push(`set: ${t} is present ${n} times (a mutation ran more than once)`);
   }
   return out;
@@ -57,9 +60,13 @@ export function checkLog(ops: readonly Op[], final: readonly (readonly [number, 
     last.set(client, Math.max(prev, seq));
   }
   for (const op of ops) {
-    if (op.f !== "log:append" || op.status !== "ok") continue;
+    if (op.f !== "log:append" || op.status === "info") continue;
     const { client, seq } = op.args as { client: number; seq: number };
-    if (!seen.has(`${client}/${seq}`)) out.push(`log: client ${client}'s mutation ${seq} was acknowledged but is lost`);
+    const present = seen.has(`${client}/${seq}`);
+    if (op.status === "ok" && !present)
+      out.push(`log: client ${client}'s mutation ${seq} was acknowledged but is lost`);
+    if (op.status === "fail" && present)
+      out.push(`log: client ${client}'s mutation ${seq} is present, but it was reported failed`);
   }
   return out;
 }

@@ -11,7 +11,7 @@ const short = (o: Op) => ({
   args: o.args,
   status: o.status,
   result: o.result,
-  error: o.error?.split("\n")[0],
+  error: o.error?.split("\n").slice(0, 2).join(" "),
   start: Math.round(o.start * 10) / 10,
   end: o.end === Infinity ? null : Math.round(o.end * 10) / 10,
 });
@@ -20,9 +20,11 @@ const short = (o: Op) => ({
 export function describe(r: RunResult): string {
   const lines = [
     `${r.ok ? "PASS" : "FAIL"} seed=${r.seed} store=${r.store} nemesis=${r.nemesis} ${r.durationMs} ms, ` +
-      `${r.stats.ops} ops (ok ${r.stats.ok}, fail ${r.stats.fail}, info ${r.stats.info})`,
+      `${r.stats.ops} ops (ok ${r.stats.ok}, fail ${r.stats.fail}, info ${r.stats.info})` +
+      (r.events.length ? `, ${r.events.length} faults` : ""),
     ...r.violations.map((v) => `  ${v}`),
   ];
+  if (!r.ok && r.events.length) lines.push("  faults:", ...r.events.map((e) => `    ${e}`));
   if (!r.linearizability.ok)
     lines.push(
       `  smallest failing history (${r.linearizability.minimal.length} ops):`,
