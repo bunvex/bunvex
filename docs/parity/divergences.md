@@ -192,6 +192,7 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-225 | bunvex's client announced version 0.0.0, so a server never sent it `TransitionChunk`s | As Convex's client announces its npm version: bunvex's client announces the Convex client version it follows (1.46.0), in the sync URL and the `Bunvex-Client` header | no (big results now arrive in parts) | owner, 2026-10-02 (#220) | [STUDY-23 P8](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
 | DV-10 | Sync: transitions over 5 MB were not split into `TransitionChunk`s | As Convex's `maybe_split_transition`: over 5 000 000 bytes, cut on UTF-8 boundaries, for npm clients from 1.28.0 (the client header, else the sync URL's version) | yes (big results reach clients that take chunks in parts) | owner, 2026-09-30 (#220) | [STUDY-23 P8](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
 | DV-205 | A nested error reached the caller with its message alone | As Convex's `JsError` display: "Uncaught Error: <message>" and the nested stack frames, each "    at …", ending with a newline; a timeout as its message and a newline; a `BunvexError` keeps its data | yes (the caught message) | owner, 2026-10-02 (#213) | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-206 | `transactionLimits` applied to documents and bytes read and written only | As Convex: also `databaseQueries` (read-set intervals), `functionsScheduled` and `scheduledFunctionArgsBytes`, with Convex's messages printing the lowered limit; the file limits are accepted and, as in Convex (which never counts them), never reached | yes (rare) | owner, 2026-10-02 (#213) | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
@@ -287,11 +288,7 @@ DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 were built later (#213) and are in [Resolved to match Convex](#resolved-to-match-convex).
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
 
-Awaiting the owner:
-
-| # | Divergence | Convex | Visible to apps? | Recommendation | Study |
-|---|---|---|---|---|---|
-| DV-225 | bunvex's client announces version 0.0.0 in the sync URL, so a bunvex server never sends it `TransitionChunk`s (it reassembles them) | the npm client announces its version (≥ 1.28.0 gets chunks) | no (a big result arrives whole instead of in parts) | announce the Convex client version bunvex's client follows | [STUDY-23 P8](../study/STUDY-23-sync-protocol-v1.md#6-decisions-accepted-as-recommended-owner-2026-09-30) |
+DV-225 was accepted as recommended (owner, 2026-10-02) and built in #220: it is in [Resolved to match Convex](#resolved-to-match-convex).
 DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-02): DV-222 is in
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).
