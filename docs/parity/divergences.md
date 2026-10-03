@@ -190,6 +190,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-269 | Vector search is exact over every document | HNSW disk segments (approximate) plus an exact memory index | yes (results at least as accurate) | owner, 2026-10-02: exact in memory | owner, 2026-10-02: exact in memory | [STUDY-51 V1](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-270 | Vector indexes live in memory, rebuilt at start | persisted segments | operational (memory, start time) | owner, 2026-10-02 | owner, 2026-10-02 | [STUDY-51 V2](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-271 | A search while the index is being built fails at once (`IndexBackfillingError`) | retried up to 5 times during bootstrap | yes (just after a start) | Not done yet | owner, 2026-10-03 (as recommended) | [STUDY-51 V3](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-272 | The vector field is not checked against the document schema at push | must be able to hold `array(float64)` | yes (a schema Convex refuses) | Not done yet | owner, 2026-10-03 (as recommended) | [STUDY-51 V4](../study/STUDY-51-vector-search.md#4-divergences) |
+| DV-273 | A negative or non-integer `limit` gets bunvex's message | serde's message | yes (an error message) | Not possible exactly | owner, 2026-10-03 (as recommended) | [STUDY-51 V5](../study/STUDY-51-vector-search.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -301,15 +306,7 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
-DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were decided by the owner (2026-10-02). DV-271–DV-273 (STUDY-51 V3–V5) await the owner; the draft PR implements each recommendation:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-269 | Vector search is exact over every document | HNSW disk segments (approximate) plus an exact memory index | yes (results at least as accurate) | owner, 2026-10-02: exact in memory | [STUDY-51 V1](../study/STUDY-51-vector-search.md#4-divergences) |
-| DV-270 | Vector indexes live in memory, rebuilt at start | persisted segments | operational (memory, start time) | owner, 2026-10-02 | [STUDY-51 V2](../study/STUDY-51-vector-search.md#4-divergences) |
-| DV-271 | A search while the index is being built fails at once (`IndexBackfillingError`) | retried up to 5 times during bootstrap | yes (just after a start) | Not done yet. Accept for now | [STUDY-51 V3](../study/STUDY-51-vector-search.md#4-divergences) |
-| DV-272 | The vector field is not checked against the document schema at push | must be able to hold `array(float64)` | yes (a schema Convex refuses) | Not done yet. Accept for now | [STUDY-51 V4](../study/STUDY-51-vector-search.md#4-divergences) |
-| DV-273 | A negative or non-integer `limit` gets bunvex's message | serde's message | yes (an error message) | Not possible exactly. Accept | [STUDY-51 V5](../study/STUDY-51-vector-search.md#4-divergences) |
+DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).

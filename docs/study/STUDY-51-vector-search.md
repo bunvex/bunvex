@@ -1,6 +1,6 @@
 # STUDY-51 — Vector search
 
-- **Status:** V1–V2 decided by the owner (2026-10-02: exact, in memory); V3–V5 decision pending (owner). The draft PR implements the recommendations
+- **Status:** V1–V2 decided by the owner (2026-10-02: exact, in memory); V3–V5 decision pending (owner)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-45](STUDY-45-text-search.md) (the search index structure this reuses), [STUDY-29](STUDY-29-index-backfill.md)
 
@@ -62,6 +62,6 @@ mutations already awaited.
 |---|---|---|---|
 | V1 | Exact search over every document | Convex's disk segments are approximate (HNSW); bunvex is at least as accurate | DV-269, owner 2026-10-02 |
 | V2 | Indexes live in memory only and are rebuilt at start | The owner's choice: no persisted segments. Memory grows with the vectors | DV-270, owner 2026-10-02 |
-| V3 | While an index is being built after a start, a search fails at once with `IndexBackfillingError` | Convex retries `VectorIndexesUnavailable` up to 5 times during bootstrap. **Not done yet** | DV-271, pending |
-| V4 | The vector field is not checked against the document schema at push | **Not done yet** | DV-272, pending |
-| V5 | A negative or non-integer `limit` gives bunvex's message, not serde's | Rust's deserializer message. **Not possible** to reproduce exactly | DV-273, pending |
+| V3 | While an index is being built after a start, a search fails at once with `IndexBackfillingError` | Convex retries `VectorIndexesUnavailable` up to 5 times during bootstrap. **Not done yet** | DV-271, accepted (owner, 2026-10-03) |
+| V4 | The vector field is not checked against the document schema at push | **Not done yet** | DV-272, accepted (owner, 2026-10-03) |
+| V5 | A negative or non-integer `limit` gives bunvex's message, not serde's | Rust's deserializer message. **Not possible** to reproduce exactly | DV-273, accepted (owner, 2026-10-03) |
