@@ -94,3 +94,20 @@ system queries and the HTTP list.
 | A3 | `snapshot_import`'s `member_id` is null | bunvex's import rows have no member (STUDY-42). **Not done yet** | DV-277, accepted (owner, 2026-10-03) |
 
 The events of features bunvex lacks wait for those features (ledger, "Waiting on a dependency").
+
+**As built (follow-up, DV-276).** `push_config_with_components` is recorded in the push's commit
+(`finish_push`), as the push's admin. Its metadata:
+
+- `component_diffs` holds the root component only. `diffType` is `create` on the first push and `modify`
+  after.
+- `moduleDiff`: modules added and removed.
+- `cronDiff`: crons added, updated and deleted.
+- `indexDiff`: computed from the active and pushed schemas, as `get_full_index_diff`. Each index is
+  Convex's `{name, type, …spec, staged}` entry, for database, search and vector indexes alike. An index
+  whose definition changed is removed and added.
+- `schemaDiff`: the stored schema JSON strings, or null when unchanged.
+- `auth_diff`: the providers added and removed, each as a JSON string with sorted keys.
+- `message`: from `bunvex deploy --message`. At most 1024 bytes, else `PushMessageTooLong`, which is
+  refused before the push as in Convex.
+- `udfConfigDiff` and `node_version_diff` are null: bunvex's server version is fixed and it pushes no Node
+  version.

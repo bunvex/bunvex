@@ -1,4 +1,4 @@
-// Package @bunvex/react-query — TanStack Query integration (STUDY-48), the counterpart of Convex's
+// Package @bunvex/react-query — TanStack Query integration (STUDY-55), the counterpart of Convex's
 // `@convex-dev/react-query`. `BunvexQueryClient` keeps one live subscription per cached `bunvexQuery` key and
 // writes every new result into the `QueryClient`; on the server, queries are read over HTTP at one snapshot.
 import {
@@ -41,7 +41,7 @@ type EmptyObject = Record<string, never>;
 /** Decided once, as Convex: no `window` means server rendering. */
 const isServer = typeof (globalThis as { window?: unknown }).window === "undefined";
 
-/** A query key: the prefix, the function's name, and its args in the JSON value encoding (STUDY-48 R3). */
+/** A query key: the prefix, the function's name, and its args in the JSON value encoding (STUDY-55 R3). */
 type QueryKeyOf<Q extends AnyFunctionReference> = ["bunvexQuery", Q, FunctionArgs<Q>];
 type ActionKeyOf<A extends AnyFunctionReference> = ["bunvexAction", A, FunctionArgs<A>];
 type StoredKey = readonly [prefix: string, name: string, args: JSONValue | "skip", ...rest: unknown[]];
