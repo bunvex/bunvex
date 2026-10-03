@@ -1,8 +1,8 @@
 # STUDY-71 — Usage metering: database I/O, user time, egress, storage and search bytes
 
 - **Status:** decisions taken (owner, 2026-10-03): text search bytes estimated from the index (U1); Node
-  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); PR 1 (database I/O) is
-  implemented.
+  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); PR 1 (database I/O) and
+  PR 2 (user time) are implemented.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-61](STUDY-61-usage-limits.md) (the meter and limits; DV-309),
   [STUDY-47](STUDY-47-log-streaming.md) (the function log's `usageStats`; DV-251, DV-252)
@@ -96,7 +96,13 @@ Sources: `crates/usage_tracking/src/lib.rs` (`FunctionUsageTracker`, `UsageCount
   The cost is the documents' size, about 0.3 µs per document read, the same work Convex does when it packs
   a document. A first version that re-encoded each index key cost +70 % in memory. Writes are unchanged
   (5000 inserts: 90–95 ms before and after).
-- **Later PRs:** user time (PR 2), egress and storage (PR 3), search bytes (PR 4); §5.
+- **User time (PR 2).** bunvex already kept Convex's clock for a query's or mutation's time budget
+  (STUDY-41's `UserTimer`, paused in store calls and nested calls); the function log now reports it
+  (`userTimeMs`, read when the body ends, never above the wall time): a query's or mutation's user time is
+  its wall time minus its pauses. An action's stays its wall time — what Convex reports, since it pauses an
+  action's clock only while the isolate starts, which bunvex does not do per call. `actionComputeCpuGbHours`
+  is unchanged for that reason. Cost: one clock read per run.
+- **Later PRs:** egress and storage (PR 3), search bytes (PR 4); §5.
 
 ## 4. Divergences
 
@@ -119,7 +125,9 @@ Found while reading, not divergences of this study:
 | 3 | `fetch` egress, action storage calls and bytes, `dataEgressGb`, system functions' calls | DV-251's storage and egress; DV-309's egress, storage and system parts |
 | 4 | Text (U1) and vector search bytes | DV-251's search fields; DV-309's search part |
 
-## 6. Tests (PR 1)
+## 6. Tests
+
+### PR 1
 
 - `packages/server/test/usage-database-io.test.ts`: exact bytes, worked out by hand from Convex's rules, for:
   - an insert, a patch that keeps every key, a patch that moves one, a delete;
@@ -137,3 +145,15 @@ Found while reading, not divergences of this study:
   - the stream path;
   - the fast path;
   - document bytes on write.
+
+### PR 2
+
+- `packages/server/test/usage-user-time.test.ts`, against a store whose reads take 60 ms:
+  - a query that reads has little user time;
+  - one that spins 40 ms has at least that;
+  - a mutation's user time is its work between store calls;
+  - an action's equals its wall time.
+- Sabotage checks, each failing a test:
+  - the old behaviour (user = wall);
+  - the query's or the mutation's timer not noted;
+  - pauses not subtracted.

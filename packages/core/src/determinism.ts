@@ -51,6 +51,8 @@ export type UserTimer = {
   systemMs: number;
   /** The timeout, once hit: thrown again at every store call and at the end. */
   failed: Error | null;
+  /** When the body ended (its user time stops there, as Convex's `into_function_execution_time`). */
+  ended: number | null;
 };
 
 /** Rust's `Duration` Debug form, as Convex's message prints the limit (`1s`, `1.5s`, `500ms`). */
@@ -63,8 +65,15 @@ export function formatDuration(ms: number): string {
 export const SYSTEM_TIMEOUT_MESSAGE = "Your request timed out performing too many system operations.";
 
 export function newUserTimer(userMs: number, systemMs: number): UserTimer {
-  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null };
+  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null, ended: null };
 }
+
+/**
+ * The user time a body took, in ms (STUDY-71): its wall time minus the time paused in store calls and
+ * nested calls, as Convex's `user_execution_time` (wall time minus its timeout's pauses); up to now while it
+ * runs.
+ */
+export const userTimeMs = (t: UserTimer) => (t.ended ?? realPerformanceNow()) - t.start - pausedNow(t);
 
 const pausedNow = (t: UserTimer) => t.paused + (t.pausedSince === null ? 0 : realPerformanceNow() - t.pausedSince);
 
@@ -125,6 +134,7 @@ export async function withUserTimer<T>(timer: UserTimer, fn: () => T): Promise<A
     if (timer.failed) throw timer.failed;
     throw err;
   } finally {
+    timer.ended ??= realPerformanceNow();
     e.timer = outer;
   }
 }
