@@ -377,6 +377,7 @@ journal, with cancel / rerun / restart from a step, and work pools — an extens
 |---|---|---|---|
 | `POST /api/query`, `/api/mutation`, `/api/action` `{path, args, format}` returning `{status, value, logLines}` | `crates/local_backend/public_api.rs` | partial | Since STUDY-20: `args` as an object or a one-element array, function errors as HTTP 200 `{status:"error", errorMessage, errorData?, logLines?}`, request errors as `{code, message}`, system failures as 500 (503 for `OutOfRetention`, STUDY-06 D10). Still no `format`, no auth header. |
 | `GET /api/query`, `/api/query_ts`, `/api/query_at_ts`, `/api/query_batch`, `/api/function`, `/api/run/{fn}` | same | partial (STUDY-26) | `POST /api/query_ts` and `/api/query_at_ts` done; `POST /api/function` done (STUDY-37: any kind; internal ones for an admin; Convex's "Could not find function for …" otherwise); the others missing. |
+| CORS on `/api/*` and `/instance_name`: credentials always, the origin and asked headers mirrored, any `OPTIONS` a 200 preflight (every method, `max-age` 86400) | `crates/local_backend/router.rs` `cors()` | done (STUDY-67 H2) | One layer around the API server's `fetch` (`packages/server/src/cors.ts`), file storage included; not `/http/`, the site or the sync upgrade. Unknown `/api` paths get the headers too (Convex's fallback 404 has none). |
 
 ### 24. Limits apps can hit (from `crates/common/knobs.rs` and hard constants)
 

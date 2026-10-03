@@ -46,6 +46,7 @@ import {
 } from "./canonical-urls.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
+import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import {
@@ -520,26 +521,24 @@ export function createServer(opts: ServerOptions) {
   // ---------------------------------------------------------------- file storage (STUDY-32)
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
-    if (req.method === "OPTIONS") return fs.preflight(req);
     try {
       // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
-        return fs.cors(req, r);
+        return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
         const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
         usageMeter.record("functionCalls", 1);
         if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
-        return fs.cors(req, r);
+        return r;
       }
-      return fs.cors(req, new Response(null, { status: 405 }));
+      return new Response(null, { status: 405 });
     } catch (e) {
-      if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
-      if (e instanceof BackendIsNotRunningError) return fs.cors(req, requestError(400, e.code, e.message));
-      if (isSystemError(e))
-        return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
+      if (e instanceof StorageError) return requestError(e.status, e.code, e.message);
+      if (e instanceof BackendIsNotRunningError) return requestError(400, e.code, e.message);
+      if (isSystemError(e)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       throw e;
     }
   };
@@ -814,7 +813,8 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
-  server = Bun.serve<WsData, never>({
+  // Convex's CORS layer on `/api` (STUDY-67 H2).
+  const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
     ...(opts.hostname ? { hostname: opts.hostname } : {}),
     idleTimeout: 120,
@@ -966,7 +966,8 @@ export function createServer(opts: ServerOptions) {
         kind,
       );
     },
-  });
+  };
+  server = Bun.serve<WsData, never>(withApiCors(apiOptions));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
