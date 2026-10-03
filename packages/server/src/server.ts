@@ -46,6 +46,7 @@ import {
   setCanonicalUrl,
   withCanonical,
 } from "./canonical-urls.ts";
+import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
@@ -930,7 +931,10 @@ export function createServer(opts: ServerOptions) {
           ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
           userAgent: req.headers.get("user-agent"),
         };
-        if (srv.upgrade(req, { data })) return undefined as never;
+        // A deprecated client's upgrade carries the deprecation headers (a refused one never gets here).
+        const verdict = requestVerdict(req);
+        const headers = verdict?.status === 200 ? verdict.headers : undefined;
+        if (srv.upgrade(req, { data, ...(headers ? { headers } : {}) })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");
@@ -1116,7 +1120,8 @@ export function createServer(opts: ServerOptions) {
       );
     },
   };
-  server = Bun.serve<WsData, never>(withApiCors(apiOptions));
+  // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
+  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1143,18 +1148,20 @@ export function createServer(opts: ServerOptions) {
   const site =
     sitePort === null
       ? null
-      : Bun.serve({
-          port: sitePort,
-          ...(opts.hostname ? { hostname: opts.hostname } : {}),
-          idleTimeout: 120,
-          ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-          fetch(req, srv) {
-            const url = new URL(req.url);
-            if (url.pathname === "/version") return new Response("bunvex");
-            srv.timeout(req, 0);
-            return serveHttpAction(req, url.pathname, url.search);
-          },
-        });
+      : Bun.serve(
+          withClientVersionCheck({
+            port: sitePort,
+            ...(opts.hostname ? { hostname: opts.hostname } : {}),
+            idleTimeout: 120,
+            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+            fetch(req, srv) {
+              const url = new URL(req.url);
+              if (url.pathname === "/version") return new Response("bunvex");
+              srv.timeout(req, 0);
+              return serveHttpAction(req, url.pathname, url.search);
+            },
+          } as Bun.Serve.Options<undefined, never>),
+        );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
     ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`)
