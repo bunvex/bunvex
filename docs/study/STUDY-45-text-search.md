@@ -84,6 +84,21 @@ errors of a misused query; the index states while a search index is built.
 - **PR 3 — reactivity:** the terms and filters in the read set; Convex's OCC rule at commit and its
   subscription rule for invalidation.
 
+### As built
+
+- **PR 1** (#225): the schema.
+- **PR 2** (#PR2): `@bunvex/search`, a package of its own (owner, 2026-10-02):
+  - `tokenize`;
+  - tantivy's fieldnorm code, its table generated from tantivy's documented formula and checked equal entry by entry;
+  - BM25 in 32-bit floats;
+  - `TextIndex`: term selection, matching, ranking, 1024 candidates, an overlay.
+- **In core** (`core/src/search-indexes.ts`):
+  - one index per search index of an active table, backfilled at one snapshot. Commits that land meanwhile are applied, and the backfill's older copies are not written over them;
+  - each index is updated in commit order from the commit's `onVisible`;
+  - a 5-minute log of changes lets a transaction search an older snapshot;
+  - `Tx.withSearchIndex` with Convex's checks, ordering, limits and pagination. The cursor's id part is complemented, so ties page in the results' order.
+- **PR 3:** the read set (terms and filters), conflicts and invalidation.
+
 ## 4. Divergences (decisions)
 
 | # | Divergence | Why | Decision |
