@@ -2,7 +2,14 @@
 // schema.ts, system_fields.ts): what `_generated/dataModel` derives from an app's schema, and what the typed
 // database, contexts and builders are generic over. Types only; nothing here exists at run time.
 import type { GenericId, GenericValidator, Value } from "@bunvex/values";
-import type { Expand, GenericSchema, GenericTableIndexes, SchemaDefinition, TableDefinition } from "./schema.ts";
+import type {
+  Expand,
+  GenericSchema,
+  GenericTableIndexes,
+  GenericTableSearchIndexes,
+  SchemaDefinition,
+  TableDefinition,
+} from "./schema.ts";
 
 /** A document's fields (Convex's `GenericDocument`). */
 export type GenericDocument = Record<string, Value>;
@@ -14,7 +21,7 @@ export type GenericTableInfo = {
   document: GenericDocument;
   fieldPaths: GenericFieldPaths;
   indexes: GenericTableIndexes;
-  searchIndexes: Record<string, unknown>;
+  searchIndexes: GenericTableSearchIndexes;
   vectorIndexes: Record<string, unknown>;
 };
 
@@ -95,7 +102,7 @@ type WithSystemFields<TableName extends string, D> = D extends unknown
 
 /** One table's info from its definition. */
 type TableInfoOf<TableName extends string, T> =
-  T extends TableDefinition<infer DocumentType, infer TableIndexes>
+  T extends TableDefinition<infer DocumentType, infer TableIndexes, infer SearchIndexes>
     ? DocumentType extends GenericValidator
       ? {
           document: unknown extends DocumentType["type"]
@@ -106,7 +113,7 @@ type TableInfoOf<TableName extends string, T> =
             ? GenericFieldPaths
             : "_id" | "_creationTime" | PathsOf<DocumentType["type"]>;
           indexes: Expand<TableIndexes & SystemIndexes>;
-          searchIndexes: {};
+          searchIndexes: SearchIndexes;
           vectorIndexes: {};
         }
       : never

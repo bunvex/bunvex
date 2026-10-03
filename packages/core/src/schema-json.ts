@@ -4,10 +4,15 @@ import { type GenericValidator, type ValidatorJSON, validatorFromJson } from "@b
 import type { DeclaredTable, SchemaDefinition } from "./schema.ts";
 
 export type IndexJson = { indexDescriptor: string; fields: string[] };
+/** A search index, as Convex's schema JSON (`filterFields` sorted, as Convex serializes its set). */
+export type SearchIndexJson = { indexDescriptor: string; searchField: string; filterFields: string[] };
 export type TableJson = {
   tableName: string;
   indexes: IndexJson[];
   stagedDbIndexes: IndexJson[];
+  /** Optional, as in Convex's schema JSON. */
+  searchIndexes?: SearchIndexJson[];
+  stagedSearchIndexes?: SearchIndexJson[];
   documentType: ValidatorJSON | null;
 };
 export type SchemaJson = { tables: TableJson[]; schemaValidation: boolean };
@@ -27,10 +32,30 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
         stagedDbIndexes: Object.keys(t.indexes)
           .filter((n) => staged.has(n))
           .map(index),
+        ...searchJson(t),
         documentType: anyJson(t.document),
       };
     }),
     schemaValidation: s.schemaValidation,
+  };
+}
+
+function searchJson(t: DeclaredTable): Pick<TableJson, "searchIndexes" | "stagedSearchIndexes"> {
+  const all = t.searchIndexes ?? {};
+  if (!Object.keys(all).length) return {};
+  const staged = new Set(t.stagedSearch ?? []);
+  const one = (name: string): SearchIndexJson => ({
+    indexDescriptor: name,
+    searchField: all[name]!.searchField,
+    filterFields: [...all[name]!.filterFields].sort(),
+  });
+  return {
+    searchIndexes: Object.keys(all)
+      .filter((n) => !staged.has(n))
+      .map(one),
+    stagedSearchIndexes: Object.keys(all)
+      .filter((n) => staged.has(n))
+      .map(one),
   };
 }
 
@@ -44,6 +69,17 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
       indexes,
       document: t.documentType === null ? validatorFromJson({ type: "any" }) : validatorFromJson(t.documentType),
       staged: t.stagedDbIndexes.map((i) => i.indexDescriptor),
+      ...(t.searchIndexes?.length || t.stagedSearchIndexes?.length
+        ? {
+            searchIndexes: Object.fromEntries(
+              [...(t.searchIndexes ?? []), ...(t.stagedSearchIndexes ?? [])].map((i) => [
+                i.indexDescriptor,
+                { searchField: i.searchField, filterFields: [...i.filterFields] },
+              ]),
+            ),
+            stagedSearch: (t.stagedSearchIndexes ?? []).map((i) => i.indexDescriptor),
+          }
+        : {}),
     });
   }
   return { tables, schemaValidation: j.schemaValidation };
