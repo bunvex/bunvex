@@ -716,7 +716,7 @@ export class Functions {
   }
 
   /**
-   * Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-57): a user function fails while
+   * Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-63): a user function fails while
    * the deployment is paused. Read in the function's transaction, so a subscribed query reruns on unpause.
    */
   private async failWhileNotRunning(db: Tx): Promise<void> {

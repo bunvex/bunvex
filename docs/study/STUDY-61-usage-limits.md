@@ -2,7 +2,7 @@
 
 - **Status:** implemented; DV-308 resolved to match Convex, DV-309 accepted (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
-- **Related:** [STUDY-57](STUDY-57-pause-deployment.md) (`_backend_state` and the stop checks this reuses),
+- **Related:** [STUDY-63](STUDY-63-pause-deployment.md) (`_backend_state` and the stop checks this reuses),
   [STUDY-47](STUDY-47-log-streaming.md) (the function log's usage, DV-251 / DV-252),
   [STUDY-48](STUDY-48-audit-log.md) (audit events), STUDY-34 (`ViewUsage`, `ViewUsageLimits`,
   `WriteUsageLimits`)
@@ -76,7 +76,7 @@
     limit. Update or disable the usage limit in the Convex dashboard in deployment settings to resume
     function execution.";
   - the scheduler and crons wait;
-  - storage refuses (STUDY-57's checks).
+  - storage refuses (STUDY-63's checks).
 - **Re-enabling** is automatic: a new window, or a raised, disabled or deleted limit. On self-hosted a
   restart resets the meter, and so re-enables.
 
@@ -94,7 +94,7 @@
   - the routes;
   - `UsageLimitWorker`.
 - **`core/src/backend-state.ts`**: `setUsageLimitStopState`. The stop checks and the message come from
-  STUDY-57.
+  STUDY-63.
 - **Metering**:
   - `Functions` meters each logged completion, OCC retries included: compute from the function log's
     time and memory (64 / 512 MB, now also in the log's `memoryUsedMb`), and database I/O from its usage

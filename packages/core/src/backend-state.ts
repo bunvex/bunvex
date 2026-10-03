@@ -1,4 +1,4 @@
-// The deployment's run state (STUDY-57), as Convex's `_backend_state` (crates/model/src/backend_state):
+// The deployment's run state (STUDY-63), as Convex's `_backend_state` (crates/model/src/backend_state):
 // one document `{system, usage_limit, user}`, each "none" when running. An operator pauses a deployment
 // (`user: "paused"`); the other two are set by Convex's cloud (suspension, usage limits). While any is not
 // "none" the backend is stopped: scheduled functions and crons wait, and file storage refuses.

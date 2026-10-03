@@ -92,7 +92,7 @@ export class CronJobExecutor {
       ? await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push")
       : undefined;
     const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
-    // And by a pause or unpause (STUDY-57), as Convex's executors subscribe to `_backend_state`.
+    // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();

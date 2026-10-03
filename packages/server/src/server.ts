@@ -210,7 +210,7 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 
 /** The log stream routes (Convex mounts both under `/api/` and `/api/app_metrics/`). */
 const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
-/** Convex's pause routes (STUDY-57). */
+/** Convex's pause routes (STUDY-63). */
 const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
@@ -578,7 +578,7 @@ export function createServer(opts: ServerOptions) {
   /** The admin routes; the caller is already identified. */
   /**
    * Convex's `/api/v1/pause_deployment` and `/api/v1/unpause_deployment` (local_backend/deployment_state.rs,
-   * STUDY-57): set `_backend_state.user`, with an audit event when it changes; 200 with no body.
+   * STUDY-63): set `_backend_state.user`, with an audit event when it changes; 200 with no body.
    */
   const pauseRoute = async (unpause: boolean, caller: Caller): Promise<Response> => {
     functions.requireOperation(caller, unpause ? "UnpauseDeployment" : "PauseDeployment");

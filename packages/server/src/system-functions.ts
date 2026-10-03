@@ -146,7 +146,7 @@ const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: s
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
-  // The deployment's run state (STUDY-57), as Convex's `_system/frontend/backendState`.
+  // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
   "_system/frontend/backendState": {
     args: {},
     noPermissionRequired: true,

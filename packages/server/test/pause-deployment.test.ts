@@ -1,4 +1,4 @@
-// Pausing a deployment (STUDY-57), as Convex's: `/api/v1/pause_deployment` and `/api/v1/unpause_deployment`
+// Pausing a deployment (STUDY-63), as Convex's: `/api/v1/pause_deployment` and `/api/v1/unpause_deployment`
 // set `_backend_state.user`, with an audit event when it changes. While paused, user functions fail (system
 // ones run), scheduled functions and crons wait, and file storage refuses; on unpause everything resumes.
 import { afterEach, expect, test } from "bun:test";

@@ -385,7 +385,7 @@ describe("createServer({ crons })", () => {
   });
 });
 
-test("a paused deployment's crons wait; unpausing wakes the executor (STUDY-57)", async () => {
+test("a paused deployment's crons wait; unpausing wakes the executor (STUDY-63)", async () => {
   const c = cronJobs();
   c.interval("t", { seconds: 1 }, "m:tick" as never);
   const t = await setup(c, { start: false });

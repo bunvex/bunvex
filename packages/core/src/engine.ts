@@ -212,7 +212,7 @@ export class Engine {
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
   private cacheEpoch = 0;
-  /** The deployment's run state, as every user function checks it (STUDY-57). */
+  /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
   readonly searchIndexes = new SearchIndexes();

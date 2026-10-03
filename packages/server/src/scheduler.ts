@@ -218,7 +218,7 @@ export class ScheduledJobExecutor {
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
     const byNextTs = this.engine.catalog.table("_scheduled_functions").indexes.get("by_next_ts")!.id;
-    // And by a pause or unpause (STUDY-57), as Convex's executors subscribe to `_backend_state`.
+    // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();

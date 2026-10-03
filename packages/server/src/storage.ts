@@ -277,7 +277,7 @@ export class FileStorage {
     };
   }
 
-  /** Convex's `bail_if_not_running`: file storage refuses while the deployment is stopped (STUDY-57). */
+  /** Convex's `bail_if_not_running`: file storage refuses while the deployment is stopped (STUDY-63). */
   private async ensureRunningIn(db: Tx): Promise<void> {
     if (isStopped(await readBackendState(db))) throw new BackendIsNotRunningError();
   }

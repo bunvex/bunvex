@@ -40,7 +40,7 @@ export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 export const USAGE_LIMITS_TABLE = "_usage_limits";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
 export const FUNCTION_HANDLES_TABLE = "_function_handles";
-/** The deployment's run state (STUDY-57), as Convex's `_backend_state`: `{system, usage_limit, user}`. */
+/** The deployment's run state (STUDY-63), as Convex's `_backend_state`: `{system, usage_limit, user}`. */
 export const BACKEND_STATE_TABLE = "_backend_state";
 /** Snapshot imports (STUDY-42), as Convex's `_snapshot_imports`: one row per import, its state and checkpoints. */
 export const SNAPSHOT_IMPORTS_TABLE = "_snapshot_imports";
