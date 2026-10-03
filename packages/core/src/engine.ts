@@ -72,6 +72,7 @@ import {
   outsideExecution,
   preciseClock,
   runDeterministic,
+  settled,
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
@@ -1488,7 +1489,7 @@ export class Engine {
       tx.pendingValidators = this.pendingValidators;
     }
     const observed: Observed = { time: false };
-    const value = await runDeterministic(kind, now, () => body(tx), observed);
+    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
     return { tx, value, observed, now };
   }
 
@@ -1682,7 +1683,8 @@ export class Engine {
       identityObserved: tx.identityObserved,
     });
     try {
-      const value = await runDeterministic("query", now, () => body(tx));
+      const observed: Observed = { time: false };
+      const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };

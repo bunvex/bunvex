@@ -21,6 +21,36 @@ const fail = async (p: Promise<unknown>) => {
   throw new Error("expected a failure");
 };
 
+test("a name may appear more than once in a batch, as in Convex: removals first, then sets by name and value", async () => {
+  const e = await engine();
+  await update(e, [
+    { name: "A", value: "old" },
+    { name: "B", value: "b" },
+  ]);
+  // Removing A and setting it again (a dashboard rename onto a deleted name): the set wins, whatever the order.
+  await update(e, [
+    { name: "A", value: "new" },
+    { name: "A", value: null },
+  ]);
+  // Two sets of one name: the greater value wins (Convex sorts the batch), not the last one sent.
+  await update(e, [
+    { name: "D", value: "2" },
+    { name: "D", value: "1" },
+  ]);
+  // Swapping two names in one batch.
+  await update(e, [
+    { name: "A", value: null },
+    { name: "B", value: null },
+    { name: "A", value: "b" },
+    { name: "B", value: "new" },
+  ]);
+  expect(await list(e)).toEqual([
+    { name: "A", value: "b" },
+    { name: "B", value: "new" },
+    { name: "D", value: "2" },
+  ]);
+});
+
 test("names, values and limits, with Convex's codes and messages", async () => {
   const e = await engine();
   expect(await fail(update(e, [{ name: "1X", value: "v" }]))).toEqual({
@@ -39,16 +69,6 @@ test("names, values and limits, with Convex's codes and messages", async () => {
     code: "EnvVarNameForbidden",
     message: 'Environment variable with name "BUNVEX_SITE_URL" is built-in and cannot be overridden',
   });
-  expect(
-    (
-      await fail(
-        update(e, [
-          { name: "D", value: "1" },
-          { name: "D", value: "2" },
-        ]),
-      )
-    ).code,
-  ).toBe("EnvVarNameNotUnique");
   // 64 values of 8 KiB, plus their names: over 512 KiB.
   const big = Array.from({ length: 64 }, (_, i) => ({ name: `V${i}`, value: "x".repeat(8192) }));
   expect(await fail(update(e, big))).toMatchObject({ code: "EnvVarTotalSizeLimitMet" });
