@@ -687,6 +687,7 @@ export function createServer(opts: ServerOptions) {
     ...(siteOrigin ? { BUNVEX_SITE_URL: siteOrigin.replace(/\/$/, "") } : {}),
   };
   functions.builtinEnv = builtinEnv;
+  functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
   const deploymentEnv = async () => ({
     ...builtinEnv,
