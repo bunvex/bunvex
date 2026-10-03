@@ -304,7 +304,7 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
-DV-250–DV-255 (STUDY-47 L1–L6, the function execution log and `bunvex logs`) await the owner. Until decided, the PR that
+DV-250–DV-253 and DV-255 (STUDY-47 L1–L4 and L6, the function execution log and `bunvex logs`) await the owner; DV-254 is withdrawn (bunvex logs `"use node"` actions as `node`, as Convex). Until decided, the PR that
 builds the log implements the recommendation in each row:
 
 | ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
@@ -314,7 +314,6 @@ builds the log implements the recommendation in each row:
 | DV-252 | `userExecutionTime` equals `executionTime` | user time apart from system time | yes (the log) | Not done yet. Accept | [STUDY-47 L3](../study/STUDY-47-log-streaming.md#4-divergences) |
 | DV-253 | No `Tester` caller: the dashboard's function runner logs as `HttpApi` | `/api/run_test_function` logs as `Tester` | yes (the log) | Not done yet: bunvex has no `run_test_function`. Accept | [STUDY-47 L4](../study/STUDY-47-log-streaming.md#4-divergences) |
 | DV-255 | `bunvex logs` does not print the deployment it targets first | `announceDeploymentTarget`: "Showing logs of deployment: …" | yes (one stderr line) | Not done yet: no bunvex command prints Convex's deployment announcement. Accept | [STUDY-47 L6](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-254 | `environment` is always `"isolate"` | `"node"` for `"use node"` actions | yes (the log) | Not possible in one process without a Node runtime. Accept | [STUDY-47 L5](../study/STUDY-47-log-streaming.md#4-divergences) |
 
 ## Waiting on a dependency
 

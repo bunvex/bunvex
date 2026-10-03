@@ -99,6 +99,8 @@ export type Completion = {
   /** When the execution started. */
   executionTimestamp: number;
   identityType: IdentityType;
+  /** `node` for a `"use node"` action. */
+  environment: "isolate" | "node";
 };
 
 /** Lines an action or HTTP action printed while running (Convex's `FunctionExecutionProgress`). */
@@ -132,6 +134,7 @@ export class Running implements LogOwner {
     readonly identityType: IdentityType,
     /** Wall-clock ms. */
     readonly start: number,
+    readonly environment: "isolate" | "node" = "isolate",
   ) {}
 }
 
@@ -259,7 +262,7 @@ export function partJson(p: Part, opts: { structured: boolean; parts: boolean })
     willRetry: p.willRetry,
     executionTimestamp: p.executionTimestamp,
     identityType: p.identityType,
-    environment: "isolate",
+    environment: p.environment,
   };
 }
 
