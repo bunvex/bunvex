@@ -342,7 +342,7 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
-Components (STUDY-62) await nine design decisions, K1–K9 in [STUDY-62 §4](../study/STUDY-62-components.md#4-decisions-for-the-owner): per-namespace table numbers, running `@convex-dev/*` packages (a rule-5 exception), bundling under Bun, module isolation, identity in component queries, no legacy args, unmounted data, the sync `componentPath` fix, and the dashboard's order. The divergences below waiting on components follow from them.
+Components (STUDY-62): nine design decisions, K1–K9, were accepted as recommended (owner, 2026-10-03; [STUDY-62 §4](../study/STUDY-62-components.md#4-decisions-owner-2026-10-03-all-as-recommended)): per-namespace table numbers, running `@convex-dev/*` packages (a rule-5 exception), bundling under Bun, module isolation, identity in component queries, no legacy args, unmounted data, the sync `componentPath` fix, and the dashboard's order. The divergences below waiting on components follow from them.
 
 ## Waiting on a dependency
 

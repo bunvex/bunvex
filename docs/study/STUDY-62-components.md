@@ -1,7 +1,7 @@
 # STUDY-62 — Components
 
-- **Status:** draft; decisions pending (owner): K1–K9. No code yet: this study and its plan are the first
-  PR.
+- **Status:** K1–K9 accepted as recommended (owner, 2026-10-03). No code yet: this study and its plan are
+  the first PR; K8's fix is the next one.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031, npm `convex` 1.46.0), 2026-10-03
 - **Related:** [STUDY-04](STUDY-04-table-and-index-metadata.md) D4 (DV-55: no namespaces),
   [STUDY-36](STUDY-36-codegen.md) G2 (DV-174), [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md)
@@ -125,7 +125,7 @@ There are no components. These are the touch points:
   Action, and then **ignores it**. A non-root path runs the root function of that name. Convex refuses
   it for non-admins (and ends the session, an untyped error) and routes it for admins. See K8.
 
-## 4. Decisions for the owner
+## 4. Decisions (owner, 2026-10-03: all as recommended)
 
 | # | Question | Convex | Recommendation |
 |---|---|---|---|
