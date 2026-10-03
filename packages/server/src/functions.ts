@@ -43,6 +43,7 @@ import {
 } from "./admin-keys.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
+import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import type {
   ActionBuilder,
@@ -505,7 +506,19 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args);
+    return inHandleScope({ db, engine: this.engine }, () =>
+      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    );
+  }
+
+  /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
+  engineOf(): Engine {
+    return this.engine;
+  }
+
+  /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
+  functionPaths(): string[] {
+    return [...this.fns.keys()].map(canonicalPath);
   }
 
   /**
@@ -596,7 +609,7 @@ export class Functions {
     opts: NestedOptions | undefined,
     depth: number,
   ): Promise<unknown> {
-    const name = registryKey(getFunctionName(ref));
+    const name = registryKey(await functionNameOf(ref, db, this.engine));
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -876,7 +889,11 @@ export class Functions {
     const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
     const ctx = this.actionCtx(caller, null, opts.job, f);
     const a = this.checkArgs(f, args);
-    return this.actionPermits.run(() => this.inActionEnv(() => f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
+    return this.actionPermits.run(() =>
+      this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then((r) =>
+        this.checkReturns(f, r),
+      ),
+    );
   }
 
   /**
@@ -892,9 +909,12 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: (n: FunctionRef, a?: unknown) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
-      runMutation: (n: FunctionRef, a?: unknown) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
-      runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      runQuery: async (n: FunctionRef, a?: unknown) =>
+        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runMutation: async (n: FunctionRef, a?: unknown) =>
+        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runAction: async (n: FunctionRef, a?: unknown) =>
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
@@ -909,6 +929,8 @@ export class Functions {
     authError: Error | null,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
-    return this.actionPermits.run(async () => this.inActionEnv(() => handler(ctx, request)));
+    return this.actionPermits.run(async () =>
+      this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+    );
   }
 }

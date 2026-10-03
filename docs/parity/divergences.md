@@ -301,6 +301,12 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
+DV-264 (STUDY-50 H1, function handles) awaits the owner; the PR implements the recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-264 | `_function_handles` rows are synced in a transaction right after a push installs its code | in the push's own transaction | barely (an instant after a push) | Not done yet: doable in `finish_push`'s transaction. Accept for now | [STUDY-50 H1](../study/STUDY-50-function-handles.md#4-divergences) |
+
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 

@@ -32,6 +32,8 @@ export const SCHEMAS_TABLE = "_schemas";
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
 export const EXPORTS_TABLE = "_exports";
+/** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
+export const FUNCTION_HANDLES_TABLE = "_function_handles";
 /** Snapshot imports (STUDY-42), as Convex's `_snapshot_imports`: one row per import, its state and checkpoints. */
 export const SNAPSHOT_IMPORTS_TABLE = "_snapshot_imports";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
@@ -67,6 +69,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _scheduled_functions: 539,
   _storage: 540,
   _snapshot_imports: 541,
+  _function_handles: 545,
   _cron_next_run: 547,
   _index_backfills: 548,
   // bunvex's own.

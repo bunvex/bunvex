@@ -314,7 +314,7 @@ Key bunvex facts behind the statuses:
 | `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing | |
 | `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing | |
 | Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing | New. |
-| `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | missing | |
+| `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |
 | Isolated per-component tables, functions and data | crates (component registry) | missing | |
 
 ### 18. Errors surfaced to apps

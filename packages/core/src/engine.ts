@@ -14,6 +14,7 @@ import {
   CRON_NEXT_RUN_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FUNCTION_HANDLES_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -481,6 +482,7 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
     ];
     return [...systemTables, ...schema.tables.values()];
   }

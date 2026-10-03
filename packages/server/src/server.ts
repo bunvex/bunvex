@@ -42,6 +42,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
+import { syncFunctionHandles } from "./function-handles.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -943,13 +944,18 @@ export function createServer(opts: ServerOptions) {
         authModule = code.authConfig;
         if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
       })
-    : Promise.resolve();
+    : // An embedded server's functions are registered in process: their handles now.
+      engine
+        .mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles")
+        .then(() => {});
   codeReady.catch((e) =>
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
+    // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
+    await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
     if (o.auth !== undefined)
       verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));

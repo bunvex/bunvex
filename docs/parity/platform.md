@@ -84,7 +84,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference or a name. Function handles come with components. |
+| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference, a name or a function handle (STUDY-50). |
 | Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | done (STUDY-30) | From actions, each call commits at once. |
 | Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
 | Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
@@ -180,7 +180,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `defineComponent(name)` and a component's own schema and functions | same; `crates/model/components` | missing | |
 | Table and function isolation per component (`TableNamespace`) | `crates/model/components`; `_components`, `_component_definitions` tables | missing | |
 | Calling a component: `ctx.runQuery(components.x.fn, args)` | `server/impl/actions_impl.ts` | missing | Also works from mutations via `ctx.runMutation`, at depth up to 8. |
-| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | missing | Used by the scheduler and by components. |
+| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | done (STUDY-50) | `function://<id>#<path>`; rows per function kept by each push (tombstoned, revived); resolved in the caller's transaction by `runQuery` / `runMutation` / `runAction` and the scheduler. Synced just after the push's commit (DV-264, pending). |
 | Component type checking on push | `crates/model/components/type_checking.rs` | missing | |
 | Ecosystem components (ratelimiter, workpool, aggregate, …) | `npm-packages/components/`; external `@convex-dev/*` | missing | Popular apps depend on these, so they are the main reason to support components. |
 
@@ -270,7 +270,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_modules`, `_source_packages`, `_udf_config`, `_external_deps_packages` | `crates/model/modules` etc. | partial | `_modules`, `_source_packages`, `_udf_config` as Convex's (STUDY-35). No `_external_deps_packages` (Node actions, Phase 4). |
 | `_auth` | `crates/model/auth` | missing | |
 | `_environment_variables` | `crates/model/environment_variables` | done (STUDY-37) | `{ name, value }`, indexed `by_name`, as Convex's. |
-| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | missing | |
+| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | partial | `_function_handles` done (STUDY-50, number 545); the component tables come with components. |
 | `_session_requests` | `crates/model/session_requests` | done (STUDY-23) | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | done (STUDY-42) | Convex's fields, states and indexes (timestamps in ns); `_snapshot_imports` also keeps the upload's size (`object_size`, not returned by `queryImport`). |
 | `_log_sinks` | `crates/model/log_sinks` | missing | |
