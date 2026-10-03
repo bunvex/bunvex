@@ -310,6 +310,10 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
+|---|---|---|---|---|---|---|
+| DV-310 | An index range ends a complete value at `key + [0xFF]`: `eq(f, "")` selects only `""`, `gt(f, "")` includes `"\0…"` | `End::after_prefix` / `BinaryKey::increment` (crates/common/src/query.rs `IndexRange::compile`, interval/bounds.rs): `eq(f, "")` also returns `"\0…"`, `{}` also `{"": x}`, empty bytes also `[0x00…]`; `gt(f, "")`, `lte`, `gt` skip or add them the same way | yes, rarely (values that begin with another value then a NUL / an empty field name) | An index range must select what the same comparison selects; found by a property test (TEST-01, `core/test/index-range.property.test.ts`, counterexample `[["\0", null], "", "eq"]`) | Fix (diverge): wrong results are a bug, not behaviour apps rely on | TEST-01 §5 |
+
 None as of 2026-10-01: the owner decided every pending row ("approve all recommendations"). DV-53, DV-56,
 DV-67, DV-68, DV-72, DV-87 and DV-89 moved to [Decided divergences](#decided-divergences); the others to
 [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
