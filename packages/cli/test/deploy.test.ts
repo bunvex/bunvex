@@ -195,7 +195,7 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     });
     const broken = io(app, { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY });
     expect(await main(["deploy"], broken.it)).toBe(1);
-    expect(broken.err[0]).toContain("Failed to analyze a.js: Uncaught Error: broken");
+    expect(broken.err.join("\n")).toContain("Failed to analyze a.js: Uncaught Error: broken");
     write(app, { "bunvex/a.ts": `import { readFileSync } from "node:fs"; export const x = readFileSync;` });
     const nodeApi = io(app, { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY });
     expect(await main(["deploy"], nodeApi.it)).toBe(1);
@@ -278,5 +278,92 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
       C: "3",
       D: "four",
     });
+  });
+});
+
+describe("the checks before a push (STUDY-56), as Convex's deploy", () => {
+  // A table with documents, thresholds lowered so it counts as large.
+  const LARGE = {
+    BUNVEX_MIN_DOCUMENTS_FOR_INDEX_DELETE_WARNING: "1",
+    BUNVEX_MIN_DOCUMENTS_FOR_INDEX_BACKFILL_WARNING: "1",
+  };
+  const schema = (indexes: string, validator = "v.string()") => ({
+    "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(VALUES)};
+export default defineSchema({ notes: defineTable({ body: ${validator} })${indexes} });`,
+    "bunvex/notes.ts": `import { mutation } from ${JSON.stringify(SERVER)};
+export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }));`,
+  });
+  async function setup() {
+    const d = await deployment();
+    const app = tmp();
+    write(app, schema('.index("by_body", ["body"])'));
+    const env = { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY, ...LARGE };
+    expect(await main(["deploy", "--typecheck=disable"], io(app, env).it)).toBe(0);
+    for (let i = 0; i < 3; i++) await d.call("mutation", "notes:add");
+    return { d, app, env };
+  }
+
+  test("deleting an index of a large table: no terminal stops the push, the flag lets it through", async () => {
+    const { d, app, env } = await setup();
+    write(app, schema(""));
+    const stopped = io(app, env);
+    expect(await main(["deploy", "--typecheck=disable"], stopped.it)).toBe(1);
+    const text = stopped.err.join("\n");
+    expect(text).toContain("This code push will delete the following index");
+    expect(text).toContain("⛔ notes.by_body   body  ⚠️  3 documents");
+    expect(text).toContain("or run the deploy command with the --skip-large-indexes-check flag");
+    // Nothing was pushed: the index is still there.
+    const r = await d.call("query", "notes:add");
+    expect(r.errorMessage ?? "").not.toContain("by_body");
+    const allowed = io(app, env);
+    expect(await main(["deploy", "--typecheck=disable", "--skip-large-indexes-check"], allowed.it)).toBe(0);
+    expect(allowed.err.join("\n")).toContain("Proceeding with push since deleting large indexes was allowed by flag");
+  });
+
+  test("a non-staged index on a large table asks; the answer decides; a dry run only warns", async () => {
+    const { app, env } = await setup();
+    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body"])'));
+    const no = io(app, env);
+    no.it.prompt = () => "n";
+    expect(await main(["deploy", "--typecheck=disable"], no.it)).toBe(1);
+    expect(no.err.join("\n")).toContain("This push will create the following index on a large table");
+    expect(no.err).toContain("Canceling push");
+    const dry = io(app, env);
+    expect(await main(["deploy", "--typecheck=disable", "--dry-run"], dry.it)).toBe(0);
+    expect(dry.err.join("\n")).toContain("This push will create the following index on a large table");
+    const yes = io(app, env);
+    yes.it.prompt = () => "y";
+    expect(await main(["deploy", "--typecheck=disable"], yes.it)).toBe(0);
+    expect(yes.err).toContain("✔ Proceeding with push.");
+    // A staged index never blocks.
+    write(
+      app,
+      schema(
+        '.index("by_body", ["body"]).index("by_other", ["body"]).index("later", { fields: ["body"], staged: true })',
+      ),
+    );
+    const staged = io(app, env);
+    expect(await main(["deploy", "--typecheck=disable"], staged.it)).toBe(0);
+    expect(staged.err.join("\n")).not.toContain("This push will create");
+  });
+
+  test("a dry run warns about a slow schema walk; a CI platform names the push in the audit log", async () => {
+    const { d, app, env } = await setup();
+    write(app, schema('.index("by_body", ["body"])', "v.union(v.string(), v.number())"));
+    const dry = io(app, { ...env, BUNVEX_MIN_BYTES_FOR_SCHEMA_WALK_WARNING: "1" });
+    expect(await main(["deploy", "--typecheck=disable", "--dry-run"], dry.it)).toBe(0);
+    expect(dry.err.join("\n")).toMatch(
+      /This schema change requires checking every document in the following table against your new schema, totaling \d+ bytes/,
+    );
+    expect(dry.err.join("\n")).toContain("  notes (3 documents, ");
+    const ci = io(app, { ...env, GITHUB_ACTIONS: "true", GITHUB_SHA: "0123456789abcdef" });
+    expect(await main(["deploy", "--typecheck=disable"], ci.it)).toBe(0);
+    const events = (await d.engine.query((db) =>
+      db.asSystem(() => db.query("_deployment_audit_log").collect()),
+    )) as unknown as { action: string; metadata: { message: string | null } }[];
+    expect(events.filter((e) => e.action === "push_config_with_components").at(-1)!.metadata.message).toBe(
+      "Deployed from GitHub Actions • 0123456",
+    );
   });
 });

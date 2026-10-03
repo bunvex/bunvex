@@ -1,4 +1,4 @@
-// The Clerk and Auth0 providers (STUDY-47), differential: Convex's `convex/react-clerk` and `convex/react-auth0`
+// The Clerk and Auth0 providers (STUDY-54), differential: Convex's `convex/react-clerk` and `convex/react-auth0`
 // (the oracle) and `@bunvex/react-clerk` / `@bunvex/react-auth0` run the same app against the same bunvex server,
 // with each library's hook faked. Both must ask the library for the same tokens (Convex's "convex" template and
 // audience are "bunvex" here, DV-242) and reach the same auth states.

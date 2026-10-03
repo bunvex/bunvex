@@ -1,6 +1,6 @@
 # @bunvex/react-clerk
 
-`BunvexProviderWithClerk` (STUDY-47), the counterpart of Convex's `convex/react-clerk`: the React client,
+`BunvexProviderWithClerk` (STUDY-54), the counterpart of Convex's `convex/react-clerk`: the React client,
 authenticated with Clerk. Pass the `useAuth` of the Clerk SDK you use (`@clerk/clerk-react`, `@clerk/react`,
 `@clerk/nextjs`, `@clerk/clerk-expo`, …).
 

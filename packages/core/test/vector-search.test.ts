@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { decodeId, v } from "@bunvex/values";
 import { defineSchema, defineTable, Engine } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const schema = () =>
   defineSchema({
@@ -142,4 +143,25 @@ test("a vector index is backfilled from the documents already there", async () =
   const second = await new Engine(schema(), p).init();
   await second.searchReady();
   expect(second.vectorSearch("docs", "by_embedding", { vector: [0, 0, 1] })).toHaveLength(1);
+});
+
+test("vector indexes in the schema JSON: staged apart, filter fields sorted, round-trips", () => {
+  const schema = defineSchema({
+    docs: defineTable(v.any())
+      .vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 3, filterFields: ["lang", "kind"] })
+      .vectorIndex("staged", { vectorField: "other", dimensions: 2, staged: true }),
+  });
+  const json = schemaToJson(schema);
+  expect(json.tables[0]).toMatchObject({
+    vectorIndexes: [
+      { indexDescriptor: "by_embedding", vectorField: "embedding", dimensions: 3, filterFields: ["kind", "lang"] },
+    ],
+    stagedVectorIndexes: [{ indexDescriptor: "staged", vectorField: "other", dimensions: 2, filterFields: [] }],
+  });
+  const back = schemaFromJson(json);
+  expect(back.tables.get("docs")!.stagedVector).toEqual(["staged"]);
+  expect(back.tables.get("docs")!.vectorIndexes!.by_embedding!.dimensions).toBe(3);
+  expect(schemaToJson(back)).toEqual(json);
+  // A table without vector indexes has no such keys, as Convex's optional fields.
+  expect("vectorIndexes" in schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]!).toBe(false);
 });

@@ -130,7 +130,8 @@ export type SyncDeps = {
   /** A failed function run, for a client: its message (without request id) and the app's data as JSON. */
   formatError: (e: unknown) => { error: string; data?: string };
   /** Arguments in JSON form → values. */
-  fromWire: (args: unknown) => unknown;
+  /** A call's arguments from the wire (`path`: the function's, for Convex's "Invalid arguments for" error). */
+  fromWire: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
@@ -438,7 +439,7 @@ export class SyncHub {
         q.udfPath,
         { ...caller, source: "SyncWorker" } as SourcedCaller,
         async () => {
-          const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
+          const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
           return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
         },
         (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
@@ -875,7 +876,7 @@ export class SyncSession {
   /** Arguments as canonical JSON (fields sorted), so equal arguments share executions. */
   private canonicalArgs(args: v1.JSONValue[]) {
     try {
-      return stringifyValue(this.hub.deps.fromWire(args) as never);
+      return stringifyValue(this.hub.deps.fromWire(args, "") as never);
     } catch {
       return JSON.stringify(args); // invalid: the run reports it
     }
@@ -899,10 +900,10 @@ export class SyncSession {
         const session = this.sessionId;
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args), true, caller)
+            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller)
             : functions.runSessionMutation(
                 path,
-                fromWire(m.args),
+                fromWire(m.args, path),
                 { sessionId: session, requestId: m.requestId },
                 caller,
               ),
@@ -938,7 +939,7 @@ export class SyncSession {
       try {
         const { functions, fromWire } = this.hub.deps;
         const r = await collectLogs(() =>
-          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args), caller),
+          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
         );
         if (this.closed) return;
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);

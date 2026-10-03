@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
+  BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
   DEPLOYMENT_AUDIT_LOG_TABLE,
@@ -11,8 +12,11 @@ import {
   insertAuditLogEvents,
   OccError,
   parseValue,
+  readBackendState,
   SchemaEnforcementError,
+  setUserStopState,
   stringifyValue,
+  TableSummariesUnavailableError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -70,6 +74,15 @@ import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.
 import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
 import {
+  documentDeltas,
+  jsonSchemas,
+  listSnapshot,
+  STREAMING_EXPORT_ROUTE,
+  StreamingExportError,
+  streamingArgs,
+  tableColumnNames,
+} from "./streaming-export.ts";
+import {
   fromWireTs,
   MAX_PENDING_MUTATIONS,
   type SplayOptions,
@@ -80,6 +93,7 @@ import {
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -127,6 +141,8 @@ export type ServerOptions = {
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
    */
   scheduler?: SchedulerOptions;
+  /** How often usage limits are evaluated (Convex's `USAGE_LIMIT_EVALUATE_INTERVAL_SECS`, 10 s). */
+  usageLimitIntervalMs?: number;
   /**
    * Log streams (STUDY-59): a file every event is appended to, as Convex's `--local-log-sink <path>`.
    * Default: the `BUNVEX_LOCAL_LOG_SINK` environment variable.
@@ -204,7 +220,16 @@ export type ServerOptions = {
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
  * Convex (`UdfArgsJson`), `args` is the arguments object or an array holding it (what Convex's clients send).
  */
-const fromWire = (args: unknown) => parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+const fromWire = (args: unknown, path: string) => {
+  try {
+    return parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+  } catch (e) {
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
+    throw new FunctionPathError(
+      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
+    );
+  }
+};
 
 /** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
 const envFlag = (v: string | undefined) => v !== undefined && v !== "";
@@ -217,6 +242,8 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
 /** Convex's metric routes (STUDY-58), `/api/app_metrics/<route>`. */
 const METRICS_ROUTE = /^\/api\/app_metrics\/([a-z_]+)$/;
+/** Convex's pause routes (STUDY-63). */
+const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
@@ -237,6 +264,11 @@ export function createServer(opts: ServerOptions) {
     const o = functions.actionPermits.outstanding[kind];
     appMetrics.recordOutstanding("isolate", kind, o.running, o.queued);
   };
+  // Usage limits (STUDY-61): this process's usage, and the worker that enforces the limits.
+  const usageMeter = new UsageMeter();
+  functions.usageMeter = usageMeter;
+  const usageLimitWorker = new UsageLimitWorker(engine, usageMeter, opts.usageLimitIntervalMs);
+  usageLimitWorker.start();
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
   const makeVerifier = (auth: AuthConfig | undefined) =>
@@ -490,13 +522,22 @@ export function createServer(opts: ServerOptions) {
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     if (req.method === "OPTIONS") return fs.preflight(req);
     try {
-      if (url.pathname === "/api/storage/upload" && req.method === "POST")
-        return fs.cors(req, await fs.upload(req, url));
-      if (req.method === "GET" || req.method === "HEAD")
-        return fs.cors(req, await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length))));
+      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      if (url.pathname === "/api/storage/upload" && req.method === "POST") {
+        const r = await fs.upload(req, url);
+        usageMeter.record("functionCalls", 1);
+        return fs.cors(req, r);
+      }
+      if (req.method === "GET" || req.method === "HEAD") {
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        usageMeter.record("functionCalls", 1);
+        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
+        return fs.cors(req, r);
+      }
       return fs.cors(req, new Response(null, { status: 405 }));
     } catch (e) {
       if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
+      if (e instanceof BackendIsNotRunningError) return fs.cors(req, requestError(400, e.code, e.message));
       if (isSystemError(e))
         return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
       throw e;
@@ -592,6 +633,29 @@ export function createServer(opts: ServerOptions) {
   };
 
   /** The admin routes; the caller is already identified. */
+  /**
+   * Convex's `/api/v1/pause_deployment` and `/api/v1/unpause_deployment` (local_backend/deployment_state.rs,
+   * STUDY-63): set `_backend_state.user`, with an audit event when it changes; 200 with no body.
+   */
+  const pauseRoute = async (unpause: boolean, caller: Caller): Promise<Response> => {
+    functions.requireOperation(caller, unpause ? "UnpauseDeployment" : "PauseDeployment");
+    const failed = unpause ? "UnpauseDeploymentFailed" : "PauseDeploymentFailed";
+    const outcome = await engine.mutation(async (db) => {
+      const current = await readBackendState(db);
+      if (current.system !== "none")
+        return `Deployment is currently disabled or suspended and cannot be ${unpause ? "unpaused" : "paused"}.`;
+      if (unpause && current.user !== "paused") return "Deployment is not currently paused.";
+      if ((await setUserStopState(db, unpause ? "none" : "paused")) !== null)
+        await insertAuditLogEvents(
+          db,
+          [unpause ? auditEvents.unpauseDeployment() : auditEvents.pauseDeployment()],
+          auditActor(caller),
+        );
+      return null;
+    }, "set_user_stop_state");
+    return outcome === null ? new Response(null, { status: 200 }) : requestError(400, failed, outcome);
+  };
+
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
     // Convex's `check_admin_key`: an admin or acting user (not the system) gets its operations.
@@ -643,6 +707,29 @@ export function createServer(opts: ServerOptions) {
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
     }
+    const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
+    if (streaming) {
+      const route = streaming[1]!;
+      const getOnly =
+        route === "json_schemas" || route === "get_table_column_names" || route === "test_streaming_export_connection";
+      if (req.method === "GET" || (!getOnly && req.method === "POST")) {
+        // Convex's order: the streaming export entitlement (always on here), then `ViewData`.
+        functions.requireOperation(caller, "ViewData");
+        try {
+          if (route === "test_streaming_export_connection") return json(null);
+          if (route === "json_schemas") return json(await jsonSchemas({ engine }, url.searchParams));
+          if (route === "get_table_column_names") return json(await tableColumnNames({ engine }));
+          const args = await streamingArgs(req, url);
+          const text =
+            route === "list_snapshot" ? await listSnapshot({ engine }, args) : await documentDeltas({ engine }, args);
+          return new Response(text, { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          if (isSystemError(e)) throw e;
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        }
+      }
+    }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
       functions.requireOperation(caller, "ViewLogs");
@@ -656,6 +743,23 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       return json(await tableShapes(engine));
     }
+    const usage = USAGE_LIMIT_ROUTE.exec(url.pathname);
+    if (usage)
+      try {
+        const r = await usageLimitRoute(
+          { engine, functions, meter: usageMeter, wake: () => void usageLimitWorker.wake() },
+          usage[1]!,
+          usage[2],
+          req,
+          caller,
+        );
+        if (r) return r;
+      } catch (e) {
+        if (e instanceof UsageLimitError) return requestError(e.status, e.code, e.message);
+        throw e;
+      }
+    const pause = PAUSE_ROUTE.exec(url.pathname);
+    if (pause && req.method === "POST") return pauseRoute(pause[1] === "unpause", caller);
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -788,7 +892,10 @@ export function createServer(opts: ServerOptions) {
         STREAM_ROUTE.test(url.pathname) ||
         METRICS_ROUTE.test(url.pathname) ||
         LOG_STREAM_ROUTE.test(url.pathname) ||
+        STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
+        PAUSE_ROUTE.test(url.pathname) ||
+        USAGE_LIMIT_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -847,7 +954,7 @@ export function createServer(opts: ServerOptions) {
       }
       return udfResponse(
         await collectLogs(async () => {
-          const args = fromWire(body.args);
+          const args = fromWire(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(body.path, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);
           const value =
@@ -918,7 +1025,10 @@ export function createServer(opts: ServerOptions) {
   };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
+  /** The auth providers in force, for a push's audit-log auth diff. */
+  let installedAuth: unknown[] | null = null;
   const useAuth = (providers: unknown[] | null) => {
+    installedAuth = providers;
     verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
   };
   /**
@@ -1173,8 +1283,10 @@ export function createServer(opts: ServerOptions) {
     cronExecutor,
     install: (version, auth, module) => {
       authModule = module;
+      installedAuth = auth;
       return installCodeVersion(version, { crons: false, auth });
     },
+    currentAuth: () => installedAuth,
     deploymentEnv,
   });
   /**
@@ -1236,6 +1348,7 @@ export function createServer(opts: ServerOptions) {
       if (authModule) useAuth(providers);
       return new Response(null, { status: 200 });
     } catch (e) {
+      if (e instanceof TableSummariesUnavailableError) return requestError(503, e.code, e.message);
       if (e instanceof PushError) return requestError(400, e.code, e.message);
       throw e;
     }
@@ -1325,7 +1438,7 @@ export function createServer(opts: ServerOptions) {
     if (caller instanceof Response) return caller;
     if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
       try {
-        caller = adminCaller(body.adminKey, false);
+        caller = withRequest(adminCaller(body.adminKey, false), req);
       } catch (e) {
         const r = accessError(e);
         if (r) return r;
@@ -1341,8 +1454,9 @@ export function createServer(opts: ServerOptions) {
       if (step === "get_config_hashes") return json(await push.configHashes());
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
+      if (step === "evaluate_schema") return json(await push.evaluateSchema(body));
       if (step === "wait_for_schema") return json(await push.waitForSchema(body));
-      if (step === "finish_push") return json(await push.finishPush(body));
+      if (step === "finish_push") return json(await push.finishPush(body, auditActor(caller)));
       if (step === "report_push_completed") return json({});
       return requestError(404, "NotFound", `no route for ${url.pathname}`);
     } catch (e) {
@@ -1350,7 +1464,10 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          e.code === "RaceDetected" ? e.message : `Hit an error while pushing:\n${e.message}`,
+          // As Convex: a race and a message refused before the push are not "while pushing".
+          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+            ? e.message
+            : `Hit an error while pushing:\n${e.message}`,
         );
       const r = accessError(e);
       if (r) return r;
@@ -1379,9 +1496,13 @@ export function createServer(opts: ServerOptions) {
     /** Log streams (STUDY-59): settled once the stored sinks were started. */
     logManager,
     logSinksReady,
+    /** Usage limits (STUDY-61). */
+    usageMeter,
+    usageLimitWorker,
     stop: () => {
       functionLog.close();
       logManager.stop();
+      usageLimitWorker.stop();
       void exportService?.stop();
       void importService?.stop();
       void scheduler.stop();
