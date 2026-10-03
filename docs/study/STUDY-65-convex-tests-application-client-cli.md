@@ -188,12 +188,13 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | |
 | 17 | the rest of §2–§4 | characterisation, messages | | S each | |
 
-## 7. Open questions for the owner
+## 7. Owner decisions
 
-- **Q1. A stale reconnect timer after `stop()`** (§3, shared with Convex). Keep Convex's behaviour, or
-  cancel the scheduled reconnect in `stop()` (a divergence)? Default: keep, and add a characterisation test.
-- **Q2. `insertAtPosition`'s `===` on `argsToMatch`** (shared with Convex). Keep, or compare as
-  `insertAtTop` does (a divergence)? Default: keep.
+Both match Convex, so no divergence row (owner, 2026-10-03: keep).
+
+- **Q1. A stale reconnect timer after `stop()`** (§3, shared with Convex): **keep** Convex's behaviour;
+  `stop()` does not cancel a scheduled reconnect.
+- **Q2. `insertAtPosition`'s `===` on `argsToMatch`** (shared with Convex): **keep**.
 
 No decision is needed for F1–F5 or M1–M8: matching Convex is the default.
 
