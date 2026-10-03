@@ -88,7 +88,7 @@ test("a client that stops reading loses no frame past 16 MiB of unsent data", as
 });
 
 test("a socket whose unsent data passes the limit is closed, never left with frames missing", async () => {
-  const { functions, port } = await setup(4 << 20);
+  const { functions, port } = await setup(1 << 20);
   const c = await subscribed(port);
   c.pause();
   for (let n = 1; n <= 30; n++) {
