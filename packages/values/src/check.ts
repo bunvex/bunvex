@@ -1,6 +1,8 @@
 // Checking a value against a validator (STUDY-13), with the rules and the message structure of Convex's
 // `Validator::check_value` (crates/common/src/schemas/validator.rs): a path from the outermost level, the
 // value and the validator in the same display forms.
+
+import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { decodeId } from "./id.ts";
 import type { GenericValidator } from "./validators.ts";
 import { compareValues, isBytes, isSimpleObject, type Value } from "./value.ts";
@@ -76,6 +78,8 @@ const noMatch = (value: Value | undefined, x: GenericValidator) =>
   );
 
 function check(x: GenericValidator, value: Value | undefined, tableOf: TableOfId): Mismatch | null {
+  // Before the commit, a commit timestamp is checked as the largest int64 (Convex's max view, STUDY-53).
+  if (isCommitTsPlaceholder(value)) value = MAX_COMMIT_TS;
   // biome-ignore lint/suspicious/noExplicitAny: the composite parts are validators
   const part = (p: any) => p as GenericValidator;
   switch (x.kind) {
@@ -86,6 +90,7 @@ function check(x: GenericValidator, value: Value | undefined, tableOf: TableOfId
     case "float64":
       return typeof value === "number" ? null : noMatch(value, x);
     case "int64":
+    case "commitTs":
       return typeof value === "bigint" ? null : noMatch(value, x);
     case "boolean":
       return typeof value === "boolean" ? null : noMatch(value, x);

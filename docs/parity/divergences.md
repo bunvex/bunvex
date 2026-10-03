@@ -259,6 +259,7 @@ Kept so the history is in one place.
 | DV-78 | A system error during a WebSocket mutation is that mutation's error | As Convex on protocol v1: the connection closes with 1011 `InternalServerError`; v0 is gone | yes | owner, 2026-09-30 (#50, v0 deleted) | [STUDY-20 D6](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
 | DV-88 | Database selection read only bunvex's env names (`PERSISTENCE`, `PERSISTENCE_URL`) | As Convex's image: without `PERSISTENCE`, `POSTGRES_URL`, then `MYSQL_URL`, then `DATABASE_URL` (Postgres, deprecated, warns) select the driver; empty is unset. bunvex's names win when both are set. `PG_CA_FILE` / `MYSQL_CA_FILE` too. The database-name part is DV-110 | operational | owner, 2026-10-01 (#116) | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration), [STUDY-25 §3.7](../study/STUDY-25-persistence-lifecycle.md#37-database-selection-and-tls-l8-built) |
 | DV-109 | Postgres and MySQL URLs were used as given: no TLS or session defaults | As Convex: TLS required, chain and host name verified (system and bundled roots plus `PG_CA_FILE` / `MYSQL_CA_FILE`); a weaker `sslmode` in the URL does not lift it; `DO_NOT_REQUIRE_SSL` (any non-empty value) does, and Postgres then prefers TLS. Postgres sessions `target_session_attrs=read-write`; a read-only MySQL refused at open | operational | owner, 2026-10-01 (#116) | [STUDY-25 L8](../study/STUDY-25-persistence-lifecycle.md#4-divergences), [§1.6](../study/STUDY-25-persistence-lifecycle.md#16-database-selection-and-tls-l8) |
+| DV-59 | No `db.vars.commitTs` / `v.commitTs()` | As Convex (STUDY-53): the placeholder resolved at commit to the commit ts (int64 ns) in documents, index entries and the result; read back as the placeholder; `i64::MAX` before the commit for validators and indexes | yes | owner, 2026-10-01 (match Convex) | [STUDY-53](../study/STUDY-53-commit-timestamp.md), [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -273,7 +274,6 @@ classed as bugs by their study; they are listed here because they change what op
 | ID | Gap | Convex | Source |
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-59 | No `db.vars.commitTs` / `v.commitTs()` | has them | [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-13 D2](../study/STUDY-13-validators.md#4-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
 | DV-73 | Pagination cursors are signed (HMAC), not encrypted | encrypted (with the key broker, Phase 3) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 
@@ -300,6 +300,13 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
+
+DV-267–DV-268 (STUDY-53 T1–T2, the commit timestamp) await the owner; the draft PR implements each recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-267 | A query run by a mutation (`ctx.runQuery`) sees `db.vars` | a query's reader has no `vars` | barely | Not done yet. Accept for PR 1 | [STUDY-53 T1](../study/STUDY-53-commit-timestamp.md#4-divergences) |
+| DV-268 | The commit timestamp token in arguments that refuse it gets bunvex's value error | "Field name $commitTs starts with '$', which is reserved." | yes (an error message) | Not done yet: PR 2. Accept for PR 1 | [STUDY-53 T2](../study/STUDY-53-commit-timestamp.md#4-divergences) |
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).

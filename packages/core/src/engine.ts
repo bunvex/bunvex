@@ -3,7 +3,16 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
-import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
+import {
+  checkValue,
+  fromJsonValue,
+  type GenericValidator,
+  hasCommitTs,
+  resolveCommitTs,
+  toJsonValue,
+  type Value,
+  v,
+} from "@bunvex/values";
 import {
   activeTables,
   bootstrapCatalog,
@@ -1325,8 +1334,13 @@ export class Engine {
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
-      if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
+      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
+      const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
+      if (!tx.hasWrites) {
+        const value = resolved(tx.snapshot);
+        return withTs ? { value, ts: tx.snapshot } : value;
+      }
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({
@@ -1336,7 +1350,16 @@ export class Engine {
           idx,
           source,
           onVisible: this.withPendingCheck(tx),
+          ...(tx.hasCommitTs
+            ? {
+                atTs: (ts: number) => {
+                  tx.resolveCommitTs(BigInt(ts) * 1000n);
+                  return tx.toWrites();
+                },
+              }
+            : {}),
         });
+        const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)
