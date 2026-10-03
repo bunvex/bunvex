@@ -44,21 +44,20 @@ export const FLOORS: Record<string, Floor> = {
   },
   "packages/values/src/value.ts": { floor: 95, area: "value encoding/order", why: "compareValues, the wire JSON form" },
   "packages/values/src/commit-ts.ts": {
-    floor: 70,
+    floor: 98,
     area: "value encoding/order",
     why: "the commit timestamp placeholder",
   },
   "packages/core/src/keyenc.ts": { floor: 98, area: "value encoding/order", why: "index keys and their range bounds" },
-  // Persistence durability. split.ts is exercised by the SQL drivers' conformance jobs, not the root run;
-  // #255's properties bring it (and scan.ts) into the root run: raise both floors when it merges, as #259's
-  // tests do for commit-ts, system-reader, schema-json, web-socket-manager, persistence and local-backend.
+  // Persistence durability. split.ts is also exercised by the SQL drivers' conformance jobs; in the root run
+  // scan.property.test.ts covers it against the split-key model.
   "packages/core/src/persistence/split.ts": {
-    floor: 8,
+    floor: 84,
     area: "persistence durability",
     why: "keys over 2500 bytes on SQL stores",
   },
   "packages/core/src/persistence/scan.ts": {
-    floor: 78,
+    floor: 96,
     area: "persistence durability",
     why: "latest-version scans every driver shares",
   },
@@ -73,7 +72,7 @@ export const FLOORS: Record<string, Floor> = {
     why: "the embedded SQL store",
   },
   "packages/server/src/persistence.ts": {
-    floor: 84,
+    floor: 94,
     area: "persistence durability",
     why: "which store a deployment opens",
   },
@@ -84,7 +83,7 @@ export const FLOORS: Record<string, Floor> = {
     why: "cached query results and their invalidation",
   },
   "packages/core/src/system-reader.ts": {
-    floor: 71,
+    floor: 98,
     area: "invalidation/cache",
     why: "db.system: the public projection of system tables",
   },
@@ -92,7 +91,7 @@ export const FLOORS: Record<string, Floor> = {
   "packages/server/src/sync.ts": { floor: 97, area: "sync/reconnect", why: "the server side of the sync protocol" },
   "packages/protocol/src/v1.ts": { floor: 97, area: "sync/reconnect", why: "the wire messages" },
   "packages/client/src/web-socket-manager.ts": {
-    floor: 83,
+    floor: 98,
     area: "sync/reconnect",
     why: "reconnects, backoff, transition chunks",
   },
@@ -103,7 +102,7 @@ export const FLOORS: Record<string, Floor> = {
   },
   // Determinism.
   "packages/core/src/schema-json.ts": {
-    floor: 74,
+    floor: 98,
     area: "determinism",
     why: "the schema a push compares: same input, same JSON",
   },
@@ -117,7 +116,7 @@ export const FLOORS: Record<string, Floor> = {
   // Admin keys.
   "packages/server/src/admin-keys.ts": { floor: 98, area: "admin keys", why: "issuing and checking admin keys" },
   "packages/server/src/local-backend.ts": {
-    floor: 82,
+    floor: 98,
     area: "admin keys",
     why: "the self-hosted binary: secret checks, keygen",
   },
