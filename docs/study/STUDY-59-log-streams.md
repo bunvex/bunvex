@@ -1,6 +1,6 @@
 # STUDY-59 — Log streams (`_log_sinks`, the log stream API, webhook and local sinks)
 
-- **Status:** implemented; decisions pending (owner): DV-303–DV-305
+- **Status:** implemented; DV-303–DV-305 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-47](STUDY-47-log-streaming.md) (the function log the events come from),
   [STUDY-48](STUDY-48-audit-log.md) (the audit log, now streamed), [STUDY-58](STUDY-58-app-metrics.md)
@@ -132,9 +132,9 @@ mutation_retry_count}`. Storage usage, AI gateway, egress and custom audit event
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-303 | Datadog, Axiom, Sentry and PostHog streams are created, listed and updated as Convex's, and then fail to start ("Datadog log streams are not supported by bunvex yet."). | Ainda não fizemos: each needs its client. | pending (recommend: accept for now) |
-| DV-304 | The event metadata is under `deployment`, not `convex`. The verification message is "Log stream connection test". The `custom_audit` refusal has no plans link. | Rule 5. Não dá pra fazer igual sem quebrar a regra. | pending (recommend: accept) |
-| DV-305 | In `function_execution`: a subscription's `run_reason` is always `initialSubscription`; `scheduler_info`, `function_args_bytes` and `mutation_retry_count` are null. Exception `frames` are null. | Ainda não fizemos: the function log does not carry them. | pending (recommend: accept for now) |
+| DV-303 | Datadog, Axiom, Sentry and PostHog streams are created, listed and updated as Convex's, and then fail to start ("Datadog log streams are not supported by bunvex yet."). | Ainda não fizemos: each needs its client. | accepted (owner, 2026-10-03) |
+| DV-304 | The event metadata is under `deployment`, not `convex`. The verification message is "Log stream connection test". The `custom_audit` refusal has no plans link. | Rule 5. Não dá pra fazer igual sem quebrar a regra. | accepted (owner, 2026-10-03) |
+| DV-305 | In `function_execution`: a subscription's `run_reason` is always `initialSubscription`; `scheduler_info`, `function_args_bytes` and `mutation_retry_count` are null. Exception `frames` are null. | Ainda não fizemos: the function log does not carry them. | accepted (owner, 2026-10-03) |
 
 Not divergences:
 

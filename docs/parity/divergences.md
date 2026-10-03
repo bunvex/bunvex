@@ -216,6 +216,10 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-276 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR | owner, 2026-10-03 (as recommended) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-277 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-278 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL` | owner, 2026-10-03 (as recommended) | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
+| DV-302 | `function_concurrency`: actions and HTTP actions report the one shared permit pool's counts; queries and mutations report how many are in flight (`queued` always 0); no `node` gauges | one limiter per function type and environment, each reporting its running and queued permits | dashboard only (the Health page's concurrency chart) | Not done yet: bunvex has no per-type limiters (STUDY-31). Accept for now; the gauges follow if limiters are split | owner, 2026-10-03 (as recommended) | [STUDY-58 §4](../study/STUDY-58-app-metrics.md#4-divergences) |
+| DV-303 | Datadog, Axiom, Sentry, PostHog Logs and PostHog Error Tracking streams are created, listed and updated as Convex's, but fail to start ("… log streams are not supported by bunvex yet.") | each sends to its service | yes: those integrations never become active | Not done yet: each needs its client (and Sentry its SDK). Accept for now; add them one by one later | owner, 2026-10-03 (as recommended) | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+| DV-304 | A webhook or local event's deployment metadata is under `deployment` (not `convex`); the verification event's message is "Log stream connection test" (not "Convex connection test"); the `custom_audit` refusal has no plans link | `convex: {…}`, "Convex connection test" | yes, to the receiving endpoint | Rule 5 (no "convex" in shipped strings). Accept: receivers written for Convex read `convex.deployment_name` and would need `deployment.deployment_name` | owner, 2026-10-03 (as recommended) | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+| DV-305 | `function_execution`: `run_reason` of a subscribed query is always `initialSubscription` (never `dataChange` / `identityChange`); `scheduler_info`, `function_args_bytes` and `mutation_retry_count` are null; an exception's `frames` are null; usage as the function log's (DV-251) | the rerun's reason, the job, the sizes, the stack frames | yes, in those fields | Not done yet: the function log does not carry them. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -341,20 +345,8 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
-
-DV-302 (STUDY-58, the app metrics' concurrency gauges) awaits the owner; the draft PR implements the recommendation:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-302 | `function_concurrency`: actions and HTTP actions report the one shared permit pool's counts; queries and mutations report how many are in flight (`queued` always 0); no `node` gauges | one limiter per function type and environment, each reporting its running and queued permits | dashboard only (the Health page's concurrency chart) | Not done yet: bunvex has no per-type limiters (STUDY-31). Accept for now; the gauges follow if limiters are split | [STUDY-58 §4](../study/STUDY-58-app-metrics.md#4-divergences) |
-
-DV-303–DV-305 (STUDY-59, log streams) await the owner; the draft PR implements the recommendations:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-303 | Datadog, Axiom, Sentry, PostHog Logs and PostHog Error Tracking streams are created, listed and updated as Convex's, but fail to start ("… log streams are not supported by bunvex yet.") | each sends to its service | yes: those integrations never become active | Not done yet: each needs its client (and Sentry its SDK). Accept for now; add them one by one later | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
-| DV-304 | A webhook or local event's deployment metadata is under `deployment` (not `convex`); the verification event's message is "Log stream connection test" (not "Convex connection test"); the `custom_audit` refusal has no plans link | `convex: {…}`, "Convex connection test" | yes, to the receiving endpoint | Rule 5 (no "convex" in shipped strings). Accept: receivers written for Convex read `convex.deployment_name` and would need `deployment.deployment_name` | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
-| DV-305 | `function_execution`: `run_reason` of a subscribed query is always `initialSubscription` (never `dataChange` / `identityChange`); `scheduler_info`, `function_args_bytes` and `mutation_retry_count` are null; an exception's `frames` are null; usage as the function log's (DV-251) | the rerun's reason, the job, the sizes, the stack frames | yes, in those fields | Not done yet: the function log does not carry them. Accept for now | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+DV-302 was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
+DV-303, DV-304, DV-305 were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
