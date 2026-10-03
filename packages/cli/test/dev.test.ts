@@ -57,7 +57,13 @@ async function deployment() {
   stops.push(() => s.shutdown());
   const url = `http://127.0.0.1:${s.server.port}`;
   const query = async (path: string) =>
-    (await (await fetch(`${url}/api/query`, { method: "POST", body: JSON.stringify({ path, args: {} }) })).json()) as {
+    (await (
+      await fetch(`${url}/api/query`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args: {} }),
+      })
+    ).json()) as {
       status: string;
       value?: unknown;
     };

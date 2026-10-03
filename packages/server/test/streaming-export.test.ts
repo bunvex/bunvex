@@ -56,6 +56,7 @@ async function setup() {
       (await (
         await fetch(`${api}/mutation`, {
           method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ path, args: toJsonValue(args as never) }),
         })
       ).json()) as { value: any }
