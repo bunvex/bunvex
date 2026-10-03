@@ -370,18 +370,30 @@ export class Tx {
   /** Functions scheduled by this transaction and their arguments' bytes (`scheduled-jobs.ts`). */
   scheduledCount = 0;
   scheduledBytes = 0;
-  /**
-   * Database egress as Convex's usage tracker counts it (STUDY-71, `ReadSet::record_read_document` and the
-   * index range stream): user tables only; each document handed out of a `get`, an index range or a search is
-   * its size, plus its index key's bytes when a user-defined index returned it.
-   */
-  private egress = { bytes: 0, documents: 0 };
+  /** The index key bytes the user's reads were metered (STUDY-71), beside their documents' `bytesRead`. */
+  private keyBytesRead = 0;
 
+  /**
+   * One document handed out of a `get`, an index range or a search, as Convex's
+   * `ReadSet::record_read_document` (STUDY-71): a user table's document counts its size and one row toward
+   * the read limits (checked here, the count growing even when it throws) and the metered egress, plus its
+   * index key's bytes when a user-defined index returned it. A system table's is kept apart and never
+   * limited (Convex's `system_tx_size`).
+   */
   private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
     if (t.name.startsWith("_")) return;
-    this.egress.documents++;
-    this.egress.bytes += valueSize(doc as unknown as Value);
-    if (ix && !isReservedIndex(ix)) this.egress.bytes += keyBytesLength(indexKeyValues(ix, doc));
+    this.docsRead++;
+    this.bytesRead += valueSize(doc as unknown as Value);
+    if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
+    if (this.systemTx) return;
+    if (this.docsRead > this.limits.documentsRead)
+      throw new Error(
+        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
+      );
+    if (this.bytesRead > this.limits.bytesRead)
+      throw new Error(
+        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
+      );
   }
 
   /**
@@ -414,8 +426,8 @@ export class Tx {
         if (next) writeBytes += valueSize(next as unknown as Value);
       }
     return {
-      readBytes: this.egress.bytes,
-      readDocuments: this.egress.documents,
+      readBytes: this.bytesRead + this.keyBytesRead,
+      readDocuments: this.docsRead,
       writeBytes,
       writeDocuments,
       writeIndexRows,
@@ -687,20 +699,7 @@ export class Tx {
     this.uncountedReads++;
   }
 
-  /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */
-  private recordDoc(json: string) {
-    this.docsRead++;
-    this.bytesRead += json.length;
-    if (this.systemTx) return;
-    if (this.docsRead > this.limits.documentsRead)
-      throw new Error(
-        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
-      );
-    if (this.bytesRead > this.limits.bytesRead)
-      throw new Error(
-        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
-      );
-  }
+
 
   /**
    * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
@@ -777,7 +776,6 @@ export class Tx {
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
     if (!json) return null;
-    this.recordDoc(json);
     const doc = decodeDoc(json);
     this.countEgress(t, doc, null);
     return doc;
@@ -933,7 +931,6 @@ export class Tx {
           throw e;
         }
       });
-      for (const j of rows) this.recordDoc(j);
       this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
     }
@@ -943,7 +940,6 @@ export class Tx {
       const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
       // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
       if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
-      this.recordDoc(json);
       out.push(decodeDoc(json));
     }
     this.countRowsRead(t.name, out.length);

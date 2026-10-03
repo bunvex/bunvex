@@ -544,10 +544,10 @@ index on append and trim. Memory driver 124–128k commits/s after vs 129k befor
     value is encoded at once instead.
 - **Pagination** already recorded `[start, last key]` (STUDY-17); its end now uses the same
   `readEndAfter`.
-- **Not changed:** a scan's prefetch (pages of 64, growing to 1 024) still counts every fetched document
-  toward the 32 000-document read limit, where Convex counts the rows returned (`record_read_document` in
-  `start_next`). It only matters near the limit, with a filter or a `for await` that stops early; noted
-  here for a follow-up, not decided.
+- **Not changed then:** a scan's prefetch (pages of 64, growing to 1 024) still counted every fetched
+  document toward the 32 000-document read limit, where Convex counts the rows returned
+  (`record_read_document` in `start_next`). Fixed with STUDY-71: only the documents handed out count, by
+  their sizes, and system tables' reads apart.
 
 Tests (`packages/core/test/read-set-prefix.test.ts`, `read-set-serializable.test.ts`,
 `packages/server/test/sync.test.ts`):

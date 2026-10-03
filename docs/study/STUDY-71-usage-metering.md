@@ -107,8 +107,10 @@ Sources: `crates/usage_tracking/src/lib.rs` (`FunctionUsageTracker`, `UsageCount
 
 Found while reading, not divergences of this study:
 
-- The transaction's read limit counts JSON lengths, and system-table reads in the same budget; Convex counts
-  document sizes, and system reads in a separate budget. This is a follow-up PR.
+- The transaction's read limit counted JSON lengths, every prefetched document and system-table reads;
+  Convex counts the documents handed out by their sizes, system reads in a separate, unlimited budget.
+  Fixed in the PR after PR 1: the limit now counts what the metering does (`Tx.countEgress`), so the two
+  can no longer disagree.
 
 ## 5. Plan
 

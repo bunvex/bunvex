@@ -385,11 +385,11 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 
 | Limit | Convex value (source) | bunvex status | Notes |
 |---|---|---|---|
-| Documents written per transaction | 16 000 (`TRANSACTION_MAX_NUM_USER_WRITES`) | missing | |
-| Bytes written per transaction | 16 MiB (`TRANSACTION_MAX_USER_WRITE_SIZE_BYTES`) | missing | |
-| Documents scanned per transaction | 32 000 (`TRANSACTION_MAX_READ_SIZE_ROWS`) | missing | |
-| Bytes read per transaction | 16 MiB (`TRANSACTION_MAX_READ_SIZE_BYTES`) | missing | |
-| Read-set intervals | 4096, warning at 3072 (`TRANSACTION_MAX_READ_SET_INTERVALS`) | missing | |
+| Documents written per transaction | 16 000 (`TRANSACTION_MAX_NUM_USER_WRITES`) | done (#35) | |
+| Bytes written per transaction | 16 MiB (`TRANSACTION_MAX_USER_WRITE_SIZE_BYTES`) | done (#35) | |
+| Documents scanned per transaction | 32 000 (`TRANSACTION_MAX_READ_SIZE_ROWS`) | done (#12; STUDY-71) | As Convex's `record_read_document`: each user-table document handed out counts (not a page's prefetch); system tables' reads apart, never limited. |
+| Bytes read per transaction | 16 MiB (`TRANSACTION_MAX_READ_SIZE_BYTES`) | done (#12; STUDY-71) | Documents' sizes (Convex's `Size`), not their JSON. |
+| Read-set intervals | 4096, warning at 3072 (`TRANSACTION_MAX_READ_SET_INTERVALS`) | partial (#12) | The limit and its error; the warning is not emitted. |
 | Query / mutation user time | 1 s (`DATABASE_UDF_USER_TIMEOUT_SECONDS`); syscall time 15 s | missing | bunvex has no timeouts. |
 | Action timeout | V8 1800 s (docs say 10 min for cloud); Node 600 s | missing | |
 | Arguments / return value size | 16 MiB each (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64) | Same knobs. |
