@@ -145,6 +145,28 @@ describe("bunvex env", () => {
     expect(none.err.at(-1)).toBe("error: No environment variables specified to be set.");
   });
 
+  test("what list prints, set reads back: multi-line values survive a round trip through a .env file", async () => {
+    const url = await deployment();
+    const dir = tmp();
+    const values: Record<string, string> = {
+      CERT: "-----BEGIN KEY-----\nabc\n-----END KEY-----",
+      QUOTED: "it's\nmulti",
+      HASH: "a#b",
+      JSON: '{"a":"b"}',
+    };
+    for (const [name, value] of Object.entries(values)) {
+      writeFileSync(join(dir, name), value);
+      expect((await cli(dir, url)("set", name, "--from-file", name)).code).toBe(0);
+    }
+    const listed = (await cli(dir, url)("list")).out.join("\n");
+    // A second deployment, filled from the first one's listing.
+    const other = await deployment();
+    writeFileSync(join(dir, ".env.copy"), listed);
+    expect((await cli(dir, other)("set", "--from-file", ".env.copy")).code).toBe(0);
+    for (const [name, value] of Object.entries(values))
+      expect((await cli(dir, other)("get", name)).out).toEqual([value]);
+  });
+
   test("access: a read-only key reads but cannot write; no deployment configured", async () => {
     const url = await deployment();
     const dir = tmp();
