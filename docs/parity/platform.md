@@ -180,7 +180,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `defineComponent(name)` and a component's own schema and functions | same; `crates/model/components` | missing | |
 | Table and function isolation per component (`TableNamespace`) | `crates/model/components`; `_components`, `_component_definitions` tables | missing | |
 | Calling a component: `ctx.runQuery(components.x.fn, args)` | `server/impl/actions_impl.ts` | missing | Also works from mutations via `ctx.runMutation`, at depth up to 8. |
-| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | done (STUDY-50) | `function://<id>#<path>`; rows per function kept by each push (tombstoned, revived); resolved in the caller's transaction by `runQuery` / `runMutation` / `runAction` and the scheduler. Synced just after the push's commit (DV-264, pending). |
+| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | done (STUDY-50) | `function://<id>#<path>`; rows per function kept by each push (tombstoned, revived); resolved in the caller's transaction by `runQuery` / `runMutation` / `runAction` and the scheduler. Synced just after the push's commit (DV-264, accepted). |
 | Component type checking on push | `crates/model/components/type_checking.rs` | missing | |
 | Ecosystem components (ratelimiter, workpool, aggregate, …) | `npm-packages/components/`; external `@convex-dev/*` | missing | Popular apps depend on these, so they are the main reason to support components. |
 

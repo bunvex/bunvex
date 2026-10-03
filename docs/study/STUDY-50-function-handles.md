@@ -1,6 +1,6 @@
 # STUDY-50 — Function handles
 
-- **Status:** decision pending (owner): H1; the PR implements the recommendation
+- **Status:** accepted: H1 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02
 - **Related:** [STUDY-30](STUDY-30-scheduler-and-crons.md) (the scheduler), [STUDY-41](STUDY-41-nested-calls.md)
   (nested calls), [STUDY-35](STUDY-35-push.md) (pushes)
@@ -39,4 +39,4 @@ The handle strings, which functions they run, that they survive a delete and re-
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| H1 | The rows are synced in a transaction right after a push installs its code, not in the push's own | bunvex's push commits its config before it installs the code version (STUDY-35). **Not done yet** (doable by moving it into `finish_push`'s transaction); for an instant after a push, a new function's handle may be "not found" | DV-264, pending |
+| H1 | The rows are synced in a transaction right after a push installs its code, not in the push's own | bunvex's push commits its config before it installs the code version (STUDY-35). **Not done yet** (doable by moving it into `finish_push`'s transaction); for an instant after a push, a new function's handle may be "not found" | DV-264, accepted (owner, 2026-10-03) |
