@@ -40,7 +40,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | done (STUDY-27) | `@bunvex/client`; see client-sync.md. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |
 | Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | done (STUDY-34) | `Bunvex <key>:<b64 identity>` (DV-97) and sync's `impersonating`; needs `ActAsUser`; `tokenIdentifier`, or `issuer|subject`; a malformed identity is 400 `HeaderParseFailure`; never with a system key. |
-| Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | partial | Clerk and Auth0: `@bunvex/react-clerk`, `@bunvex/react-auth0` (STUDY-47); the rest are OIDC configurations. WorkOS and Convex Auth helpers missing. |
+| Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | partial | Clerk and Auth0: `@bunvex/react-clerk`, `@bunvex/react-auth0` (STUDY-54); the rest are OIDC configurations. WorkOS and Convex Auth helpers missing. |
 
 ### 2. Deployment auth, admin keys, operations
 
