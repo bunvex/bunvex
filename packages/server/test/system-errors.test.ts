@@ -133,6 +133,7 @@ describe("a store failure under a function is a system error (DV-80)", () => {
       store.failing = path === "m:bump";
       const r = await fetch(`http://127.0.0.1:${port}/api/mutation`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, args: {} }),
       });
       expect(r.status).toBe(500);

@@ -43,7 +43,11 @@ async function setup() {
   dirs.push(dir);
   const api = `http://127.0.0.1:${s.server.port}`;
   const call = (kind: string, path: string, args: object = {}) =>
-    fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) }).then((r) => r.json());
+    fetch(`${api}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args }),
+    }).then((r) => r.json());
   /** Run `bunvex logs` until `until` holds of its output (then abort it). */
   const run = async (args: string[], until: (out: string[]) => boolean, key = KEY) => {
     const out: string[] = [];

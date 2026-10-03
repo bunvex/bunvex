@@ -44,7 +44,12 @@ async function setup(opts: Partial<ServerOptions> = {}) {
   const post = (path: string, body: object | string = {}, key = KEY) =>
     fetch(`${api}${path}`, {
       method: "POST",
-      headers: { authorization: `Bunvex ${key}`, "user-agent": "audit-test-agent", "x-forwarded-for": "10.1.2.3" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bunvex ${key}`,
+        "user-agent": "audit-test-agent",
+        "x-forwarded-for": "10.1.2.3",
+      },
       body: typeof body === "string" ? body : JSON.stringify(body),
     });
   const call = async (kind: string, path: string, args: object = {}, key = KEY) =>
