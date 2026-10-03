@@ -30,9 +30,9 @@ import { v1 } from "@bunvex/protocol";
 import { type Value, valueSize } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
-import { isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
+import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
-import { callerOf, Functions, type SourcedCaller } from "./functions.ts";
+import { type AdminCaller, callerOf, Functions, type SourcedCaller } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
@@ -161,6 +161,8 @@ type Execution = {
 
 type SessionQuery = {
   udfPath: string;
+  /** A non-root component path an admin asked for (STUDY-62 K8): bunvex has none, so the query fails. */
+  component?: string;
   args: v1.JSONValue[];
   argsJson: string;
   journal: string | null;
@@ -389,6 +391,7 @@ export class SyncHub {
         q.udfPath,
         { ...caller, source: "SyncWorker" } as SourcedCaller,
         async () => {
+          if (q.component !== undefined) throw componentNotFound(q.component);
           const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
           return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
         },
@@ -728,7 +731,9 @@ export class SyncSession {
     for (const m of this.pending.splice(0)) {
       if (m.type === "Add") {
         if (this.queries.has(m.queryId)) throw new Error(`Duplicate query ID: ${m.queryId}`);
+        const component = componentOf(m.componentPath, caller);
         const q: SessionQuery = {
+          ...(component === null ? {} : { component }),
           udfPath: canonicalizeUdfPath(m.udfPath),
           args: m.args,
           argsJson: this.canonicalArgs(m.args),
@@ -844,6 +849,17 @@ export class SyncSession {
         const { functions, fromWire } = this.hub.deps;
         const caller = this.requestCaller(m.requestId);
         if (caller === null) return;
+        let component: string | null;
+        try {
+          component = componentOf(m.componentPath, caller);
+        } catch (e) {
+          return this.internalError(e);
+        }
+        if (component !== null) {
+          const missing = await collectLogs(async () => Promise.reject(componentNotFound(component!)));
+          this.send(this.response("MutationResponse", m.requestId, missing, null));
+          return;
+        }
         const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
         // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
@@ -884,6 +900,18 @@ export class SyncSession {
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
     const caller = this.requestCaller(m.requestId);
     if (caller === null) return;
+    let component: string | null;
+    try {
+      component = componentOf(m.componentPath, caller);
+    } catch (e) {
+      return this.internalError(e);
+    }
+    if (component !== null) {
+      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) =>
+        this.send(this.response("ActionResponse", m.requestId, r)),
+      );
+      return;
+    }
     this.inflightActions++;
     void (async () => {
       try {
@@ -922,7 +950,24 @@ export class SyncSession {
 }
 
 /** Path, args and journal: what a run's result depends on besides the caller. */
-const baseKeyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
+const baseKeyOf = (q: SessionQuery) =>
+  `${q.component === undefined ? "" : `${q.component}\u0001`}${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
+
+/**
+ * Convex's `parse_admin_component_path` (crates/sync/src/worker.rs, STUDY-62 K8): a function of a non-root
+ * component may be called directly only by an admin (not one acting as a user) or the system; anyone else
+ * ends the session (an untyped error). The component, or null for the root.
+ */
+function componentOf(componentPath: string | undefined, caller: Caller): string | null {
+  if (componentPath === undefined || componentPath === "") return null;
+  const admin = (caller as AdminCaller).admin;
+  if (!admin || caller.identity != null)
+    throw new Error("Only admin or system users can call functions on non-root components directly");
+  return componentPath;
+}
+
+/** Convex's `ComponentPathNotFound`: bunvex has no components (STUDY-62), so every non-root path is missing. */
+const componentNotFound = (path: string) => new FunctionPathError(`Component path '${path}' not found`);
 const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
 
