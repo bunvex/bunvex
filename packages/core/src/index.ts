@@ -118,6 +118,7 @@ export {
   installDeterminismIn,
   newUserTimer,
   observeTime,
+  outsideExecution,
   PersistenceReadError,
   pausingUserTime,
   runImportPhase,

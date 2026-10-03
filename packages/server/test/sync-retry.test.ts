@@ -15,8 +15,10 @@ const stops: (() => void)[] = [];
 afterEach(() => {
   for (const s of stops.splice(0)) s();
 });
-// Short backoffs for the tests, through Convex's knobs.
+// Short backoffs for the tests, through Convex's knobs. The deployment's query limiter (16, STUDY-68) is
+// raised so the connection's own cap is what these tests see; with both, as in Convex, 16 bodies run.
 const KNOBS = {
+  APPLICATION_MAX_CONCURRENT_QUERIES: "100",
   SYNC_WORKER_QUERY_RETRY_INITIAL_BACKOFF_MS: "5",
   SYNC_WORKER_QUERY_RETRY_MAX_BACKOFF_SECS: "1",
   SYNC_WORKER_UPDATE_QUERIES_RETRY_INITIAL_BACKOFF_MS: "5",

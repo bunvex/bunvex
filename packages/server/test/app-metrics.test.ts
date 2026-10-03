@@ -250,6 +250,9 @@ test("function_concurrency's gauges and the scheduler's lag", async () => {
     "outstanding_functions:isolate:Mutation:running",
     "outstanding_functions:isolate:Query:queued",
     "outstanding_functions:isolate:Query:running",
+    // Each limiter reports from start, the Node actions' too (STUDY-68).
+    "outstanding_functions:node:Action:queued",
+    "outstanding_functions:node:Action:running",
   ]);
   expect(t.one(c["outstanding_functions:isolate:Action:running"])).toBe(1);
   // No job yet: no sample. A job an hour away: a lag of 0.

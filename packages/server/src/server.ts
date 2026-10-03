@@ -262,10 +262,18 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
-  functions.actionPermits.onChange = (kind) => {
-    const o = functions.actionPermits.outstanding[kind];
-    appMetrics.recordOutstanding("isolate", kind, o.running, o.queued);
-  };
+  // Each limiter reports its running and queued functions (Convex's `Limiter::report_metrics`), from start.
+  for (const [limiter, env, kind] of [
+    [functions.limits.query, "isolate", "Query"],
+    [functions.limits.mutation, "isolate", "Mutation"],
+    [functions.limits.action, "isolate", "Action"],
+    [functions.limits.nodeAction, "node", "Action"],
+  ] as const) {
+    const report = () =>
+      appMetrics.recordOutstanding(env, kind, limiter.outstanding.running, limiter.outstanding.queued);
+    limiter.onChange = report;
+    report();
+  }
   // Usage limits (STUDY-61): this process's usage, and the worker that enforces the limits.
   const usageMeter = new UsageMeter();
   functions.usageMeter = usageMeter;
