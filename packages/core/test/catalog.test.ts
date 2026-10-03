@@ -48,6 +48,7 @@ describe("catalog (_tables / _index)", () => {
           _cron_jobs: 531,
           _schemas: 532,
           _cron_job_logs: 533,
+          _backend_state: 536,
           _scheduled_functions: 539,
           _storage: 540,
           _snapshot_imports: 541,

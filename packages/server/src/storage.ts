@@ -8,7 +8,15 @@
 // - Uploads: a token valid for an hour (reusable), `POST /api/storage/upload?token=`, the body streamed to the
 //   backend and hashed. Downloads: `GET /api/storage/<uuid>`, Convex's headers and single-range rule.
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { type Engine, STORAGE_DELETIONS_TABLE, STORAGE_TABLE, type Tx } from "@bunvex/core";
+import {
+  BackendIsNotRunningError,
+  type Engine,
+  isStopped,
+  readBackendState,
+  STORAGE_DELETIONS_TABLE,
+  STORAGE_TABLE,
+  type Tx,
+} from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
@@ -232,16 +240,26 @@ export class FileStorage {
   /** `ctx.storage` in an action (and an HTTP action): each call its own transaction; get and store. */
   actionWriter() {
     const q = <T>(f: (db: Tx) => Promise<T>) => this.engine.query(f);
+    // Convex's action storage callbacks (all but generateUploadUrl) refuse while the deployment is stopped.
+    const running = <T>(f: (db: Tx) => Promise<T>) =>
+      q(async (db) => {
+        await this.ensureRunningIn(db);
+        return f(db);
+      });
     return {
-      getUrl: (storageId: string) => q((db) => this.reader(db).getUrl(storageId)),
-      getMetadata: (storageId: string) => q((db) => this.reader(db).getMetadata(storageId)),
+      getUrl: (storageId: string) => running((db) => this.reader(db).getUrl(storageId)),
+      getMetadata: (storageId: string) => running((db) => this.reader(db).getMetadata(storageId)),
       generateUploadUrl: async () => this.uploadUrl(await q((db) => this.originIn(db))),
-      delete: (storageId: string) => this.engine.mutation((db) => this.deleteIn(db, storageId), "_system/storage"),
+      delete: (storageId: string) =>
+        this.engine.mutation(async (db) => {
+          await this.ensureRunningIn(db);
+          return this.deleteIn(db, storageId);
+        }, "_system/storage"),
       get: async (storageId: string): Promise<Blob | null> => {
         if (typeof storageId !== "string")
           throw new Error(`storage.get requires a string storageId but received ${storageId}`);
         // Convex reports `get`'s id errors as `storage.getMetadata`'s.
-        const row = await q((db) => this.resolve(db, storageId, "storage.getMetadata"));
+        const row = await running((db) => this.resolve(db, storageId, "storage.getMetadata"));
         if (!row) return null;
         const stream = await this.blobs.get(row.storageKey);
         if (!stream) return null;
@@ -253,9 +271,19 @@ export class FileStorage {
           throw new Error(
             "store() expects a Blob. If you are trying to store a Request, `await request.blob()` will give you the correct input.",
           );
+        await this.ensureRunning();
         return this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256);
       },
     };
+  }
+
+  /** Convex's `bail_if_not_running`: file storage refuses while the deployment is stopped (STUDY-57). */
+  private async ensureRunningIn(db: Tx): Promise<void> {
+    if (isStopped(await readBackendState(db))) throw new BackendIsNotRunningError();
+  }
+
+  private ensureRunning(): Promise<void> {
+    return this.engine.query((db) => this.ensureRunningIn(db));
   }
 
   // ---------------------------------------------------------------- deleted and orphaned blobs (F3)
@@ -326,6 +354,7 @@ export class FileStorage {
   /** `POST /api/storage/upload?token=`: the body to the backend, hashed; `{storageId}`. */
   async upload(req: Request, url: URL): Promise<Response> {
     this.checkToken(url.searchParams.get("token"));
+    await this.ensureRunning();
     let expected: string | undefined;
     const digest = req.headers.get("digest");
     if (digest !== null) {
@@ -351,7 +380,10 @@ export class FileStorage {
         "InvalidStoragePath",
         `Invalid storage path: "${uuid}". Please use \`storage.getUrl(storageId: Id<"_storage">)\` to generate a valid URL to retrieve files.`,
       );
-    const row = await this.engine.query((db) => this.byUuid(db, uuid.toLowerCase()));
+    const row = await this.engine.query(async (db) => {
+      await this.ensureRunningIn(db);
+      return this.byUuid(db, uuid.toLowerCase());
+    });
     const missing = () => new StorageError(404, "FileNotFound", `File ${uuid} not found`);
     if (!row) throw missing();
     const headers: Record<string, string> = { "cache-control": CACHE_CONTROL, "accept-ranges": "bytes" };

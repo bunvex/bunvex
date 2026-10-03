@@ -21,6 +21,7 @@ import {
   type JobDoc,
   type PaginationOptions,
   type PaginationResult,
+  readBackendState,
   SCHEDULED_FUNCTIONS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
@@ -128,6 +129,8 @@ export type SystemQuery = {
   /** The operation a key needs (Convex's `queryPrivateSystem(op)` / `mutationGeneric(op)`); default
    *  `ViewData` for a query, `WriteData` for a mutation. */
   op?: DeploymentOp;
+  /** Any admin may run it (Convex's `noPermissionRequired`). */
+  noPermissionRequired?: true;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
 export type SystemMutation = SystemQuery;
@@ -143,6 +146,29 @@ const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: s
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  // The deployment's run state (STUDY-57), as Convex's `_system/frontend/backendState`.
+  "_system/frontend/backendState": {
+    args: {},
+    noPermissionRequired: true,
+    handler: (db) => readBackendState(db),
+  },
+  // Convex's lossy older form: a usage-limit stop reads as running.
+  "_system/frontend/deploymentState": {
+    args: {},
+    noPermissionRequired: true,
+    handler: async (db) => {
+      const s = await readBackendState(db);
+      const state =
+        s.system === "disabled"
+          ? "disabled"
+          : s.system === "suspended"
+            ? "suspended"
+            : s.user === "paused"
+              ? "paused"
+              : "running";
+      return { state };
+    },
+  },
   // The CLI's `export` waits on it (Convex's `_system/cli/exports:getLatest`): the newest export, or null.
   "_system/cli/exports:getLatest": {
     args: {},

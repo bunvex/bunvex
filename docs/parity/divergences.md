@@ -351,7 +351,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 |---|---|---|
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
-| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
+| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |

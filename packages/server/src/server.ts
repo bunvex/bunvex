@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
+  BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
   DEPLOYMENT_AUDIT_LOG_TABLE,
@@ -11,7 +12,9 @@ import {
   insertAuditLogEvents,
   OccError,
   parseValue,
+  readBackendState,
   SchemaEnforcementError,
+  setUserStopState,
   stringifyValue,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
@@ -204,6 +207,8 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 
 /** The log stream routes (Convex mounts both under `/api/` and `/api/app_metrics/`). */
 const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
+/** Convex's pause routes (STUDY-57). */
+const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
@@ -459,6 +464,7 @@ export function createServer(opts: ServerOptions) {
       return fs.cors(req, new Response(null, { status: 405 }));
     } catch (e) {
       if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
+      if (e instanceof BackendIsNotRunningError) return fs.cors(req, requestError(400, e.code, e.message));
       if (isSystemError(e))
         return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
       throw e;
@@ -554,6 +560,29 @@ export function createServer(opts: ServerOptions) {
   };
 
   /** The admin routes; the caller is already identified. */
+  /**
+   * Convex's `/api/v1/pause_deployment` and `/api/v1/unpause_deployment` (local_backend/deployment_state.rs,
+   * STUDY-57): set `_backend_state.user`, with an audit event when it changes; 200 with no body.
+   */
+  const pauseRoute = async (unpause: boolean, caller: Caller): Promise<Response> => {
+    functions.requireOperation(caller, unpause ? "UnpauseDeployment" : "PauseDeployment");
+    const failed = unpause ? "UnpauseDeploymentFailed" : "PauseDeploymentFailed";
+    const outcome = await engine.mutation(async (db) => {
+      const current = await readBackendState(db);
+      if (current.system !== "none")
+        return `Deployment is currently disabled or suspended and cannot be ${unpause ? "unpaused" : "paused"}.`;
+      if (unpause && current.user !== "paused") return "Deployment is not currently paused.";
+      if ((await setUserStopState(db, unpause ? "none" : "paused")) !== null)
+        await insertAuditLogEvents(
+          db,
+          [unpause ? auditEvents.unpauseDeployment() : auditEvents.pauseDeployment()],
+          auditActor(caller),
+        );
+      return null;
+    }, "set_user_stop_state");
+    return outcome === null ? new Response(null, { status: 200 }) : requestError(400, failed, outcome);
+  };
+
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
     // Convex's `check_admin_key`: an admin or acting user (not the system) gets its operations.
@@ -593,6 +622,8 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       return json(await tableShapes(engine));
     }
+    const pause = PAUSE_ROUTE.exec(url.pathname);
+    if (pause && req.method === "POST") return pauseRoute(pause[1] === "unpause", caller);
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -724,6 +755,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/v1/get_canonical_urls" ||
         STREAM_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
+        PAUSE_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);

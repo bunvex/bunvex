@@ -38,6 +38,8 @@ export const CANONICAL_URLS_TABLE = "_canonical_urls";
 export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
 export const FUNCTION_HANDLES_TABLE = "_function_handles";
+/** The deployment's run state (STUDY-57), as Convex's `_backend_state`: `{system, usage_limit, user}`. */
+export const BACKEND_STATE_TABLE = "_backend_state";
 /** Snapshot imports (STUDY-42), as Convex's `_snapshot_imports`: one row per import, its state and checkpoints. */
 export const SNAPSHOT_IMPORTS_TABLE = "_snapshot_imports";
 /** Cron jobs (STUDY-30 §1.5): the specs, each one's next run, and the last runs' logs. Not visible to apps. */
@@ -76,6 +78,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _snapshot_imports: 541,
   _function_handles: 545,
   _canonical_urls: 546,
+  _backend_state: 536,
   _cron_next_run: 547,
   _index_backfills: 548,
   // bunvex's own.

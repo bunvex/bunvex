@@ -309,6 +309,8 @@ export class ImportIdError extends Error {
 
 export class Tx {
   private readList: Interval[] = [];
+  /** Intervals in `readList` that do not count against `databaseQueries` (`uncountedRead`). */
+  private uncountedReads = 0;
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
   readonly unsettled: ScanReads[] = [];
   /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
@@ -361,7 +363,7 @@ export class Tx {
       bytesRead: this.bytesRead,
       documentsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
-      databaseQueries: this.readList.length,
+      databaseQueries: this.readList.length - this.uncountedReads,
       functionsScheduled: this.scheduledCount,
       scheduledFunctionArgsBytes: this.scheduledBytes,
     };
@@ -579,10 +581,31 @@ export class Tx {
   /** @internal (ScanReads) */
   recordInterval(i: Interval) {
     this.readList.push(i);
-    if (!this.systemTx && this.readList.length > this.limits.databaseQueries)
+    if (!this.systemTx && this.readList.length - this.uncountedReads > this.limits.databaseQueries)
       throw new Error(
         `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
+  }
+
+  /**
+   * @internal A read Convex keeps out of a function's limits (its `system_tx_size`, backend-state.ts): `fn`'s
+   * reads are neither kept nor counted, and the whole of `index` is recorded (for OCC and subscriptions)
+   * without counting against `databaseQueries`.
+   */
+  async uncountedRead<T>(index: number, fn: () => Promise<T>): Promise<T> {
+    const [docs, bytes] = [this.docsRead, this.bytesRead];
+    try {
+      return await this.unrecorded(fn);
+    } finally {
+      [this.docsRead, this.bytesRead] = [docs, bytes];
+      this.recordUncounted(index);
+    }
+  }
+
+  /** @internal The whole of `index`, recorded without counting against `databaseQueries` (`uncountedRead`). */
+  recordUncounted(index: number) {
+    this.readList.push({ index, lo: FULL.lo, hi: FULL.hi });
+    this.uncountedReads++;
   }
 
   /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */

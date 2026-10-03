@@ -3,7 +3,17 @@
 // - A mutation runs exactly once: its log and the next run are written in the transaction that commits it.
 // - An action runs at most once: in progress is committed first; one found in progress that no one runs
 //   was cut short, so it is logged as "Transient error while executing action" and the cron moves on.
-import { CommitterStoppedError, type Engine, OccError, stringifyValue, type Tx, wallClock } from "@bunvex/core";
+import {
+  BACKEND_STATE_TABLE,
+  CommitterStoppedError,
+  type Engine,
+  isStopped,
+  OccError,
+  readBackendState,
+  stringifyValue,
+  type Tx,
+  wallClock,
+} from "@bunvex/core";
 import { displayValue, type Value, valueSize } from "@bunvex/values";
 import type { CronSpec } from "./cron.ts";
 import {
@@ -82,8 +92,10 @@ export class CronJobExecutor {
       ? await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push")
       : undefined;
     const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
+    // And by a pause or unpause (STUDY-57), as Convex's executors subscribe to `_backend_state`.
+    const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
-      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs))) this.poke();
+      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
     });
     this.loop = this.run();
     return diff;
@@ -128,6 +140,15 @@ export class CronJobExecutor {
       let nextAt: number | null = null;
       try {
         const now = wallClock();
+        // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
+        if (await this.engine.query(async (db) => isStopped(await readBackendState(db)))) {
+          if (this.stopped) return;
+          if (this.pokes !== seen) continue;
+          await new Promise<void>((resolve) => {
+            this.wake = resolve;
+          });
+          continue;
+        }
         if (this.running.size < this.o.parallelism) {
           const due = await this.engine.query((db) => dueCrons(db, now, this.o.parallelism + this.running.size));
           for (const job of due) {

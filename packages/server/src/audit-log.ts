@@ -44,6 +44,8 @@ export const auditEvents = {
   deleteCanonicalUrl: (destination: string) => event("delete_canonical_url", { request_destination: destination }),
   deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
   generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),
+  pauseDeployment: () => event("pause_deployment", {}),
+  unpauseDeployment: () => event("unpause_deployment", {}),
 };
 
 /** A value as Convex's clean JSON (`ValueFormat::ConvexCleanJSON`): int64 as a decimal string. */

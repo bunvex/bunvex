@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   newUserTimer,
+  notRunningMessage,
   OccError,
   observeTime,
   pausingUserTime,
@@ -649,9 +650,11 @@ export class Functions {
 
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
-    const f = this.fn(name, "query", fromClient, caller);
+    const resolved = this.fnLater(name, "query", fromClient, caller);
     return async (db: Tx) => {
       noteTx(db);
+      await this.failWhileNotRunning(db);
+      const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
@@ -663,14 +666,45 @@ export class Functions {
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
    */
-  private mutationBody(f: FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
+  private mutationBody(resolved: () => FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
     return perAttempt(async (db: Tx) => {
       noteTx(db);
+      await this.failWhileNotRunning(db);
+      const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
       return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
     });
+  }
+
+  /**
+   * A function to run, resolved now; when that fails, the error is thrown when the body runs, after
+   * `failWhileNotRunning` — Convex checks the run state before it resolves the path.
+   */
+  private fnLater<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
+    try {
+      const f = this.fn(name, kind, fromClient, caller);
+      return () => f;
+    } catch (e) {
+      return (): Extract<FunctionDef, { kind: K }> => {
+        throw e;
+      };
+    }
+  }
+
+  /**
+   * Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-57): a user function fails while
+   * the deployment is paused. Read in the function's transaction, so a subscribed query reruns on unpause.
+   */
+  private async failWhileNotRunning(db: Tx): Promise<void> {
+    const message = notRunningMessage(await this.engine.backendState.read(db));
+    if (message !== null) throw new FunctionPathError(message);
+  }
+
+  /** The same, for an action or HTTP action: in a transaction of its own. */
+  private async failActionWhileNotRunning(): Promise<void> {
+    await this.engine.query((db) => this.failWhileNotRunning(db));
   }
 
   /**
@@ -923,7 +957,7 @@ export class Functions {
     const admin = adminOf(caller);
     if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
     if (!f || !admin) throw notFound(n);
-    this.requireOperation(caller, f.op ?? fallback);
+    if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
   /**
@@ -999,7 +1033,8 @@ export class Functions {
 
   /** @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction. */
   scheduledMutationBody(canonical: string, args: unknown, job?: string) {
-    return this.mutationBody(this.fn(registryKey(canonical), "mutation", false), args, job);
+    const f = this.fn(registryKey(canonical), "mutation", false);
+    return this.mutationBody(() => f, args, job);
   }
 
   async runQuery(name: string, args: unknown, fromClient = true, caller?: Caller): Promise<unknown> {
@@ -1072,7 +1107,7 @@ export class Functions {
       caller,
       () =>
         this.engine.mutationWithTs(
-          this.mutationBody(this.fn(name, "mutation", fromClient, caller), args),
+          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args),
           name,
           caller,
         ),
@@ -1094,7 +1129,7 @@ export class Functions {
       this.engine.sessionMutation(
         isSystemPath(name)
           ? this.systemMutationBody(name, args, true, caller)
-          : this.mutationBody(this.fn(name, "mutation", true, caller), args),
+          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args),
         name,
         request,
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
@@ -1120,6 +1155,7 @@ export class Functions {
       name,
       caller,
       async () => {
+        await this.failActionWhileNotRunning();
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
         const ctx = this.actionCtx(caller, null, opts.job, f);
         const a = this.checkArgs(f, args);
@@ -1188,10 +1224,12 @@ export class Functions {
       "HttpAction",
       route,
       caller,
-      () =>
-        this.actionPermits.run(async () =>
+      async () => {
+        await this.failActionWhileNotRunning();
+        return this.actionPermits.run(async () =>
           this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
-        ),
+        );
+      },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
     );
   }

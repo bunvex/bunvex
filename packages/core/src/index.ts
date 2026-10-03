@@ -7,8 +7,17 @@ export {
   insertAuditLogEvents,
   SYSTEM_ACTOR,
 } from "./audit-log.ts";
+export {
+  BackendIsNotRunningError,
+  type BackendState,
+  isStopped,
+  notRunningMessage,
+  readBackendState,
+  setUserStopState,
+} from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,

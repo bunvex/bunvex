@@ -11,6 +11,7 @@
 //     "Transient error while executing action" and never runs again.
 // - Completed jobs are deleted after the retention window (7 days).
 import {
+  BACKEND_STATE_TABLE,
   type Caller,
   CommitterStoppedError,
   cancelJob,
@@ -21,10 +22,12 @@ import {
   getJob,
   insertJob,
   isJobId,
+  isStopped,
   type JobDoc,
   nextJobTs,
   OccError,
   patchJob,
+  readBackendState,
   stringifyValue,
   type Tx,
   wallClock,
@@ -215,8 +218,10 @@ export class ScheduledJobExecutor {
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
     const byNextTs = this.engine.catalog.table("_scheduled_functions").indexes.get("by_next_ts")!.id;
+    // And by a pause or unpause (STUDY-57), as Convex's executors subscribe to `_backend_state`.
+    const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
-      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs))) this.poke();
+      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
     });
     this.loop = this.run();
     this.scheduleGc(1000);
@@ -244,6 +249,15 @@ export class ScheduledJobExecutor {
       try {
         const now = wallClock();
         const free = this.o.parallelism - this.running.size;
+        // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
+        if (await this.engine.query(async (db) => isStopped(await readBackendState(db)))) {
+          if (this.stopped) return;
+          if (this.pokes !== pokesSeen) continue;
+          await new Promise<void>((resolve) => {
+            this.wake = resolve;
+          });
+          continue;
+        }
         if (free > 0) {
           const due = await this.engine.query((db) => dueJobs(db, now, free + this.running.size));
           for (const job of due) {

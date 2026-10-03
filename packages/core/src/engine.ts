@@ -13,8 +13,10 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
+import { BackendStateCache } from "./backend-state.ts";
 import {
   activeTables,
+  BACKEND_STATE_TABLE,
   bootstrapCatalog,
   buildCatalog,
   CANONICAL_URLS_TABLE,
@@ -209,6 +211,8 @@ export class Engine {
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
   private cacheEpoch = 0;
+  /** The deployment's run state, as every user function checks it (STUDY-57). */
+  readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
   readonly searchIndexes = new SearchIndexes();
   /** Vector indexes (STUDY-51): exact, in memory. */
@@ -279,6 +283,10 @@ export class Engine {
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
+    // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
+    const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
+    this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
+    this.committer.onCommit((entries) => this.backendState.observe(entries));
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
@@ -533,6 +541,7 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: BACKEND_STATE_TABLE, indexes: {}, document: v.any() },
       { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
       {
         name: DEPLOYMENT_AUDIT_LOG_TABLE,
