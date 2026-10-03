@@ -40,7 +40,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
-import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 import {
   checkIdentifier,
@@ -146,14 +146,14 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
   let lo = prefixVals.length ? prefix : FULL.lo;
-  let hi = prefixVals.length ? prefixEnd(prefix) : FULL.hi;
+  let hi = prefixVals.length ? afterValues(prefix) : FULL.hi;
   if (lower) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, lower.v)]);
-    lo = lower.incl ? k : prefixEnd(k);
+    lo = lower.incl ? k : afterValues(k);
   }
   if (upper) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, upper.v)]);
-    hi = upper.incl ? prefixEnd(k) : k;
+    hi = upper.incl ? afterValues(k) : k;
   }
   return { lo, hi };
 }
@@ -1295,6 +1295,27 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
+  tableCount: ((tablet: number) => number) | null = null;
+
+  /**
+   * The number of documents of `table` (Convex's internal `count()`, which its `tableSize` system functions
+   * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
+   * table, so a cached query or a subscription re-runs when it changes. System transactions only.
+   */
+  async countTable(table: string): Promise<number> {
+    if (!this.systemAccess) throw new Error("countTable is for system transactions");
+    const t = this.findTable(table);
+    if (!t) {
+      this.readMissingTable();
+      return 0;
+    }
+    const ix = t.indexes.get("by_creation_time")!;
+    this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
+    let n = this.tableCount ? this.tableCount(t.id) : 0;
+    for (const w of this.writes.values()) if (w.table.id === t.id) n += (w.next ? 1 : 0) - (w.old ? 1 : 0);
+    return n;
+  }
 
   /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
   writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {

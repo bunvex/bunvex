@@ -17,6 +17,7 @@
     "lint": "biome ci .",
     "format": "biome check --write .",
     "check:deps": "bun scripts/check-deps.ts",
+    "coverage": "bun scripts/coverage.ts",
     "test": "bun test && bun run --cwd packages/sync-e2e test:react && bun run --cwd packages/ui test && bun run --cwd packages/dashboard test && bun run --cwd apps/dashboard test && bun run --cwd apps/site test",
     "conformance": "bun bench/conformance.ts",
     "build:dashboard": "bun run --cwd apps/dashboard build",
@@ -28,6 +29,7 @@
     "@biomejs/biome": "^2.2.0",
     "@changesets/cli": "^2.29.0",
     "@types/bun": "^1.2.0",
+    "fast-check": "4.10.2",
     "typescript": "^5.9.0"
   }
 }

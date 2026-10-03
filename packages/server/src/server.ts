@@ -16,6 +16,7 @@ import {
   SchemaEnforcementError,
   setUserStopState,
   stringifyValue,
+  TableSummariesUnavailableError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -55,7 +56,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
-import { syncFunctionHandles } from "./function-handles.ts";
+import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
@@ -68,6 +69,15 @@ import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } 
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
+import {
+  documentDeltas,
+  jsonSchemas,
+  listSnapshot,
+  STREAMING_EXPORT_ROUTE,
+  StreamingExportError,
+  streamingArgs,
+  tableColumnNames,
+} from "./streaming-export.ts";
 import {
   fromWireTs,
   MAX_PENDING_MUTATIONS,
@@ -199,7 +209,16 @@ export type ServerOptions = {
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
  * Convex (`UdfArgsJson`), `args` is the arguments object or an array holding it (what Convex's clients send).
  */
-const fromWire = (args: unknown) => parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+const fromWire = (args: unknown, path: string) => {
+  try {
+    return parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+  } catch (e) {
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
+    throw new FunctionPathError(
+      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
+    );
+  }
+};
 
 /** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
 const envFlag = (v: string | undefined) => v !== undefined && v !== "";
@@ -625,6 +644,29 @@ export function createServer(opts: ServerOptions) {
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
       return canonicalRoute(url, req, caller);
+    const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
+    if (streaming) {
+      const route = streaming[1]!;
+      const getOnly =
+        route === "json_schemas" || route === "get_table_column_names" || route === "test_streaming_export_connection";
+      if (req.method === "GET" || (!getOnly && req.method === "POST")) {
+        // Convex's order: the streaming export entitlement (always on here), then `ViewData`.
+        functions.requireOperation(caller, "ViewData");
+        try {
+          if (route === "test_streaming_export_connection") return json(null);
+          if (route === "json_schemas") return json(await jsonSchemas({ engine }, url.searchParams));
+          if (route === "get_table_column_names") return json(await tableColumnNames({ engine }));
+          const args = await streamingArgs(req, url);
+          const text =
+            route === "list_snapshot" ? await listSnapshot({ engine }, args) : await documentDeltas({ engine }, args);
+          return new Response(text, { headers: { "content-type": "application/json" } });
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          if (isSystemError(e)) throw e;
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        }
+      }
+    }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
       functions.requireOperation(caller, "ViewLogs");
@@ -785,6 +827,7 @@ export function createServer(opts: ServerOptions) {
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||
         STREAM_ROUTE.test(url.pathname) ||
+        STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
         USAGE_LIMIT_ROUTE.test(url.pathname) ||
@@ -846,7 +889,7 @@ export function createServer(opts: ServerOptions) {
       }
       return udfResponse(
         await collectLogs(async () => {
-          const args = fromWire(body.args);
+          const args = fromWire(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(body.path, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);
           const value =
@@ -917,7 +960,10 @@ export function createServer(opts: ServerOptions) {
   };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
+  /** The auth providers in force, for a push's audit-log auth diff. */
+  let installedAuth: unknown[] | null = null;
   const useAuth = (providers: unknown[] | null) => {
+    installedAuth = providers;
     verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
   };
   /**
@@ -1172,8 +1218,10 @@ export function createServer(opts: ServerOptions) {
     cronExecutor,
     install: (version, auth, module) => {
       authModule = module;
+      installedAuth = auth;
       return installCodeVersion(version, { crons: false, auth });
     },
+    currentAuth: () => installedAuth,
     deploymentEnv,
   });
   /**
@@ -1235,6 +1283,7 @@ export function createServer(opts: ServerOptions) {
       if (authModule) useAuth(providers);
       return new Response(null, { status: 200 });
     } catch (e) {
+      if (e instanceof TableSummariesUnavailableError) return requestError(503, e.code, e.message);
       if (e instanceof PushError) return requestError(400, e.code, e.message);
       throw e;
     }
@@ -1324,7 +1373,7 @@ export function createServer(opts: ServerOptions) {
     if (caller instanceof Response) return caller;
     if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
       try {
-        caller = adminCaller(body.adminKey, false);
+        caller = withRequest(adminCaller(body.adminKey, false), req);
       } catch (e) {
         const r = accessError(e);
         if (r) return r;
@@ -1340,8 +1389,9 @@ export function createServer(opts: ServerOptions) {
       if (step === "get_config_hashes") return json(await push.configHashes());
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
+      if (step === "evaluate_schema") return json(await push.evaluateSchema(body));
       if (step === "wait_for_schema") return json(await push.waitForSchema(body));
-      if (step === "finish_push") return json(await push.finishPush(body));
+      if (step === "finish_push") return json(await push.finishPush(body, auditActor(caller)));
       if (step === "report_push_completed") return json({});
       return requestError(404, "NotFound", `no route for ${url.pathname}`);
     } catch (e) {
@@ -1349,7 +1399,10 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          e.code === "RaceDetected" ? e.message : `Hit an error while pushing:\n${e.message}`,
+          // As Convex: a race and a message refused before the push are not "while pushing".
+          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+            ? e.message
+            : `Hit an error while pushing:\n${e.message}`,
         );
       const r = accessError(e);
       if (r) return r;

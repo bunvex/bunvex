@@ -365,6 +365,24 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       return (a._creationTime as number) > (b._creationTime as number) ? a : b;
     },
   },
+  // Convex's `tableSize` system functions (STUDY-52 PR 2): a table's document count, from the summaries.
+  "_system/cli/tableSize": {
+    args: { tableName: v.string() },
+    handler: async (db, { tableName }: { tableName: string }) => db.asSystem(() => db.countTable(tableName)),
+  },
+  "_system/frontend/tableSize": {
+    args: { tableName: v.string(), componentId },
+    handler: async (db, { tableName }: { tableName: string }) =>
+      tableName ? db.asSystem(() => db.countTable(tableName)) : 0,
+  },
+  "_system/frontend/tableSize:sizeOfAllTables": {
+    args: { componentId },
+    handler: async (db, _args, env) => {
+      let total = 0;
+      for (const name of env.functions?.userTableNames() ?? []) total += await db.asSystem(() => db.countTable(name));
+      return total;
+    },
+  },
   "_system/frontend/listCronJobs": {
     args: { componentId },
     handler: async (db) =>

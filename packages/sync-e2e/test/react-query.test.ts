@@ -1,4 +1,4 @@
-// The TanStack Query integration on the server (STUDY-48): no `window` here, so `BunvexQueryClient` reads over
+// The TanStack Query integration on the server (STUDY-55): no `window` here, so `BunvexQueryClient` reads over
 // HTTP, every query of a render at one snapshot (or each at the latest when inconsistent), and never subscribes.
 // The official `@convex-dev/react-query` runs the same prefetches against the same server.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
