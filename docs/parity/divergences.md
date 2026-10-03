@@ -111,6 +111,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-73 | Pagination cursors were signed (HMAC), not encrypted | As Convex's keybroker: the `InstanceCursor` proto sealed with AES-128-GCM-SIV under KBKDF(secret, "cursor"), deterministic, version 7, hex (`cursor.ts`); a cursor of another instance gets `Key is invalid for instance` | yes (cursors are opaque) | owner, 2026-10-01 (STUDY-17 D1: match Convex) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 | DV-142 | Cron `L-nW` (day of month) from certain Mondays: answered, the comparison taken as false | saffron underflows and the process aborts | yes (Convex crashes) | A crash is not behaviour to copy; every other saffron quirk is kept | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S4](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
 | DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
@@ -275,7 +276,6 @@ classed as bugs by their study; they are listed here because they change what op
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-59 | No `db.vars.commitTs` / `v.commitTs()` | has them | [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-13 D2](../study/STUDY-13-validators.md#4-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
-| DV-73 | Pagination cursors are signed (HMAC), not encrypted | encrypted (with the key broker, Phase 3) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 
 ## Pending owner decisions
 

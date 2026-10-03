@@ -46,9 +46,11 @@ the split fields, and the validators.
 
 ## 3. How bunvex does it
 
-- **`packages/core/src/cursor.ts`:** the same content (position + fingerprint), base64url-encoded and
-  signed with HMAC-SHA256 under the instance secret: the `Engine` option `instanceSecret` (`INSTANCE_SECRET`
-  in the bench server), or else the one generated once and stored in `_instance` (D2).
+- **`packages/core/src/cursor.ts`:** Convex's format (DV-73 resolved): the `InstanceCursor` proto
+  (instance name, position, fingerprint) sealed with AES-128-GCM-SIV (`aead.ts`) under the key derived from
+  the instance secret for "cursor", with a zero nonce (the same position gives the same cursor), version 7,
+  hex. The secret is the `Engine` option `instanceSecret`, or else the one generated once and stored in
+  `_instance` (D2). Sealing and opening one cursor costs about 7 µs (an HMAC cost 1.5 µs).
 - **`Tx` query `.paginate()`:**
   - streams the sub-range between the cursors, with filters, the transaction's own writes, the limits and
     the split fields as in §1;
@@ -62,7 +64,7 @@ the split fields, and the validators.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | Cursors are signed (HMAC), not encrypted: the index key position is visible to a client who decodes base64 | Tampering is refused all the same; encryption needs the key broker (admin keys, phase 3) | Decided (owner, 2026-10-01): match Convex (gap, to be built): encrypted cursors, Phase 3 (DV-73) |
+| D1 | Cursors are signed (HMAC), not encrypted: the index key position is visible to a client who decodes base64 | Tampering is refused all the same; encryption needs the key broker (admin keys, phase 3) | Decided (owner, 2026-10-01): match Convex. Built: cursors sealed as Convex's keybroker seals them (`cursor.ts`; DV-73 resolved) |
 | D2 | Without `INSTANCE_SECRET`, a random secret is generated on first start and stored with the data (system table `_instance`), as Convex's self-hosted image does (`self-hosted/docker-build/read_credentials.sh`: the env var, else the stored secret, else a new random one that is then saved). Convex saves it in a file of its data directory; bunvex saves it in the store, because the data may live in a remote database | accepted: option D (owner, 2026-09-30) |
 | D3 | The fingerprint covers table, index, range and order, not filter expressions | Filters are closures here, not a serialized expression | accepted |
 | D4 | `InvalidCursor` errors are plain errors, without Convex's error `data` | The error-data class lands with the errors work (track B, #32) | resolved (STUDY-26 P1): a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}`; a cursor that does not parse stays a plain error, as in Convex |

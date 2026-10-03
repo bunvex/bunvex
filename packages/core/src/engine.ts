@@ -45,6 +45,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+import type { CursorCodec } from "./cursor.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -435,6 +436,16 @@ export class Engine {
   derivedKey(purpose: string, length = 16): Uint8Array {
     if (!this.instanceSecret) throw new Error("derivedKey: the engine is not initialized");
     return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
+  }
+
+  private cursorCodecCache: CursorCodec | null = null;
+  /** Pagination cursors' key (`derivedKey("cursor")`, as Convex's keybroker) and the instance they name. */
+  private readonly cursorCodecOf = (): CursorCodec => this.cursorCodec;
+  get cursorCodec(): CursorCodec {
+    const c = this.cursorCodecCache;
+    if (c && c.instanceName === this.instanceName) return c;
+    this.cursorCodecCache = { key: this.derivedKey("cursor"), instanceName: this.instanceName };
+    return this.cursorCodecCache;
   }
 
   /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
@@ -1042,7 +1053,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1227,7 +1238,7 @@ export class Engine {
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.retention = this.retention;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
