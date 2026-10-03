@@ -218,6 +218,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s; older is `SnapshotTooOld`), and each value's `_ts` is the snapshot | snapshots up to 5 days old (its table iterator rebuilds them from the document log); `_ts` is each document's revision | yes: a connector paging one snapshot for more than 4 minutes restarts; `_ts` differs (Convex says the snapshot gives the same guarantees) | Not done yet: needs a table iterator over the document log and a driver method for a revision's ts. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-60 §4](../study/STUDY-60-streaming-export.md#4-divergences) |
 | DV-309 | Usage is metered from the function log: database I/O as its byte counts (DV-251; no index key bytes), no search, fetch or action-storage bytes, no system-function bandwidth; action CPU equals action time (DV-252) | per-byte counts from the store, searches, fetches and storage calls | yes: `get_current_usage` and when limits trip | Not done yet: those counters are not measured. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-61 §4](../study/STUDY-61-usage-limits.md#4-divergences) |
 | DV-311 | A WebSocket whose unsent data would pass 2³² − 1 bytes (4 GiB) is closed; nothing is ever dropped | Buffers without limit: the sync worker's outgoing channel is unbounded (`crates/sync/src/worker.rs` `measurable_unbounded_channel`); only the 120 s ping/pong timeout ends a peer that does not read | yes, in theory (a client that reads nothing while gigabytes are sent to it gets a close, reconnects and resends) | Bun's `backpressureLimit` is a 32-bit count and cannot be off; past it Bun either drops frames (its default, at 16 MiB: the STUDY-64 W0 bug) or closes. With single flight (STUDY-64 §1.3) a slow reader's buffer holds at most three transitions plus responses | Accept | owner, 2026-10-03 (#287) |
+| DV-210 | Dashboard sign-in: the admin key is never written to storage | written to `sessionStorage`, but not used to sign in again on reload | no (dashboard) | same observable behaviour (a reload asks for the key again); no secret in storage | owner, 2026-10-03 | [STUDY-12 LG2](../study/STUDY-12-dashboard.md#194-divergences-and-additions) |
 
 ## Resolved to match Convex
 
@@ -336,6 +337,7 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 were built later (#213) and are in [Resolved to match Convex](#resolved-to-match-convex).
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
+DV-210 (STUDY-12 LG2, the admin key never written to storage) was accepted (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 
 DV-225 was accepted as recommended (owner, 2026-10-02) and built in #220: it is in [Resolved to match Convex](#resolved-to-match-convex).
 DV-226 was accepted as recommended (owner, 2026-10-02) and is in [Decided divergences](#decided-divergences).
@@ -378,10 +380,6 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
 | **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
-
-| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
-|---|---|---|---|---|---|---|
-| DV-210 | Dashboard sign-in: the admin key is never written to storage | written to `sessionStorage`, but not used to sign in again on reload | no (dashboard) | same observable behaviour; no secret in storage | accept | [STUDY-12 LG2](../study/STUDY-12-dashboard.md#194-divergences-and-additions) |
 
 ## Gaps recorded in studies
 
