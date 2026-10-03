@@ -25,7 +25,7 @@ export async function readBackendState(db: Tx): Promise<BackendState> {
  */
 export class BackendStateCache {
   private writtenTs = 0;
-  private cached: { from: number; state: BackendState } | null = null;
+  private cached: { from: number; state: BackendState; exists: boolean } | null = null;
 
   constructor(private readonly byIdIndex: () => number) {}
 
@@ -41,10 +41,18 @@ export class BackendStateCache {
     const from = this.writtenTs;
     if (c !== null && c.from === from && db.snapshot >= from) {
       db.recordUncounted(this.byIdIndex());
+      // The row a scan would have read, as Convex's `TableStats` counts system reads too.
+      if (c.exists) db.countRowsReadOf(BACKEND_STATE_TABLE, 1);
       return { ...c.state };
     }
-    const state = await db.uncountedRead(this.byIdIndex(), () => readBackendState(db));
-    if (db.snapshot >= from && this.writtenTs === from) this.cached = { from, state: { ...state } };
+    const row = await db.uncountedRead(this.byIdIndex(), () =>
+      db.asSystem(() => db.query(BACKEND_STATE_TABLE).first()),
+    );
+    const state = row
+      ? { system: row.system as string, usage_limit: row.usage_limit as string, user: row.user as string }
+      : { ...RUNNING };
+    if (db.snapshot >= from && this.writtenTs === from)
+      this.cached = { from, state: { ...state }, exists: row !== null };
     return state;
   }
 }

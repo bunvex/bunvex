@@ -75,6 +75,16 @@ test("environment variables: create, update, delete; Convex's document shape, ac
     ["create_environment_variable", "B"],
     ["delete_environment_variable", "A"],
   ]);
+  // One name removed and set in one batch (a rename onto it): accepted, a delete then a create, as Convex
+  // applies the batch (removals first, then sets by name).
+  expect((await env([{ name: "B", value: "y" }, { name: "B" }, { name: "D", value: "1" }])).status).toBe(200);
+  expect(
+    (await t.events()).slice(4).map((d) => [d.action, (d.metadata as { variable_name: string }).variable_name]),
+  ).toEqual([
+    ["delete_environment_variable", "B"],
+    ["create_environment_variable", "B"],
+    ["create_environment_variable", "D"],
+  ]);
   const { _id, _creationTime, ...doc } = e[0]!;
   expect(Object.keys(doc)).toEqual([
     "action",

@@ -138,7 +138,6 @@ export class EnvironmentVariables {
 
   private checkChanges(changes: EnvVarChange[], forbidden: Iterable<string>) {
     const builtIn = new Set(forbidden);
-    const names = new Set<string>();
     for (const c of changes) {
       checkEnvVarName(c.name);
       if (c.value !== null) {
@@ -149,22 +148,13 @@ export class EnvironmentVariables {
             `Environment variable with name "${c.name}" is built-in and cannot be overridden`,
           );
       }
-      if (names.has(c.name))
-        throw new EnvironmentVariableError(
-          "EnvVarNameNotUnique",
-          "One or more environment variable name is not unique",
-        );
-      names.add(c.name);
     }
   }
 
   /** Check a batch without applying it: its names, values and the limits it would leave (a dry run). */
   async check(db: Tx, changes: EnvVarChange[], forbidden: Iterable<string> = []) {
     this.checkChanges(changes, forbidden);
-    const after = new Map((await this.rows(db)).map((r) => [r.name, r.value]));
-    for (const c of changes) if (c.value === null) after.delete(c.name);
-    for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
-    this.checkLimits(after);
+    this.checkLimits(applyEnvVarChanges(new Map((await this.rows(db)).map((r) => [r.name, r.value])), changes));
   }
 
   private checkLimits(vars: Map<string, string>) {
@@ -183,15 +173,14 @@ export class EnvironmentVariables {
   }
 
   /**
-   * Apply a batch (Convex's `update_environment_variables`), in `db`'s transaction: removals, then sets,
-   * then the limits. `forbidden`: the built-in names, which may not be set.
+   * Apply a batch (Convex's `update_environment_variables`), in `db`'s transaction, in Convex's order
+   * (`orderEnvVarChanges`), then check the limits. `forbidden`: the built-in names, which may not be set.
    */
   async update(db: Tx, changes: EnvVarChange[], forbidden: Iterable<string> = []) {
     this.checkChanges(changes, forbidden);
     const existing = new Map((await this.rows(db)).map((r) => [r.name, r]));
-    const ordered = [...changes.filter((c) => c.value === null), ...changes.filter((c) => c.value !== null)];
     await db.asSystem(async () => {
-      for (const c of ordered) {
+      for (const c of orderEnvVarChanges(changes)) {
         const old = existing.get(c.name);
         if (old) {
           await db.delete(ENVIRONMENT_VARIABLES_TABLE, old._id);
@@ -209,4 +198,31 @@ export class EnvironmentVariables {
     this.checkLimits(vars);
     return vars;
   }
+}
+
+const utf8 = new TextEncoder();
+const compareBytes = (a: string, b: string) => Buffer.compare(utf8.encode(a), utf8.encode(b));
+
+/**
+ * The order a batch is applied in, as Convex's (`EnvVarChange` derives `Ord` and the route sorts the
+ * batch, crates/local_backend/src/environment_variables.rs): every removal first, then the sets by name and
+ * then value, compared as UTF-8 bytes. A name may appear more than once: a removal and a set of it leave the
+ * set's value, two sets the greater value. Convex checks no uniqueness in this batch.
+ */
+export function orderEnvVarChanges(changes: readonly EnvVarChange[]): EnvVarChange[] {
+  const unsets = changes.filter((c) => c.value === null);
+  const sets = changes
+    .filter((c) => c.value !== null)
+    .sort((a, b) => compareBytes(a.name, b.name) || compareBytes(a.value!, b.value!));
+  return [...unsets, ...sets];
+}
+
+/** The variables `vars` would hold after the batch (a copy). */
+export function applyEnvVarChanges(vars: ReadonlyMap<string, string>, changes: readonly EnvVarChange[]) {
+  const after = new Map(vars);
+  for (const c of orderEnvVarChanges(changes)) {
+    if (c.value === null) after.delete(c.name);
+    else after.set(c.name, c.value);
+  }
+  return after;
 }

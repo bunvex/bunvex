@@ -92,6 +92,9 @@ class ProjectedQuery implements TxQuery {
   filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
     return this.wrap(this.q.filter(predicate));
   }
+  limit(n: number): TxQuery {
+    return this.wrap(this.q.limit(n));
+  }
   async take(n: number): Promise<Doc[]> {
     return (await this.q.take(n)).map(this.project);
   }
