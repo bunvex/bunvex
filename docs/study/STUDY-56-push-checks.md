@@ -1,6 +1,6 @@
 # STUDY-56 — The checks before a push (`evaluate_schema`, large indexes)
 
-- **Status:** decision pending (owner): P1
+- **Status:** P1 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-35](STUDY-35-push.md) (pushes), [STUDY-29](STUDY-29-index-backfill.md) (staged indexes),
   [STUDY-52](STUDY-52-shape-inference.md) (table summaries: the counts this needs)
@@ -65,4 +65,4 @@ The CLI's prompts, messages and exit codes before a push; the `evaluate_schema` 
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| P1 | A table's outcome is `supersetOfEnforced` only when its validator is unchanged, else `mustWalk`; never `supersetOfShape` | It is what bunvex's schema walk does (STUDY-35: it walks tables whose validator changed). Convex skips more: a new validator that is a superset of the old one, or of the inferred shape. **Not done yet**: needs validator subtyping and shape-to-validator, then the walk can skip the same tables | DV-301, pending |
+| P1 | A table's outcome is `supersetOfEnforced` only when its validator is unchanged, else `mustWalk`; never `supersetOfShape` | It is what bunvex's schema walk does (STUDY-35: it walks tables whose validator changed). Convex skips more: a new validator that is a superset of the old one, or of the inferred shape. **Not done yet**: needs validator subtyping and shape-to-validator, then the walk can skip the same tables | DV-301, accepted (owner, 2026-10-03) |

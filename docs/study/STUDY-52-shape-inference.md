@@ -1,6 +1,6 @@
 # STUDY-52 — Table shape inference
 
-- **Status:** A1–A2 accepted as recommended (owner, 2026-10-03); A3 decision pending (owner)
+- **Status:** A1–A3 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-12](STUDY-12-dashboard.md) (the dashboard's schema views), [STUDY-35](STUDY-35-push.md)
 
@@ -81,7 +81,7 @@ Nothing from functions. Operators see `/api/shapes2` and the dashboard's generat
 |---|---|---|---|
 | A1 | Shapes are exact and current: computed at one snapshot when asked (PR 1), then kept per commit (PR 2), never `Unknown` while warming up | Convex's checkpoints save work in a large multi-tenant backend; bunvex has one deployment in memory. **Possible to match**; recommended not to: the dashboard shows the truth | DV-265, accepted (owner, 2026-10-03) |
 | A2 | After deletes, PR 1's shapes narrow back (they are recomputed); Convex's widened variants stay widened until their count is 0 | A consequence of A1 in PR 1. PR 2 keeps Convex's no-narrowing rule | DV-266, accepted (owner, 2026-10-03); resolved by PR 2 |
-| A3 | The table summaries (counts, sizes, shapes) are rebuilt on start from the documents, not loaded from a checkpoint | Convex checkpoints them into a persistence global and replays the log. **Not done yet**: a rebuild reads every document once at start, in the background; until it is done they are unavailable (`TableSummariesUnavailable`, as Convex's while it bootstraps) | DV-300, pending |
+| A3 | The table summaries (counts, sizes, shapes) are rebuilt on start from the documents, not loaded from a checkpoint | Convex checkpoints them into a persistence global and replays the log. **Not done yet**: a rebuild reads every document once at start, in the background; until it is done they are unavailable (`TableSummariesUnavailable`, as Convex's while it bootstraps) | DV-300, accepted (owner, 2026-10-03) |
 
 **As built (PR 2).** `@bunvex/core` `table-summaries.ts`:
 

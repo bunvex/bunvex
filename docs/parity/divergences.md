@@ -214,6 +214,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-275 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit | owner, 2026-10-03 (as recommended) | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-277 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-278 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL` | owner, 2026-10-03 (as recommended) | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
+| DV-300 | Table summaries (counts, sizes, shapes) are rebuilt on start from the documents | checkpointed in a persistence global, the log replayed on start | operational (a scan at start; `TableSummariesUnavailable` until done) | Not done yet: a checkpoint can come later. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-52 A3](../study/STUDY-52-shape-inference.md#4-divergences) |
+| DV-301 | `evaluate_schema`'s table outcome is `supersetOfEnforced` only for an unchanged validator, never `supersetOfShape` | a superset of the enforced validator or of the inferred shape skips the walk | yes (the slow-walk warning; the walk itself, STUDY-35) | Not done yet: needs validator subtyping. Accept for now | owner, 2026-10-03 (as recommended) | [STUDY-56 P1](../study/STUDY-56-push-checks.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -336,23 +338,12 @@ DV-267–DV-268 (STUDY-53 T1–T2, the commit timestamp) were accepted as recomm
 DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were decided by the owner (2026-10-02); DV-271–DV-273 (STUDY-51 V3–V5) were accepted as recommended (owner, 2026-10-03). All are in [Decided divergences](#decided-divergences).
 DV-275–DV-277 (STUDY-48 A1–A3, the audit log) were accepted as recommended (owner, 2026-10-03); DV-276 was built since and is in [Resolved to match Convex](#resolved-to-match-convex) and are in [Decided divergences](#decided-divergences).
 
-DV-300 (STUDY-52 A3, table summaries) awaits the owner; the draft PR implements the recommendation:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-300 | Table summaries (counts, sizes, shapes) are rebuilt on start from the documents | checkpointed in a persistence global, the log replayed on start | operational (a scan at start; `TableSummariesUnavailable` until done) | Not done yet: a checkpoint can come later. Accept for now | [STUDY-52 A3](../study/STUDY-52-shape-inference.md#4-divergences) |
-
-DV-301 (STUDY-56 P1, the push's checks) awaits the owner; the draft PR implements the recommendation:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-301 | `evaluate_schema`'s table outcome is `supersetOfEnforced` only for an unchanged validator, never `supersetOfShape` | a superset of the enforced validator or of the inferred shape skips the walk | yes (the slow-walk warning; the walk itself, STUDY-35) | Not done yet: needs validator subtyping. Accept for now | [STUDY-56 P1](../study/STUDY-56-push-checks.md#4-divergences) |
-
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
+DV-300, DV-301 were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
