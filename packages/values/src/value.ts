@@ -78,6 +78,11 @@ export const opaque = (value: unknown) => {
   return name ? `${name} {…}` : "{…}";
 };
 
+/** An object's own enumerable string keys, in `JSON.stringify`'s order, one at a time. */
+function* ownKeys(o: object): Generator<string> {
+  for (const k in o) if (Object.hasOwn(o, k)) yield k;
+}
+
 // Escaping only lengthens a string, so a prefix two past the limit decides the cut.
 const quote = (s: string) =>
   JSON.stringify(s.length > MAX_VALUE_FOR_ERROR_LEN ? s.slice(0, MAX_VALUE_FOR_ERROR_LEN + 2) : s);
@@ -125,43 +130,57 @@ export function stringifyValueForError(value: unknown): string {
     if (!Array.isArray(o) && !isSimpleObject(o)) return opaque(o);
     return null;
   };
-  const write = (v: unknown) => {
-    if (full()) return;
-    const text = closed(v);
-    if (text !== null) {
-      emit(text);
-      return;
-    }
-    const o = v as object;
+  // Iterative, not recursive: the value can nest deeper than the stack (a 100 000-deep array overflowed it
+  // on Linux). Each frame is an open array or object, with what it has left to print.
+  type Frame = { o: object; close: string; next: () => { key?: string; value: unknown } | null; first: boolean };
+  const stack: Frame[] = [];
+  const open = (o: object) => {
     ancestors.add(o);
     if (Array.isArray(o)) {
+      let i = 0;
       emit("[");
-      for (let i = 0; i < o.length && !full(); i++) {
-        if (i > 0) emit(",");
-        const e = o[i];
-        if (skipped(e)) emit("null");
-        else write(e);
-      }
-      emit("]");
+      stack.push({ o, close: "]", first: true, next: () => (i < o.length ? { value: o[i++] } : null) });
     } else {
+      const keys = ownKeys(o);
       emit("{");
-      let first = true;
-      for (const k in o) {
-        if (full()) break;
-        if (!Object.hasOwn(o, k)) continue;
-        const e = (o as Record<string, unknown>)[k];
-        if (skipped(e)) continue;
-        if (!first) emit(",");
-        first = false;
-        emit(`${quote(k)}:`);
-        write(e);
-      }
-      emit("}");
+      stack.push({
+        o,
+        close: "}",
+        first: true,
+        next: () => {
+          for (let r = keys.next(); !r.done; r = keys.next()) {
+            const e = (o as Record<string, unknown>)[r.value];
+            if (!skipped(e)) return { key: r.value, value: e };
+          }
+          return null;
+        },
+      });
     }
-    ancestors.delete(o);
+  };
+  // one value: printed at once when closed, else opened as a frame
+  const write = (v: unknown) => {
+    const text = closed(v);
+    if (text !== null) emit(text);
+    else open(v as object);
   };
   if (skipped(value)) return "undefined";
   write(value);
+  while (stack.length && !full()) {
+    const top = stack[stack.length - 1]!;
+    const member = top.next();
+    if (member === null) {
+      stack.pop();
+      ancestors.delete(top.o);
+      emit(top.close);
+      continue;
+    }
+    if (!top.first) emit(",");
+    top.first = false;
+    if (member.key !== undefined) emit(`${quote(member.key)}:`);
+    // an array keeps a function or a symbol's place as null; an object's were skipped by `next`
+    if (skipped(member.value)) emit("null");
+    else write(member.value);
+  }
   const s = out.join("");
   if (s.length <= MAX_VALUE_FOR_ERROR_LEN) return s;
   const rest = "[...truncated]";

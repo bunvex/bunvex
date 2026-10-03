@@ -108,8 +108,48 @@ describe("stringifyValueForError", () => {
     let deep: unknown = 1;
     for (let i = 0; i < 100_000; i++) deep = [deep];
     expect(stringifyValueForError(deep).length).toBe(LIMIT);
+    let deepObject: unknown = 1;
+    for (let i = 0; i < 100_000; i++) deepObject = { a: deepObject };
+    expect(stringifyValueForError(deepObject).length).toBe(LIMIT);
+  });
+
+  test("a deep value needs no stack: the walk is iterative", () => {
+    // Linux runs with a smaller stack than macOS: a recursive walk 16 000 levels down overflowed it there. Run
+    // the call with almost no stack left, wherever the test runs, and see how much it needed.
+    let deep: unknown = 1;
+    for (let i = 0; i < 100_000; i++) deep = [deep];
+    expect(framesNeeded(() => stringifyValueForError(deep))).toBeLessThan(500);
+    let deepObject: unknown = 1;
+    for (let i = 0; i < 100_000; i++) deepObject = { a: deepObject };
+    expect(framesNeeded(() => stringifyValueForError(deepObject))).toBeLessThan(500);
   });
 });
+
+/**
+ * How many frames of headroom `f` needs: recurse until the stack overflows, then, unwinding, try `f` at each
+ * level until it stops overflowing.
+ */
+function framesNeeded(f: () => unknown): number {
+  let needed = -1;
+  let attempts = 0;
+  const dive = (): void => {
+    try {
+      dive();
+    } catch {
+      // the frame below overflowed: we are at the bottom, or f overflowed from here
+    }
+    if (needed >= 0) return;
+    try {
+      f();
+      needed = attempts;
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      attempts++;
+    }
+  };
+  dive();
+  return needed;
+}
 
 describe("the unsupported-value message", () => {
   test("keeps Convex's structure: name, value, path, original object", () => {
