@@ -336,37 +336,6 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
-/**
- * A mutation stops once its `deadline` is set (a WebSocket mutation's 60 s limit, STUDY-64 §1.1): checked
- * before each attempt and after the handler returns, so it never commits after the limit unless it had
- * already reached the committer — what Convex's dropped future does. `mutationBody` checks it itself; this
- * wraps a system mutation's body.
- */
-function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | undefined): (db: Tx) => Promise<T> {
-  if (!deadline) return body;
-  return async (db) => {
-    checkDeadline(deadline);
-    const value = await body(db);
-    checkDeadline(deadline);
-    return value;
-  };
-}
-
-function checkDeadline(deadline: Deadline | undefined) {
-  if (deadline?.aborted) throw new MutationAbortedError();
-}
-
-/** Set once a mutation must stop (its WebSocket's time limit passed); checked between its steps. */
-export type Deadline = { aborted: boolean };
-
-/** A mutation stopped by its `Deadline`: nobody waits for its answer any more. */
-class MutationAbortedError extends Error {
-  override name = "MutationAbortedError";
-  constructor() {
-    super("The mutation was stopped: its time limit passed");
-  }
-}
-
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
 const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
 /** The same for a result already as JSON: its length. */
@@ -1449,5 +1418,36 @@ export class Functions {
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
       routePath ?? new URL(request.url).pathname,
     );
+  }
+}
+
+/**
+ * A mutation stops once its `deadline` is set (a WebSocket mutation's 60 s limit, STUDY-64 §1.1): checked
+ * before each attempt and after the handler returns, so it never commits after the limit unless it had
+ * already reached the committer — what Convex's dropped future does. `mutationBody` checks it itself; this
+ * wraps a system mutation's body.
+ */
+function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | undefined): (db: Tx) => Promise<T> {
+  if (!deadline) return body;
+  return async (db) => {
+    checkDeadline(deadline);
+    const value = await body(db);
+    checkDeadline(deadline);
+    return value;
+  };
+}
+
+function checkDeadline(deadline: Deadline | undefined) {
+  if (deadline?.aborted) throw new MutationAbortedError();
+}
+
+/** Set once a mutation must stop (its WebSocket's time limit passed); checked between its steps. */
+export type Deadline = { aborted: boolean };
+
+/** A mutation stopped by its `Deadline`: nobody waits for its answer any more. */
+class MutationAbortedError extends Error {
+  override name = "MutationAbortedError";
+  constructor() {
+    super("The mutation was stopped: its time limit passed");
   }
 }
