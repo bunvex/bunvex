@@ -97,7 +97,10 @@ errors of a misused query; the index states while a search index is built.
   - each index is updated in commit order from the commit's `onVisible`;
   - a 5-minute log of changes lets a transaction search an older snapshot;
   - `Tx.withSearchIndex` with Convex's checks, ordering, limits and pagination. The cursor's id part is complemented, so ties page in the results' order.
-- **PR 3:** the read set (terms and filters), conflicts and invalidation.
+- **PR 3** (#229), Convex's `QueryReads`:
+  - **A query's read set:** its terms (the last as a prefix) and its filters are recorded as keys of a synthetic index, one per search index. Each commit logs its versions' tokens and filter keys (old and new) under that index, in the log only.
+    - So the cache and subscriptions follow Convex's subscription rule: any term or any filter.
+  - **A mutation's searches** are checked at commit by Convex's OCC rule: every filter and one term. Each search keeps its own filters (DV-230).
 
 ## 4. Divergences (decisions)
 
