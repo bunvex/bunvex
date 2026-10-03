@@ -19,6 +19,7 @@ import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
   type Caller,
   type Engine,
+  firstOverlap,
   type Interval,
   type LogEntry,
   OccError,
@@ -129,7 +130,8 @@ export type SyncDeps = {
   /** A failed function run, for a client: its message (without request id) and the app's data as JSON. */
   formatError: (e: unknown) => { error: string; data?: string };
   /** Arguments in JSON form → values. */
-  fromWire: (args: unknown) => unknown;
+  /** A call's arguments from the wire (`path`: the function's, for Convex's "Invalid arguments for" error). */
+  fromWire: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
@@ -140,6 +142,11 @@ export type SyncDeps = {
    * tokens are refused.
    */
   adminCaller?: (key: string, impersonating: unknown) => Caller;
+  /**
+   * The subscriptions each commit invalidated, by the write that did it (its write source and table), as
+   * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
+   */
+  onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -254,6 +261,9 @@ export class SyncHub {
     // still pending is not counted again: in Convex it left the subscription map when it was invalidated.
     const touched = new Map<SyncSession, { n: number; keys: string[] }>();
     let count = 0;
+    const events = this.deps.onInvalidations
+      ? new Map<string, { source: string | undefined; table: string; count: number }>()
+      : null;
     for (const key of hit) {
       const sessions = this.watchers.get(key);
       if (!sessions) continue;
@@ -261,6 +271,7 @@ export class SyncHub {
         const n = s.newlyInvalidated(key);
         if (n === 0) continue;
         count += n;
+        if (events) this.attribute(events, key, entries, n);
         const t = touched.get(s);
         if (t) {
           t.n += n;
@@ -268,6 +279,7 @@ export class SyncHub {
         } else touched.set(s, { n, keys: [key] });
       }
     }
+    if (events && events.size > 0) this.deps.onInvalidations!([...events.values()]);
     const { threshold, multiplierMs, random } = this.splay;
     if (count <= threshold || multiplierMs === 0) {
       for (const s of touched.keys()) s.schedule();
@@ -281,6 +293,44 @@ export class SyncHub {
       for (let i = 0; i < n; i++) delay = Math.min(delay, Math.floor(random() * (window + 1)));
       s.scheduleAfter(delay, keys);
     }
+  }
+
+  /** Count `n` invalidations of `key` against the first write that overlaps its reads, as Convex's. */
+  private attribute(
+    events: Map<string, { source: string | undefined; table: string; count: number }>,
+    key: string,
+    entries: LogEntry[],
+    n: number,
+  ) {
+    const reads = this.latest.get(key)?.reads;
+    if (!reads) return;
+    for (const e of entries) {
+      const w = firstOverlap(e.writes, reads);
+      if (!w) continue;
+      const table = this.tableOfIndex(w.index);
+      if (table === undefined) return;
+      const k = `${e.source ?? ""}\u0000${table}`;
+      const ev = events.get(k);
+      if (ev) ev.count += n;
+      else events.set(k, { source: e.source, table, count: n });
+      return;
+    }
+  }
+
+  private indexTables: { catalog: unknown; map: Map<number, string> } | null = null;
+
+  /** The table an index belongs to (rebuilt when the catalog changes). */
+  private tableOfIndex(index: number): string | undefined {
+    const catalog = this.deps.engine.catalog;
+    if (this.indexTables?.catalog !== catalog) {
+      const map = new Map<number, string>();
+      for (const t of catalog.tables.values()) {
+        for (const ix of t.indexes.values()) map.set(ix.id, t.name);
+        for (const ix of t.pending) map.set(ix.id, t.name);
+      }
+      this.indexTables = { catalog, map };
+    }
+    return this.indexTables.map.get(index);
   }
 
   /**
@@ -392,7 +442,7 @@ export class SyncHub {
         { ...caller, source: "SyncWorker" } as SourcedCaller,
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
-          const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
+          const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
           return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
         },
         (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
@@ -831,7 +881,7 @@ export class SyncSession {
   /** Arguments as canonical JSON (fields sorted), so equal arguments share executions. */
   private canonicalArgs(args: v1.JSONValue[]) {
     try {
-      return stringifyValue(this.hub.deps.fromWire(args) as never);
+      return stringifyValue(this.hub.deps.fromWire(args, "") as never);
     } catch {
       return JSON.stringify(args); // invalid: the run reports it
     }
@@ -866,10 +916,10 @@ export class SyncSession {
         const session = this.sessionId;
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args), true, caller)
+            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller)
             : functions.runSessionMutation(
                 path,
-                fromWire(m.args),
+                fromWire(m.args, path),
                 { sessionId: session, requestId: m.requestId },
                 caller,
               ),
@@ -917,7 +967,7 @@ export class SyncSession {
       try {
         const { functions, fromWire } = this.hub.deps;
         const r = await collectLogs(() =>
-          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args), caller),
+          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
         );
         if (this.closed) return;
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);

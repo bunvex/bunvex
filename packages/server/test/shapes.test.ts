@@ -56,3 +56,41 @@ test("each user table's shape: system fields, ids by table name, optional fields
     (await fetch(`${api}/api/shapes2?component=abc`, { headers: { authorization: `Bunvex ${KEY}` } })).status,
   ).toBe(400);
 });
+
+test("tableSize system functions: a table's count from the summaries; cached results follow writes", async () => {
+  const engine = await new Engine(
+    defineSchema({ a: defineTable(v.any()), b: defineTable(v.any()) }),
+    await MemoryPersistence.open(null, { durable: false }),
+    { instanceName: NAME, instanceSecret: SECRET },
+  ).init();
+  const functions = new Functions(engine).register("m", {
+    add: mutation(async ({ db }, { table }: { table: string }) => db.insert(table as never, {})),
+  });
+  const s = createServer({ engine, functions, port: 0 });
+  stops.push(s.stop);
+  await engine.summariesReady();
+  const api = `http://127.0.0.1:${s.server!.port}`;
+  const q = async (path: string, args: object) =>
+    (
+      (await (
+        await fetch(`${api}/api/query`, {
+          method: "POST",
+          headers: { authorization: `Bunvex ${KEY}` },
+          body: JSON.stringify({ path, args }),
+        })
+      ).json()) as { value: number }
+    ).value;
+  const add = (table: string) =>
+    fetch(`${api}/api/mutation`, { method: "POST", body: JSON.stringify({ path: "m:add", args: { table } }) });
+  expect(await q("_system/cli/tableSize", { tableName: "a" })).toBe(0);
+  await add("a");
+  await add("a");
+  await add("b");
+  expect(await q("_system/cli/tableSize", { tableName: "a" })).toBe(2);
+  expect(await q("_system/frontend/tableSize", { tableName: "b" })).toBe(1);
+  expect(await q("_system/frontend/tableSize", { tableName: "" })).toBe(0);
+  expect(await q("_system/frontend/tableSize", { tableName: "missing" })).toBe(0);
+  expect(await q("_system/frontend/tableSize:sizeOfAllTables", {})).toBe(3);
+  await add("b");
+  expect(await q("_system/frontend/tableSize:sizeOfAllTables", {})).toBe(4);
+});

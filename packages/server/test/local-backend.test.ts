@@ -98,4 +98,79 @@ describe("bunvex-local-backend", () => {
     const r = await fetch(`${b.url}/api/check_admin_key`, { headers: { authorization: `Bunvex ${k.out[0]}` } });
     expect(r.status).toBe(200);
   });
+  test("--help; keygen's usage errors exit 2 with Convex's messages", async () => {
+    const h = io();
+    expect(await localBackendMain(["--port", "1", "--help"], h.it, "v1")).toBe(0);
+    expect(h.out[0]).toContain("-h, --help");
+    const run = async (args: string[]) => {
+      const r = io();
+      return { code: await localBackendMain(["keygen", ...args], r.it, "v1"), err: r.err.join("\n") };
+    };
+    expect(await run(["other"])).toEqual({
+      code: 2,
+      err: "Usage: bunvex-local-backend keygen admin-key --instance-name <name> --instance-secret <hex>",
+    });
+    expect(await run(["admin-key", "--instance-name", "n", "--bogus"])).toEqual({
+      code: 2,
+      err: "unexpected argument '--bogus' found",
+    });
+    const missing = await run(["admin-key", "--instance-name", "n"]);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain("--instance-secret <INSTANCE_SECRET>");
+    const bad = await run(["admin-key", "--instance-name", "n", "--instance-secret", "xyz"]);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toBe(parseLocalBackendFlags(["--instance-secret", "xyz"]) as string);
+  });
+
+  test("a backend that cannot start exits 1 with the reason", async () => {
+    const r = io();
+    const args = ["--instance-secret", SECRET, "--db", "postgres", "postgres://u@127.0.0.1:1"];
+    expect(await localBackendMain(args, r.it, "v1")).toBe(1);
+    expect(r.err).toEqual([expect.stringMatching(/^error: PERSISTENCE_URL names no database/)]);
+  });
+
+  test("runs until SIGTERM: announces its URLs, serves, then stops", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+    dirs.push(cwd);
+    const r = io(cwd);
+    const exit = localBackendMain(
+      ["--instance-secret", SECRET, "--port", "0", "--site-proxy-port", "0", "--redact-logs-to-client"],
+      r.it,
+      "v9",
+    );
+    for (let i = 0; i < 500 && r.err.length < 2; i++) await Bun.sleep(10);
+    expect(r.err[0]).toBe("bunvex-local-backend v9: instance bunvex-self-hosted, sqlite");
+    const url = /the API at (\S+?)(,|$)/.exec(r.err[1]!)![1]!;
+    expect(r.err[1]).toContain(", HTTP actions at http://");
+    expect(await (await fetch(`${url}/instance_name`)).text()).toBe("bunvex-self-hosted");
+    process.emit("SIGTERM");
+    expect(await exit).toBe(0);
+    expect(r.err.at(-1)).toBe("bunvex-local-backend: stopping");
+    await expect(fetch(`${url}/instance_name`)).rejects.toThrow();
+  });
+
+  test("--s3-storage: a use case with a bucket goes to S3, the others stay local; --cloud-origin is the URL", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+    dirs.push(cwd);
+    const flags = parseLocalBackendFlags([
+      "--instance-secret",
+      SECRET,
+      "--port",
+      "0",
+      "--site-proxy-port",
+      "0",
+      "--s3-storage",
+      "--cloud-origin",
+      "https://api.example.test/",
+      "--site-origin",
+      "https://site.example.test",
+    ]);
+    if (typeof flags === "string") throw new Error(flags);
+    const it = { ...io(cwd).it, env: { S3_STORAGE_FILES_BUCKET: "files-bucket", AWS_REGION: "us-east-1" } };
+    const b = await startLocalBackend(flags, it);
+    stops.push(b.stop);
+    expect(b.url).toBe("https://api.example.test");
+    expect(existsSync(join(cwd, "bunvex_local_storage/modules"))).toBe(true);
+    expect(existsSync(join(cwd, "bunvex_local_storage/files"))).toBe(false);
+  });
 });

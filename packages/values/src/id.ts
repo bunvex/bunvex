@@ -110,15 +110,20 @@ export function decodeId(s: string): DecodedId {
   const footer = buf[pos + INTERNAL_ID_LEN] | (buf[pos + INTERNAL_ID_LEN + 1] << 8);
   if (footer !== expected)
     throw new IdDecodeError(`Unable to decode ID: Invalid ID version ${footer} (expected ${expected})`);
-  const internalId = buf.slice(pos, pos + INTERNAL_ID_LEN);
-  // One string per id, as in Convex: a string whose unused trailing bits are set re-encodes differently.
-  if (encodeId(tableNumber, internalId) !== s)
+  // One string per id, as in Convex: the string must be exactly the encoding of its bytes — no extra
+  // character, and the unused trailing bits of the last one zero (what re-encoding would check).
+  const spare = s.length * 5 - buf.length * 8;
+  if (encodedLen(buf.length) !== s.length || (DECODE[s.charCodeAt(s.length - 1)]! & ((1 << spare) - 1)) !== 0)
     throw new IdDecodeError(`Unable to decode ID: Invalid ID length ${s.length}`);
-  return { tableNumber, internalId };
+  return { tableNumber, internalId: buf.slice(pos, pos + INTERNAL_ID_LEN) };
 }
+
+/** Whether `s` could be an id at all: its length and alphabet (cheap, before decoding). */
+const ID_SHAPE = /^[0-9abcdefghjkmnpqrstvwxyz]+$/;
 
 /** The id's table number, or null when the string is not an id. */
 export function idTableNumber(s: string): number | null {
+  if (s.length < MIN_LEN || s.length > MAX_LEN || !ID_SHAPE.test(s)) return null;
   try {
     return decodeId(s).tableNumber;
   } catch {
