@@ -286,6 +286,22 @@ export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
+/** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
+const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
+/**
+ * A query run inside a mutation's transaction (`ctx.runQuery`) sees it as a reader, as Convex's: no writes
+ * and no `db.vars` (STUDY-53, DV-267).
+ */
+function readerView(db: Tx): Tx {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
 /** A function's path as the function log names it (Convex's stripped `UdfPath`): no `.js`, no `:default`. */
 const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
 
@@ -688,7 +704,7 @@ export class Functions {
     const ctx =
       f.kind === "query"
         ? {
-            db: db as unknown as QueryCtx["db"],
+            db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
             storage: this.fileStorage?.reader(db) ?? noStorage,
             runQuery: nested.runQuery,

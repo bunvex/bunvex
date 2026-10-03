@@ -40,7 +40,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
-import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 import {
   checkIdentifier,
@@ -146,14 +146,14 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
   let lo = prefixVals.length ? prefix : FULL.lo;
-  let hi = prefixVals.length ? prefixEnd(prefix) : FULL.hi;
+  let hi = prefixVals.length ? afterValues(prefix) : FULL.hi;
   if (lower) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, lower.v)]);
-    lo = lower.incl ? k : prefixEnd(k);
+    lo = lower.incl ? k : afterValues(k);
   }
   if (upper) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, upper.v)]);
-    hi = upper.incl ? prefixEnd(k) : k;
+    hi = upper.incl ? afterValues(k) : k;
   }
   return { lo, hi };
 }

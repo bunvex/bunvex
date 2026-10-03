@@ -1,6 +1,6 @@
 # @bunvex/react-auth0
 
-`BunvexProviderWithAuth0` (STUDY-47), the counterpart of Convex's `convex/react-auth0`: the React client,
+`BunvexProviderWithAuth0` (STUDY-54), the counterpart of Convex's `convex/react-auth0`: the React client,
 authenticated with Auth0. It must be under `Auth0Provider` (`@auth0/auth0-react`, a peer dependency).
 
 ```tsx

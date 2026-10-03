@@ -53,7 +53,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
-import { syncFunctionHandles } from "./function-handles.ts";
+import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
@@ -194,7 +194,16 @@ export type ServerOptions = {
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
  * Convex (`UdfArgsJson`), `args` is the arguments object or an array holding it (what Convex's clients send).
  */
-const fromWire = (args: unknown) => parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+const fromWire = (args: unknown, path: string) => {
+  try {
+    return parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+  } catch (e) {
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
+    throw new FunctionPathError(
+      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
+    );
+  }
+};
 
 /** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
 const envFlag = (v: string | undefined) => v !== undefined && v !== "";
@@ -783,7 +792,7 @@ export function createServer(opts: ServerOptions) {
       }
       return udfResponse(
         await collectLogs(async () => {
-          const args = fromWire(body.args);
+          const args = fromWire(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(body.path, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);
           const value =
