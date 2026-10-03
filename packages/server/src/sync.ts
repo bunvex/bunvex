@@ -30,6 +30,7 @@ import {
 import { v1 } from "@bunvex/protocol";
 import { type Value, valueSize } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
+import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
@@ -462,6 +463,8 @@ export class SyncHub {
     const run = r.ok
       ? r.value
       : { ok: false as const, error: r.error, reads: [], ts, journal: {} as QueryJournal, identityObserved: false };
+    // No permit (STUDY-64): not the query's result; the session ends with "try again", as Convex's.
+    if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
     const lines = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
     const tail = `,"logLines":${lines},"journal":${JSON.stringify(journal)}`;
@@ -576,6 +579,8 @@ export class SyncSession {
   private internalError(e: unknown) {
     console.error("bunvex sync:", e);
     // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
+    // Too many functions at once (STUDY-64): Convex's rate-limited close, "try again", with its code.
+    if (e instanceof TooManyConcurrentRequestsError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
     this.fail({
       code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,
       reason: "InternalServerError",
@@ -936,7 +941,8 @@ export class SyncSession {
         );
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
-        if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
+        if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
+          return this.internalError(r.error);
         if (r.ok && "replayed" in r.value) {
           const { result, logLines } = r.value.replayed;
           const out: WithLogLines<unknown> = { ok: true, value: undefined, logLines };
@@ -980,7 +986,8 @@ export class SyncSession {
           functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
         );
         if (this.closed) return;
-        if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
+        if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
+          return this.internalError(r.error);
         this.send(this.response("ActionResponse", m.requestId, r));
         this.schedule();
       } finally {

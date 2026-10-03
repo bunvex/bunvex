@@ -285,7 +285,10 @@ export class CronJobExecutor {
     if (!started) return;
     const t0 = performance.now();
     const r = await collectLogs(() =>
-      this.functions.runAction(job.cronSpec.udfPath, job.cronSpec.udfArgs[0], NO_ONE, { internal: true }),
+      this.functions.runAction(job.cronSpec.udfPath, job.cronSpec.udfArgs[0], NO_ONE, {
+        internal: true,
+        waitForPermit: true,
+      }),
     );
     const status: CronStatus = r.ok ? resultStatus(r.value) : { type: "err", error: describeUncaught(r.error).message };
     const elapsed = (performance.now() - t0) / 1000;
