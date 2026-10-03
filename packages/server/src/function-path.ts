@@ -92,14 +92,14 @@ export function functionPathError(path: string): string | null {
   return checkModulePath(module) ?? (fn === null ? null : checkIdentifier(fn));
 }
 
-/** Convex's 400 for a path that does not parse, in bunvex's words. */
+/** Convex's 400 for a path that does not parse (`BadConvexFunctionIdentifier`), with bunvex's code (DV-312) and words. */
 export function badFunctionPath(path: string): { status: 400; code: string; message: string } | null {
   const why = functionPathError(path);
   return why === null
     ? null
     : {
         status: 400,
-        code: "BadConvexFunctionIdentifier",
+        code: "BadBunvexFunctionIdentifier",
         message: `${path} is not a valid path to a bunvex function. ${why}`,
       };
 }

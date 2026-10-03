@@ -46,7 +46,7 @@ test("Convex's reasons", () => {
   );
 });
 
-test("over HTTP: 400 BadConvexFunctionIdentifier before the call; /api/function after its admin check", async () => {
+test("over HTTP: 400 BadBunvexFunctionIdentifier before the call; /api/function after its admin check, /api/run after authentication", async () => {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
@@ -66,7 +66,7 @@ test("over HTTP: 400 BadConvexFunctionIdentifier before the call; /api/function 
   const bad = {
     status: 400,
     body: {
-      code: "BadConvexFunctionIdentifier",
+      code: "BadBunvexFunctionIdentifier",
       message:
         "m:ok:x is not a valid path to a bunvex function. Path component m:ok.js can only contain alphanumeric characters, underscores, or periods.",
     },
@@ -77,4 +77,24 @@ test("over HTTP: 400 BadConvexFunctionIdentifier before the call; /api/function 
   expect((await post("function", "m:ok:x")).status).toBe(403);
   expect(await post("function", "m:ok:x", { authorization: `Bunvex ${KEY}` })).toEqual(bad);
   expect((await post("query", "m:ok")).body).toEqual({ status: "success", value: "ok" });
+  // `/api/run/{module}/{name}`: the path is built from the URL after authentication (Convex's
+  // `public_function_post_with_path`), then parsed as `/api/function`'s.
+  const run = async (path: string, headers: Record<string, string> = {}) => {
+    const r = await fetch(`http://127.0.0.1:${s.server!.port}/api/run/${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ args: {} }),
+    });
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+  expect(await run("m/o-k")).toEqual({
+    status: 400,
+    body: {
+      code: "BadBunvexFunctionIdentifier",
+      message:
+        "m:o-k is not a valid path to a bunvex function. Identifier o-k has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
+    },
+  });
+  expect((await run("m/o-k", { authorization: "Bunvex nope" })).body.code).not.toBe("BadBunvexFunctionIdentifier");
+  expect((await run("m/ok")).body).toEqual({ status: "success", value: "ok" });
 });
