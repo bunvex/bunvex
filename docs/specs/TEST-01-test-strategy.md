@@ -84,6 +84,21 @@ Compared with PERSIST-01's K1–K29:
 The two gaps are candidates for K30 and K31; they touch every driver, so they belong to the persistence
 track.
 
+### 3.2 The application, client and CLI tests
+
+[STUDY-65](../study/STUDY-65-convex-tests-application-client-cli.md) maps the rest of what applies:
+- `crates/application/src/tests`;
+- the React, browser and Next.js client tests;
+- the CLI tests.
+
+It found four bugs, each fixed with its test:
+- `.env` files not read as dotenv reads them (#277);
+- a repeated name refused in an environment-variable batch (#278);
+- `auth.config` losing the canonical URLs on an environment-variable update (#279);
+- a canceled job's callees still scheduling live jobs (#281).
+
+Its §6 is the prioritized list of what is still untested.
+
 ## 4. Coverage floors
 
 `bun run coverage` (`scripts/coverage.ts`) runs the root `bun test` with lcov coverage. It prints:
