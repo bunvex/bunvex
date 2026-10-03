@@ -8,6 +8,7 @@ import {
   isBytes,
   type ObjectType,
   type PropertyValidators,
+  type ValidatorJSON,
   type VObject,
   v,
 } from "@bunvex/values";
@@ -76,15 +77,29 @@ export type GenericTableIndexes = Record<string, string[]>;
  * A table of a schema: its document validator and its indexes (Convex's `defineTable(...).index(...)`).
  * The type parameters keep the validator and the indexes for `DataModelFromSchemaDefinition` (STUDY-36).
  */
+/** A search index's configuration (Convex's `SearchIndexConfig`), as stored: its filter fields deduplicated. */
+export type SearchIndexDef = { searchField: string; filterFields: string[] };
+/** A table's search indexes as types (Convex's `GenericTableSearchIndexes`). */
+export type GenericTableSearchIndexes = Record<string, { searchField: string; filterFields: string }>;
+
+/** Convex's MAX_TEXT_INDEX_FILTER_FIELDS_SIZE and MAX_INDEXES_PER_TABLE. */
+export const MAX_SEARCH_FILTER_FIELDS = 16;
+export const MAX_INDEXES_PER_TABLE = 64;
+
 export class TableDefinition<
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   DocumentType extends GenericValidator = GenericValidator,
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   Indexes extends GenericTableIndexes = {},
+  // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
+  SearchIndexes extends GenericTableSearchIndexes = {},
 > {
   readonly indexes: Record<string, string[]> = {};
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly staged: string[] = [];
+  /** Full-text search indexes (STUDY-45), and those declared `staged: true`. */
+  readonly searchIndexes: Record<string, SearchIndexDef> = {};
+  readonly stagedSearch: string[] = [];
   readonly document: GenericValidator;
   constructor(document: GenericValidator | PropertyValidators) {
     this.document = (document as GenericValidator)?.isValidator
@@ -105,7 +120,7 @@ export class TableDefinition<
   index<IndexName extends string, const Fields extends [string, ...string[]]>(
     name: IndexName,
     config: Fields | { fields: Fields; staged?: boolean },
-  ): TableDefinition<DocumentType, Expand<Indexes & Record<IndexName, [...Fields, "_creationTime"]>>>;
+  ): TableDefinition<DocumentType, Expand<Indexes & Record<IndexName, [...Fields, "_creationTime"]>>, SearchIndexes>;
   index(name: string, config: string[] | { fields: string[]; staged?: boolean }): this;
   index(name: string, config: string[] | { fields: string[]; staged?: boolean }) {
     const fields = Array.isArray(config) ? config : config?.fields;
@@ -126,6 +141,74 @@ export class TableDefinition<
     if (!Array.isArray(config) && config.staged === true) this.staged.push(name);
     return this;
   }
+
+  /**
+   * Declare a full-text search index (Convex's `searchIndex`, STUDY-45): `searchField` is tokenized, the
+   * `filterFields` can be matched with `.eq()` at query time. `staged: true` builds it without enabling it.
+   * The checks that need the table's name run in `defineSchema`, as Convex runs them at push.
+   */
+  searchIndex<
+    const IndexName extends string,
+    const SearchField extends string,
+    const FilterFields extends string = never,
+  >(name: IndexName, config: { searchField: SearchField; filterFields?: FilterFields[]; staged: true }): this;
+  searchIndex<
+    const IndexName extends string,
+    const SearchField extends string,
+    const FilterFields extends string = never,
+  >(
+    name: IndexName,
+    config: { searchField: SearchField; filterFields?: FilterFields[]; staged?: false },
+  ): TableDefinition<
+    DocumentType,
+    Indexes,
+    Expand<SearchIndexes & Record<IndexName, { searchField: SearchField; filterFields: FilterFields }>>
+  >;
+  searchIndex(name: string, config: { searchField: string; filterFields?: string[]; staged?: boolean }) {
+    checkIdentifier("index", name);
+    if (typeof config?.searchField !== "string")
+      throw new Error(`Search index "${name}" must be declared with a \`searchField\`.`);
+    this.searchIndexes[name] = {
+      searchField: config.searchField,
+      // A set, as Convex's: duplicates are dropped.
+      filterFields: [...new Set(config.filterFields ?? [])],
+    };
+    if (config.staged === true) this.stagedSearch.push(name);
+    return this;
+  }
+}
+
+/** A dotted path of identifiers (Convex's `FieldPath`). */
+const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+
+/** Convex's push-time checks of a table's search indexes (`schemas/json.rs`, `index_validation_error.rs`). */
+function checkSearchIndexes(table: string, t: TableDefinition) {
+  const names = [...Object.keys(t.indexes), ...Object.keys(t.searchIndexes)];
+  for (const n of Object.keys(t.searchIndexes)) {
+    if (n.startsWith("_") || n in SYSTEM_INDEXES)
+      throw new Error(
+        `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
+      );
+    if (n in t.indexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
+  }
+  if (names.length > MAX_INDEXES_PER_TABLE)
+    throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
+  const seen = new Map<string, string>();
+  for (const [n, d] of Object.entries(t.searchIndexes)) {
+    for (const f of [d.searchField, ...d.filterFields])
+      if (!FIELD_PATH.test(f)) throw new Error(`In index "${n}": Invalid index field: "${f}"`);
+    if (d.filterFields.length > MAX_SEARCH_FILTER_FIELDS)
+      throw new Error(`Search indexes may have up to ${MAX_SEARCH_FILTER_FIELDS} filter fields.`);
+    // Two search indexes on the same field and the same filter fields (Convex compares the pair; its message,
+    // stray line break included, names the field).
+    const key = JSON.stringify([d.searchField, [...d.filterFields].sort()]);
+    const other = seen.get(key);
+    if (other !== undefined)
+      throw new Error(
+        `In table "${table}" search index "${other}" and search index "${n}" have the same \`searchField\`. Search index fields must be unique within a table. You should combine the\n             indexes with the same \`searchField\` into one index containing all \`filterField\`s and then use different subsets of the \`filterField\`s at query time.`,
+      );
+    seen.set(key, n);
+  }
 }
 
 /** Convex's `defineTable`: a document validator (or an object of field validators). */
@@ -141,9 +224,15 @@ export type DeclaredTable = {
   document: GenericValidator;
   /** Names of `indexes` declared staged. */
   staged?: string[];
+  /** Full-text search indexes (STUDY-45), and the names of those declared staged. */
+  searchIndexes?: Record<string, SearchIndexDef>;
+  stagedSearch?: string[];
 };
 /** A schema's tables as types (Convex's `GenericSchema`). */
-export type GenericSchema = Record<string, TableDefinition<GenericValidator, GenericTableIndexes>>;
+export type GenericSchema = Record<
+  string,
+  TableDefinition<GenericValidator, GenericTableIndexes, GenericTableSearchIndexes>
+>;
 /**
  * A schema: its tables at run time, and (as types only) the definitions they came from and whether table
  * names are strict, for `DataModelFromSchemaDefinition` (STUDY-36).
@@ -172,7 +261,16 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
     checkIdentifier("table", name);
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
     if (!(t instanceof TableDefinition)) throw new Error(`Table "${name}" must be defined with defineTable(...).`);
-    out.set(name, { name, indexes: { ...t.indexes }, document: t.document, staged: [...t.staged] });
+    checkSearchIndexes(name, t);
+    out.set(name, {
+      name,
+      indexes: { ...t.indexes },
+      document: t.document,
+      staged: [...t.staged],
+      ...(Object.keys(t.searchIndexes).length
+        ? { searchIndexes: structuredClone(t.searchIndexes), stagedSearch: [...t.stagedSearch] }
+        : {}),
+    });
   }
   return { tables: out, schemaValidation: options.schemaValidation ?? true };
 }
@@ -209,4 +307,27 @@ export function indexKeyValues(ix: IndexDef, doc: Doc): KeyValue[] {
   const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
   vals.push(doc._id);
   return vals;
+}
+
+/** Table names a document validator points to with `v.id` (Convex's `foreign_keys`). */
+export function referencedTables(v: ValidatorJSON, out = new Set<string>()): Set<string> {
+  switch (v.type) {
+    case "id":
+      out.add(v.tableName);
+      break;
+    case "array":
+      referencedTables(v.value, out);
+      break;
+    case "object":
+      for (const f of Object.values(v.value)) referencedTables(f.fieldType, out);
+      break;
+    case "record":
+      referencedTables(v.keys, out);
+      referencedTables(v.values.fieldType, out);
+      break;
+    case "union":
+      for (const u of v.value) referencedTables(u, out);
+      break;
+  }
+  return out;
 }
