@@ -95,6 +95,7 @@ to a spec.
 | [STUDY-61](STUDY-61-usage-limits.md) | Usage tracking and usage limits: the meter, `/api/v1/*usage*`, the enforcement worker | implemented; DV-308 resolved, DV-309 accepted (owner, 2026-10-03) |
 | [STUDY-62](STUDY-62-components.md) | Components: how Convex does them, bunvex's touch points, the plan | K1–K9 accepted as recommended (owner, 2026-10-03) |
 | [STUDY-63](STUDY-63-pause-deployment.md) | Pausing a deployment: `_backend_state`, pause / unpause, what stops while paused | implemented, no divergence an app can reach |
+| [STUDY-64](STUDY-64-sync-load.md) | The sync worker under load and outages: the 60 s mutation timeout, per-socket caps, single-flight transitions, query rerun concurrency and retries, the reconnect limiter, result and argument sizes | draft; W1 pending (owner) |
 | [STUDY-65](STUDY-65-convex-tests-application-client-cli.md) | What Convex tests in `crates/application`, the React / browser / Next.js clients and the CLI, mapped to bunvex's tests; the bugs it found and the gaps left | draft; F1–F4 fixed (#277, #278, #279, #281), client tests #282 |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
