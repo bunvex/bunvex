@@ -533,7 +533,7 @@ export function createServer(opts: ServerOptions) {
   /**
    * `GET /api/query` (Convex's `public_query_get`): the query string's `path`, `args` (JSON text) and `format`,
    * answered as `POST /api/query`. Convex declares this route but cannot read `args` from a query string, so
-   * every request there is a 400 (STUDY-67 §1.7); bunvex's works (DV-313, pending the owner).
+   * every request there is a 400 (STUDY-67 §1.7); bunvex's works (DV-313, decided by the owner).
    */
   const getQuery = async (url: URL, req: Request): Promise<Response> => {
     const badHeader = authHeaderSyntaxError(req);
@@ -1030,7 +1030,7 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313 pending): `args` is the arguments' JSON.
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
       if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
       const route = /^\/api\/(query|mutation|action|query_at_ts|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);

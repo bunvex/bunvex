@@ -1,4 +1,4 @@
-// `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313 pending): a query by URL. Convex declares the
+// `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): a query by URL. Convex declares the
 // route but answers every request 400 (it cannot read `args` from a query string); bunvex's works.
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
