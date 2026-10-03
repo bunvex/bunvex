@@ -64,7 +64,14 @@ import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./fun
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
-import { BadJsonBody, readJsonBody, UDF_POST, UDF_POST_WITH_COMPONENT, UDF_POST_WITH_TS } from "./json-body.ts";
+import {
+  BadJsonBody,
+  readJsonBody,
+  UDF_POST,
+  UDF_POST_ARGS_ONLY,
+  UDF_POST_WITH_COMPONENT,
+  UDF_POST_WITH_TS,
+} from "./json-body.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -232,6 +239,29 @@ const fromWire = (args: unknown, path: string) => {
     );
   }
 };
+
+/** Convex's message for a function `/api/function` or `/api/run` cannot find. */
+const anyFunctionNotFound = (path: string) =>
+  new FunctionPathError(
+    `Could not find function for '${path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
+  );
+
+/**
+ * `/api/run/messages/list` → `messages:list` (Convex's `public_function_post_with_path`): the segments, each
+ * URL-decoded; the last one is the function's name. Fewer than two segments, or one that does not decode,
+ * is null (Convex's `MissingIdentifier`).
+ */
+export function runPath(identifier: string): string | null {
+  let parts: string[];
+  try {
+    parts = identifier.split("/").map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  if (parts.length < 2) return null;
+  const name = parts.pop()!;
+  return `${parts.join("/")}:${name}`;
+}
 
 /** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
 const envFlag = (v: string | undefined) => v !== undefined && v !== "";
@@ -939,11 +969,13 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
+      const route = /^\/api\/(query|mutation|action|query_at_ts|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
       if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
-      let kind = route[1]!;
+      // `/api/run/<module path>/<name>` (Convex's `public_function_post_with_path`, STUDY-67 H8).
+      const runIdentifier = route[1]!.startsWith("run/") ? route[1]!.slice(4) : null;
+      let kind = runIdentifier === null ? route[1]! : "run";
       // Convex's extractors, in order: the auth header's syntax, then the body (STUDY-67 H4).
       const badHeader = authHeaderSyntaxError(req);
       if (badHeader) return badHeader;
@@ -958,17 +990,46 @@ export function createServer(opts: ServerOptions) {
               throw new BadJsonBody("Failed to buffer the request body: length limit exceeded");
             }
           },
-          kind === "query_at_ts" ? UDF_POST_WITH_TS : kind === "function" ? UDF_POST_WITH_COMPONENT : UDF_POST,
+          kind === "query_at_ts"
+            ? UDF_POST_WITH_TS
+            : kind === "function"
+              ? UDF_POST_WITH_COMPONENT
+              : kind === "run"
+                ? UDF_POST_ARGS_ONLY
+                : UDF_POST,
         );
       } catch (e) {
         if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
         throw e;
       }
-      const formatRequest = { format: body.format, client: req.headers.get("bunvex-client") };
+      // `/api/run` answers clean JSON by default, whatever the client (Convex's `ConvexCleanJSON` default there).
+      const formatRequest = { format: body.format, client: kind === "run" ? null : req.headers.get("bunvex-client") };
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
+      if (runIdentifier !== null) {
+        const path = runPath(runIdentifier);
+        if (path === null)
+          return requestError(
+            400,
+            "MissingIdentifier",
+            "Path or function name not provided in path, e.g. /api/run/messages/list",
+          );
+        body.path = path;
+      }
       // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
       // a user), on the root component; the function's own kind, internal ones included.
+      // `/api/run`: any kind on the root component, as `/api/function`, but open to everyone: an internal
+      // function is found for an admin only.
+      if (kind === "run") {
+        const found = functions.kindOf(body.path);
+        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+          return udfResponse(
+            { ok: false, error: anyFunctionNotFound(body.path), logLines: [] } as never,
+            kind,
+            formatRequest,
+          );
+        kind = found;
+      }
       if (kind === "function") {
         if ((caller as AdminCaller).admin?.kind !== "admin") {
           const denied = new BadDeployKeyError();
@@ -982,9 +1043,7 @@ export function createServer(opts: ServerOptions) {
           return udfResponse(
             {
               ok: false,
-              error: new FunctionPathError(
-                `Could not find function for '${body.path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
-              ),
+              error: anyFunctionNotFound(body.path),
               logLines: [],
             } as never,
             kind,
