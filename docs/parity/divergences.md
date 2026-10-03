@@ -301,6 +301,13 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
+DV-265–DV-266 (STUDY-52 A1–A2, table shapes) await the owner; the draft PR implements each recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-265 | Shapes are exact and current (computed at one snapshot when asked; later kept per commit) | checkpointed every 500 commits / 10 minutes after writes / 4 hours; `Unknown` until the first | yes (dashboard schema views) | Convex's staleness is a cost trade-off bunvex need not make. Accept | [STUDY-52 A1](../study/STUDY-52-shape-inference.md#4-divergences) |
+| DV-266 | In PR 1, shapes narrow back after deletes | widened variants stay widened until their count is 0 | yes (rare) | Recomputing (A1); PR 2 keeps Convex's rule. Accept for PR 1 | [STUDY-52 A2](../study/STUDY-52-shape-inference.md#4-divergences) |
+
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
