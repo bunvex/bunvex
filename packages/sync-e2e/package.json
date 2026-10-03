@@ -12,6 +12,9 @@
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@bunvex/react": "workspace:*",
+    "@bunvex/nextjs": "workspace:*",
+    "@bunvex/react-clerk": "workspace:*",
+    "@bunvex/react-auth0": "workspace:*",
     "@bunvex/react-query": "workspace:*"
   },
   "repository": {

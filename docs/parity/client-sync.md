@@ -68,7 +68,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `FatalError` {error} sent before closing on a deterministic user error (BadRequest, Unauthenticated, …); the client logs it and terminates | `crates/local_backend/src/subs/mod.rs`, `browser/sync/client.ts` | done (STUDY-23) | Malformed frames and a `BaseVersionMismatch`. |
 | `TransitionChunk` (see §1) | `browser/sync/protocol.ts` | done | `{ type, chunk, partNumber, totalParts, transitionId }`, as Convex's. |
 | `Ping` (see §1) | `browser/sync/protocol.ts` | done (STUDY-23) |  |
-| `clientClockSkew` computed from `Connect.clientTs`, used for token-expiry estimates | `crates/sync/src/worker.rs`, `browser/sync/authentication_manager.ts` | partial (STUDY-23) | Computed and sent; no token-expiry use until auth. |
+| `clientClockSkew` computed from `Connect.clientTs`, used for token-expiry estimates | `crates/sync/src/worker.rs`, `browser/sync/authentication_manager.ts` | done (STUDY-27) | Sent in every Transition; the client's auth manager uses it to schedule a reused token's refetch on the server's clock. |
 
 ### 4. Consistency guarantees (the core "N" items)
 
@@ -125,7 +125,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `onServerDisconnectError` callback for abnormal close reasons | `browser/sync/client.ts` | done (STUDY-26) |  |
 | "Unsaved changes" `beforeunload` prompt while mutations are in flight (default on in browsers) | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `close()`: terminate the socket, stop auth refresh, never reconnect | `browser/sync/client.ts` | done (STUDY-26) |  |
-| Server cleans up a connection's subscriptions on close | `crates/sync/src/worker.rs` | partial | Done on `close`, but duplicate `sub` of the same key from one socket increments `refs` twice while `ws.data.keys` (a Set) removes it once, so refs leak. |
+| Server cleans up a connection's subscriptions on close | `crates/sync/src/worker.rs` | done (#11) | Fixed as B14: a duplicate subscription from one socket no longer leaks a reference count. |
 
 ### 7. Auth (client and sync side)
 
@@ -143,7 +143,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
 | Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
 | Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | done (STUDY-27, STUDY-34) | User tokens: checked before every transition, mutation and action. Admin identities do not expire (DV-163). |
-| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | missing | Used by the dashboard and tests. |
+| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | done (STUDY-26) | `setAdminAuth(key, identity)` on the base client (`Authenticate` Admin with `impersonating`) and on the HTTP client (`Authorization: Bunvex <key>:<base64 identity>`). |
 
 ### 8. Optimistic updates
 
@@ -155,7 +155,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Optimistic update dropped exactly when its mutation is reflected (ts reached) or failed, so there is no flicker | `browser/sync/client.ts` (`notifyOnQueryResultChanges`), `browser/sync/request_manager.ts` | done (STUDY-26) |  |
 | Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | done (STUDY-26) |  |
-| React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | missing | — |
+| React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | done (STUDY-26) | `ReactMutation.withOptimisticUpdate`, one per mutation, stable across renders. |
 | Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
 
 ### 9. Pagination on the client (and its server contract)
@@ -169,8 +169,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `InvalidCursor` error (or `paginationError` in ConvexError data) → reset to the first page | `react/use_paginated_query.ts` | done (STUDY-26) | By its data (`isBunvexSystemError`, P1) or its message; the server sends the data since STUDY-26 P1. |
 | Per-hook pagination `id` in the args as a cache-buster (independent journals per hook instance) | `react/use_paginated_query.ts` (`nextPaginationId`), `browser/sync/udf_path_utils.ts` (`serializePaginatedPathAndArgs`) | done (STUDY-26) |  |
 | `usePaginatedQuery(query, args \| "skip", {initialNumItems})` → `{results, status: LoadingFirstPage \| CanLoadMore \| LoadingMore \| Exhausted, isLoading, loadMore(n)}` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
-| `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | missing | — |
-| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | missing | Later (STUDY-26 P2). |
+| `usePaginatedQuery_experimental` (object options form) | `react/use_paginated_query2.ts` | done (STUDY-26 §8.4) | Both forms, over the paginated query client. A failed page reaches the hook (DV-250, pending). |
+| Non-React paginated subscriptions: `ConvexClient.onPaginatedUpdate_experimental`, `ConvexReactClient.watchPaginatedQuery` | `browser/simple_client.ts`, `react/client.ts` | done (STUDY-26 §8.4) | One `PaginatedQueryClient` under both, as Convex. Checked step by step against the official client. A failed page reaches `onError` (DV-250, pending). |
 
 ### 10. Base client API (`BaseConvexClient`, `ConvexClient`)
 
@@ -189,7 +189,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | partial (STUDY-26) | `BunvexReactClient` (R1): all but the paginated client (with `usePaginatedQuery`); `setAuth` since STUDY-27; `baseClient` injection included. |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | done (STUDY-26) | `BunvexReactClient` (R1); the paginated client since STUDY-26 §8.4; `setAuth` since STUDY-27; `baseClient` injection included. |
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
@@ -211,14 +211,14 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Effect ordering: `setAuth` in a first child (before children subscribe), `clearAuth` in a last child (after children unsubscribe) | `react/ConvexAuthState.tsx` | done (STUDY-27) | Tested: a query never runs signed out, on mount or on sign-out. |
 | `useConvexAuth()` → `{isLoading, isAuthenticated, isRefreshing}` (backend-confirmed, not only IdP state) | `react/ConvexAuthState.tsx` | done (STUDY-27) | `useBunvexAuth()`. |
 | `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>`, `<AuthRefreshing>` | `react/auth_helpers.tsx` | done (STUDY-27) | |
-| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | missing | ARCHITECTURE: D. |
-| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | missing | ARCHITECTURE: D. |
+| `ConvexProviderWithClerk` (getToken with template "convex" or `aud === "convex"`, skipCache on force refresh) | `react-clerk/ConvexProviderWithClerk.tsx` | done (STUDY-47) | `BunvexProviderWithClerk` in `@bunvex/react-clerk` (DV-243); template and audience "bunvex" (DV-242). Differential test against Convex's provider. |
+| `ConvexProviderWithAuth0` (id_token via getAccessTokenSilently, cacheMode off on force refresh) | `react-auth0/ConvexProviderWithAuth0.tsx` | done (STUDY-47) | `BunvexProviderWithAuth0` in `@bunvex/react-auth0` (DV-243). Differential test against Convex's provider. |
 
 ### 13. HTTP client and HTTP API
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}`; ignores `format`; no Convex value encoding. |
+| `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}` with the JSON value encoding (`$integer`, `$bytes`, …); ignores `format`. |
 | Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; the client accepts HTTP 200 or 560 for a function error (anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-26) | `BunvexHttpClient`; the official `ConvexHttpClient` works against bunvex too. |
 | `GET /api/query?path=&args=&format=` | `crates/local_backend/src/public_api.rs` | missing | — |
 | `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | With components (STUDY-26 H3). |
@@ -233,10 +233,10 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `fetchQuery / fetchMutation / fetchAction(ref, args, {token?, url?, adminToken?, skipConvexDeploymentUrlCheck?})` over the HTTP client with `cache: "no-store"` | `nextjs/index.ts` | missing | ARCHITECTURE: D. |
-| `preloadQuery` → `Preloaded` {_name, _argsJSON, _valueJSON}; `preloadedQueryResult` | `nextjs/index.ts` | missing | — |
-| `usePreloadedQuery(preloaded)`: renders the server value first, then switches to the live subscription | `react/hydration.tsx` | missing | — |
-| Default URL from `NEXT_PUBLIC_CONVEX_URL`, with warnings for an explicitly undefined URL | `nextjs/index.ts` | missing | bunvex would read its own env var name. |
+| `fetchQuery / fetchMutation / fetchAction(ref, args, {token?, url?, adminToken?, skipConvexDeploymentUrlCheck?})` over the HTTP client with `cache: "no-store"` | `nextjs/index.ts` | done (STUDY-46) | `@bunvex/nextjs` (DV-241); option `skipDeploymentUrlCheck` (DV-03). |
+| `preloadQuery` → `Preloaded` {_name, _argsJSON, _valueJSON}; `preloadedQueryResult` | `nextjs/index.ts` | done (STUDY-46) | The payload is checked equal to `convex/nextjs`'s on the same server. |
+| `usePreloadedQuery(preloaded)`: renders the server value first, then switches to the live subscription | `react/hydration.tsx` | done (STUDY-46) | In `@bunvex/react`. |
+| Default URL from `NEXT_PUBLIC_CONVEX_URL`, with warnings for an explicitly undefined URL | `nextjs/index.ts` | done (STUDY-46) | `NEXT_PUBLIC_BUNVEX_URL` (DV-240). |
 
 ### 15. Logging and errors surfaced to the client
 
@@ -264,7 +264,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | Deployment URL as the only required input; validation (absolute http(s) URL; `skipConvexDeploymentUrlCheck` for self-hosted) | `common/index.ts` (`validateDeploymentUrl`), `browser/sync/client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
-| Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | missing | Choose `BUNVEX_URL`-style names. |
+| Env-var conventions used by templates (`NEXT_PUBLIC_CONVEX_URL`, `VITE_CONVEX_URL`, …) | `nextjs/index.ts`, templates | done (STUDY-40) | `bunvex dev` writes `BUNVEX_URL` under the framework's prefix (`VITE_`, `NEXT_PUBLIC_`, `EXPO_PUBLIC_`, `REACT_APP_`, `PUBLIC_`), rule 5's names for Convex's. |
 | Options: `unsavedChangesWarning`, `webSocketConstructor`, `verbose`, `logger`, `reportDebugInfoToConvex`, `onServerDisconnectError`, `skipConvexDeploymentUrlCheck`, `authRefreshTokenLeewaySeconds`, `expectAuth`, `initialAuthTokenReuse` | `browser/sync/client.ts` (`BaseConvexClientOptions`) | partial (STUDY-26) | All but `reportDebugInfoToConvex` (C4); the auth options since STUDY-27. |
-| `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | partial (STUDY-26) | `disabled` done; `baseClient` comes with the React client. |
-| Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex` re-exports `server` and `values` only; `browser`/`react`/`nextjs` re-exports are planned but empty. |
+| `ConvexClient` option `disabled` (SSR no-op); `ConvexReactClient` option `baseClient` (inject a custom or mock sync client) | `browser/simple_client.ts`, `react/client.ts` | done (STUDY-26) | `disabled` and `baseClient` (`BunvexReactClientOptions`). |
+| Package entry points `convex/browser`, `convex/react`, `convex/nextjs`, `convex/react-clerk`, `convex/react-auth0` | `npm-packages/convex/package.json` | partial | `bunvex/server`, `bunvex/values`, `bunvex/browser` and `bunvex/react` are wired (re-exports, `react` an optional peer); `nextjs`, `react-clerk` and `react-auth0` follow their packages. |

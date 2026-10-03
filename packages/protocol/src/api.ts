@@ -37,6 +37,11 @@ export type EmptyObject = Record<string, never>;
  */
 export type OptionalRestArgs<F extends AnyFunctionReference> =
   FunctionArgs<F> extends EmptyObject ? [args?: EmptyObject] : [args: FunctionArgs<F>];
+/** `OptionalRestArgs` followed by an optional options object, as Convex's `ArgsAndOptions`. */
+export type ArgsAndOptions<F extends AnyFunctionReference, Options> =
+  FunctionArgs<F> extends EmptyObject
+    ? [args?: EmptyObject, options?: Options]
+    : [args: FunctionArgs<F>, options?: Options];
 
 /** An api object: any property path, each one a reference (Convex's `AnyApi`). */
 export type AnyApi = { [module: string]: AnyApi & AnyFunctionReference };

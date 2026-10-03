@@ -25,6 +25,7 @@ import {
   checkValue,
   displayValue,
   type GenericValidator,
+  hasCommitTs,
   type Infer,
   isBunvexError,
   isSimpleObject,
@@ -452,6 +453,17 @@ export class Functions {
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
+    const body = this.queryBodyOf(name, args, fromClient, caller);
+    return async (db: Tx) => {
+      const value = await body(db);
+      // Convex's check: only a mutation's result may hold `db.vars.commitTs` (STUDY-53).
+      if (hasCommitTs(value))
+        throw new Error(`Function ${name} return value invalid: queries cannot return an unresolved commit timestamp`);
+      return value;
+    };
+  }
+
+  private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const f = this.fn(name, "query", fromClient, caller);
     return async (db: Tx) => {
