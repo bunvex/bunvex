@@ -34,9 +34,9 @@ describe("regressions", () => {
   // The skew nemesis (seed 1): after a restart with the clock behind, a document inserted by a transaction
   // that read another one got an earlier _creationTime, so the default order no longer followed commits.
   // Convex floors a transaction's first _creationTime at its snapshot (`CreationTime::for_transaction`,
-  // crates/common/src/document.rs: max(wall clock, snapshot ts rounded up to the ms)).
+  // crates/common/src/document.rs: max(wall clock, snapshot ts rounded up to the ms)). Fixed by #271.
   for (const store of ["memory", "sqlite"])
-    test.failing(`${store}: _creationTime follows commits across a restart with the clock behind`, async () => {
+    test(`${store}: _creationTime follows commits across a restart with the clock behind`, async () => {
       const server = serverOn(store);
       let c = client(await server.start({ JEPSEN_CLOCK_SKEW_MS: "3000" }));
       await c.mutation("log:append", { client: 0, seq: 0 });
