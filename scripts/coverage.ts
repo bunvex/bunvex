@@ -42,7 +42,7 @@ function table(head: string[], rows: string[][]): string {
 async function runTests(): Promise<{ lcov: string; ok: boolean }> {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-coverage-"));
   try {
-    const p = Bun.spawn(["bun", "test", "--coverage", "--coverage-reporter=lcov", `--coverage-dir=${dir}`], {
+    const p = Bun.spawn(["bun", "test", "--isolate", "--coverage", "--coverage-reporter=lcov", `--coverage-dir=${dir}`], {
       stdout: "inherit",
       stderr: "inherit",
     });
