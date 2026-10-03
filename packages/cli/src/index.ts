@@ -6,6 +6,7 @@ import { deployCommand } from "./deploy.ts";
 import { devCommand } from "./dev.ts";
 import { envCommand } from "./env.ts";
 import { exportCommand } from "./export.ts";
+import { functionSpecCommand } from "./function-spec.ts";
 import { importCommand } from "./import.ts";
 import { type Io, processIo } from "./io.ts";
 import { runCommand } from "./run.ts";
@@ -22,6 +23,7 @@ Commands:
   dev         push the functions, and again whenever they change
   env         set and view the deployment's environment variables
   export      export the deployment's data into a ZIP file
+  function-spec  list the functions' arguments and return values, as JSON
   import      import data from a file (CSV, JSON, JSON Lines, or a snapshot ZIP) into the deployment
   run         run a function (query, mutation or action) on the deployment
 
@@ -35,6 +37,7 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   dev: (args, io) => devCommand(args, io),
   env: envCommand,
   export: (args, io) => exportCommand(args, io),
+  "function-spec": (args, io) => functionSpecCommand(args, io),
   import: (args, io) => importCommand(args, io),
   run: runCommand,
 };

@@ -73,6 +73,12 @@ export function checkUserTime() {
   if (t.failed) throw t.failed;
 }
 
+/** Record that the running function read the time (`ctx.meta.getSnapshotTs()`, as Convex's `observe_time`). */
+export function observeTime() {
+  const e = executions.getStore();
+  if (e) e.observed.time = true;
+}
+
 /**
  * Fail the running function for good (a nested call's system error, STUDY-41 N6): the error is thrown at its
  * next store call and when it ends, even if it was caught, as Convex's non-catchable system errors.
