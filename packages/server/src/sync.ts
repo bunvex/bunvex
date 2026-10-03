@@ -225,12 +225,12 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** A WebSocket mutation's time limit (tests lower it). */
+  mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
   private generation = 0;
   stats = { executions: 0, reused: 0, transitions: 0, splayed: 0 };
   readonly splay: SplayOptions;
-  /** A WebSocket mutation's time limit (tests lower it). */
-  mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
