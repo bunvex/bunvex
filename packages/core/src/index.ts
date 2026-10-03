@@ -188,13 +188,23 @@ export {
   type FieldValue,
   type GenericSchema,
   type GenericTableIndexes,
+  type GenericTableSearchIndexes,
   type IndexDef,
   indexKey,
+  MAX_INDEXES_PER_TABLE,
+  MAX_SEARCH_FILTER_FIELDS,
   type SchemaDefinition,
+  type SearchIndexDef,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
-export { type SchemaJson, schemaFromJson, schemaToJson, type TableJson } from "./schema-json.ts";
+export {
+  type SchemaJson,
+  type SearchIndexJson,
+  schemaFromJson,
+  schemaToJson,
+  type TableJson,
+} from "./schema-json.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
