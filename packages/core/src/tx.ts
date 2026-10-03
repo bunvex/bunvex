@@ -1081,6 +1081,11 @@ export class Tx {
     if (n > 0) this.tableStat(table).rowsRead += n;
   }
 
+  /** @internal Rows a cached read stands for (backend-state.ts): counted as the scan it replaces would be. */
+  countRowsReadOf(table: string, n: number) {
+    this.countRowsRead(table, n);
+  }
+
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
   private checkWriteLimits(next: Doc | null) {
     if (next) {
