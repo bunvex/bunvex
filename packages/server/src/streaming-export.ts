@@ -230,8 +230,19 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
     if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
     throw e;
   }
-  // Each document as of the snapshot; `_ts` is the snapshot (DV-306).
-  const values = page.map((d) => docJson(t.name, snapshotNs, null, pickColumns(d, cols!), f));
+  // Each document as of the snapshot, `_ts` its revision's ts (PERSIST-01 C16); a third-party store without
+  // `getVersions` gives the snapshot instead.
+  const versions = engine.persistence.getVersions
+    ? await engine.persistence.getVersions(
+        t.id,
+        page.map((d) => d._id as string),
+        snapshotUs,
+      )
+    : null;
+  const values = page.map((d, i) => {
+    const v = versions?.[i];
+    return docJson(t.name, v ? BigInt(v.ts) * 1000n : snapshotNs, null, pickColumns(d, cols!), f);
+  });
   if (page.length >= SNAPSHOT_LIST_LIMIT)
     return out(values, JSON.stringify({ tablet: t.id, id: page[page.length - 1]!._id }));
   const next = tables[1];

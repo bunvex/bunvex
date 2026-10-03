@@ -170,6 +170,7 @@ export {
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
+  type DocVersion,
   type DocWrite,
   hasLease,
   hasRetention,
