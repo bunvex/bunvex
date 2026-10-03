@@ -149,8 +149,8 @@ Key bunvex facts behind the statuses:
 | `Date.now()` / `new Date()` frozen at the start of a query or mutation | crates/isolate/src/environment/udf/phase.rs | done | Via AsyncLocalStorage (determinism.ts). Floored at the snapshot (rounded up to the ms), as `CreationTime::for_transaction`, so a clock behind the stored timestamps after a restart never gives a `Date.now()` or `_creationTime` below what the transaction read (STUDY-06 §3). |
 | `Math.random()` seeded per execution | isolate/src/environment/udf | done | sfc32 PRNG. |
 | `performance.now()` fixed in queries, incrementing in mutations, rounded down to 0.1 ms | isolate/src/environment/udf/phase.rs, helpers/performance.rs, ops/time.rs | done | `performance.timeOrigin` is the process's, not the module import time (STUDY-03 D3). |
-| `fetch`, timers and `crypto.getRandomValues` throw in queries and mutations ("NoXInQueriesOrMutations") | isolate/src/environment/udf/mod.rs (`not_allowed_in_udf`) | partial | Blocked, but `crypto.randomUUID` and `crypto.subtle` aren't. This is not a sandbox: captured globals escape. |
-| `Date` / `Math.random` at module import time | udf/phase.rs | done (STUDY-35) | Convex's import phase: `Math.random` seeded and `Date.now()` fixed by the deployment, `performance.now()` 0; fetch, timers and `crypto.getRandomValues` fail with Convex's "… unsupported at import time" / "Cannot use cryptographic randomness at import time". |
+| `fetch`, timers and `crypto.getRandomValues` throw in queries and mutations ("NoXInQueriesOrMutations") | isolate/src/environment/udf/mod.rs (`not_allowed_in_udf`) | done (STUDY-66) | As Convex's isolate: `fetch()` rejects and timers return then fail the function (uncatchable), with Convex's "Can't use … in queries and mutations. Please consider using an action." (no docs link); `crypto.getRandomValues` / `randomUUID` are **allowed**, from a stream fixed per execution (AES-CTR, as strong as Convex's ChaCha12); `crypto.subtle`'s randomness (`generateKey`, RSA-OAEP `encrypt`, RSA-PSS / ECDSA `sign`) is refused. Not a sandbox: captured globals escape. |
+| `Date` / `Math.random` at module import time | udf/phase.rs | done (STUDY-35) | Convex's import phase: `Math.random` seeded and `Date.now()` fixed by the deployment, `performance.now()` 0; fetch and timers fail with Convex's "… unsupported at import time" (a timer after it returns), `crypto.getRandomValues` / `randomUUID` draw from a stream keyed by the deployment, and `crypto.subtle`'s randomness fails with "Cannot use cryptographic randomness at import time" (STUDY-66 §4). |
 | Actions run with the real globals (`fetch`, timers) | isolate/src/environment/action | done | |
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | partial (STUDY-35) | Deployed code runs in one `vm` context per code version (DV-164): its own globals and deterministic `Date`/`Math`, imports limited to `bunvex/*` and the bundle (Node builtins only in `"use node"`), freed when superseded. Not a security boundary; no heap cap. Module state lasts the version (DV-165). |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | done (STUDY-37) | Pushed code reads the deployment's variables, each read in the read set; see [platform §env](platform.md). Managed over HTTP; the CLI's `bunvex env` comes next. |
@@ -355,7 +355,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 206 |
-| partial | 10 |
+| done | 207 |
+| partial | 9 |
 | missing | 23 |
 | **total** | **239** |
