@@ -63,7 +63,7 @@ async function setup() {
   const post = (path: string, body?: object, key = KEY) =>
     fetch(`${api}${path}`, {
       method: "POST",
-      headers: { authorization: `Bunvex ${key}` },
+      headers: { "content-type": "application/json", authorization: `Bunvex ${key}` },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   const call = async (kind: string, path: string, args: object = {}, key = KEY) =>

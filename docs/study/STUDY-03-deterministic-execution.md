@@ -36,7 +36,10 @@
 - Inside a query or mutation:
   - time is frozen;
   - `Math.random` is not cryptographic;
-  - `fetch`, timers and `crypto.getRandomValues` throw an error that points to actions.
+  - `fetch`, timers and `crypto.getRandomValues` throw an error that points to actions. (Corrected by
+    [STUDY-66](STUDY-66-server-api-gaps.md) §4: Convex allows `getRandomValues` and `randomUUID`, from its
+    seeded generator, and refuses only `crypto.subtle`'s randomness; a timer fails the function after it
+    returns.)
 - Inserts are ordered by `_creationTime`.
 - Actions see the real clock and APIs.
 

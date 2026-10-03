@@ -68,6 +68,7 @@ describe("BunvexHttpClient", () => {
     expect(lines.flat().join(" ")).toContain("[BUNVEX M(messages:logged)] [LOG]");
     const r = await fetch(`${h.url}/api/query_at_ts`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "messages:count", args: [{}], ts: v1.encodeU64(2n ** 62n) }),
     });
     expect(r.status).toBe(400);
