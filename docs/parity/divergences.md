@@ -392,7 +392,7 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 |---|---|
 | [STUDY-14 D1](../study/STUDY-14-schemas.md#4-divergences) | ~~Existing documents are not re-checked when the schema changes~~ — closed by STUDY-35 (pushes walk them; writes while pending are checked) |
 | [STUDY-14 D2](../study/STUDY-14-schemas.md#4-divergences) | `searchIndex`, `vectorIndex` (phase 4); staged database indexes are built (STUDY-29) |
-| [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | The query-operator limit (`MAX_QUERY_OPERATORS`) |
+| [STUDY-15 D1](../study/STUDY-15-query-filter.md#4-divergences) | ~~The query-operator limit (`MAX_QUERY_OPERATORS`)~~ — closed by STUDY-66 §1 |
 | [STUDY-21 D3](../study/STUDY-21-occ-error-and-retries.md#4-divergences) | `TooManyWrites` retried within the budget (no write-throughput limit yet) |
 | [STUDY-12 D11, D12](../study/STUDY-12-dashboard.md#4-divergences) | Dashboard: custom query, per-table metrics; function metrics on the Health screen |
 | [STUDY-12 L6](../study/STUDY-12-dashboard.md#73-divergences) | Dashboard logs: deployment events, usage and identity, "act as a user", run history, live runner results |

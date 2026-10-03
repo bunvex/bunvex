@@ -47,7 +47,7 @@ match, wherever they are in the range.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | The limit on the number of query operators (`MAX_QUERY_OPERATORS`) is not enforced | Filters are closures here, not a serialized expression list; follow-up | gap |
+| D1 | The limit on the number of query operators (`MAX_QUERY_OPERATORS`) is not enforced | Filters are closures here, not a serialized expression list; follow-up | gap, closed by [STUDY-66](STUDY-66-server-api-gaps.md) §1 |
 
 ## 5. Tests
 
