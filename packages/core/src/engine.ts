@@ -67,6 +67,7 @@ import type { CursorCodec } from "./cursor.ts";
 import {
   type ExecutionKind,
   installDeterminism,
+  nextUp,
   type Observed,
   outsideExecution,
   preciseClock,
@@ -214,6 +215,10 @@ export class Engine {
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
   private cacheEpoch = 0;
+  /** The last transaction's first `_creationTime` (see `transactionStart`). */
+  private lastStart = 0;
+  /** The last transaction begun: its creation cursor bounds the next start. */
+  private lastTx: Tx | null = null;
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
@@ -1450,6 +1455,17 @@ export class Engine {
     };
   }
 
+  /**
+   * A transaction's first `_creationTime`: the clock floored at its snapshot, past the previous transaction's
+   * start and every `_creationTime` it has handed out (several documents of one transaction in the same ms
+   * would otherwise sort after the next transaction's first).
+   */
+  private transactionStart(snapshotUs: number): number {
+    const last = this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart;
+    this.lastStart = transactionStart(snapshotUs, preciseClock(), last);
+    return this.lastStart;
+  }
+
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
   private async execute<T>(
     kind: ExecutionKind,
@@ -1458,8 +1474,9 @@ export class Engine {
     system = false,
     caller: Caller = ANONYMOUS,
   ) {
-    const now = preciseClock(); // the first _creationTime; Date.now() in the body is its floor
+    const now = this.transactionStart(snapshot); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+    this.lastTx = tx;
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
@@ -1647,8 +1664,9 @@ export class Engine {
     }
   > {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
-    const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
+    const now = this.transactionStart(snapshot); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
+    this.lastTx = tx;
     tx.retention = this.retention;
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
@@ -1825,6 +1843,20 @@ export class Engine {
       { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
+}
+
+/**
+ * A transaction's first `_creationTime` (ms), as Convex's `CreationTime::for_transaction`
+ * (crates/common/src/document.rs): the clock, but never below the snapshot's timestamp rounded up to the
+ * millisecond. Commit timestamps are wall-clock microseconds resumed from the store (STUDY-06 D9), so after a
+ * restart with the clock behind, the snapshot is ahead of the clock: without the floor a new document would
+ * sort before ones it read, and `Date.now()` (floored from this) would go back. Unlike Convex, two
+ * transactions of an engine never share a start (`last`, the engine's previous one): bunvex's sub-ms creation
+ * times keep same-ms transactions in commit order (parity B5).
+ */
+export function transactionStart(snapshotUs: number, clockMs: number, last: number): number {
+  const t = Math.max(clockMs, Math.ceil(snapshotUs / 1000));
+  return t > last ? t : nextUp(last);
 }
 
 /** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */

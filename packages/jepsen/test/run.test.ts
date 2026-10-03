@@ -27,3 +27,15 @@ describe("Jepsen-style short run", () => {
     expect(result.stats.ops).toBeGreaterThan(100);
   }, 60_000);
 });
+
+describe("quiesce", () => {
+  // Bug 3 (3 Oct 2026): with no nemesis the quiesce bound ran from the start, so a run longer than it read
+  // the final state while the workers still wrote, and reported their later writes as lost
+  test("the final read waits for the workload's deadline, with no nemesis", async () => {
+    const result = await run({ seed, store: "memory", clients: 3, durationMs: 2500, quiesceMs: 1000 });
+    // every worker had stopped: none still had an operation in flight when the final state was read
+    expect(result.history.filter((op) => op.end === Number.POSITIVE_INFINITY)).toEqual([]);
+    if (!result.ok) console.error(summary(result));
+    expect({ seed, violations: result.violations }).toEqual({ seed, violations: [] });
+  }, 60_000);
+});

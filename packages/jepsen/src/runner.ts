@@ -18,13 +18,16 @@ export type RunOptions = {
   durationMs?: number;
   /** Faults to inject while the workload runs. */
   nemesis?: Nemesis;
+  /** How long operations still in flight at the deadline get to finish before the final read (15 s). */
+  quiesceMs?: number;
 };
 
 /** Something that injects faults during a run, and undoes them before the run quiesces. */
 export type Nemesis = {
   name: string;
-  /** Environment for the server process, from the run's seed (e.g. store faults). */
-  serverEnv?(seed: number): Record<string, string>;
+  /** Environment for the server process, from the run's seed and its environment (store faults, a proxy in
+   *  front of a remote store). */
+  serverEnv?(seed: number, env: Record<string, string | undefined>): Record<string, string>;
   /** A failure this nemesis causes on purpose (an injected store error), not a finding. */
   expected?(error: string): boolean;
   /** Called once the server is up; returns the URL clients should use (a proxy, for network faults). */
@@ -66,7 +69,10 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   const server = new ServerProcess({
     store: opts.store,
     dataDir,
-    env: { ...opts.env, ...opts.nemesis?.serverEnv?.(opts.seed) },
+    env: {
+      ...opts.env,
+      ...opts.nemesis?.serverEnv?.(opts.seed, { ...process.env, ...opts.env, PERSISTENCE: opts.store }),
+    },
   });
   const history = new History();
   const violations: string[] = [];
@@ -106,8 +112,11 @@ export async function run(opts: RunOptions): Promise<RunResult> {
       })();
     }
     await nemesisDone;
-    // quiesce: every operation still in flight gets a bounded while to finish (resends after a reconnect)
-    await Promise.race([Promise.all(workers), Bun.sleep(15_000)]);
+    // quiesce: every operation still in flight gets a bounded while to finish (resends after a reconnect),
+    // counted from the deadline: without a nemesis nothing above waited for it, and a final read taken while
+    // the workers still run misses their later writes
+    const quiesceMs = Math.max(0, deadline - performance.now()) + (opts.quiesceMs ?? 15_000);
+    await Promise.race([Promise.all(workers), Bun.sleep(quiesceMs)]);
 
     // the final state, from a fresh client on the server itself (where it runs now: a restart moves it)
     const reader = new BunvexClient(`http://127.0.0.1:${server.port}`, { logger: false });
