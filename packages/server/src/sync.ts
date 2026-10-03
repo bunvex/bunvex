@@ -36,16 +36,32 @@ import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
-import { type AdminCaller, callerOf, Functions, type SourcedCaller } from "./functions.ts";
+import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
-/** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
+/**
+ * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
+ * the size of the channel the running mutation has already left; STUDY-64 §1.2).
+ */
 export const MAX_PENDING_MUTATIONS = 1000;
-/** Actions one connection may have running (the same buffer size in Convex). */
+/**
+ * Convex checks `action_futures.len() <= OPERATION_QUEUE_BUFFER_SIZE` before adding one, so one connection may
+ * have this many actions running, plus one (STUDY-64 §1.2).
+ */
 export const MAX_INFLIGHT_ACTIONS = 1000;
+/**
+ * How long a WebSocket mutation may run, from when it starts at the head of the connection's queue
+ * (Convex's SYNC_WORKER_PROCESS_TIMEOUT, a constant; STUDY-64 §1.1). Actions have no such limit.
+ */
+export const SYNC_WORKER_PROCESS_TIMEOUT_MS = 60_000;
 /** The server sends a `Ping` after this long without sending anything (Convex's HEARTBEAT_INTERVAL). */
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_CHECK_MS = 1_000;
+/**
+ * Backpressure (Convex's SYNC_MAX_SEND_TRANSITION_COUNT, a knob; STUDY-64 §1.3): a session computes no new
+ * transition while this many are waiting in its socket's send buffer behind the frame being written.
+ */
+export const SYNC_MAX_SEND_TRANSITION_COUNT = 2;
 /** Close codes (RFC 6455): 1011 for an internal error, 1013 "try again later" for OCC and overload. */
 const CLOSE_INTERNAL_ERROR = 1011;
 const CLOSE_TRY_AGAIN_LATER = 1013;
@@ -196,6 +212,8 @@ export type SyncDeps = {
   fromWire: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
+  /** Backpressure: `SYNC_MAX_SEND_TRANSITION_COUNT` (the environment, else Convex's 2). */
+  maxSendTransitions?: number;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
   verifyToken: (token: string) => Promise<VerifiedIdentity>;
   /** Query rerun retries; defaults to `retryOptions()`. */
@@ -281,17 +299,23 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** A WebSocket mutation's time limit (tests lower it). */
+  mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
   private generation = 0;
   readonly retry: RetryOptions;
   stats = { executions: 0, reused: 0, transitions: 0, splayed: 0, retries: 0 };
   readonly splay: SplayOptions;
+  /** Transitions a session may have waiting to be sent before it computes another (STUDY-64 §1.3). */
+  readonly maxSendTransitions: number;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
 
   constructor(readonly deps: SyncDeps) {
     this.splay = deps.splay ?? splayOptions();
+    this.maxSendTransitions =
+      deps.maxSendTransitions ?? knob(process.env, "SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
     deps.engine.committer.onCommit((entries) => this.onCommit(entries));
     this.retry = retryOptions(deps.retry);
     this.heartbeat = setInterval(() => {
@@ -622,6 +646,7 @@ export class SyncSession {
   private clientClockSkew: number | null = null;
   private mutations: Promise<void> = Promise.resolve();
   private pendingMutations = 0;
+  private mutationRunning = false;
   private inflightActions = 0;
   private lastSent = performance.now();
   private ws: Socket | null = null;
@@ -662,13 +687,71 @@ export class SyncSession {
   transitionChunks = false;
 
   private sendTransition(json: string) {
-    for (const frame of transitionFrames(json, this.transitionChunks)) this.send(frame);
+    const frames = transitionFrames(json, this.transitionChunks);
+    for (let i = 0; i < frames.length; i++) this.send(frames[i]!, i === frames.length - 1);
   }
 
-  private send(frame: string) {
+  /**
+   * What is still in the socket's send buffer (Bun keeps there what the kernel did not take yet), so that a
+   * slow reader is not sent transitions faster than it reads them (STUDY-64 §3.2). Kept only while the buffer
+   * is not empty: `sentBytes` counts the frames' wire bytes from when it last was, and `inBuffer` holds where
+   * each frame since then ends in that count (from `head` on), and whether it ends a transition. Bytes
+   * flushed = `sentBytes` − the bytes buffered.
+   */
+  private sentBytes = 0;
+  private inBuffer: { end: number; transition: boolean }[] = [];
+  private head = 0;
+  private transitionsInBuffer = 0;
+
+  /** `transition`: the frame is a transition's (its last frame, when it is sent in chunks). */
+  private send(frame: string, transition = false) {
     if (this.closed || !this.ws) return;
-    this.ws.send(frame);
+    const ws = this.ws;
+    if (this.head === this.inBuffer.length) {
+      // Nothing of ours is buffered: the frame goes to the kernel at once, unless it does not fit.
+      ws.send(frame);
+      const left = ws.getBufferedAmount();
+      if (left > 0) {
+        this.sentBytes = left;
+        this.inBuffer.push({ end: left, transition });
+        if (transition) this.transitionsInBuffer++;
+      }
+    } else {
+      this.sentBytes += wireSize(frame);
+      ws.send(frame);
+      this.inBuffer.push({ end: this.sentBytes, transition });
+      if (transition) this.transitionsInBuffer++;
+    }
     this.lastSent = performance.now();
+  }
+
+  /**
+   * The transitions waiting in the send buffer behind the frame being written: Convex's count of transitions
+   * in the channel its socket writer takes them from (`SingleFlightSender::transition_count`).
+   */
+  private waitingTransitions(): number {
+    if (this.head === this.inBuffer.length || !this.ws) return 0;
+    const flushed = this.sentBytes - this.ws.getBufferedAmount();
+    while (this.head < this.inBuffer.length && this.inBuffer[this.head]!.end <= flushed) {
+      if (this.inBuffer[this.head]!.transition) this.transitionsInBuffer--;
+      this.head++;
+    }
+    if (this.head === this.inBuffer.length) {
+      this.inBuffer = [];
+      this.head = 0;
+      return 0;
+    }
+    if (this.head > 1024 && this.head * 2 > this.inBuffer.length) {
+      this.inBuffer = this.inBuffer.slice(this.head);
+      this.head = 0;
+    }
+    // The frame being written has left Convex's channel already.
+    return this.transitionsInBuffer - (this.inBuffer[this.head]!.transition ? 1 : 0);
+  }
+
+  /** The socket took more of its send buffer (Bun's `drain`): a transition held back may start now. */
+  drained() {
+    if (this.scheduled) this.schedule();
   }
 
   pingIfIdle(now: number) {
@@ -877,6 +960,9 @@ export class SyncSession {
     this.updating = true;
     try {
       while (this.scheduled && !this.closed) {
+        // A client that does not keep up gets no new transition until it reads (Convex's single flight):
+        // what triggered it stays scheduled, and coalesces into the next one, which `drained` starts.
+        if (this.waitingTransitions() >= this.hub.maxSendTransitions) break;
         this.scheduled = false;
         await this.transition();
       }
@@ -1028,11 +1114,12 @@ export class SyncSession {
   }
 
   private mutation(m: v1.MutationRequest) {
-    if (this.pendingMutations >= MAX_PENDING_MUTATIONS)
+    if (this.pendingMutations - (this.mutationRunning ? 1 : 0) >= MAX_PENDING_MUTATIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyConcurrentMutations" });
     this.pendingMutations++;
     // Queued before any await, so the queue order is the order frames arrived (STUDY-22).
     this.mutations = this.mutations.then(async () => {
+      this.mutationRunning = true;
       try {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
@@ -1054,16 +1141,27 @@ export class SyncSession {
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
         // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
         const session = this.sessionId;
+        // Convex's 60 s limit, from now (STUDY-64 §1.1): when it passes, the connection closes with 1011 at
+        // once, and the run is told to stop before it commits (Convex drops its future; JS cannot be
+        // interrupted). The queue stays blocked behind it, but a closed connection's queue never runs.
+        const deadline: Deadline = { aborted: false };
+        const timer = setTimeout(() => {
+          deadline.aborted = true;
+          this.internalError(new Error(`'mutation' timeout after ${this.hub.mutationTimeoutMs} ms`));
+        }, this.hub.mutationTimeoutMs);
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller)
+            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller, deadline)
             : functions.runSessionMutation(
                 path,
                 fromWire(m.args, path),
                 { sessionId: session, requestId: m.requestId },
                 caller,
+                deadline,
               ),
         );
+        clearTimeout(timer);
+        if (deadline.aborted) return;
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
@@ -1081,12 +1179,13 @@ export class SyncSession {
         this.schedule();
       } finally {
         this.pendingMutations--;
+        this.mutationRunning = false;
       }
     });
   }
 
   private action(m: v1.ActionRequest) {
-    if (this.inflightActions >= MAX_INFLIGHT_ACTIONS)
+    if (this.inflightActions > MAX_INFLIGHT_ACTIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
     const caller = this.requestCaller(m.requestId);
     if (caller === null) return;
@@ -1160,6 +1259,12 @@ function componentOf(componentPath: string | undefined, caller: Caller): string 
 const componentNotFound = (path: string) => new FunctionPathError(`Component path '${path}' not found`);
 const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
+
+/** A text frame's size on the wire from the server (unmasked): its UTF-8 payload and a 2, 4 or 10 byte header. */
+function wireSize(frame: string): number {
+  const n = Buffer.byteLength(frame);
+  return n + (n < 126 ? 2 : n < 65536 ? 4 : 10);
+}
 
 /** Convex's MAX_MESSAGE_SIZE: a larger transition goes as chunks of this many bytes (DV-10). */
 export const MAX_TRANSITION_MESSAGE_BYTES = 5_000_000;
