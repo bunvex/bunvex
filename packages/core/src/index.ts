@@ -232,12 +232,15 @@ export {
   type DashboardShape,
   isSubtype,
   reduceShape,
+  removeValue,
   type Shape,
+  ShapeRemovalError,
   shapeOf,
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   ImportIdError,
   type PaginationOptions,

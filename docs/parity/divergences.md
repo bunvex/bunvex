@@ -203,7 +203,6 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-263 | Paginated queries through TanStack Query, on the paginated client (STUDY-26 P2); to be built in a follow-up | not supported (README TODO) | yes (more API) | an extension that closes Convex's TODO | owner, 2026-10-03 (as recommended) | [STUDY-48 R4](../study/STUDY-48-react-query.md#4-divergences) |
 | DV-264 | `_function_handles` rows are synced in a transaction right after a push installs its code | in the push's own transaction | barely (an instant after a push) | Not done yet: doable in `finish_push`'s transaction | owner, 2026-10-03 (as recommended) | [STUDY-50 H1](../study/STUDY-50-function-handles.md#4-divergences) |
 | DV-265 | Shapes are exact and current (computed at one snapshot when asked; later kept per commit) | checkpointed every 500 commits / 10 minutes after writes / 4 hours; `Unknown` until the first | yes (dashboard schema views) | Convex's staleness is a cost trade-off bunvex need not make | owner, 2026-10-03 (as recommended) | [STUDY-52 A1](../study/STUDY-52-shape-inference.md#4-divergences) |
-| DV-266 | In PR 1, shapes narrow back after deletes | widened variants stay widened until their count is 0 | yes (rare) | Recomputing (A1); PR 2 keeps Convex's rule | owner, 2026-10-03 (as recommended) | [STUDY-52 A2](../study/STUDY-52-shape-inference.md#4-divergences) |
 | DV-267 | A query run by a mutation (`ctx.runQuery`) sees `db.vars` | a query's reader has no `vars` | barely | Not done yet | owner, 2026-10-03 (as recommended) | [STUDY-53 T1](../study/STUDY-53-commit-timestamp.md#4-divergences) |
 | DV-268 | The commit timestamp token in arguments that refuse it gets bunvex's value error | "Field name $commitTs starts with '$', which is reserved." | yes (an error message) | Not done yet: PR 2 | owner, 2026-10-03 (as recommended) | [STUDY-53 T2](../study/STUDY-53-commit-timestamp.md#4-divergences) |
 | DV-269 | Vector search is exact over every document | HNSW disk segments (approximate) plus an exact memory index | yes (results at least as accurate) | the owner's choice: exact, in memory | owner, 2026-10-02 | [STUDY-51 V1](../study/STUDY-51-vector-search.md#4-divergences) |
@@ -290,6 +289,7 @@ Kept so the history is in one place.
 | DV-141 | Scheduled and cron runs' log lines went only to the server's output | As Convex: every execution, scheduled and cron runs included, is in the function execution log with its lines (`function-log.ts`), read by the log stream routes | yes (dashboard logs) | owner, 2026-10-01 (STUDY-30 S3: until log streaming) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-184 | `dev --tail-logs` defaulted to `disable` | As Convex: `pause-on-deploy` by default, the deployment's function logs on stderr, held back during a push | yes | owner, 2026-10-02 (STUDY-37 E7: until log streaming) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-218 | No audit-log entries for exports and imports | As Convex: `request_export`, `set_export_expiration`, `cancel_export` and `snapshot_import`, in the change's transaction (`_deployment_audit_log`) | dashboard only | owner, 2026-10-02 (STUDY-42 X4: until an audit log) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences), [STUDY-48](../study/STUDY-48-audit-log.md) |
+| DV-266 | Shapes narrowed back after deletes (recomputed when asked) | As Convex: kept by every commit, a removal lowers counts and never narrows a widened variant | yes (rare) | owner, 2026-10-03 (as recommended: PR 2 keeps Convex's rule) | [STUDY-52 A2](../study/STUDY-52-shape-inference.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -335,6 +335,12 @@ DV-265–DV-266 (STUDY-52 A1–A2, table shapes) were accepted as recommended (o
 DV-267–DV-268 (STUDY-53 T1–T2, the commit timestamp) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were decided by the owner (2026-10-02); DV-271–DV-273 (STUDY-51 V3–V5) were accepted as recommended (owner, 2026-10-03). All are in [Decided divergences](#decided-divergences).
 DV-275–DV-277 (STUDY-48 A1–A3, the audit log) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
+
+DV-300 (STUDY-52 A3, table summaries) awaits the owner; the draft PR implements the recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-300 | Table summaries (counts, sizes, shapes) are rebuilt on start from the documents | checkpointed in a persistence global, the log replayed on start | operational (a scan at start; `TableSummariesUnavailable` until done) | Not done yet: a checkpoint can come later. Accept for now | [STUDY-52 A3](../study/STUDY-52-shape-inference.md#4-divergences) |
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).

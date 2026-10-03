@@ -1272,6 +1272,27 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
+  tableCount: ((tablet: number) => number) | null = null;
+
+  /**
+   * The number of documents of `table` (Convex's internal `count()`, which its `tableSize` system functions
+   * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
+   * table, so a cached query or a subscription re-runs when it changes. System transactions only.
+   */
+  async countTable(table: string): Promise<number> {
+    if (!this.systemAccess) throw new Error("countTable is for system transactions");
+    const t = this.findTable(table);
+    if (!t) {
+      this.readMissingTable();
+      return 0;
+    }
+    const ix = t.indexes.get("by_creation_time")!;
+    this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
+    let n = this.tableCount ? this.tableCount(t.id) : 0;
+    for (const w of this.writes.values()) if (w.table.id === t.id) n += (w.next ? 1 : 0) - (w.old ? 1 : 0);
+    return n;
+  }
 
   /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
   writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {

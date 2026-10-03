@@ -104,6 +104,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
+import { TableSummaries } from "./table-summaries.ts";
 import { Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
@@ -211,6 +212,9 @@ export class Engine {
   private cacheEpoch = 0;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
   readonly searchIndexes = new SearchIndexes();
+  /** Each table's count, size and shape (STUDY-52 PR 2), kept by every commit; built on start. */
+  readonly tableSummaries = new TableSummaries();
+  private summariesBuild: Promise<void> | null = null;
   /** Vector indexes (STUDY-51): exact, in memory. */
   readonly vectorIndexes = new VectorIndexes();
   private searchBackfills = new Set<Promise<void>>();
@@ -324,6 +328,9 @@ export class Engine {
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
     this.startTableDeletion();
+    this.summariesBuild = this.buildSummaries().catch((err) => {
+      if (!this.closed) console.error(`bunvex: table summaries failed to build: ${err.message}`);
+    });
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
     if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
       this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
@@ -631,6 +638,10 @@ export class Engine {
         const final = resolvesLater ? tx.writtenDocs() : writes;
         this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
         this.vectorIndexes.apply(final);
+        this.tableSummaries.apply(
+          ts,
+          final.map((w) => ({ tablet: w.table.id, old: w.old, next: w.next })),
+        );
       },
       ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
       ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
@@ -785,6 +796,46 @@ export class Engine {
       await new Promise((r) => setImmediate(r));
     }
     this.searchIndexes.done(e);
+  }
+
+  /**
+   * Build the table summaries from every table's documents (active, hidden and being deleted) at one
+   * snapshot, page by page; commits meanwhile are queued and applied after (STUDY-52 PR 2).
+   */
+  private async buildSummaries() {
+    const at = this.committer.visibleTs;
+    const defs = [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()];
+    for (const t of defs) {
+      let last: string | null = null;
+      for (;;) {
+        if (this.closed) return;
+        const page = (await this.query(
+          (db) =>
+            db.asSystem(() =>
+              db
+                .queryDef(t)
+                .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+                .take(1000),
+            ),
+          undefined,
+          undefined,
+          undefined,
+          at,
+        )) as Doc[];
+        this.tableSummaries.build(at, t.id, page);
+        if (page.length < 1000) break;
+        last = page[page.length - 1]!._id as string;
+        await new Promise((r) => setImmediate(r));
+      }
+    }
+    this.tableSummaries.finish();
+  }
+
+  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+
+  /** Wait until the table summaries are built (tests, and callers that need them at once). */
+  async summariesReady() {
+    await this.summariesBuild;
   }
 
   /** Wait until every search index is built (tests). */
@@ -1284,6 +1335,7 @@ export class Engine {
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
+    tx.tableCount = this.tableCountOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1471,6 +1523,7 @@ export class Engine {
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
+    tx.tableCount = this.tableCountOf;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;

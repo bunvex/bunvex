@@ -59,11 +59,13 @@ export const isFieldName = (s: string) => !s.startsWith("$") && s.length <= 1024
 
 const scalar = (kind: string): Shape => ({ n: 1, v: { kind } as Variant });
 
-/** A string's shape (Convex's `StringLiteralShape::shape_of`): a literal, an id, a field name, a string. */
+/** A string's shape (Convex's `StringLiteralShape::shape_of`): an id, a literal, a field name, a string. */
 function stringShape(s: string): Shape {
-  if (isIdentifier(s)) return { n: 1, v: { kind: "StringLiteral", literal: s } };
+  // An id is an `Id` at once (Convex makes it a literal first and promotes literals of one table to `Id`
+  // when contracting; the dashboard's form is the same, and this saves decoding it at every merge).
   const table = idTableNumber(s);
   if (table !== null) return { n: 1, v: { kind: "Id", table } };
+  if (isIdentifier(s)) return { n: 1, v: { kind: "StringLiteral", literal: s } };
   return scalar(isFieldName(s) ? "FieldName" : "String");
 }
 
@@ -203,6 +205,11 @@ function mergeInto(sup: Shape, sub: Shape): Shape {
 
 /** The union of shapes (counts summed): Convex's `UnionBuilder`. */
 export function union(shapes: Shape[]): Shape {
+  // The common case, a value like the ones before: straight into the shape that contains it.
+  if (shapes.length === 2) {
+    const [a, x] = shapes as [Shape, Shape];
+    if (a.n > 0 && x.n > 0 && a.v.kind !== "Union" && x.v.kind !== "Union" && isSubtype(x, a)) return mergeInto(a, x);
+  }
   const b = new UnionBuilder();
   for (const s of shapes) b.push(s);
   return b.build();
@@ -427,4 +434,63 @@ export function tableShape(docs: Iterable<Value>): Shape {
   const b = new UnionBuilder();
   for (const d of docs) b.push(shapeOf(d));
   return b.build();
+}
+
+// ---------------------------------------------------------------- removing a value (STUDY-52 PR 2)
+
+/** A shape's value can no longer be found in it: the summary is out of step with the data. */
+export class ShapeRemovalError extends Error {}
+
+/**
+ * `shape` without one of its values, `value` (Convex's `CountedShape::remove`): the counts along the value's
+ * path go down by one; a variant, a field or an element shape whose count reaches 0 disappears, and an
+ * optional field present in every remaining object becomes required again. A widened variant (`Float64`,
+ * `String`, a record, `Unknown`) is never narrowed back.
+ */
+export function removeValue(shape: Shape, value: Value): Shape {
+  if (shape.n <= 0 || !isSubtype(shapeOf(value), shape)) throw new ShapeRemovalError("value not in shape");
+  const n = shape.n - 1;
+  if (n === 0) return NEVER;
+  const v = shape.v;
+  switch (v.kind) {
+    case "Union": {
+      const i = v.variants.findIndex((s) => isSubtype(shapeOf(value), s));
+      if (i < 0) throw new ShapeRemovalError("value not in any variant");
+      const b = new UnionBuilder();
+      v.variants.forEach((s, j) => b.push(j === i ? removeValue(s, value) : s));
+      return b.build();
+    }
+    case "Array": {
+      if (!Array.isArray(value)) throw new ShapeRemovalError("not an array");
+      let element = v.element;
+      for (const x of value) element = removeValue(element, x);
+      return { n, v: { kind: "Array", element } };
+    }
+    case "Object": {
+      const fields = new Map(v.fields);
+      for (const [k, x] of Object.entries(value as Record<string, Value>)) {
+        if (x === undefined) continue;
+        const f = fields.get(k);
+        if (!f) throw new ShapeRemovalError(`no field ${k}`);
+        const rest = removeValue(f.shape, x);
+        if (rest.n === 0) fields.delete(k);
+        else fields.set(k, { shape: rest, optional: f.optional });
+      }
+      // A field every remaining object has is required again.
+      for (const [k, f] of fields) if (f.optional && f.shape.n === n) fields.set(k, { ...f, optional: false });
+      return { n, v: { kind: "Object", fields } };
+    }
+    case "Record": {
+      let key = v.key;
+      let val = v.value;
+      for (const [k, x] of Object.entries(value as Record<string, Value>)) {
+        if (x === undefined) continue;
+        key = removeValue(key, k);
+        val = removeValue(val, x);
+      }
+      return { n, v: { kind: "Record", key, value: val } };
+    }
+    default:
+      return { n, v };
+  }
 }

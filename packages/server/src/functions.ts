@@ -713,6 +713,11 @@ export class Functions {
     return this.engine;
   }
 
+  /** The active user tables' names (`tableSize:sizeOfAllTables`). */
+  userTableNames(): string[] {
+    return [...this.engine.catalog.tables.keys()].filter((n) => !n.startsWith("_"));
+  }
+
   /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
   functionPaths(): string[] {
     return [...this.fns.keys()].map(canonicalPath);

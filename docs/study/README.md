@@ -85,7 +85,7 @@ to a spec.
 | [STUDY-49](STUDY-49-canonical-urls.md) | Canonical URLs: `_canonical_urls`, `update_canonical_url`, the built-ins and file URLs they replace | accepted: C1 as recommended (owner, 2026-10-03) |
 | [STUDY-50](STUDY-50-function-handles.md) | Function handles: `createFunctionHandle`, `_function_handles`, handles in `runX` and the scheduler | accepted: H1 as recommended (owner, 2026-10-03) |
 | [STUDY-51](STUDY-51-vector-search.md) | Vector search: `vectorIndex`, `ctx.vectorSearch`, exact in memory | V1–V2 decided (owner, 2026-10-02); V3–V5 accepted as recommended (owner, 2026-10-03) |
-| [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | accepted: A1–A2 as recommended (owner, 2026-10-03) |
+| [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | A1–A2 accepted as recommended (owner, 2026-10-03); A3 pending |
 | [STUDY-53](STUDY-53-commit-timestamp.md) | The commit timestamp: `db.vars.commitTs`, `v.commitTs()`, resolution at commit | accepted: T1–T2 as recommended (owner, 2026-10-03) |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
