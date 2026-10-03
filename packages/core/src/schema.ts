@@ -11,6 +11,7 @@ import {
   type ValidatorJSON,
   type VObject,
   v,
+  valueSize,
 } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
@@ -411,6 +412,20 @@ export function indexKeyValues(ix: IndexDef, doc: Doc): KeyValue[] {
   const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
   vals.push(doc._id);
   return vals;
+}
+
+/** Convex's reserved index descriptors (`by_id`, `by_creation_time`, `_…`): their I/O is not metered. */
+export const isReservedIndex = (ix: IndexDef) =>
+  ix.name === "by_id" || ix.name === "by_creation_time" || ix.name.startsWith("_");
+
+/**
+ * An index entry's metered size, as Convex's `IndexKey::size` (STUDY-71): the document id's 33 bytes (table
+ * number and internal id) plus the size of each indexed value present, the `_id` string included.
+ */
+export function indexKeySize(ix: IndexDef, doc: Doc): number {
+  let n = 33;
+  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += valueSize(v);
+  return n;
 }
 
 /** Table names a document validator points to with `v.id` (Convex's `foreign_keys`). */

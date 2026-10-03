@@ -18,6 +18,7 @@ import {
   type GenericValidator,
   isCommitTsPlaceholder,
   isSimpleObject,
+  keyBytesLength,
   MAX_COMMIT_TS,
   toJsonValue,
   type Value,
@@ -54,7 +55,9 @@ import {
   type Doc,
   type IndexDef,
   indexKey,
+  indexKeySize,
   indexKeyValues,
+  isReservedIndex,
   maintainedIndexes,
   SYSTEM_INDEXES,
   type TableDef,
@@ -367,6 +370,58 @@ export class Tx {
   /** Functions scheduled by this transaction and their arguments' bytes (`scheduled-jobs.ts`). */
   scheduledCount = 0;
   scheduledBytes = 0;
+  /**
+   * Database egress as Convex's usage tracker counts it (STUDY-71, `ReadSet::record_read_document` and the
+   * index range stream): user tables only; each document handed out of a `get`, an index range or a search is
+   * its size, plus its index key's bytes when a user-defined index returned it.
+   */
+  private egress = { bytes: 0, documents: 0 };
+
+  private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
+    if (t.name.startsWith("_")) return;
+    this.egress.documents++;
+    this.egress.bytes += valueSize(doc as unknown as Value);
+    if (ix && !isReservedIndex(ix)) this.egress.bytes += keyBytesLength(indexKeyValues(ix, doc));
+  }
+
+  /**
+   * The database I/O Convex meters for this transaction (STUDY-71): what it read, and — once it committed —
+   * what it wrote, as Convex's `Committer::track_commit`: per written document of a user table one row, the
+   * index entries it changed (a delete's too), and the bytes of its new version and of each user-defined
+   * index entry it adds (`IndexKey::size`). A delete adds no bytes.
+   */
+  io(committed: boolean): {
+    readBytes: number;
+    readDocuments: number;
+    writeBytes: number;
+    writeDocuments: number;
+    writeIndexRows: number;
+  } {
+    let writeBytes = 0;
+    let writeDocuments = 0;
+    let writeIndexRows = 0;
+    if (committed)
+      for (const { table: t, old, next } of this.writes.values()) {
+        if (t.name.startsWith("_") || (!old && !next)) continue;
+        writeDocuments++;
+        for (const ix of maintainedIndexes(t)) {
+          const oldKey = old && indexKey(ix, old);
+          const newKey = next && indexKey(ix, next);
+          writeIndexRows +=
+            oldKey && newKey && compareKeys(oldKey, newKey) === 0 ? 1 : (oldKey ? 1 : 0) + (newKey ? 1 : 0);
+          if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
+        }
+        if (next) writeBytes += valueSize(next as unknown as Value);
+      }
+    return {
+      readBytes: this.egress.bytes,
+      readDocuments: this.egress.documents,
+      writeBytes,
+      writeDocuments,
+      writeIndexRows,
+    };
+  }
+
   /** What has been read, written and scheduled so far, against the limits. */
   get usage(): TxLimits {
     return {
@@ -712,14 +767,20 @@ export class Tx {
     this.countRowsRead(t.name, 1);
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
-    if (w) return w.next && structuredClone(w.next);
+    if (w) {
+      if (w.next) this.countEgress(t, w.next, null);
+      return w.next && structuredClone(w.next);
+    }
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
-    if (json) this.recordDoc(json);
-    return json ? decodeDoc(json) : null;
+    if (!json) return null;
+    this.recordDoc(json);
+    const doc = decodeDoc(json);
+    this.countEgress(t, doc, null);
+    return doc;
   }
 
   /**
@@ -913,7 +974,10 @@ export class Tx {
     let n = 64;
     for (;;) {
       const docs = await this.page(st, lo, hi, n);
-      for (const d of docs) yield d;
+      for (const d of docs) {
+        this.countEgress(st.t!, d, st.ix!);
+        yield d;
+      }
       if (docs.length < n) return;
       const last = indexKey(st.ix!, docs[docs.length - 1]);
       if (st.desc) hi = last;
@@ -1083,6 +1147,7 @@ export class Tx {
       // Only limits: the smallest is the page size.
       const limit = Math.min(pipe.onlyLimits, cap);
       const docs = await this.page(st, st.range.lo, st.range.hi, limit);
+      for (const d of docs) this.countEgress(st.t, d, st.ix);
       // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
       // one ran out of the range.
       if (docs.length < limit) reads.exhausted();
