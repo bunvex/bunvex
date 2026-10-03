@@ -187,6 +187,11 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-250 | A Completion's `returnBytes` is the value's size as bunvex counts it for limits (a JSON result's length on the HTTP API) | Rust's `heap_size()` of the value | yes (a number in the log) | Not possible: `heap_size` measures Rust memory | owner, 2026-10-03 (as recommended) | [STUDY-47 L1](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-251 | `usageStats`: the I/O bytes equal the read and written bytes; index rows, storage, vector, text, egress and memory are 0 | metered | yes (the log, the dashboard) | Not done yet: bunvex does not meter them | owner, 2026-10-03 (as recommended) | [STUDY-47 L2](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-252 | `userExecutionTime` equals `executionTime` | user time apart from system time | yes (the log) | Not done yet | owner, 2026-10-03 (as recommended) | [STUDY-47 L3](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-253 | No `Tester` caller: the dashboard's function runner logs as `HttpApi` | `/api/run_test_function` logs as `Tester` | yes (the log) | Not done yet: bunvex has no `run_test_function` | owner, 2026-10-03 (as recommended) | [STUDY-47 L4](../study/STUDY-47-log-streaming.md#4-divergences) |
+| DV-255 | `bunvex logs` does not print the deployment it targets first | `announceDeploymentTarget`: "Showing logs of deployment: …" | yes (one stderr line) | Not done yet: no bunvex command prints Convex's deployment announcement | owner, 2026-10-03 (as recommended) | [STUDY-47 L6](../study/STUDY-47-log-streaming.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -304,16 +309,7 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
-DV-250–DV-253 and DV-255 (STUDY-47 L1–L4 and L6, the function execution log and `bunvex logs`) await the owner; DV-254 is withdrawn (bunvex logs `"use node"` actions as `node`, as Convex). Until decided, the PR that
-builds the log implements the recommendation in each row:
-
-| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
-|---|---|---|---|---|---|
-| DV-250 | A Completion's `returnBytes` is the value's size as bunvex counts it for limits (a JSON result's length on the HTTP API) | Rust's `heap_size()` of the value | yes (a number in the log) | Not possible: `heap_size` measures Rust memory. Accept | [STUDY-47 L1](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-251 | `usageStats`: the I/O bytes equal the read and written bytes; index rows, storage, vector, text, egress and memory are 0 | metered | yes (the log, the dashboard) | Not done yet: bunvex does not meter them. Accept until usage tracking | [STUDY-47 L2](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-252 | `userExecutionTime` equals `executionTime` | user time apart from system time | yes (the log) | Not done yet. Accept | [STUDY-47 L3](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-253 | No `Tester` caller: the dashboard's function runner logs as `HttpApi` | `/api/run_test_function` logs as `Tester` | yes (the log) | Not done yet: bunvex has no `run_test_function`. Accept | [STUDY-47 L4](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-255 | `bunvex logs` does not print the deployment it targets first | `announceDeploymentTarget`: "Showing logs of deployment: …" | yes (one stderr line) | Not done yet: no bunvex command prints Convex's deployment announcement. Accept | [STUDY-47 L6](../study/STUDY-47-log-streaming.md#4-divergences) |
+DV-250–DV-253 and DV-255 (STUDY-47 L1–L4 and L6, the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
