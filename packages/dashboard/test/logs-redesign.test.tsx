@@ -249,11 +249,18 @@ describe("the histogram", () => {
     const from = Number(params().from);
     const shown = rows().map(timeOf);
     expect(shown.length).toBeGreaterThan(0);
-    // every shown line is in the later half
-    const oldest = new Date(from);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const floor = `${pad(oldest.getMonth() + 1)}-${pad(oldest.getDate())} ${pad(oldest.getHours())}:${pad(oldest.getMinutes())}`;
-    expect(shown.every((t) => t >= floor)).toBe(true);
+    // every shown line is in the later half: compared as instants, since a line's time is "HH:mm:ss.SSS" today
+    // and "YYYY-MM-DD HH:mm:ss.SSS" before (shell/time.tsx), so its text does not sort against a date
+    const instant = (t: string) => {
+      const today = new Date();
+      const [date, clock] = t.includes(" ")
+        ? (t.split(" ") as [string, string])
+        : [`${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`, t];
+      const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
+      const [h, mi, s] = clock.split(":").map(Number) as [number, number, number];
+      return new Date(y, mo - 1, d, h, mi, Math.floor(s), Math.round((s % 1) * 1000)).getTime();
+    };
+    expect(shown.filter((t) => instant(t) < from)).toEqual([]);
   });
 });
 
