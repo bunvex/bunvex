@@ -113,6 +113,7 @@ export {
   wallClock,
   withUserTimer,
 } from "./determinism.ts";
+export type { IndexChange, IndexPrediction, SchemaPrediction, TableOutcome, TablePrediction } from "./engine.ts";
 export {
   type CacheCompanion,
   type Caller,
@@ -232,12 +233,15 @@ export {
   type DashboardShape,
   isSubtype,
   reduceShape,
+  removeValue,
   type Shape,
+  ShapeRemovalError,
   shapeOf,
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   ImportIdError,
   type PaginationOptions,

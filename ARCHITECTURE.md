@@ -198,6 +198,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── persistence-conformance (──► values) client ──► protocol, values
                 ◄── testing ──► server                   react ──► client
                 ◄── sync-e2e ──► client, react, server (tests only, never published)
+                ◄── jepsen ──► client, server (consistency runs, tests only, never published)
 cli ──► server, core, client                              bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)

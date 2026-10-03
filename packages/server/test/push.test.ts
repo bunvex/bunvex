@@ -65,7 +65,7 @@ async function deployment(dir: string, o: { deployable?: boolean; store?: Memory
       })
     ).json()) as { status: string; value?: unknown; errorMessage?: string };
   /** What `bunvex deploy` does: hashes, start, wait, finish. */
-  const push = async (modules: ModuleSource[], schema: ModuleSource | null = null, key = KEY) => {
+  const push = async (modules: ModuleSource[], schema: ModuleSource | null = null, key = KEY, message?: string) => {
     const hashes = (await post("/api/get_config_hashes", {}, key)).body.moduleHashes as {
       path: string;
       hash: string;
@@ -100,7 +100,11 @@ async function deployment(dir: string, o: { deployable?: boolean; store?: Memory
         await post("/api/deploy2/wait_for_schema", { schemaChange: start.body.schemaChange, timeoutMs: 1000 }, key)
       ).body;
     while (wait.type === "inProgress");
-    const finish = await post("/api/deploy2/finish_push", { startPush: start.body, dryRun: false }, key);
+    const finish = await post(
+      "/api/deploy2/finish_push",
+      { startPush: start.body, dryRun: false, ...(message === undefined ? {} : { message }) },
+      key,
+    );
     return { start, wait, finish, changedModules };
   };
   return { engine, s, post, call, push, api };
@@ -127,6 +131,151 @@ const schema = mod(
 );
 
 describe("deploy2 over HTTP", () => {
+  test("evaluate_schema: what a push would do to indexes and tables, as Convex's prediction (STUDY-56)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    await d.call("mutation", "messages:send", { author: "ada", body: "hi" });
+    await d.engine.summariesReady();
+    const next = mod(
+      "schema.js",
+      schema.source.replace(
+        '.index("by_author", ["author"])',
+        '.index("by_body", ["body"]).searchIndex("search_body", { searchField: "body" })',
+      ),
+    );
+    const r = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: next, changedModules: [], unchangedModuleHashes: [] },
+      componentDefinitions: [],
+    });
+    expect(r.status).toBe(200);
+    const p = r.body.componentSchemaEvaluations[""];
+    expect(r.body.newComponentDefinitions).toEqual([]);
+    expect(p.definitionPath).toBe("");
+    expect(p.schemaValidation).toBe(true);
+    expect(p.indexes).toEqual([
+      {
+        name: "messages.by_body",
+        type: "database",
+        fields: ["body"],
+        staged: false,
+        change: "added",
+        needsBackfill: true,
+        numDocs: 1,
+      },
+      {
+        name: "messages.by_author",
+        type: "database",
+        fields: ["author"],
+        staged: false,
+        change: "dropped",
+        needsBackfill: false,
+        numDocs: 1,
+      },
+      {
+        name: "messages.search_body",
+        type: "search",
+        searchField: "body",
+        filterFields: [],
+        staged: false,
+        change: "added",
+        needsBackfill: true,
+        numDocs: 1,
+      },
+    ]);
+    expect(Object.keys(p.indexes[0])).toEqual([
+      "name",
+      "type",
+      "fields",
+      "staged",
+      "change",
+      "needsBackfill",
+      "numDocs",
+    ]);
+    expect(p.tables).toEqual([
+      { name: "messages", outcome: "supersetOfEnforced", numDocs: 1, sizeBytes: expect.any(Number) },
+    ]);
+    expect(p.tables[0].sizeBytes).toBeGreaterThan(0);
+    // The same schema is identical; no schema drops every index.
+    const same = await d.post("/api/deploy2/evaluate_schema", { appDefinition: { schema }, componentDefinitions: [] });
+    expect(same.body.componentSchemaEvaluations[""].indexes.map((i: { change: string }) => i.change)).toEqual([
+      "identical",
+    ]);
+    const none = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: null },
+      componentDefinitions: [],
+    });
+    expect(none.body.componentSchemaEvaluations[""]).toMatchObject({ schemaValidation: false, tables: [] });
+    expect(none.body.componentSchemaEvaluations[""].indexes.map((i: { change: string }) => i.change)).toEqual([
+      "dropped",
+    ]);
+  });
+
+  test("each push records Convex's push_config_with_components in the audit log (STUDY-48, DV-276)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const events = async () =>
+      (
+        (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+          action: string;
+          metadata: Record<string, any>;
+          member_id: bigint | null;
+        }[]
+      ).filter((e) => e.action === "push_config_with_components");
+    await d.push([messages(1)], schema);
+    const [first] = await events();
+    expect(first!.member_id).toBe(0n);
+    const c = first!.metadata.component_diffs[0];
+    expect(c.component_path).toBeNull();
+    expect(c.component_diff.diffType).toEqual({ type: "create" });
+    expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js"], removed: [] });
+    expect(c.component_diff.indexDiff.added_indexes).toEqual([
+      { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
+    ]);
+    expect(c.component_diff.schemaDiff.previous_schema).toBeNull();
+    expect(JSON.parse(c.component_diff.schemaDiff.next_schema).tables[0].tableName).toBe("messages");
+    expect(first!.metadata.message).toBeNull();
+    expect(first!.metadata.auth_diff).toEqual({ added: [], removed: [] });
+    // A second push: an index changed, a module added, a message.
+    const schema2 = mod(
+      "schema.js",
+      schema.source.replace(
+        '.index("by_author", ["author"])',
+        '.index("by_author", ["author", "body"]).index("by_body", ["body"])',
+      ),
+    );
+    await d.push([messages(2), mod("other.js", "export const x = 1;")], schema2, KEY, "ship it");
+    const second = (await events())[1]!;
+    const c2 = second.metadata.component_diffs[0].component_diff;
+    expect(c2.diffType).toEqual({ type: "modify" });
+    expect(c2.moduleDiff).toEqual({ added: ["other.js"], removed: [] });
+    expect(c2.indexDiff.added_indexes.map((i: { name: string }) => i.name).sort()).toEqual([
+      "messages.by_author",
+      "messages.by_body",
+    ]);
+    expect(c2.indexDiff.removed_indexes).toEqual([
+      { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
+    ]);
+    expect(second.metadata.message).toBe("ship it");
+    // The same push again: nothing in the diffs, no schema change.
+    await d.push([messages(2), mod("other.js", "export const x = 1;")], schema2);
+    const third = (await events())[2]!.metadata.component_diffs[0].component_diff;
+    expect(third.indexDiff).toEqual({
+      added_indexes: [],
+      removed_indexes: [],
+      enabled_indexes: [],
+      disabled_indexes: [],
+    });
+    expect(third.schemaDiff).toBeNull();
+    const last = await d.call("query", "_system/frontend/deploymentEvents:lastPushEvent", {}, `Bunvex ${KEY}`);
+    expect((last.value as { action: string }).action).toBe("push_config_with_components");
+    // Convex's limit on the message.
+    const long = await d.push([messages(3)], schema2, KEY, "x".repeat(1025));
+    expect(long.finish!.status).toBe(400);
+    expect(long.finish!.body.code).toBe("PushMessageTooLong");
+    expect(long.finish!.body.message).toBe("Push messages can be at most 1024 bytes long");
+  });
+
   test("a first push: start (analysis, schema change), wait, finish (diff); the code and schema are live", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

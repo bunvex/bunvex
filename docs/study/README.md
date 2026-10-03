@@ -85,13 +85,16 @@ to a spec.
 | [STUDY-49](STUDY-49-canonical-urls.md) | Canonical URLs: `_canonical_urls`, `update_canonical_url`, the built-ins and file URLs they replace | accepted: C1 as recommended (owner, 2026-10-03) |
 | [STUDY-50](STUDY-50-function-handles.md) | Function handles: `createFunctionHandle`, `_function_handles`, handles in `runX` and the scheduler | accepted: H1 as recommended (owner, 2026-10-03) |
 | [STUDY-51](STUDY-51-vector-search.md) | Vector search: `vectorIndex`, `ctx.vectorSearch`, exact in memory | V1–V2 decided (owner, 2026-10-02); V3–V5 accepted as recommended (owner, 2026-10-03) |
-| [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | accepted: A1–A2 as recommended (owner, 2026-10-03) |
+| [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | A1–A3 accepted as recommended (owner, 2026-10-03) |
 | [STUDY-53](STUDY-53-commit-timestamp.md) | The commit timestamp: `db.vars.commitTs`, `v.commitTs()`, resolution at commit | accepted: T1–T2 as recommended (owner, 2026-10-03) |
+| [STUDY-56](STUDY-56-push-checks.md) | The checks before a push: `evaluate_schema`, large-index deletion and backfill, slow schema walk, the default `--message` | P1 accepted as recommended (owner, 2026-10-03) |
+| [STUDY-57](STUDY-57-linearizability-testing.md) | Jepsen-style consistency testing: a history of concurrent clients, a linearizability checker, invariants, faults | draft (PR 1: harness and checker) |
 | [STUDY-60](STUDY-60-streaming-export.md) | Streaming export: `list_snapshot`, `document_deltas`, `json_schemas`, `get_table_column_names` | implemented; DV-306 accepted, DV-307 resolved (owner, 2026-10-03) |
+| [STUDY-62](STUDY-62-components.md) | Components: how Convex does them, bunvex's touch points, the plan | K1–K9 accepted as recommended (owner, 2026-10-03) |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
-| [STUDY-47](STUDY-47-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
-| [STUDY-48](STUDY-48-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
+| [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
+| [STUDY-55](STUDY-55-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

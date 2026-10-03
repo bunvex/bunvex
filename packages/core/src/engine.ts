@@ -104,6 +104,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
+import { TableSummaries, TableSummariesUnavailableError } from "./table-summaries.ts";
 import { Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
@@ -211,6 +212,9 @@ export class Engine {
   private cacheEpoch = 0;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
   readonly searchIndexes = new SearchIndexes();
+  /** Each table's count, size and shape (STUDY-52 PR 2), kept by every commit; built on start. */
+  readonly tableSummaries = new TableSummaries();
+  private summariesBuild: Promise<void> | null = null;
   /** Vector indexes (STUDY-51): exact, in memory. */
   readonly vectorIndexes = new VectorIndexes();
   private searchBackfills = new Set<Promise<void>>();
@@ -324,6 +328,9 @@ export class Engine {
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
     this.startTableDeletion();
+    this.summariesBuild = this.buildSummaries().catch((err) => {
+      if (!this.closed) console.error(`bunvex: table summaries failed to build: ${err.message}`);
+    });
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
     if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
       this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
@@ -631,6 +638,10 @@ export class Engine {
         const final = resolvesLater ? tx.writtenDocs() : writes;
         this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
         this.vectorIndexes.apply(final);
+        this.tableSummaries.apply(
+          ts,
+          final.map((w) => ({ tablet: w.table.id, old: w.old, next: w.next })),
+        );
       },
       ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
       ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
@@ -785,6 +796,159 @@ export class Engine {
       await new Promise((r) => setImmediate(r));
     }
     this.searchIndexes.done(e);
+  }
+
+  /**
+   * Build the table summaries from every table's documents (active, hidden and being deleted) at one
+   * snapshot, page by page; commits meanwhile are queued and applied after (STUDY-52 PR 2).
+   */
+  private async buildSummaries() {
+    const at = this.committer.visibleTs;
+    const defs = [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()];
+    for (const t of defs) {
+      let last: string | null = null;
+      for (;;) {
+        if (this.closed) return;
+        const page = (await this.query(
+          (db) =>
+            db.asSystem(() =>
+              db
+                .queryDef(t)
+                .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+                .take(1000),
+            ),
+          undefined,
+          undefined,
+          undefined,
+          at,
+        )) as Doc[];
+        this.tableSummaries.build(at, t.id, page);
+        if (page.length < 1000) break;
+        last = page[page.length - 1]!._id as string;
+        await new Promise((r) => setImmediate(r));
+      }
+    }
+    this.tableSummaries.finish();
+  }
+
+  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+
+  /**
+   * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
+   * index added, kept, enabled, disabled or dropped, whether it needs a backfill and its table's document
+   * count; each declared table's validation outcome with its count and size. Needs the table summaries.
+   */
+  async evaluateSchema(next: SchemaDefinition): Promise<SchemaPrediction> {
+    if (!this.tableSummaries.ready) throw new TableSummariesUnavailableError();
+    const { value: cat } = await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true);
+    const active = activeTables(cat.tables);
+    const tabletOf = (name: string) => active.find((t) => t.name === name)?.tablet;
+    const docs = (table: string) => {
+      const tablet = tabletOf(table);
+      return tablet === undefined ? 0 : this.tableSummaries.count(tablet);
+    };
+    const indexes: IndexPrediction[] = [];
+    const push = (
+      table: string,
+      name: string,
+      spec: Record<string, unknown>,
+      staged: boolean,
+      change: IndexChange,
+      needsBackfill: boolean,
+    ) => indexes.push({ name: `${table}.${name}`, ...spec, staged, change, needsBackfill, numDocs: docs(table) });
+    // Database indexes: the stored ones (their `_creationTime` suffix aside) against the declared ones.
+    const userFields = (f: string[]) => (f.at(-1) === "_creationTime" ? f.slice(0, -1) : f);
+    const tableNames = new Set([
+      ...next.tables.keys(),
+      ...active.filter((t) => !t.name.startsWith("_")).map((t) => t.name),
+    ]);
+    for (const table of [...tableNames].sort()) {
+      const declared = next.tables.get(table);
+      const tablet = tabletOf(table);
+      const stored = cat.indexes.filter((i) => i.tablet === tablet && !(i.name in SYSTEM_INDEXES));
+      const stagedNext = new Set(declared?.staged ?? []);
+      for (const [name, fields] of Object.entries(declared?.indexes ?? {})) {
+        const st = stored.find((i) => i.name === name);
+        const spec = { type: "database", fields: [...fields] };
+        const staged = stagedNext.has(name);
+        if (!st || JSON.stringify(userFields(st.fields)) !== JSON.stringify(fields)) {
+          push(table, name, spec, staged, "added", true);
+          if (st) push(table, name, { type: "database", fields: userFields(st.fields) }, !!st.staged, "dropped", false);
+        } else if (st.staged && !staged) push(table, name, spec, staged, "enabled", st.state === "backfilling");
+        else if (!st.staged && staged) push(table, name, spec, staged, "disabled", false);
+        else push(table, name, spec, staged, "identical", st.state === "backfilling");
+      }
+      for (const st of stored)
+        if (!declared?.indexes[st.name])
+          push(table, st.name, { type: "database", fields: userFields(st.fields) }, !!st.staged, "dropped", false);
+      // Search and vector indexes: the active schema's against the pushed one's.
+      const before = this.schema.tables.get(table);
+      const kinds = [
+        {
+          now: before?.searchIndexes ?? {},
+          pushed: declared?.searchIndexes ?? {},
+          nowStaged: new Set(before?.stagedSearch ?? []),
+          pushedStaged: new Set(declared?.stagedSearch ?? []),
+          spec: (d: { searchField: string; filterFields: string[] }) => ({
+            type: "search",
+            searchField: d.searchField,
+            filterFields: [...d.filterFields].sort(),
+          }),
+          ready: (n: string) =>
+            tablet === undefined ? false : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+        },
+        {
+          now: before?.vectorIndexes ?? {},
+          pushed: declared?.vectorIndexes ?? {},
+          nowStaged: new Set(before?.stagedVector ?? []),
+          pushedStaged: new Set(declared?.stagedVector ?? []),
+          spec: (d: { vectorField: string; dimensions: number; filterFields: string[] }) => ({
+            type: "vector",
+            vectorField: d.vectorField,
+            dimensions: d.dimensions,
+            filterFields: [...d.filterFields].sort(),
+          }),
+          ready: (n: string) =>
+            tablet === undefined ? false : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+        },
+      ] as const;
+      for (const k of kinds) {
+        const nowAll = k.now as Record<string, never>;
+        const pushedAll = k.pushed as Record<string, never>;
+        for (const [name, d] of Object.entries(pushedAll)) {
+          const spec = k.spec(d);
+          const old = nowAll[name];
+          const staged = k.pushedStaged.has(name);
+          if (old === undefined || JSON.stringify(k.spec(old)) !== JSON.stringify(spec)) {
+            push(table, name, spec, staged, "added", true);
+            if (old !== undefined) push(table, name, k.spec(old), k.nowStaged.has(name), "dropped", false);
+          } else if (k.nowStaged.has(name) && !staged) push(table, name, spec, staged, "enabled", !k.ready(name));
+          else if (!k.nowStaged.has(name) && staged) push(table, name, spec, staged, "disabled", false);
+          else push(table, name, spec, staged, "identical", !staged && !k.ready(name));
+        }
+        for (const [name, d] of Object.entries(nowAll))
+          if (pushedAll[name] === undefined) push(table, name, k.spec(d), k.nowStaged.has(name), "dropped", false);
+      }
+    }
+    // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
+    const enforced = this.schema.schemaValidation ? this.schema : null;
+    const tables: TablePrediction[] = [...next.tables.values()].map((t) => {
+      const tablet = tabletOf(t.name);
+      const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
+      const was = enforced?.tables.get(t.name);
+      const outcome: TableOutcome = !next.schemaValidation
+        ? "notValidated"
+        : was && JSON.stringify(was.document.json) === JSON.stringify(t.document.json)
+          ? "supersetOfEnforced"
+          : "mustWalk";
+      return { name: t.name, outcome, numDocs: s.count, sizeBytes: s.size };
+    });
+    return { schemaValidation: next.schemaValidation, tables, indexes };
+  }
+
+  /** Wait until the table summaries are built (tests, and callers that need them at once). */
+  async summariesReady() {
+    await this.summariesBuild;
   }
 
   /** Wait until every search index is built (tests). */
@@ -1284,6 +1448,7 @@ export class Engine {
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
+    tx.tableCount = this.tableCountOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1471,6 +1636,7 @@ export class Engine {
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
+    tx.tableCount = this.tableCountOf;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;
@@ -1741,3 +1907,16 @@ function vectorFilter(x: unknown, out: VectorFilter = new Map()): VectorFilter {
   }
   throw new Error("Filters should be a combination of `q.eq` and `q.or`.");
 }
+
+/** A schema prediction (STUDY-56), as Convex's `ComponentSchemaPrediction` for the root component. */
+export type IndexChange = "added" | "identical" | "enabled" | "disabled" | "dropped";
+export type IndexPrediction = {
+  name: string;
+  staged: boolean;
+  change: IndexChange;
+  needsBackfill: boolean;
+  numDocs: number;
+} & Record<string, unknown>;
+export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
+export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
+export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
