@@ -62,10 +62,12 @@ import {
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
+import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
+import { BadJsonBody, readJsonBody, UDF_POST, UDF_POST_WITH_COMPONENT, UDF_POST_WITH_TS } from "./json-body.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -341,6 +343,19 @@ export function createServer(opts: ServerOptions) {
   const callerOfRequest = async (req: Request): Promise<Caller | Response> => {
     const caller = await identifyRequest(req);
     return caller instanceof Response ? caller : withRequest(caller, req);
+  };
+  /**
+   * The `Authorization` header's syntax alone (Convex's `ExtractAuthenticationToken`, which runs before the
+   * body is read): a key or a token is checked later, after the body.
+   */
+  const authHeaderSyntaxError = (req: Request): Response | null => {
+    const header = req.headers.get("authorization");
+    if (header === null) return null;
+    if (header.length < 7) return requestError(400, "InvalidHeaderFailure", "Invalid authentication header");
+    const scheme = header.slice(0, 7).toLowerCase();
+    if (scheme !== "bunvex " && (scheme !== "bearer " || header.length === 7))
+      return requestError(400, "InvalidAdminKey", "Invalid admin key");
+    return null;
   };
   const identifyRequest = async (req: Request): Promise<Caller | Response> => {
     const header = req.headers.get("authorization");
@@ -918,22 +933,56 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
       const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
-      if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
-      let body: { path: string; args: unknown; ts?: unknown };
-      try {
-        body = JSON.parse(await new Response(capped(req).body).text()) as typeof body;
-      } catch (e) {
-        return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
-      }
-      if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
+      if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
+      if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
       let kind = route[1]!;
+      // Convex's extractors, in order: the auth header's syntax, then the body (STUDY-67 H4).
+      const badHeader = authHeaderSyntaxError(req);
+      if (badHeader) return badHeader;
+      let body: { path: string; args: unknown; ts?: string; format?: string | null; componentPath?: string | null };
+      try {
+        body = await readJsonBody(
+          req,
+          async () => {
+            try {
+              return await new Response(capped(req).body).text();
+            } catch {
+              throw new BadJsonBody("Failed to buffer the request body: length limit exceeded");
+            }
+          },
+          kind === "query_at_ts" ? UDF_POST_WITH_TS : kind === "function" ? UDF_POST_WITH_COMPONENT : UDF_POST,
+        );
+      } catch (e) {
+        if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+        throw e;
+      }
+      // Convex parses the path before it authenticates (`parse_export_path`); `/api/function`, after its admin
+      // check (STUDY-67 H7).
+      const badPath = () => {
+        const bad = badFunctionPath(body.path);
+        return bad && requestError(bad.status, bad.code, bad.message);
+      };
+      if (kind !== "function") {
+        const bad = badPath();
+        if (bad) return bad;
+      }
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
-      // Convex's `/api/function` (`execute_any_function`): the function's own kind; an admin may run an
-      // internal one (its key's operation is checked as for any call), others only public ones.
+      // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
+      // a user), on the root component; the function's own kind, internal ones included.
       if (kind === "function") {
+        if ((caller as AdminCaller).admin?.kind !== "admin") {
+          const denied = new BadDeployKeyError();
+          return requestError(denied.status, denied.code, denied.message);
+        }
+        // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
+        if (typeof body.componentPath === "string" && body.componentPath !== "")
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        const bad = badPath();
+        if (bad) return bad;
         const found = functions.kindOf(body.path);
-        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+        if (!found)
           return udfResponse(
             {
               ok: false,

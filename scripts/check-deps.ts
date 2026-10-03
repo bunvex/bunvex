@@ -125,6 +125,7 @@ const WIRE_NAMES: Record<string, string> = {
   convex_json: "DV-307: streaming export `format` (legacy alias)",
   convex_clean_json: "DV-307: streaming export `format` (legacy alias)",
   actionComputeConvexGbHours: "DV-308: usage limit metric",
+  BadConvexFunctionIdentifier: "DV-312 (pending): HTTP function API error code",
 };
 const wireNameRe = new RegExp(`(["'\`])(?:${Object.keys(WIRE_NAMES).join("|")})\\1`, "g");
 
