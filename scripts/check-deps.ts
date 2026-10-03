@@ -51,7 +51,7 @@ const ALLOWED: Record<string, string[]> = {
     "values",
   ],
   // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
-  bunvex: ["server", "values", "client", "react", "nextjs", "cli", "core", "persistence"],
+  bunvex: ["server", "values", "client", "react", "nextjs", "react-clerk", "react-auth0", "cli", "core", "persistence"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.
   ui: [],
