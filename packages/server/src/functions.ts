@@ -228,6 +228,9 @@ const asObjectValidator = (a: ArgsValidator): GenericValidator =>
 
 /** Every function a builder made: how a code version's analysis tells its functions from other exports. */
 const DEFINED = new WeakSet<object>();
+/** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
+export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
+
 export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
 
 const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
@@ -404,6 +407,7 @@ export class Functions {
       parent ? "Action" : udfType === "HttpAction" ? "HttpEndpoint" : ((caller as SourcedCaller)?.source ?? "HttpApi"),
       identityTypeOf(caller),
       wallClock(),
+      udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
     if (udfType === "Action" || udfType === "HttpAction")
       r.onLine = (line) =>
@@ -422,6 +426,11 @@ export class Functions {
     if (!o.skip) log.append(this.completion(r, res.lines, o, false));
     if (!res.ok) throw res.error;
     return res.value;
+  }
+
+  private isNodeAction(name: string): boolean {
+    const f = this.fns.get(registryKey(name)) ?? this.fns.get(name);
+    return f !== undefined && NODE_FUNCTIONS.has(f);
   }
 
   /** The current mutation attempt lost an OCC conflict and runs again: log it (the engine's `onOccRetry`). */
@@ -472,6 +481,7 @@ export class Functions {
       willRetry,
       executionTimestamp: r.start / 1000,
       identityType: r.identityType,
+      environment: r.environment,
     };
   }
 

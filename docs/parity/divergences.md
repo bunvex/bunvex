@@ -304,7 +304,7 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
-DV-250–DV-254 (STUDY-47 L1–L5, the function execution log) await the owner. Until decided, the PR that
+DV-250–DV-253 (STUDY-47 L1–L4, the function execution log) await the owner; DV-254 is withdrawn (bunvex logs `"use node"` actions as `node`, as Convex). Until decided, the PR that
 builds the log implements the recommendation in each row:
 
 | ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
@@ -313,7 +313,6 @@ builds the log implements the recommendation in each row:
 | DV-251 | `usageStats`: the I/O bytes equal the read and written bytes; index rows, storage, vector, text, egress and memory are 0 | metered | yes (the log, the dashboard) | Not done yet: bunvex does not meter them. Accept until usage tracking | [STUDY-47 L2](../study/STUDY-47-log-streaming.md#4-divergences) |
 | DV-252 | `userExecutionTime` equals `executionTime` | user time apart from system time | yes (the log) | Not done yet. Accept | [STUDY-47 L3](../study/STUDY-47-log-streaming.md#4-divergences) |
 | DV-253 | No `Tester` caller: the dashboard's function runner logs as `HttpApi` | `/api/run_test_function` logs as `Tester` | yes (the log) | Not done yet: bunvex has no `run_test_function`. Accept | [STUDY-47 L4](../study/STUDY-47-log-streaming.md#4-divergences) |
-| DV-254 | `environment` is always `"isolate"` | `"node"` for `"use node"` actions | yes (the log) | Not possible in one process without a Node runtime. Accept | [STUDY-47 L5](../study/STUDY-47-log-streaming.md#4-divergences) |
 
 ## Waiting on a dependency
 
