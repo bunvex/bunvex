@@ -224,7 +224,9 @@ export type ServerOptions = {
  */
 const fromWire = (args: unknown, path: string) => {
   try {
-    return parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+    // `null` is an argument (a validated function refuses it); nothing at all is `{}`.
+    const one = Array.isArray(args) ? args[0] : args;
+    return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
     // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
     throw new FunctionPathError(
@@ -959,6 +961,13 @@ export function createServer(opts: ServerOptions) {
       }
       return udfResponse(
         await collectLogs(async () => {
+          if (Array.isArray(body.args) && body.args.length !== 1)
+            functions.checkArity(
+              body.path,
+              kind === "query_at_ts" ? "query" : (kind as "query" | "mutation" | "action"),
+              body.args.map((a) => fromWire(a, body.path) as Value),
+              caller,
+            );
           const args = fromWire(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(body.path, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);

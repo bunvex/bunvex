@@ -52,8 +52,21 @@ export class FunctionPathError extends Error {
   override name = "FunctionPathError";
 }
 
+/**
+ * An argument or result that misses its validator: Convex checks both in Rust, around the run
+ * (`ArgsValidator::check_args`, `ReturnsValidator::check_output`), so the error is a message alone — no
+ * `Uncaught`, no frames — and its message is the `JsError`'s display, newline included, for the client and
+ * for a function that called this one alike. `ArgumentValidationError: <check>` wraps the check's own
+ * `JsError`, so it ends with two newlines (STUDY-67 H6).
+ */
+export class ValidatorError extends Error {
+  static args = (check: string) => new ValidatorError(`ArgumentValidationError: ${check}\n\n`);
+  static returns = (check: string) => new ValidatorError(`ReturnsValidationError: ${check}\n`);
+}
+
 export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof FunctionPathError) return { message: `${e.message}\n` };
+  if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
     return { message: `Uncaught ${what}\n` };

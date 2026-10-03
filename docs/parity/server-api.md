@@ -109,8 +109,8 @@ Key bunvex facts behind the statuses:
 | `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
 | `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
 | Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
-| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | |
-| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | An object of validators is `v.object` of them, as for `args` (STUDY-36). |
+| `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | As Convex's `check_args` (STUDY-67 H6): the error is the message alone (no `Uncaught`, no frames, two trailing newlines), for a caller function too; a validated function refuses a non-object (`Instead received: 5.0`) and, over HTTP, an `args` array of other than one; a function without a validator gets whatever came. Over the sync protocol, extra array elements are still dropped. |
+| `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | An object of validators is `v.object` of them, as for `args` (STUDY-36). Its error is Convex's `ReturnsValidationError: …` alone, no `Uncaught`, no frames (STUDY-67 H6). |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
 | Handler returning `undefined` becomes `null` on the wire | impl/registration_impl.ts | done | `value ?? null`. |
 | Function names `"dir/module:export"`; a `default` export omits `:export` | server/api.ts (`getFunctionName`) | done (STUDY-35) | Pushed modules are analyzed by file: `dir/module:export`, and a `default` export is `dir/module`. |
