@@ -1,6 +1,6 @@
 # STUDY-53 — The commit timestamp (`db.vars.commitTs`)
 
-- **Status:** decision pending (owner): T1–T2; PR 1 (draft) implements the recommendations. Closes DV-59
+- **Status:** accepted: T1–T2 as recommended (owner, 2026-10-03). Closes DV-59
 - **Convex source read:** `main` of get-convex/convex-backend (npm 1.46.0; the feature is in 1.43.0), 2026-10-03
 - **Related:** [STUDY-06 D8](STUDY-06-transactions-and-occ.md), [STUDY-13 D2](STUDY-13-validators.md),
   [STUDY-44](STUDY-44-ctx-meta.md) (`getSnapshotTs`, same clock)
@@ -51,5 +51,5 @@ treat it inside the mutation, and the errors above.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| T1 | A query running inside a mutation (`ctx.runQuery`) sees `db.vars` | bunvex gives nested functions the caller's transaction object; Convex gives a query a reader without `vars`. **Not done yet** | DV-267, pending |
-| T2 | The token in arguments that do not accept it (client, scheduler, `.filter`) is refused with bunvex's value error, not Convex's "Field name $commitTs starts with '$', which is reserved." | **Not done yet**: PR 2 aligns these messages (and cron logs of results holding it) | DV-268, pending |
+| T1 | A query running inside a mutation (`ctx.runQuery`) sees `db.vars` | bunvex gives nested functions the caller's transaction object; Convex gives a query a reader without `vars`. **Not done yet** | DV-267, accepted (owner, 2026-10-03) |
+| T2 | The token in arguments that do not accept it (client, scheduler, `.filter`) is refused with bunvex's value error, not Convex's "Field name $commitTs starts with '$', which is reserved." | **Not done yet**: PR 2 aligns these messages (and cron logs of results holding it) | DV-268, accepted (owner, 2026-10-03) |
