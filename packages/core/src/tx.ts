@@ -388,6 +388,11 @@ export class Tx {
     return this.writable ? { commitTs: commitTsPlaceholder } : undefined;
   }
 
+  /** @internal The next `_creationTime` this transaction would hand out (the engine starts the next one past it). */
+  get creationCursor(): number {
+    return this.nextCreationTime;
+  }
+
   /** Whether a write holds a commit timestamp to resolve at commit. */
   get hasCommitTs() {
     return this.commitTs.size > 0;

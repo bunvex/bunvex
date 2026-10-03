@@ -42,4 +42,23 @@ describe("_creationTime and Date.now() are floored at the snapshot", () => {
     expect(second).toBeGreaterThanOrEqual(first);
     await e.close();
   });
+
+  test("a transaction starts after every _creationTime the one before it handed out, not only after its start", async () => {
+    const p = await MemoryPersistence.open(null, { durable: false });
+    // the floor dominates, mid-millisecond: both transactions' snapshots round up to the same ms
+    const ahead = (Date.now() + 10_000) * 1000 + 500;
+    const realMaxTs = p.maxTs.bind(p);
+    p.maxTs = () => Math.max(realMaxTs(), ahead);
+    const e = await new Engine(defineSchema({ items: defineTable(v.any()) }), p).init();
+    // the first hands out many creation times; the second must start after all of them
+    await e.mutation(async (db) => {
+      for (let n = 0; n < 100; n++) await db.insert("items", { n });
+    });
+    await e.mutation(async (db) => {
+      await db.insert("items", { n: 100 });
+    });
+    const docs = await e.query((db) => db.query("items").collect());
+    expect(docs.map((d) => d.n)).toEqual(Array.from({ length: 101 }, (_, n) => n));
+    await e.close();
+  });
 });
