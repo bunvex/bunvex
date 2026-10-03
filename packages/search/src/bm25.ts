@@ -44,8 +44,7 @@ export class Bm25Weight {
   constructor(docFreq: number, docCount: number, averageFieldnorm: number, boost = 1) {
     this.weight = f(f(idf(docFreq, docCount) * f(1 + K1)) * f(boost));
     const avg = f(averageFieldnorm);
-    for (let id = 0; id < 256; id++)
-      this.cache[id] = f(K1 * f(f(1 - B) + f(f(B * FIELDNORMS[id]!) / avg)));
+    for (let id = 0; id < 256; id++) this.cache[id] = f(K1 * f(f(1 - B) + f(f(B * FIELDNORMS[id]!) / avg)));
   }
   /** The score of a document with this fieldnorm code and this many occurrences of the term. */
   score(fieldnormId: number, termFreq: number): number {

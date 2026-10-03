@@ -79,6 +79,10 @@ class ProjectedQuery implements TxQuery {
     if (!PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
     return this.wrap(this.q.withIndex(name, range));
   }
+  /** System tables have no search indexes. */
+  withSearchIndex(name: string): TxQuery {
+    throw new Error(`Index ${this.table}.${name} not found.`);
+  }
   fullTableScan(): TxQuery {
     return this.wrap(this.q.fullTableScan());
   }

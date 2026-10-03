@@ -121,13 +121,12 @@ export class TextIndex {
       if (exists(t)) candidates.push({ term: t, prefix: false, ord });
       if (q.prefixLast && ord === tokens.length - 1) {
         const expansions = new Set(this.termsWithPrefix(t));
-        for (const s of over.values()) if (s) for (const term of s.tf.keys()) if (term.startsWith(t)) expansions.add(term);
+        for (const s of over.values())
+          if (s) for (const term of s.tf.keys()) if (term.startsWith(t)) expansions.add(term);
         for (const term of expansions) if (term !== t && exists(term)) candidates.push({ term, prefix: true, ord });
       }
     });
-    candidates.sort(
-      (a, b) => Number(a.prefix) - Number(b.prefix) || byteOrder(a.term, b.term) || a.ord - b.ord,
-    );
+    candidates.sort((a, b) => Number(a.prefix) - Number(b.prefix) || byteOrder(a.term, b.term) || a.ord - b.ord);
     const terms = new Map<string, QueryTerm>();
     for (const c of candidates) {
       if (terms.size >= MAX_UNIQUE_QUERY_TERMS - q.filters.length) break;

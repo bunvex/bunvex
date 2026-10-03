@@ -6,6 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { MAX_CANDIDATE_REVISIONS, tokenize } from "@bunvex/search";
 import {
   checkValue,
   copyValue,
@@ -47,6 +48,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
+import { filterKey, type SearchIndexes } from "./search-indexes.ts";
 import { SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
@@ -190,11 +192,22 @@ type QState = {
   stage: "initializer" | "query";
   closed: boolean;
   iterated: boolean;
+  /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
+  search?: SearchSpec;
 };
+
+type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
+type SearchSpec = { name: string; filters: SearchFilter[] };
+
+/** Convex's `SearchQueryScannedTooManyDocumentsError`. */
+const SCANNED_TOO_MANY = `Search query scanned too many documents (fetched ${MAX_CANDIDATE_REVISIONS}). Consider using a smaller limit, paginating the query, or using a filter field to limit the number of documents pulled from the search index.`;
+/** Convex's MAX_FILTER_CONDITIONS: `eq`s in one search query. */
+const MAX_SEARCH_FILTER_CONDITIONS = 8;
 
 /** A query under construction (Convex's QueryInitializer / Query / OrderedQuery in one shape). */
 export type TxQuery = {
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery;
+  withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery;
   fullTableScan(): TxQuery;
   order(dir: "asc" | "desc"): TxQuery;
   filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery;
@@ -456,6 +469,7 @@ export class Tx {
    */
   resolveIndex(t: TableDef, name: string): IndexDef {
     const ix = t.indexes.get(name);
+    if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
     // An index enabled after this snapshot was still being built at it.
     if (ix && (ix.readyTs ?? 0) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
@@ -685,6 +699,11 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async *iterate(st: QState): AsyncGenerator<Doc> {
+    if (st.search) {
+      if (!st.t) return;
+      for await (const { doc } of this.searchDocs(st)) if (st.filters.every((f) => passes(f, doc))) yield doc;
+      return;
+    }
     if (!st.t || !st.ix) return;
     const reads = new ScanReads(this, st);
     for await (const d of this.stream(st)) {
@@ -776,7 +795,10 @@ export class Tx {
     const fp = queryFingerprint({
       tablet: st.t?.id ?? 0,
       index: st.ix?.id ?? 0,
-      lo: st.range.lo,
+      // A search's cursor belongs to its index and filters.
+      lo: st.search
+        ? new TextEncoder().encode(JSON.stringify(st.search, (_k, x) => (typeof x === "bigint" ? `${x}n` : x)))
+        : st.range.lo,
       hi: st.range.hi,
       desc: st.desc,
     });
@@ -789,6 +811,27 @@ export class Tx {
       this.nextEndCursor = continueCursor;
       return { page, isDone: pos === "end", continueCursor, splitCursor: split, pageStatus: status };
     };
+    if (st.search) {
+      // As Convex's search pagination: the search runs again for each page, which keeps what comes after the
+      // cursor; never past the candidates it fetches, and no read limits (Convex passes none).
+      if (!st.t || start === "end") return done([], "end", null, null);
+      const page: Doc[] = [];
+      let last: Uint8Array | null = null;
+      let exhausted = true;
+      for await (const { doc, key } of this.searchDocs(st, start?.after)) {
+        if (end && end !== "end" && compareKeys(key, end.after) > 0) break;
+        last = key;
+        if (!st.filters.every((f) => passes(f, doc))) continue;
+        page.push(doc);
+        if (!end && page.length >= pageSize) {
+          exhausted = false;
+          break;
+        }
+      }
+      const status = page.length > (MAX_CANDIDATE_REVISIONS * 3) / 4 ? "SplitRecommended" : null;
+      const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last! });
+      return done(page, pos, status, null);
+    }
     if (!st.t || !st.ix) return done([], "end", null, null);
     if (start === "end") {
       this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
@@ -865,6 +908,7 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async runQuery(st: QState, limit: number): Promise<Doc[]> {
+    if (st.search) return this.searchRun(st, limit);
     // As Convex's `limit` operator: `take(0)` never pulls from the scan, so it reads nothing.
     if (limit <= 0 || !st.t || !st.ix) return [];
     const reads = new ScanReads(this, st);
@@ -1137,6 +1181,102 @@ export class Tx {
   get hasWrites() {
     return this.writes.size > 0;
   }
+
+  /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
+  searchIndexes: SearchIndexes | null = null;
+
+  /** @internal (Engine) The documents this transaction wrote, in their new state, for the search indexes. */
+  writtenDocs(): { table: TableDef; id: string; next: Doc | null }[] {
+    return [...this.writes].map(([id, w]) => ({ table: w.table, id, next: w.next }));
+  }
+
+  /**
+   * The ranked ids of a search (Convex's `SearchQuery`): Convex's checks of the index and the filters, then
+   * the index as of this snapshot with this transaction's own writes.
+   */
+  private searchHits(st: QState) {
+    const t = st.t!;
+    const spec = st.search!;
+    const label = `${t.name}.${spec.name}`;
+    const e = this.searchIndexes?.get(t, spec.name);
+    if (!e) {
+      if (t.indexes.has(spec.name) || t.pending.some((p) => p.name === spec.name))
+        throw new Error(`Index ${label} is not a search index`);
+      throw new Error(`Index ${label} not found.`);
+    }
+    if (e.staged) throw new IndexStagedError(label);
+    if (!e.ready) throw new IndexBackfillingError(label);
+    let text: string | undefined;
+    const eqs: [string, string][] = [];
+    for (const f of spec.filters) {
+      if (f.type === "Search") {
+        if (f.field !== e.def.searchField)
+          throw new Error(
+            `Search query against ${label} contains a search filter against "${f.field}", which doesn't match the indexed \`searchField\` "${e.def.searchField}".`,
+          );
+        if (text !== undefined)
+          throw new Error(
+            `Search query against ${label} contains multiple search filters against "${f.field}". Only one is allowed.`,
+          );
+        text = f.value;
+      } else {
+        if (!e.def.filterFields.includes(f.field))
+          throw new Error(
+            `Search query against ${label} contains an equality filter on "${f.field}" but that field isn't indexed for filtering in \`filterFields\`.`,
+          );
+        eqs.push([f.field, filterKey(f.value)]);
+      }
+    }
+    if (text === undefined)
+      throw new Error(
+        `Search query against ${label} does not contain any search filters. You must include a search filter like \`q.search(""${e.def.searchField}"", searchText)\`.`,
+      );
+    if (eqs.length > MAX_SEARCH_FILTER_CONDITIONS)
+      throw new Error(
+        `Search query against ${label} has too many filter conditions. Max: ${MAX_SEARCH_FILTER_CONDITIONS} Actual: ${eqs.length}`,
+      );
+    const pending = new Map<string, Doc | null>();
+    for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
+    const hits = this.searchIndexes!.search(
+      e,
+      { tokens: tokenize(text), prefixLast: true, filters: eqs },
+      this.snapshot,
+      pending,
+    );
+    return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
+  }
+
+  /** A search's documents in relevance order; reading past the candidates Convex fetches is an error. */
+  private async *searchDocs(st: QState, after?: Uint8Array): AsyncGenerator<{ doc: Doc; key: Uint8Array }> {
+    const { hits, full } = this.searchHits(st);
+    for (const h of hits) {
+      const key = searchKey(h);
+      if (after && compareKeys(key, after) <= 0) continue;
+      const doc = await this.read(st.t!.name, h.id, "withSearchIndex");
+      if (doc) yield { doc, key };
+    }
+    if (full) throw new Error(SCANNED_TOO_MANY);
+  }
+
+  private async searchRun(st: QState, limit: number): Promise<Doc[]> {
+    const out: Doc[] = [];
+    if (limit <= 0 || !st.t) return out;
+    for await (const { doc } of this.searchDocs(st)) {
+      if (!st.filters.every((f) => passes(f, doc))) continue;
+      out.push(doc);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+}
+
+/**
+ * A search result's position, as Convex's search cursor `(-score, -_creationTime, id)`: byte order is the
+ * results' order (the id's bytes complemented, so ties keep the results' newest-id-first order).
+ */
+function searchKey(h: { id: string; score: number; creationTime: number }): Uint8Array {
+  const internal = decodeId(h.id).internalId.map((b) => 255 - b);
+  return encodeKey([-h.score, -h.creationTime, internal.buffer as ArrayBuffer]);
 }
 
 /**
@@ -1285,6 +1425,46 @@ const reusedError = () => new Error("This query has been chained with another op
  * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
  * allocated per query: this is the hot path of every read).
  */
+/**
+ * `q` of `withSearchIndex(name, q => q.search(field, text).eq(field, value)…)`, as Convex's
+ * `SearchFilterBuilderImpl`: each builder is used once; `eq(field, undefined)` matches a missing field.
+ */
+export class SearchFilterBuilder {
+  private used = false;
+  constructor(private readonly parts: SearchFilter[]) {}
+
+  private next(part: SearchFilter): SearchFilterBuilder {
+    if (this.used)
+      throw new Error(
+        "SearchFilterBuilder has already been used! Chain your method calls like `q => q.search(...).eq(...)`.",
+      );
+    this.used = true;
+    return new SearchFilterBuilder([...this.parts, part]);
+  }
+
+  search(fieldName: string, query: string): SearchFilterBuilder {
+    if (fieldName === undefined) throw new TypeError("Must provide arg 1 `fieldName` to `search`");
+    if (query === undefined) throw new TypeError("Must provide arg 2 `query` to `search`");
+    return this.next({ type: "Search", field: fieldName, value: query });
+  }
+
+  eq(fieldName: string, value: unknown): SearchFilterBuilder {
+    if (fieldName === undefined) throw new TypeError("Must provide arg 1 `fieldName` to `eq`");
+    // Convex's own label for a missing value (its check names `search`); an explicit undefined is allowed.
+    if (arguments.length !== 2) throw new TypeError("Must provide arg 2 `value` to `search`");
+    return this.next({
+      type: "Eq",
+      field: fieldName,
+      value: value === undefined ? undefined : copyValue(value as Value),
+    });
+  }
+
+  /** @internal */
+  filters(): SearchFilter[] {
+    return this.parts;
+  }
+}
+
 class QueryImpl implements TxQuery {
   constructor(
     private readonly tx: Tx,
@@ -1324,12 +1504,24 @@ class QueryImpl implements TxQuery {
     });
   }
 
+  /** Convex's `withSearchIndex`: results in relevance order (STUDY-45). */
+  withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery {
+    this.onlyInitializer("withSearchIndex()");
+    if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
+    const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
+    return this.chain((n) => {
+      n.search = { name, filters };
+    });
+  }
+
   fullTableScan(): TxQuery {
     this.onlyInitializer("fullTableScan()");
     return this.chain(() => {});
   }
 
   order(dir: "asc" | "desc"): TxQuery {
+    if (this.st.search)
+      throw new Error("Search queries must always be in relevance order. Can not set order manually.");
     if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
     return this.chain((n) => {
       n.desc = dir === "desc";

@@ -3,10 +3,27 @@
 import { expect, test } from "bun:test";
 import { encodeId } from "@bunvex/values";
 import type { IndexedDoc } from "../src/index.ts";
-import { Bm25Weight, FIELDNORMS, fieldnormToId, idf, MAX_CANDIDATE_REVISIONS, TextIndex, tokenize } from "../src/index.ts";
+import {
+  Bm25Weight,
+  FIELDNORMS,
+  fieldnormToId,
+  idf,
+  MAX_CANDIDATE_REVISIONS,
+  TextIndex,
+  tokenize,
+} from "../src/index.ts";
 
 test("the analyzer: alphanumeric runs, long tokens dropped by bytes, lowercased per character", () => {
-  expect(tokenize("Hello, happy tax-payer! café 3rd 1.5")).toEqual(["hello", "happy", "tax", "payer", "café", "3rd", "1", "5"]);
+  expect(tokenize("Hello, happy tax-payer! café 3rd 1.5")).toEqual([
+    "hello",
+    "happy",
+    "tax",
+    "payer",
+    "café",
+    "3rd",
+    "1",
+    "5",
+  ]);
   expect(tokenize("")).toEqual([]);
   expect(tokenize("!!! ...")).toEqual([]);
   // 31 bytes kept, 32 dropped; "é" is two bytes.
@@ -88,7 +105,14 @@ test("at most 16 query terms and 1024 hits", () => {
   const sixteen = Array.from({ length: 16 }, (_, i) => `w${i}`).join(" ");
   expect(ix.search(q(`${sixteen} seventeenth`, [], false))).toEqual([]);
   const big = new TextIndex();
-  for (let i = 0; i < 1100; i++) big.set(encodeId(10001, new Uint8Array(16).fill(i % 256).map((b, j) => (j === 0 ? i >> 8 : b))), doc("word", i));
+  for (let i = 0; i < 1100; i++)
+    big.set(
+      encodeId(
+        10001,
+        new Uint8Array(16).fill(i % 256).map((b, j) => (j === 0 ? i >> 8 : b)),
+      ),
+      doc("word", i),
+    );
   expect(big.search(q("word")).length).toBe(MAX_CANDIDATE_REVISIONS);
 });
 

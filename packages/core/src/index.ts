@@ -82,6 +82,9 @@ export type {
   PatchValue,
   Query,
   QueryInitializer,
+  SearchFilter,
+  SearchFilterBuilder,
+  SearchFilterFinalizer,
   SystemDataModel,
   UpperBoundIndexRangeBuilder,
 } from "./database-types.ts";

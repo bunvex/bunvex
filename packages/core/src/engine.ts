@@ -70,12 +70,14 @@ import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
+  type Doc,
   documentValidator,
   type SchemaDefinition,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
+import { type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -168,6 +170,9 @@ export class Engine {
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
   private cacheEpoch = 0;
+  /** The search indexes of the active tables, in memory (STUDY-45 S1). */
+  readonly searchIndexes = new SearchIndexes();
+  private searchBackfills = new Set<Promise<void>>();
   /**
    * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
@@ -183,6 +188,8 @@ export class Engine {
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
       cacheClock?: () => number;
+      /** Awaited before each page a search index's backfill reads (tests hold the backfill with it). */
+      beforeSearchBackfillPage?: () => Promise<void>;
       /** Retries after an OCC conflict (default: Convex's 4). */
       maxRetries?: number;
       /** Backoff between retries, in ms (default: Convex's 100 ms doubling up to 2 s, full jitter). */
@@ -262,6 +269,7 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
+    this.reconcileSearch();
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -543,6 +551,71 @@ export class Engine {
   /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
   private validation: Promise<unknown> | null = null;
 
+  /** A commit hook that also brings the search indexes up to date with the commit, in commit order. */
+  private withSearchUpdate(tx: Tx, own: ((ts: number) => void) | undefined): (ts: number) => void {
+    return (ts) => {
+      own?.(ts);
+      this.searchIndexes.apply(ts, tx.writtenDocs());
+    };
+  }
+
+  /**
+   * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
+   * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
+   */
+  private reconcileSearch() {
+    const wanted = [];
+    for (const [name, declared] of this.schema.tables) {
+      const t = this.catalog.tables.get(name);
+      if (!t || !declared.searchIndexes) continue;
+      const staged = new Set(declared.stagedSearch ?? []);
+      for (const [index, def] of Object.entries(declared.searchIndexes))
+        wanted.push({ table: t, name: index, def, staged: staged.has(index) });
+    }
+    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs)) {
+      const p = this.backfillSearch(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: search index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+  }
+
+  private async backfillSearch(e: SearchIndexEntry) {
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return;
+    const at = this.committer.visibleTs;
+    let last: string | null = null;
+    for (;;) {
+      await this.opts.beforeSearchBackfillPage?.();
+      if (this.closed) return;
+      const page = (await this.query(
+        (db) =>
+          db.asSystem(() =>
+            db
+              .queryDef(t)
+              .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+              .take(1000),
+          ),
+        undefined,
+        undefined,
+        undefined,
+        at,
+      )) as Doc[];
+      for (const d of page) this.searchIndexes.backfill(e, d);
+      if (page.length < 1000) break;
+      last = page[page.length - 1]!._id as string;
+      // A background job: let the server's own work run between pages.
+      await new Promise((r) => setImmediate(r));
+    }
+    this.searchIndexes.done(e);
+  }
+
+  /** Wait until every search index is built (tests). */
+  async searchReady() {
+    while (this.searchBackfills.size) await Promise.all([...this.searchBackfills]);
+  }
+
   /** A transaction's commit hook, plus failing the pending schema when one of its writes did not match it. */
   private withPendingCheck(tx: Tx): ((ts: number) => void) | undefined {
     const own = tx.onCommitVisible;
@@ -754,6 +827,7 @@ export class Engine {
           this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
           this.schema = pending.schema;
           this.installValidators(pending.schema);
+          this.reconcileSearch();
           if (this.pendingPush?.id === schemaId) {
             this.pendingPush = null;
             this.pendingValidators = null;
@@ -865,6 +939,7 @@ export class Engine {
           this.catalog = this.catalog.withTableStates({ activate: tablets, delete: deleteList });
           this.cache.clear();
           this.cacheEpoch++;
+          this.reconcileSearch();
         };
       },
       true,
@@ -1005,6 +1080,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.instanceSecret = this.instanceSecret;
+    tx.searchIndexes = this.searchIndexes;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1191,6 +1267,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.instanceSecret = this.instanceSecret;
     tx.identity = caller.identity;
+    tx.searchIndexes = this.searchIndexes;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;
     const out = () => ({
@@ -1296,7 +1373,7 @@ export class Engine {
           docs,
           idx,
           source,
-          onVisible: this.withPendingCheck(tx),
+          onVisible: this.withSearchUpdate(tx, this.withPendingCheck(tx)),
         });
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).

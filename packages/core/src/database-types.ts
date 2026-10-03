@@ -127,6 +127,23 @@ export interface OrderedQuery<TableInfo extends GenericTableInfo> extends AsyncI
 export interface Query<TableInfo extends GenericTableInfo> extends OrderedQuery<TableInfo> {
   order(order: "asc" | "desc"): OrderedQuery<TableInfo>;
 }
+/** What a search filter callback returns (Convex's `SearchFilter`). */
+export interface SearchFilter {
+  readonly __isSearchFilter?: undefined;
+}
+/** Convex's `SearchFilterBuilder`: the search first. */
+export interface SearchFilterBuilder<Document, Config extends { searchField: string; filterFields: string }> {
+  search(fieldName: Config["searchField"], query: string): SearchFilterFinalizer<Document, Config>;
+}
+/** Convex's `SearchFilterFinalizer`: equality filters on the index's filter fields. */
+export interface SearchFilterFinalizer<Document, Config extends { searchField: string; filterFields: string }>
+  extends SearchFilter {
+  eq<FieldName extends Config["filterFields"]>(
+    fieldName: FieldName,
+    value: FieldTypeFromFieldPath<Document, FieldName>,
+  ): SearchFilterFinalizer<Document, Config>;
+}
+
 /** Convex's `QueryInitializer`: the whole table, or an index range. */
 export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Query<TableInfo> {
   fullTableScan(): Query<TableInfo>;
@@ -134,6 +151,13 @@ export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Qu
     indexName: IndexName,
     indexRange?: (q: IndexRangeBuilder<DocumentByInfo<TableInfo>, NamedIndex<TableInfo, IndexName>>) => IndexRange,
   ): Query<TableInfo>;
+  /** A full-text search (STUDY-45): always in relevance order. */
+  withSearchIndex<IndexName extends keyof TableInfo["searchIndexes"] & string>(
+    indexName: IndexName,
+    searchFilter: (
+      q: SearchFilterBuilder<DocumentByInfo<TableInfo>, TableInfo["searchIndexes"][IndexName]>,
+    ) => SearchFilter,
+  ): OrderedQuery<TableInfo>;
 }
 
 /** A table's name from one of its ids. */
