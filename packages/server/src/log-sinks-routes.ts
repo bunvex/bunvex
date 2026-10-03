@@ -22,6 +22,7 @@ import {
   type SinkType,
   sinkOfType,
 } from "./log-sinks.ts";
+import { parseDsn } from "./log-sinks-providers.ts";
 
 /** `/api/v1/<route>[/<id>]`. */
 export const LOG_STREAM_ROUTE =
@@ -126,11 +127,10 @@ function checkAttributes(a: unknown): { key: string; value: string }[] {
   return a;
 }
 
-/** A Sentry DSN: `<scheme>://<key>@<host>/<project id>`. */
+/** A Sentry DSN, parsed as the Sentry SDK parses it (any project id segment, STUDY-70). */
 function checkDsn(dsn: string) {
   try {
-    const u = new URL(dsn);
-    if (!u.username || !/^\/(?:.*\/)?\d+$/.test(u.pathname)) throw new Error();
+    parseDsn(dsn);
   } catch {
     throw bad("InvalidSentryDsn", "The Sentry DSN passed was invalid");
   }

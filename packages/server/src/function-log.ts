@@ -125,6 +125,9 @@ export class Running implements LogOwner {
   cached = false;
   /** Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path. */
   metricsName = "";
+  /** The caller's `tokenIdentifier` and IP, for log streams' exception events (STUDY-70). */
+  tokenIdentifier: string | null = null;
+  ip: string | null = null;
   tx: unknown = null;
   constructor(
     readonly executionId: string,

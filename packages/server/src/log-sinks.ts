@@ -1,14 +1,27 @@
 // Log streams (STUDY-59), as Convex's crates/model/src/log_sinks and crates/log_streaming: `_log_sinks` rows
 // (one per sink type, at most 8), a manager that batches events (every 5 s or 4096 events) and hands them
 // to each active sink, and a worker that starts the sinks the table asks for (verifying new ones) and marks
-// them active or failed. bunvex runs the webhook and local sinks, and S3 export's stub as Convex's; the
-// other types are stored and listed, and fail to start (DV-303).
+// them active or failed. Every sink type runs: webhook and local here, S3 export's stub as Convex's, and the
+// providers (Datadog, Axiom, Sentry, PostHog) in log-sinks-providers.ts (STUDY-70).
 
 import { createHmac, randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { DEPLOYMENT_AUDIT_LOG_TABLE, type Engine, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
 import { eventJsonV2, type LogEvent, type LogTopic } from "./log-events.ts";
+import { backoff, EgressFailure, passes, SINK_USER_AGENT, type Sink, statusText } from "./log-sink-http.ts";
+import {
+  type AxiomConfig,
+  AxiomSink,
+  type DatadogConfig,
+  DatadogSink,
+  type PostHogErrorTrackingConfig,
+  PostHogErrorTrackingSink,
+  type PostHogLogsConfig,
+  PostHogLogsSink,
+  type SentryConfig,
+  SentrySink,
+} from "./log-sinks-providers.ts";
 
 // ---------------------------------------------------------------- the model
 
@@ -133,6 +146,12 @@ export type LogSinkOptions = {
   /** `WEBHOOK_SINK_REQUEST_TIMEOUT` (30 s). */
   requestTimeoutMs: number;
   random: () => number;
+  /** The provider sinks' backoff (STUDY-70): Convex's 500 ms to 60 s. */
+  providerBackoffMs: [initial: number, max: number];
+  /** The HTTP client of the provider sinks (tests redirect Datadog's and Axiom's fixed hosts). */
+  fetch: typeof fetch;
+  /** The version sent where Convex sends its package's (`sdk.version`, `$lib_version`): "unknown", its fallback. */
+  version: string;
 };
 
 export const defaultLogSinkOptions = (): LogSinkOptions => ({
@@ -143,6 +162,9 @@ export const defaultLogSinkOptions = (): LogSinkOptions => ({
   startupTimeoutMs: 15_000,
   requestTimeoutMs: 30_000,
   random: Math.random,
+  providerBackoffMs: [500, 60_000],
+  fetch: ((input, init) => fetch(input, init)) as typeof fetch,
+  version: "unknown",
 });
 
 /** Convex's `WEBHOOK_SINK_MAX_LOGS_PER_BATCH`. */
@@ -157,40 +179,6 @@ export type DeploymentMetadata = {
   project_slug: null;
   deployment_region: null;
 };
-
-interface Sink {
-  /** Convex's per-sink channel, in drains: further drains are dropped while it is full. */
-  readonly capacity: number;
-  verify(): Promise<void>;
-  send(events: LogEvent[]): Promise<void>;
-  stop(): void;
-}
-
-/** A failed delivery, as Convex's `SinkEgressFailure`: `rejected` (another 4xx) is not retried. */
-class EgressFailure extends Error {
-  constructor(
-    message: string,
-    readonly rejected: boolean,
-  ) {
-    super(message);
-  }
-}
-
-const statusText = (r: Response) => `${r.status}${r.statusText ? ` ${r.statusText}` : ""}`;
-
-async function backoff(o: LogSinkOptions, [initial, max]: [number, number], failures: number, stopped: () => boolean) {
-  const ms = Math.min(initial * 2 ** failures, max) * o.random();
-  const end = Date.now() + ms;
-  while (Date.now() < end && !stopped()) await Bun.sleep(Math.min(50, end - Date.now()));
-}
-
-/** A general sink's filter (Convex's `SinkFilter`): verification always; exceptions never; `custom_audit` only when subscribed. */
-function passes(topics: LogTopic[] | undefined, e: LogEvent): boolean {
-  const t = e.event.topic;
-  if (t === "verification") return true;
-  if (t === "exception") return false;
-  return topics === undefined ? true : topics.includes(t);
-}
 
 export class WebhookSink implements Sink {
   readonly capacity = 8;
@@ -233,7 +221,11 @@ export class WebhookSink implements Sink {
       try {
         const r = await fetch(this.config.url, {
           method: "POST",
-          headers: { "content-type": "application/json", "x-webhook-signature": `sha256=${signature}` },
+          headers: {
+            "content-type": "application/json",
+            "x-webhook-signature": `sha256=${signature}`,
+            "user-agent": SINK_USER_AGENT,
+          },
           body,
           signal: AbortSignal.timeout(this.o.requestTimeoutMs),
         });
@@ -508,7 +500,12 @@ export class LogManager {
     if (c.type === "webhook") sink = new WebhookSink(c, this.metadata, this.options);
     else if (c.type === "local") sink = new LocalSink(c.path, this.options);
     else if (c.type === "s3Export") sink = new DrainingSink();
-    else return { type: "failed", reason: `${SINK_TYPE_NAMES[c.type]} log streams are not supported by bunvex yet.` };
+    else if (c.type === "datadog") sink = new DatadogSink(c as unknown as DatadogConfig, this.options, this.metadata);
+    else if (c.type === "axiom") sink = new AxiomSink(c as unknown as AxiomConfig, this.options, this.metadata);
+    else if (c.type === "sentry") sink = new SentrySink(c as unknown as SentryConfig, this.options, this.metadata);
+    else if (c.type === "postHogLogs")
+      sink = new PostHogLogsSink(c as unknown as PostHogLogsConfig, this.options, this.metadata);
+    else sink = new PostHogErrorTrackingSink(c as unknown as PostHogErrorTrackingConfig, this.options, this.metadata);
     if (verify) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

@@ -53,7 +53,7 @@ function receiver() {
   return { url: `http://127.0.0.1:${server.port}/hook`, got, events, setStatus: (s: number) => (status = s) };
 }
 
-async function setup(opts: { localLogSink?: string; engine?: Engine } = {}) {
+async function setup(opts: { localLogSink?: string; engine?: Engine; fetch?: typeof fetch } = {}) {
   const engine =
     opts.engine ??
     (await new Engine(
@@ -75,7 +75,15 @@ async function setup(opts: { localLogSink?: string; engine?: Engine } = {}) {
     functions,
     port: 0,
     ...(opts.localLogSink ? { localLogSink: opts.localLogSink } : {}),
-    logSinks: { aggregationMs: 20, webhookBackoffMs: [1, 2], localBackoffMs: [1, 2], random: () => 0 },
+    logSinks: {
+      aggregationMs: 20,
+      webhookBackoffMs: [1, 2],
+      localBackoffMs: [1, 2],
+      providerBackoffMs: [1, 2],
+      random: () => 0,
+      // Never the real providers: a test that does not route them gets a refusal.
+      fetch: opts.fetch ?? ((async () => new Response(null, { status: 403 })) as unknown as typeof fetch),
+    },
   });
   stops.push(() => s.stop());
   await s.logSinksReady;
@@ -228,7 +236,7 @@ test("the API's checks and errors", async () => {
       })
     ).body.code,
   ).toBe("InvalidAxiomIngestUrl");
-  // Another type: stored and listed (no API key), and it fails to start in bunvex (DV-303).
+  // Another type: stored and listed (no API key); here its endpoint refuses the key.
   const dd = await t.req("create_log_stream", {
     logStreamType: "datadog",
     siteLocation: "EU",
@@ -239,7 +247,7 @@ test("the API's checks and errors", async () => {
     const s = await t.status(dd.body.id);
     return s?.type === "failed" && s;
   });
-  expect(ddStatus.reason).toBe("Datadog log streams are not supported by bunvex yet.");
+  expect(ddStatus.reason).toBe("endpoint rejected the request with 403 Forbidden");
   const list = (await t.req("list_log_streams")).body;
   expect(list.map((x: any) => x.logStreamType).sort()).toEqual(["datadog", "webhook"]);
   expect(list.find((x: any) => x.logStreamType === "datadog")).not.toHaveProperty("ddApiKey");
