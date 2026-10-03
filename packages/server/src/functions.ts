@@ -893,7 +893,10 @@ export class Functions {
         : {
             db: db as unknown as MutationCtx["db"],
             auth: txAuth(db),
-            scheduler: makeScheduler(this, { db, job }),
+            // The scheduled job this runs under, also when an action it ran called it (Convex propagates
+            // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
+            // born canceled, and it may not cancel that job.
+            scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
@@ -1355,7 +1358,11 @@ export class Functions {
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
         this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
-      scheduler: makeScheduler(this, { engine: this.engine, job }),
+      // As a mutation's: the job also reaches an action that a scheduled action ran.
+      scheduler: makeScheduler(this, {
+        engine: this.engine,
+        job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+      }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
