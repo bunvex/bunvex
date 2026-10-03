@@ -213,7 +213,6 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-273 | A negative or non-integer `limit` gets bunvex's message | serde's message | yes (an error message) | Not possible exactly | owner, 2026-10-03 (as recommended) | [STUDY-51 V5](../study/STUDY-51-vector-search.md#4-divergences) |
 | DV-274 | A Completion's `returnBytes` is the value's size as bunvex counts it for limits (a JSON result's length on the HTTP API) | Rust's `heap_size()` of the value | yes (a number in the log) | Not possible: `heap_size` measures Rust memory | owner, 2026-10-03 (as recommended) | [STUDY-47 L1](../study/STUDY-47-log-streaming.md#4-divergences) |
 | DV-275 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit | owner, 2026-10-03 (as recommended) | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
-| DV-276 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR | owner, 2026-10-03 (as recommended) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-277 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42) | owner, 2026-10-03 (as recommended) | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-278 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL` | owner, 2026-10-03 (as recommended) | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
 
@@ -290,6 +289,7 @@ Kept so the history is in one place.
 | DV-141 | Scheduled and cron runs' log lines went only to the server's output | As Convex: every execution, scheduled and cron runs included, is in the function execution log with its lines (`function-log.ts`), read by the log stream routes | yes (dashboard logs) | owner, 2026-10-01 (STUDY-30 S3: until log streaming) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-184 | `dev --tail-logs` defaulted to `disable` | As Convex: `pause-on-deploy` by default, the deployment's function logs on stderr, held back during a push | yes | owner, 2026-10-02 (STUDY-37 E7: until log streaming) | [STUDY-37 E7](../study/STUDY-37-cli-and-environment-variables.md#4-divergences), [STUDY-47](../study/STUDY-47-log-streaming.md) |
 | DV-218 | No audit-log entries for exports and imports | As Convex: `request_export`, `set_export_expiration`, `cancel_export` and `snapshot_import`, in the change's transaction (`_deployment_audit_log`) | dashboard only | owner, 2026-10-02 (STUDY-42 X4: until an audit log) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences), [STUDY-48](../study/STUDY-48-audit-log.md) |
+| DV-276 | No `push_config_with_components` audit-log event | As Convex: recorded in the push's commit, with the module, cron, index (database, search, vector) and schema diffs, the auth diff and the `--message` (≤ 1024 bytes, `PushMessageTooLong`) | yes (dashboard) | owner, 2026-10-03 (as recommended: a follow-up PR) | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -334,7 +334,7 @@ DV-264 (STUDY-50 H1, function handles) were accepted as recommended (owner, 2026
 DV-265–DV-266 (STUDY-52 A1–A2, table shapes) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 DV-267–DV-268 (STUDY-53 T1–T2, the commit timestamp) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 DV-269 and DV-270 (STUDY-51 V1–V2, vector search exact and in memory) were decided by the owner (2026-10-02); DV-271–DV-273 (STUDY-51 V3–V5) were accepted as recommended (owner, 2026-10-03). All are in [Decided divergences](#decided-divergences).
-DV-275–DV-277 (STUDY-48 A1–A3, the audit log) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
+DV-275–DV-277 (STUDY-48 A1–A3, the audit log) were accepted as recommended (owner, 2026-10-03); DV-276 was built since and is in [Resolved to match Convex](#resolved-to-match-convex) and are in [Decided divergences](#decided-divergences).
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).

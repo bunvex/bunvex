@@ -853,7 +853,10 @@ export function createServer(opts: ServerOptions) {
   };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
+  /** The auth providers in force, for a push's audit-log auth diff. */
+  let installedAuth: unknown[] | null = null;
   const useAuth = (providers: unknown[] | null) => {
+    installedAuth = providers;
     verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
   };
   /**
@@ -1108,8 +1111,10 @@ export function createServer(opts: ServerOptions) {
     cronExecutor,
     install: (version, auth, module) => {
       authModule = module;
+      installedAuth = auth;
       return installCodeVersion(version, { crons: false, auth });
     },
+    currentAuth: () => installedAuth,
     deploymentEnv,
   });
   /**
@@ -1260,7 +1265,7 @@ export function createServer(opts: ServerOptions) {
     if (caller instanceof Response) return caller;
     if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
       try {
-        caller = adminCaller(body.adminKey, false);
+        caller = withRequest(adminCaller(body.adminKey, false), req);
       } catch (e) {
         const r = accessError(e);
         if (r) return r;
@@ -1277,7 +1282,7 @@ export function createServer(opts: ServerOptions) {
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
       if (step === "wait_for_schema") return json(await push.waitForSchema(body));
-      if (step === "finish_push") return json(await push.finishPush(body));
+      if (step === "finish_push") return json(await push.finishPush(body, auditActor(caller)));
       if (step === "report_push_completed") return json({});
       return requestError(404, "NotFound", `no route for ${url.pathname}`);
     } catch (e) {
@@ -1285,7 +1290,10 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          e.code === "RaceDetected" ? e.message : `Hit an error while pushing:\n${e.message}`,
+          // As Convex: a race and a message refused before the push are not "while pushing".
+          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+            ? e.message
+            : `Hit an error while pushing:\n${e.message}`,
         );
       const r = accessError(e);
       if (r) return r;
