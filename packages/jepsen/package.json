@@ -1,0 +1,22 @@
+{
+  "name": "@bunvex/jepsen",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jepsen-style tests of bunvex's consistency guarantees (STUDY-57): concurrent real clients against a real server process, a recorded history, a linearizability checker and invariants. Never published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "bunvex-jepsen": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/core": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/jepsen"
+  }
+}

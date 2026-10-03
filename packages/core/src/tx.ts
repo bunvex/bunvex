@@ -40,7 +40,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
-import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence, ScanDocs } from "./persistence/index.ts";
 import {
   checkIdentifier,
@@ -146,14 +146,14 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
   let lo = prefixVals.length ? prefix : FULL.lo;
-  let hi = prefixVals.length ? prefixEnd(prefix) : FULL.hi;
+  let hi = prefixVals.length ? afterValues(prefix) : FULL.hi;
   if (lower) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, lower.v)]);
-    lo = lower.incl ? k : prefixEnd(k);
+    lo = lower.incl ? k : afterValues(k);
   }
   if (upper) {
     const k = encodeKey([...prefixVals, keyValue(ineqField!, upper.v)]);
-    hi = upper.incl ? prefixEnd(k) : k;
+    hi = upper.incl ? afterValues(k) : k;
   }
   return { lo, hi };
 }
@@ -309,6 +309,8 @@ export class ImportIdError extends Error {
 
 export class Tx {
   private readList: Interval[] = [];
+  /** Intervals in `readList` that do not count against `databaseQueries` (`uncountedRead`). */
+  private uncountedReads = 0;
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
   readonly unsettled: ScanReads[] = [];
   /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
@@ -361,7 +363,7 @@ export class Tx {
       bytesRead: this.bytesRead,
       documentsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
-      databaseQueries: this.readList.length,
+      databaseQueries: this.readList.length - this.uncountedReads,
       functionsScheduled: this.scheduledCount,
       scheduledFunctionArgsBytes: this.scheduledBytes,
     };
@@ -579,10 +581,31 @@ export class Tx {
   /** @internal (ScanReads) */
   recordInterval(i: Interval) {
     this.readList.push(i);
-    if (!this.systemTx && this.readList.length > this.limits.databaseQueries)
+    if (!this.systemTx && this.readList.length - this.uncountedReads > this.limits.databaseQueries)
       throw new Error(
         `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
+  }
+
+  /**
+   * @internal A read Convex keeps out of a function's limits (its `system_tx_size`, backend-state.ts): `fn`'s
+   * reads are neither kept nor counted, and the whole of `index` is recorded (for OCC and subscriptions)
+   * without counting against `databaseQueries`.
+   */
+  async uncountedRead<T>(index: number, fn: () => Promise<T>): Promise<T> {
+    const [docs, bytes] = [this.docsRead, this.bytesRead];
+    try {
+      return await this.unrecorded(fn);
+    } finally {
+      [this.docsRead, this.bytesRead] = [docs, bytes];
+      this.recordUncounted(index);
+    }
+  }
+
+  /** @internal The whole of `index`, recorded without counting against `databaseQueries` (`uncountedRead`). */
+  recordUncounted(index: number) {
+    this.readList.push({ index, lo: FULL.lo, hi: FULL.hi });
+    this.uncountedReads++;
   }
 
   /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */
@@ -662,6 +685,7 @@ export class Tx {
       return null;
     }
     if (!this.checkId(table, id, method)) return null;
+    this.countRowsRead(t.name, 1);
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
     if (w) return w.next && structuredClone(w.next);
@@ -797,6 +821,7 @@ export class Tx {
       const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
       this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
+      this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
     }
     const ids = await storeCall(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
@@ -808,6 +833,7 @@ export class Tx {
         out.push(decodeDoc(json));
       }
     }
+    this.countRowsRead(t.name, out.length);
     this.retention?.check(this.snapshot);
     return out;
   }
@@ -1035,6 +1061,26 @@ export class Tx {
   private docsWritten = 0;
   private bytesWritten = 0;
 
+  /**
+   * Rows read and written per table (Convex's `TableStats`, a function's `tables_touched`): a `get` counts
+   * one read whether or not the document exists, a scan one per document it fetched, a write one. A rolled
+   * back nested call's stay counted, as Convex's. The app metrics' `table_rate` (STUDY-58).
+   */
+  readonly tableStats = new Map<string, { rowsRead: number; rowsWritten: number }>();
+
+  private tableStat(table: string) {
+    let s = this.tableStats.get(table);
+    if (!s) {
+      s = { rowsRead: 0, rowsWritten: 0 };
+      this.tableStats.set(table, s);
+    }
+    return s;
+  }
+
+  private countRowsRead(table: string, n: number) {
+    if (n > 0) this.tableStat(table).rowsRead += n;
+  }
+
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
   private checkWriteLimits(next: Doc | null) {
     if (next) {
@@ -1075,6 +1121,7 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     if (!t.name.startsWith("_")) this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
@@ -1272,6 +1319,27 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
+  tableCount: ((tablet: number) => number) | null = null;
+
+  /**
+   * The number of documents of `table` (Convex's internal `count()`, which its `tableSize` system functions
+   * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
+   * table, so a cached query or a subscription re-runs when it changes. System transactions only.
+   */
+  async countTable(table: string): Promise<number> {
+    if (!this.systemAccess) throw new Error("countTable is for system transactions");
+    const t = this.findTable(table);
+    if (!t) {
+      this.readMissingTable();
+      return 0;
+    }
+    const ix = t.indexes.get("by_creation_time")!;
+    this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
+    let n = this.tableCount ? this.tableCount(t.id) : 0;
+    for (const w of this.writes.values()) if (w.table.id === t.id) n += (w.next ? 1 : 0) - (w.old ? 1 : 0);
+    return n;
+  }
 
   /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
   writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {

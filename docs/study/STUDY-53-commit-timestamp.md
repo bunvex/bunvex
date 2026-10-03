@@ -53,3 +53,11 @@ treat it inside the mutation, and the errors above.
 |---|---|---|---|
 | T1 | A query running inside a mutation (`ctx.runQuery`) sees `db.vars` | bunvex gives nested functions the caller's transaction object; Convex gives a query a reader without `vars`. **Not done yet** | DV-267, accepted (owner, 2026-10-03) |
 | T2 | The token in arguments that do not accept it (client, scheduler, `.filter`) is refused with bunvex's value error, not Convex's "Field name $commitTs starts with '$', which is reserved." | **Not done yet**: PR 2 aligns these messages (and cron logs of results holding it) | DV-268, accepted (owner, 2026-10-03) |
+
+**As built (PR 2, DV-267 and DV-268 resolved).**
+
+- **Function arguments from clients** (HTTP API and sync) now fail as Convex's `parse_udf_args`: "Invalid arguments for `<module.js:fn>`: <the backend's message>". This holds for any argument that does not parse (the `$commitTs` token among them), with Convex's backend wording "starts with '$'".
+- **The scheduler** refuses a placeholder in the arguments with the same message, under the scheduled function's path.
+- **A `.filter` literal** holding it fails "Field name $commitTs starts with '$', which is reserved."
+- **A query run by a mutation** gets a reader view of the transaction: no `insert`/`patch`/`replace`/`delete` and no `vars`.
+- **A cron mutation's result** holding it is logged resolved; it already was, and a test now pins it.

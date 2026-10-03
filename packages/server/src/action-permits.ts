@@ -41,15 +41,32 @@ export class ActionPermits {
     );
   }
 
+  /** Running and queued executions per kind, for the app metrics' `function_concurrency` (STUDY-58). */
+  readonly outstanding = { Action: { running: 0, queued: 0 }, HttpAction: { running: 0, queued: 0 } };
+  /** Called when `outstanding` changes. */
+  onChange: ((kind: "Action" | "HttpAction") => void) | null = null;
+
   /** Run `fn` holding a permit; wait for one up to the timeout. */
-  async run<T>(fn: () => Promise<T>): Promise<T> {
+  async run<T>(fn: () => Promise<T>, kind: "Action" | "HttpAction" = "Action"): Promise<T> {
+    const o = this.outstanding[kind];
     // A permit freed while others wait goes straight to the first of them, so none can be taken in between.
-    if (this.inUse >= this.max) await this.wait();
-    else this.inUse++;
+    if (this.inUse >= this.max) {
+      o.queued++;
+      this.onChange?.(kind);
+      try {
+        await this.wait();
+      } finally {
+        o.queued--;
+      }
+    } else this.inUse++;
     if (this.inUse > this.stats.peak) this.stats.peak = this.inUse;
+    o.running++;
+    this.onChange?.(kind);
     try {
       return await fn();
     } finally {
+      o.running--;
+      this.onChange?.(kind);
       const next = this.waiting.shift();
       if (next) next();
       else this.inUse--;
