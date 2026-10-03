@@ -59,11 +59,111 @@ export function isSimpleObject(v: unknown): v is Record<string, unknown> {
   return proto === null || proto === Object.prototype || proto?.constructor?.name === "Object";
 }
 
+/**
+ * The name an error gives a value that is not plain data: its class's (`Point`, `Map`), or "" when it has
+ * none. It reads the prototype, not the value's own fields, and never throws.
+ */
+function className(value: unknown): string {
+  try {
+    const name = Object.getPrototypeOf(value)?.constructor?.name;
+    return typeof name === "string" ? name : "";
+  } catch {
+    return "";
+  }
+}
+
+/** A value an error message names but does not open (anything but plain data): `Point {…}`. */
+export const opaque = (value: unknown) => {
+  const name = className(value);
+  return name ? `${name} {…}` : "{…}";
+};
+
+// Escaping only lengthens a string, so a prefix two past the limit decides the cut.
+const quote = (s: string) =>
+  JSON.stringify(s.length > MAX_VALUE_FOR_ERROR_LEN ? s.slice(0, MAX_VALUE_FOR_ERROR_LEN + 2) : s);
+
+/**
+ * A value in an error message, as Convex's `stringifyValueForError` prints it (npm-packages/convex/src/values/
+ * value.ts): its JSON, with `undefined` as `"undefined"` and a bigint as `"5n"`, cut at
+ * MAX_VALUE_FOR_ERROR_LEN characters with `[...truncated]`.
+ *
+ * Unlike `JSON.stringify`, it opens only plain data: arrays, plain objects and their fields. A class instance,
+ * a `Map`, a `Date` or a function's context object prints as its class name and `{…}`, never its fields, and
+ * no `toJSON` or other method of it runs. Function code holds engine objects (`ctx.db`, a query) whose
+ * fields reach the transaction, the catalog and the store; serialising them put all of that in a message the
+ * client receives. A cycle prints as `"[Circular]"`, and the walk stops once the output is past the limit,
+ * so a huge or cyclic value costs no more than the message.
+ */
 export function stringifyValueForError(value: unknown): string {
-  const s = JSON.stringify(value, (_k, v) =>
-    v === undefined ? "undefined" : typeof v === "bigint" ? `${v.toString()}n` : v,
-  );
-  if (s === undefined || s.length <= MAX_VALUE_FOR_ERROR_LEN) return String(s);
+  const out: string[] = [];
+  let length = 0;
+  const ancestors = new Set<object>();
+  const emit = (s: string) => {
+    out.push(s);
+    length += s.length;
+  };
+  const full = () => length > MAX_VALUE_FOR_ERROR_LEN;
+  // `JSON.stringify`'s rules for a member: undefined is "undefined"; a function or a symbol is left out of an
+  // object, null in an array, and the whole output is `undefined` at the top.
+  const skipped = (v: unknown) => typeof v === "function" || typeof v === "symbol";
+  // A scalar's text, or what an object prints as when it is not opened; null for an array or a plain object.
+  const closed = (v: unknown): string | null => {
+    if (v === undefined) return '"undefined"';
+    if (v === null) return "null";
+    switch (typeof v) {
+      case "bigint":
+        return `"${v.toString()}n"`;
+      case "number":
+      case "boolean":
+        return JSON.stringify(v);
+      case "string":
+        return quote(v);
+    }
+    const o = v as object;
+    if (ancestors.has(o)) return '"[Circular]"';
+    if (isBytes(o)) return "{}"; // what `JSON.stringify` prints for bytes
+    if (!Array.isArray(o) && !isSimpleObject(o)) return opaque(o);
+    return null;
+  };
+  const write = (v: unknown) => {
+    if (full()) return;
+    const text = closed(v);
+    if (text !== null) {
+      emit(text);
+      return;
+    }
+    const o = v as object;
+    ancestors.add(o);
+    if (Array.isArray(o)) {
+      emit("[");
+      for (let i = 0; i < o.length && !full(); i++) {
+        if (i > 0) emit(",");
+        const e = o[i];
+        if (skipped(e)) emit("null");
+        else write(e);
+      }
+      emit("]");
+    } else {
+      emit("{");
+      let first = true;
+      for (const k in o) {
+        if (full()) break;
+        if (!Object.hasOwn(o, k)) continue;
+        const e = (o as Record<string, unknown>)[k];
+        if (skipped(e)) continue;
+        if (!first) emit(",");
+        first = false;
+        emit(`${quote(k)}:`);
+        write(e);
+      }
+      emit("}");
+    }
+    ancestors.delete(o);
+  };
+  if (skipped(value)) return "undefined";
+  write(value);
+  const s = out.join("");
+  if (s.length <= MAX_VALUE_FOR_ERROR_LEN) return s;
   const rest = "[...truncated]";
   let at = MAX_VALUE_FOR_ERROR_LEN - rest.length;
   const cp = s.codePointAt(at - 1);
@@ -104,7 +204,9 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (value instanceof Set) throw new Error(unsupported(context, "Set", [...value], original));
   if (value instanceof Map) throw new Error(unsupported(context, "Map", [...value], original));
   if (!isSimpleObject(value)) {
-    const name = (value as { constructor?: { name?: string } })?.constructor?.name;
+    // An object prints as `Name {…}` (stringifyValueForError); a function or a symbol as its kind's name and
+    // `undefined`, as Convex's message does.
+    const name = typeof value === "object" ? "" : className(value);
     throw new Error(unsupported(context, name ? `${name} ` : "", value, original));
   }
   const out: Record<string, JSONValue> = {};
