@@ -9,6 +9,7 @@ import {
   checkEnvVarName,
   type Engine,
   failExecution,
+  isQueryObject,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -290,6 +291,19 @@ export const mutation = mutationGeneric;
 export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
+
+/**
+ * Convex's `validateReturnValue` (registration_impl.ts, STUDY-66 §3): a query or mutation that returns a query
+ * object, not its results, fails before its result is validated.
+ */
+async function notAQuery(result: unknown): Promise<unknown> {
+  const value = await result;
+  if (isQueryObject(value))
+    throw new Error(
+      "Return value is a Query. Results must be retrieved with `.collect()`, `.take(n), `.unique()`, or `.first()`.",
+    );
+  return value;
+}
 
 /** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
 const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
@@ -899,8 +913,10 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return inHandleScope({ db, engine: this.engine }, () =>
-      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    return notAQuery(
+      inHandleScope({ db, engine: this.engine }, () =>
+        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+      ),
     );
   }
 

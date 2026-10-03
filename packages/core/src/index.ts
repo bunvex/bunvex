@@ -258,6 +258,7 @@ export { SystemReader } from "./system-reader.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   ImportIdError,
+  isQueryObject,
   type PaginationOptions,
   type PaginationResult,
   type Savepoint,

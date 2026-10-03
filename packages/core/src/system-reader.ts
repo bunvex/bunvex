@@ -66,7 +66,7 @@ export class SystemReader {
   }
 }
 
-class ProjectedQuery implements TxQuery {
+export class ProjectedQuery implements TxQuery {
   constructor(
     private readonly table: string,
     private readonly q: TxQuery,

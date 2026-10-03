@@ -60,7 +60,7 @@ Key bunvex facts behind the statuses:
 | `.unique()`: returns null or the only row, and throws if there are ≥2 | impl/query_impl.ts | done (#40) | |
 | Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | done (#40) | Reusing or rechaining throws Convex's "This query has been chained with another operator and can't be reused."; iteration only once. |
-| Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | missing | |
+| Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | done (STUDY-66) | Convex's message, for the top-level result of a query or mutation (`db.query` and its operators, `db.system.query`), before `returns` is checked. |
 | `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
 | `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | done (STUDY-45) | `SearchFilterBuilder` (`search` then `eq`s, single use), Convex's checks of the index and filters; the index is in memory, rebuilt at start (DV-227, DV-228). |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | done (STUDY-45) | BM25 ranking in relevance order, `order()` refused; the last term also matches as a prefix (DV-231). Reactive, with Convex's search read set (DV-230). |
@@ -355,7 +355,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 206 |
+| done | 207 |
 | partial | 10 |
-| missing | 23 |
+| missing | 22 |
 | **total** | **239** |

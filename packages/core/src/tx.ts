@@ -59,7 +59,7 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
-import { SystemReader } from "./system-reader.ts";
+import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
 
@@ -1655,6 +1655,14 @@ export class SearchFilterBuilder {
   filters(): SearchFilter[] {
     return this.parts;
   }
+}
+
+/**
+ * Whether `value` is a query object (`db.query(…)` and its operators, `db.system.query(…)`): what Convex's
+ * `validateReturnValue` refuses as a function's result (STUDY-66 §3).
+ */
+export function isQueryObject(value: unknown): boolean {
+  return value instanceof QueryImpl || value instanceof ProjectedQuery;
 }
 
 class QueryImpl implements TxQuery {
