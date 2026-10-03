@@ -117,8 +117,8 @@ Key bunvex facts behind the statuses:
 | `api` / `internal` function references (`anyApi`, codegen), `makeFunctionReference`, `getFunctionName`, `filterApi` | server/api.ts | partial (STUDY-26, STUDY-36) | `anyApi`, `makeFunctionReference`, `getFunctionName` and codegen's `api` / `internal`; references accepted everywhere a name is. The runtime `filterApi` helper is missing (the `FilterApi` type exists). |
 | Typed `FunctionArgs` / `FunctionReturnType`, `ApiFromModules`, `FilterApi`, `FunctionReferenceFromExport` | server/api.ts | done (STUDY-36) | `_generated/api.d.ts` (codegen PR) builds `api` / `internal` with them; `FunctionReference_future` is missing. |
 | Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | done (STUDY-36) | `queryGeneric` … `httpActionGeneric`, `QueryBuilder<DataModel, Visibility>` …, `GenericQueryCtx` / `GenericMutationCtx` / `GenericActionCtx`, `RegisteredQuery` … typed from the validators; codegen writes `_generated/server` bound to the DataModel. Convex's markers at run time (`isQuery`, `isPublic`, …), with `isBunvexFunction` for `isConvexFunction` (rule 5). |
-| Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | missing | Minor. |
-| Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | missing | Minor. |
+| Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | done (STUDY-66) | A registered function is callable: it warns (the caller's log line) and runs its handler, as Convex's; bunvex's wording, no docs link. |
+| Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | done (STUDY-66) | `console.error` when defined in a real browser (native `window` getter); the opt-out is `window.__bunvexAllowFunctionsInBrowser` (the naming rule). |
 | `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | partial (STUDY-35) | The push analysis records each function's `args` / `returns` validator JSON (Convex's `AnalyzedFunction`), for the dashboard and `_system` functions; the `exportArgs()` / `exportReturns()` methods on a registered function are missing. |
 
 ### 6. Function contexts
@@ -355,7 +355,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 206 |
+| done | 208 |
 | partial | 10 |
-| missing | 23 |
+| missing | 21 |
 | **total** | **239** |
