@@ -336,6 +336,37 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
+/**
+ * A mutation stops once its `deadline` is set (a WebSocket mutation's 60 s limit, STUDY-64 §1.1): checked
+ * before each attempt and after the handler returns, so it never commits after the limit unless it had
+ * already reached the committer — what Convex's dropped future does. `mutationBody` checks it itself; this
+ * wraps a system mutation's body.
+ */
+function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | undefined): (db: Tx) => Promise<T> {
+  if (!deadline) return body;
+  return async (db) => {
+    checkDeadline(deadline);
+    const value = await body(db);
+    checkDeadline(deadline);
+    return value;
+  };
+}
+
+function checkDeadline(deadline: Deadline | undefined) {
+  if (deadline?.aborted) throw new MutationAbortedError();
+}
+
+/** Set once a mutation must stop (its WebSocket's time limit passed); checked between its steps. */
+export type Deadline = { aborted: boolean };
+
+/** A mutation stopped by its `Deadline`: nobody waits for its answer any more. */
+class MutationAbortedError extends Error {
+  override name = "MutationAbortedError";
+  constructor() {
+    super("The mutation was stopped: its time limit passed");
+  }
+}
+
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
 const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
 /** The same for a result already as JSON: its length. */
@@ -828,15 +859,23 @@ export class Functions {
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
    */
-  private mutationBody(resolved: () => FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
+  private mutationBody(
+    resolved: () => FunctionDef & { kind: "mutation" },
+    args: unknown,
+    job?: string,
+    deadline?: Deadline,
+  ) {
     return perAttempt(async (db: Tx) => {
+      checkDeadline(deadline);
       noteTx(db);
       await this.failWhileNotRunning(db);
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
-      return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+      const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+      checkDeadline(deadline);
+      return value;
     });
   }
 
@@ -1264,17 +1303,22 @@ export class Functions {
     args: unknown,
     fromClient = true,
     caller?: Caller,
+    deadline?: Deadline,
   ): Promise<{ value: unknown; ts: number }> {
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
     if (isSystemPath(name))
-      return this.engine.mutationWithTs(this.systemMutationBody(name, args, fromClient, caller), name, caller);
+      return this.engine.mutationWithTs(
+        untilAborted(this.systemMutationBody(name, args, fromClient, caller), deadline),
+        name,
+        caller,
+      );
     return this.logged(
       "Mutation",
       name,
       caller,
       () =>
         this.engine.mutationWithTs(
-          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args),
+          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline),
           name,
           caller,
         ),
@@ -1291,12 +1335,13 @@ export class Functions {
     args: unknown,
     request: SessionRequestId,
     caller?: Caller,
+    deadline?: Deadline,
   ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
     const run = () =>
       this.engine.sessionMutation(
         isSystemPath(name)
-          ? this.systemMutationBody(name, args, true, caller)
-          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args),
+          ? untilAborted(this.systemMutationBody(name, args, true, caller), deadline)
+          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args, undefined, deadline),
         name,
         request,
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
