@@ -42,6 +42,7 @@ describe("catalog (_tables / _index)", () => {
           _modules: 521,
           _source_packages: 524,
           _environment_variables: 525,
+          _deployment_audit_log: 527,
           _session_requests: 529,
           _cron_jobs: 531,
           _schemas: 532,

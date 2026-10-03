@@ -180,7 +180,6 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-215 | Export has only the root; a ZIP with `_components/…` is refused on import | creates the components | yes (components only) | accept until components | owner, 2026-10-02 (as recommended) | [STUDY-42 X1](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-216 | The ZIP's README and the messages in bunvex's words, without Convex's links | Convex's text | yes (text) | rule 5 | owner, 2026-10-02 (as recommended) | [STUDY-42 X2](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-217 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | owner, 2026-10-02 (as recommended) | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
-| DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one (a legacy table with no documents imports) | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-226 | The system query that gives the CLI the API's URL is `_system/cli/deploymentUrl:cloudUrl` | `_system/cli/convexUrl:cloudUrl` | no (CLI only) | rule 5: no "convex" in shipped strings | owner, 2026-10-02 (as recommended) | [platform §CLI](platform.md) |
 | DV-227 | Search indexes live in memory only, rebuilt from the table at every start (searches meanwhile get `IndexBackfillingError`) | disk segments plus a memory part | yes (memory; searches unavailable while a big table is indexed at start) | no segment store yet; persisted later | owner, 2026-10-02 (as recommended) | [STUDY-45 S1](../study/STUDY-45-text-search.md#4-divergences) |
@@ -259,6 +258,7 @@ Kept so the history is in one place.
 | DV-78 | A system error during a WebSocket mutation is that mutation's error | As Convex on protocol v1: the connection closes with 1011 `InternalServerError`; v0 is gone | yes | owner, 2026-09-30 (#50, v0 deleted) | [STUDY-20 D6](../study/STUDY-20-function-errors-and-logs.md#4-divergences) |
 | DV-88 | Database selection read only bunvex's env names (`PERSISTENCE`, `PERSISTENCE_URL`) | As Convex's image: without `PERSISTENCE`, `POSTGRES_URL`, then `MYSQL_URL`, then `DATABASE_URL` (Postgres, deprecated, warns) select the driver; empty is unset. bunvex's names win when both are set. `PG_CA_FILE` / `MYSQL_CA_FILE` too. The database-name part is DV-110 | operational | owner, 2026-10-01 (#116) | [platform §22](platform.md#22-deployment-state-health-self-hosted-configuration), [STUDY-25 §3.7](../study/STUDY-25-persistence-lifecycle.md#37-database-selection-and-tls-l8-built) |
 | DV-109 | Postgres and MySQL URLs were used as given: no TLS or session defaults | As Convex: TLS required, chain and host name verified (system and bundled roots plus `PG_CA_FILE` / `MYSQL_CA_FILE`); a weaker `sslmode` in the URL does not lift it; `DO_NOT_REQUIRE_SSL` (any non-empty value) does, and Postgres then prefers TLS. Postgres sessions `target_session_attrs=read-write`; a read-only MySQL refused at open | operational | owner, 2026-10-01 (#116) | [STUDY-25 L8](../study/STUDY-25-persistence-lifecycle.md#4-divergences), [§1.6](../study/STUDY-25-persistence-lifecycle.md#16-database-selection-and-tls-l8) |
+| DV-218 | No audit-log entries for exports and imports | As Convex: `request_export`, `set_export_expiration`, `cancel_export` and `snapshot_import`, in the change's transaction (`_deployment_audit_log`) | dashboard only | owner, 2026-10-02 (STUDY-42 X4: until an audit log) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences), [STUDY-48](../study/STUDY-48-audit-log.md) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -301,6 +301,14 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
+DV-260–DV-262 (STUDY-48 A1–A3, the audit log) await the owner; the PR implements each recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-260 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit. Accept | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
+| DV-261 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR. Accept until then | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
+| DV-262 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42). Accept | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
+
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
@@ -314,7 +322,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Log streaming** (item 12) | DV-77, DV-141, DV-184 | stop printing captured log lines to stdout; scheduled and cron runs' lines in the log stream; `dev --tail-logs` on by default (`pause-on-deploy`) |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
-| **An audit log** | DV-218 | audit-log entries for exports and imports (and Convex's other events) |
+| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, canonical URLs, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |

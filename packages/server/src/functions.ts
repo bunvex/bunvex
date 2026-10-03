@@ -325,6 +325,12 @@ export class Functions {
     return env ? withAllEnv(env.all, env.read, fn) : fn();
   }
 
+  /**
+   * The audit log's retention in days (STUDY-48), as Convex's `_backend_info.auditLogRetentionDays`: -1
+   * keeps everything, null means no audit log access. Set by `createServer`.
+   */
+  auditLogRetentionDays: number | null = -1;
+
   /** Where files go (STUDY-32); set by `createServer`. */
   fileStorage: FileStorage | null = null;
 
@@ -733,7 +739,7 @@ export class Functions {
     if (fromClient) this.systemAccess(n, q, "ViewData", caller);
     else if (!q) throw notFound(n);
     const a = this.systemArgs(args, q!.args);
-    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage, functions: this });
+    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
   }
 
   private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
@@ -742,7 +748,7 @@ export class Functions {
     if (fromClient) this.systemAccess(n, m, "WriteData", caller);
     else if (!m) throw notFound(n);
     const a = this.systemArgs(args, m!.args);
-    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage, functions: this });
+    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
   }
 
   /** A dashboard system query, in process (as the system: no key involved). */

@@ -12,6 +12,7 @@ import {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   finishCatalog,
@@ -481,6 +482,11 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: DEPLOYMENT_AUDIT_LOG_TABLE,
+        indexes: { by_action_and_creation_time: ["action", "_creationTime"] },
+        document: v.any(),
+      },
     ];
     return [...systemTables, ...schema.tables.values()];
   }
@@ -933,14 +939,15 @@ export class Engine {
    * not exist is skipped; a system table is refused; one the active schema declares, or points to with
    * `v.id`, is refused with Convex's `SchemaEnforcementError` messages; a pending schema that does fails.
    */
-  async deleteTables(names: string[]) {
+  /** `body` runs in the deletion's transaction (the server records its audit-log event there). */
+  async deleteTables(names: string[], body?: (db: Tx) => Promise<void>) {
     for (const name of names) {
       if (name.startsWith("_")) throw new Error(`cannot delete system table ${name}`);
       const refusal = deletionRefusal(this.schema, name);
       if (refusal) throw new SchemaEnforcementError(refusal);
     }
     const pending = this.pendingPush;
-    await this.activateTables([], names);
+    await this.activateTables([], names, body);
     if (pending)
       for (const name of names) {
         const refusal = deletionRefusal(pending.schema, name);

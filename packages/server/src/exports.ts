@@ -11,9 +11,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Engine, EXPORTS_TABLE, STORAGE_TABLE, type Tx } from "@bunvex/core";
+import {
+  type AuditLogActor,
+  type Engine,
+  EXPORTS_TABLE,
+  insertAuditLogEvents,
+  STORAGE_TABLE,
+  SYSTEM_ACTOR,
+  type Tx,
+} from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { formatExportFloat, toExportJson, type Value } from "@bunvex/values";
+import { auditEvents } from "./audit-log.ts";
 import { ZipFileWriter } from "./zip-writer.ts";
 
 const NS_PER_MS = 1_000_000n;
@@ -152,7 +161,7 @@ export class ExportService {
   }
 
   /** Convex's `request_export`: one at a time. */
-  async request(includeStorage: boolean): Promise<string> {
+  async request(includeStorage: boolean, actor: AuditLogActor = SYSTEM_ACTOR): Promise<string> {
     const id = await this.sys(async (db) => {
       for (const state of ["requested", "in_progress"])
         if (
@@ -162,13 +171,15 @@ export class ExportService {
             .first()
         )
           throw new ExportError(400, "ExportInProgress", "There is already an export requested or in progress.");
-      return db.insert(EXPORTS_TABLE, {
+      const id = await db.insert(EXPORTS_TABLE, {
         state: "requested",
         format: { format: "zip", include_storage: includeStorage },
         component: null,
         requestor: "snapshotExport",
         expiration_ts: this.nowNs() + EXPORT_RETENTION_NS,
       });
+      await insertAuditLogEvents(db, [auditEvents.requestExport(id, includeStorage)], actor);
+      return id;
     }, true);
     this.wake?.();
     return id;
@@ -438,7 +449,7 @@ export class ExportService {
   }
 
   /** Convex's `set_export_expiration`: completed exports only, not in the past, at most 60 days ahead. */
-  async setExpiration(id: string, expirationTsNs: bigint) {
+  async setExpiration(id: string, expirationTsNs: bigint, actor: AuditLogActor = SYSTEM_ACTOR) {
     const now = this.nowNs();
     if (expirationTsNs < now) throw new ExportError(400, "InvalidExpiration", "Snapshot expiration in past.");
     const days = (expirationTsNs - now) / DAY_NS;
@@ -449,11 +460,14 @@ export class ExportService {
         `Snapshot expiration is ${days} days in the future. Must be <= ${MAX_EXPIRATION_DAYS}`,
       );
     const row = await this.completed(id);
-    await this.patch(row._id, { expiration_ts: expirationTsNs });
+    await this.sys(async (db) => {
+      await db.patch(EXPORTS_TABLE, row._id, { expiration_ts: expirationTsNs });
+      await insertAuditLogEvents(db, [auditEvents.setExportExpiration(id, expirationTsNs / 1_000_000n)], actor);
+    }, true);
   }
 
   /** Convex's `cancel_export`: a requested or running export stops. */
-  async cancel(id: string) {
+  async cancel(id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
     await this.sys(async (db) => {
       const nid = db.normalizeId(EXPORTS_TABLE, id);
       const row = nid ? ((await db.get(EXPORTS_TABLE, nid)) as unknown as ExportRow | null) : null;
@@ -465,6 +479,7 @@ export class ExportService {
         canceled_ts: this.nowNs(),
         progress_message: undefined,
       });
+      await insertAuditLogEvents(db, [auditEvents.cancelExport(id)], actor);
     }, true);
   }
 

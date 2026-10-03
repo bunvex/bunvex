@@ -1,10 +1,17 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
 
+export {
+  type AuditLogActor,
+  type AuditLogEvent,
+  insertAuditLogEvents,
+  SYSTEM_ACTOR,
+} from "./audit-log.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   IndexBackfillingError,
