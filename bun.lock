@@ -123,6 +123,7 @@
       "name": "@bunvex/core",
       "version": "0.1.0-alpha.0",
       "dependencies": {
+        "@bunvex/search": "workspace:*",
         "@bunvex/values": "workspace:*",
         "sorted-btree": "^2.1.0",
       },
@@ -208,6 +209,13 @@
       },
       "peerDependencies": {
         "react": "^19.3.0",
+      },
+    },
+    "packages/search": {
+      "name": "@bunvex/search",
+      "version": "0.1.0-alpha.0",
+      "dependencies": {
+        "@bunvex/values": "workspace:*",
       },
     },
     "packages/server": {
@@ -402,6 +410,8 @@
     "@bunvex/protocol": ["@bunvex/protocol@workspace:packages/protocol"],
 
     "@bunvex/react": ["@bunvex/react@workspace:packages/react"],
+
+    "@bunvex/search": ["@bunvex/search@workspace:packages/search"],
 
     "@bunvex/server": ["@bunvex/server@workspace:packages/server"],
 

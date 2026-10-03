@@ -19,7 +19,9 @@ const APPS = join(ROOT, "apps");
 /** Which @bunvex packages each package may import (by directory name; apps as "apps/<dir>"). */
 const ALLOWED: Record<string, string[]> = {
   values: [],
-  core: ["values"],
+  // STUDY-45 (owner, 2026-10-02: search in a package of its own): the tokenizer, index and ranking.
+  search: ["values"],
+  core: ["values", "search"],
   persistence: ["core"],
   "persistence-conformance": ["core", "values"],
   protocol: [],
