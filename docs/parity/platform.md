@@ -104,7 +104,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | `cronJobs()` with `interval`, `hourly`, `daily`, `weekly`, `monthly`, `cron("m h dom mon dow")` | `npm/convex/server/cron.ts` | done (STUDY-30) | Convex's messages. Cron strings follow saffron exactly (its quirks included), checked against saffron itself on 7143 cases. |
 | Defined as the default export of `convex/crons.ts`, validated at analyze time | `crates/isolate/environment/analyze.rs`; `application_function_runner` `validate_cron_jobs` | partial (STUDY-30) | `createServer({ crons })`, checked at start with Convex's messages (S1, DV-139); `crons.ts` discovery comes with the CLI. |
-| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | The last 5 logs per cron; results and log lines truncated to 1000 chars. |
+| `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | Convex's three tables and indexes; not visible to apps. |
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
 | Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
 | No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
@@ -168,8 +168,8 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `process.env.X` inside functions | `udf-runtime/00_misc.ts`; `crates/isolate/ops/environment_variables.rs` | done (STUDY-37) | Pushed code: Convex's isolate proxy (one name at a time, lists nothing, a name that does not parse throws); `"use node"` sees the allowlist (`PATH`, `PWD`, `LANG`, `NODE_PATH`, `TZ`, `UTC`) plus the deployment's, listable. Embedded servers' functions see the host's `process.env` (DV-180). Measured: +0.6 µs per uncached query of pushed code (`packages/server/bench/env-vars.ts`). |
 | Env reads are in the read set; changes invalidate subscriptions and the cache | `crates/udf/environment.rs` `PreloadedEnvVars` | done (STUDY-37) | Each name read records its `by_name` range (a missing name too); the variables of a snapshot come from a cache the committer invalidates; actions read them once, at their start. |
 | Limits: name `^[a-zA-Z_][a-zA-Z0-9_]*$` up to 256, value 8 KiB, 512 vars, 512 KiB total | `crates/common/types/environment_variables.rs`; knobs `ENV_VAR_*` | done (STUDY-37) | Convex's codes and messages. Not knobs (fixed). |
-| Built-ins `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` (not overridable; canonical URL overrides) | `crates/udf/environment.rs`; `/api/update_canonical_url`; `_canonical_urls` | missing | |
-| `POST /api/update_environment_variables`, `GET /api/list_environment_variables` (+ `/api/v1`) | `crates/local_backend/environment_variables.rs` | missing | |
+| Built-ins `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` (not overridable; canonical URL overrides) | `crates/udf/environment.rs`; `/api/update_canonical_url`; `_canonical_urls` | partial | `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL` from the server's origins (rule 5 names, STUDY-37), not overridable by a deployment variable. No canonical URL overrides (`/api/update_canonical_url`, `_canonical_urls`). |
+| `POST /api/update_environment_variables`, `GET /api/list_environment_variables` (+ `/api/v1`) | `crates/local_backend/environment_variables.rs` | done (STUDY-37) | Both routes and their `/api/v1` forms, with Convex's operations, limits and messages (`server.ts` `envRoute`). |
 | Component env declarations (`defineComponent({env})`, `app.use(c,{env})`) | `npm/convex/server/components/index.ts` | missing | Only the root sees user vars. |
 
 ### 11. Components
@@ -227,8 +227,8 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | Skipping unchanged modules (`get_config_hashes`) | `/api/get_config_hashes` | done (STUDY-35) | `{ moduleHashes: [{ path, hash, environment }] }`; unchanged modules are taken from the stored package, with Convex's 409s (`MissingExistingModule`, `ExistingModuleHashConflict`, `ExistingModuleEnvConflict`). |
 | Schema push: diff indexes, add pending indexes, enable on finish | `crates/database/bootstrap_model/index.rs` | done (STUDY-35) | `Engine.startSchemaPush` (tables created, indexes backfilling, the schema `pending` in `_schemas`, an older pending one `overwritten`), `schemaPushStatus` (Convex\'s `wait_for_schema` states), `commitSchemaPush` (enable, disable staged, drop, `active`, and the push\'s own writes in ONE commit; validators switch then). A deployable engine restarts on its active schema (`storedSchema`). The endpoints come in the next PR. |
 | Schema validation of existing documents on push (Pending, Validated, Active, Failed) | `crates/application/schema_worker`; `crates/common/schemas` | done (STUDY-35) | Convex's states in `_schemas`; the walk covers the tables whose validator changed (or whose validation was off), and its first failure is `Document with ID "…" in table "…" does not match the schema: …`; a write while the schema is pending lands but fails it, as Convex's `enforce`; `finish_push` needs `validated`. No shape inference to skip walks. |
-| `schemaValidation: false`, `strictTableNameTypes` | `npm/convex/server/schema.ts` | missing | |
-| Large-backfill guard (100k docs) and `staged` indexes | `cli/lib/checkForLargeIndexBackfill.ts` | missing | |
+| `schemaValidation: false`, `strictTableNameTypes` | `npm/convex/server/schema.ts` | done (STUDY-14, STUDY-36) | `defineSchema(tables, { schemaValidation, strictTableNameTypes })` (`core/src/schema.ts`): validation off skips document checks; the option shapes the generated data model's types. |
+| Large-backfill guard (100k docs) and `staged` indexes | `cli/lib/checkForLargeIndexBackfill.ts` | partial | Staged indexes are built (STUDY-29, #115). The CLI's large-backfill guard (`--skip-large-indexes-check`) is not. |
 | Push limits: 200 MB request, 4096 modules, 90 MB zipped / 230 MB unzipped | knobs `MAX_PUSH_BYTES` etc. | partial (STUDY-35) | 4096 modules checked at load; the byte limits come with the push endpoints. |
 | Analyze timeout 4 s | `ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS` | done (STUDY-35) | `SourceTextModule.evaluate({ timeout })`. |
 
@@ -262,14 +262,14 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Table | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `_storage` (virtual) / `_file_storage` | `crates/model/file_storage` | missing | Readable by apps via `db.system`. |
-| `_scheduled_functions` (virtual) / `_scheduled_jobs` / `_scheduled_job_args` | `crates/model/scheduled_jobs` | missing | Readable by apps via `db.system`. |
+| `_storage` (virtual) / `_file_storage` | `crates/model/file_storage` | done (STUDY-32) | One table, `_storage`, holding Convex's public fields and the hidden ones (UUID, blob key); apps read the public ones through `db.system`. Since #216 it has Convex's number (540). |
+| `_scheduled_functions` (virtual) / `_scheduled_jobs` / `_scheduled_job_args` | `crates/model/scheduled_jobs` | done (STUDY-30) | One table, `_scheduled_functions`, with the arguments inside (Convex splits them into `_scheduled_job_args`); apps read it through `db.system`; the dashboard's queries give Convex's `_scheduled_jobs` shape. |
 | `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` | `crates/model/cron_jobs` | missing | |
 | `_tables`, `_index`, `_index_backfills`, `_index_worker_metadata` | `crates/common/bootstrap_model`; `crates/database/bootstrap_model` | partial (#6) | `_tables` and `_index` exist; the other two do not. |
-| `_schemas`, `_schema_validations`, `_schema_validation_progress` | `crates/database/bootstrap_model/schema` | missing | |
-| `_modules`, `_source_packages`, `_udf_config`, `_external_deps_packages` | `crates/model/modules` etc. | missing | |
+| `_schemas`, `_schema_validations`, `_schema_validation_progress` | `crates/database/bootstrap_model/schema` | partial | `_schemas` with Convex's states (STUDY-35). The validation progress tables are not kept: a pending schema's walk reports its progress in memory. |
+| `_modules`, `_source_packages`, `_udf_config`, `_external_deps_packages` | `crates/model/modules` etc. | partial | `_modules`, `_source_packages`, `_udf_config` as Convex's (STUDY-35). No `_external_deps_packages` (Node actions, Phase 4). |
 | `_auth` | `crates/model/auth` | missing | |
-| `_environment_variables` | `crates/model/environment_variables` | missing | |
+| `_environment_variables` | `crates/model/environment_variables` | done (STUDY-37) | `{ name, value }`, indexed `by_name`, as Convex's. |
 | `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | missing | |
 | `_session_requests` | `crates/model/session_requests` | done (STUDY-23) | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | done (STUDY-42) | Convex's fields, states and indexes (timestamps in ns); `_snapshot_imports` also keeps the upload's size (`object_size`, not returned by `queryImport`). |
