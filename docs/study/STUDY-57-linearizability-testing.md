@@ -104,8 +104,10 @@ Written from the papers, not from any implementation:
   linearizability is local, so each register is checked alone.
 - *Info* operations get an infinite return time: they may take effect at any point after their invocation,
   or never.
-- A violation is shrunk (delta debugging, Zeller & Hildebrandt 2002) to a small history that still fails,
-  keeping it well-formed (every value read was written in it).
+- A violation is shrunk to a small history that still fails, in two steps that cannot *invent* one (dropping
+  a write could: a compare-and-set that failed because of it would then look wrong): the shortest failing
+  prefix in time (operations still running at the cut become unanswered), then delta debugging (Zeller &
+  Hildebrandt 2002) over the operations that leave the state unchanged — reads and failed compare-and-sets.
 
 ### 3.5 What it catches (sabotage)
 
@@ -113,7 +115,8 @@ Each of these was introduced on purpose and caught with seed 1 on the memory sto
 
 | Sabotage | Caught as |
 |---|---|
-| The committer skips OCC validation (`committer.ts`) | lost updates on registers (shrunk to 5 ops: a write lost under a concurrent compare-and-set), bank totals of 487, inconsistent snapshots, duplicate rows |
+| The committer skips OCC validation (`committer.ts`) | non-linearizable registers (a write lost under a concurrent compare-and-set), bank totals of 487, inconsistent snapshots, duplicate rows |
+| The shrinker drops any operation (the first version) | `test/linearizability.test.ts`: a "minimal" history that blames a correct compare-and-set |
 | The server runs a connection's mutations concurrently (`sync.ts`) | "client 3's mutation 3 committed after its mutation 5" |
 | The client resolves a mutation on its response, before the covering transition (`request-manager.ts`) | "client 3 wrote 3000002 to own3, its subscription showed null" |
 

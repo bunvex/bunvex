@@ -113,4 +113,19 @@ describe("register linearizability", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.minimal.length).toBeLessThanOrEqual(3);
   });
+
+  test("shrinking never drops a write that explains another operation (it would invent a violation)", () => {
+    const explains = op("write", { value: 2 }, 2, 3);
+    const stale = op("read", {}, 6, 7, 1); // the real violation: a stale read after the write of 2
+    const ops = [
+      op("write", { value: 1 }, 0, 1),
+      explains,
+      op("cas", { from: 1, to: 5 }, 4, 5, false), // right: the value is 2 by then
+      stale,
+    ];
+    const res = checkRegisters(ops);
+    expect(res.ok).toBe(false);
+    // without the write of 2, the failed compare-and-set would look wrong: a false witness
+    if (!res.ok) expect(res.minimal).toEqual(expect.arrayContaining([explains, stale]));
+  });
 });

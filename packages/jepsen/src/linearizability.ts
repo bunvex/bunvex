@@ -183,17 +183,37 @@ export function checkRegisters(ops: readonly Op[]): LinearizabilityResult {
 }
 
 /**
- * Shrink a non-linearizable history to a small one that still fails, delta-debugging style (Zeller &
- * Hildebrandt, "Simplifying and isolating failure-inducing input", TSE 2002): try dropping chunks, halving the
- * chunk size down to single operations; stop after `budgetMs`.
+ * Shrink a non-linearizable history to a small one that still fails, in two steps that never *create* a
+ * violation (dropping a write could: a compare-and-set that failed because of it would then fail for no
+ * reason, and the "minimal" history would blame the wrong thing):
+ *   1. the shortest failing prefix in time: only the operations invoked by some time T, those still running
+ *      at T made unanswered ("info": they may or may not take effect) and unanswered reads dropped. A
+ *      linearizable history has linearizable prefixes, since what was invoked after T is ordered after
+ *      every operation that returned before it;
+ *   2. then, delta-debugging style (Zeller & Hildebrandt, "Simplifying and isolating failure-inducing input",
+ *      TSE 2002), drop the operations that leave the state as they found it — reads and failed
+ *      compare-and-sets: dropping them only removes constraints. Chunks first, halving down to single
+ *      operations; stop after `budgetMs`.
  */
 export function shrink(ops: Op[], budgetMs = 3000): Op[] {
   const t = performance.now();
-  let current = ops.slice();
+  const times = [...new Set(ops.map((o) => o.start))].sort((a, b) => a - b);
+  let lo = 0;
+  let hi = times.length - 1; // the whole history fails: its last invocation is a failing cut
+  while (lo < hi && performance.now() - t < budgetMs) {
+    const mid = (lo + hi) >> 1;
+    if (isLinearizable(prefix(ops, times[mid]!), registerModel)) lo = mid + 1;
+    else hi = mid;
+  }
+  let current = prefix(ops, times[hi]!);
+  if (isLinearizable(current, registerModel)) current = ops.slice(); // not monotonic here: keep it all
+  const droppable = (op: Op) =>
+    op.f === "reg:read" || (op.f === "reg:cas" && op.status === "ok" && op.result === false);
   for (let size = Math.max(1, Math.floor(current.length / 2)); size >= 1; size = Math.floor(size / 2)) {
     for (let i = 0; i < current.length && performance.now() - t < budgetMs; ) {
+      const chunk = current.slice(i, i + size);
       const without = current.slice(0, i).concat(current.slice(i + size));
-      if (without.length && wellFormed(without) && !isLinearizable(without, registerModel)) current = without;
+      if (chunk.every(droppable) && !isLinearizable(without, registerModel)) current = without;
       else i += size;
     }
     if (size === 1 || performance.now() - t >= budgetMs) break;
@@ -201,20 +221,13 @@ export function shrink(ops: Op[], budgetMs = 3000): Op[] {
   return current;
 }
 
-/**
- * A shrunk history must still explain its reads: every value read (or expected by a compare-and-set) is
- * written by an operation in it. Otherwise dropping the writes would "shrink" any history to one bare read.
- */
-function wellFormed(ops: readonly Op[]): boolean {
-  const written = new Set<unknown>([null]);
+/** The operations invoked by `time`; one still running then becomes unanswered (a read: dropped). */
+function prefix(ops: readonly Op[], time: number): Op[] {
+  const out: Op[] = [];
   for (const op of ops) {
-    const a = op.args as { value?: number; to?: number };
-    if (op.f === "reg:write") written.add(a.value);
-    if (op.f === "reg:cas") written.add(a.to);
+    if (op.start > time) continue;
+    if (op.end <= time) out.push(op);
+    else if (op.f !== "reg:read") out.push({ ...op, status: "info", end: Infinity, result: undefined });
   }
-  return ops.every((op) => {
-    if (op.f === "reg:read") return written.has(op.result);
-    if (op.f === "reg:cas" && op.result === true) return written.has((op.args as { from?: unknown }).from);
-    return true;
-  });
+  return out;
 }
