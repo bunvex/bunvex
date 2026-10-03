@@ -140,6 +140,11 @@ export class Running implements LogOwner {
   tx: unknown = null;
   /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
   timer: unknown = null;
+  /**
+   * An action's metered calls (STUDY-71), as Convex's function usage tracker: its `fetch` request bodies,
+   * and its file storage calls with the bytes they read and wrote.
+   */
+  readonly io = { networkEgressBytes: 0, storageCalls: 0, storageReadBytes: 0, storageWriteBytes: 0 };
   constructor(
     readonly executionId: string,
     readonly requestId: string,

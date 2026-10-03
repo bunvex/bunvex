@@ -38,6 +38,9 @@ export type StorageRow = {
 };
 
 /** An error with Convex's code, as the HTTP routes answer it (`{code, message}`). */
+/** An action's storage call: one call, with the bytes it read or wrote. */
+export type StorageMeter = (call: { read?: number; written?: number }) => void;
+
 export class StorageError extends Error {
   constructor(
     readonly status: number,
@@ -237,8 +240,11 @@ export class FileStorage {
     };
   }
 
-  /** `ctx.storage` in an action (and an HTTP action): each call its own transaction; get and store. */
-  actionWriter() {
+  /**
+   * `ctx.storage` in an action (and an HTTP action): each call its own transaction; get and store, metered
+   * through `meter` as Convex's action storage calls (STUDY-71): a call and the bytes stored or read.
+   */
+  actionWriter(meter?: StorageMeter) {
     const q = <T>(f: (db: Tx) => Promise<T>) => this.engine.query(f);
     // Convex's action storage callbacks (all but generateUploadUrl) refuse while the deployment is stopped.
     const running = <T>(f: (db: Tx) => Promise<T>) =>
@@ -264,6 +270,7 @@ export class FileStorage {
         const stream = await this.blobs.get(row.storageKey);
         if (!stream) return null;
         const bytes = await new Response(stream).arrayBuffer();
+        meter?.({ read: bytes.byteLength });
         return new Blob([bytes], row.contentType ? { type: row.contentType } : {});
       },
       store: async (blob: Blob, opts?: { sha256?: string }): Promise<string> => {
@@ -272,7 +279,9 @@ export class FileStorage {
             "store() expects a Blob. If you are trying to store a Request, `await request.blob()` will give you the correct input.",
           );
         await this.ensureRunning();
-        return this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256);
+        const id = await this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256);
+        meter?.({ written: blob.size });
+        return id;
       },
     };
   }
