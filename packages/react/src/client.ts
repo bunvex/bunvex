@@ -8,12 +8,17 @@ import {
   BaseBunvexClient,
   type BaseBunvexClientOptions,
   type ConnectionState,
+  type ExtendedTransition,
   type FunctionArgs,
   type FunctionReturnType,
   getFunctionName,
+  type LoadMoreOfPaginatedQuery,
   type Logger,
   type OptimisticUpdate,
   type OptionalRestArgs,
+  PaginatedQueryClient,
+  type PaginatedQueryToken,
+  type PaginationStatus,
   type QueryToken,
   type v1,
 } from "@bunvex/client";
@@ -40,7 +45,18 @@ export interface Watch<T> {
   journal(): v1.QueryJournal | undefined;
 }
 
+/** A watched paginated query: listen for changes, read the loaded pages as one list. */
+export interface PaginatedWatch<T> {
+  onUpdate(callback: () => void): () => void;
+  localQueryResult(): { results: T[]; status: PaginationStatus; loadMore: LoadMoreOfPaginatedQuery } | undefined;
+}
+
 export type WatchQueryOptions = { journal?: v1.QueryJournal; componentPath?: string };
+/**
+ * @internal Options of `watchPaginatedQuery`: `id` keeps separate uses of one query apart (each
+ * `usePaginatedQuery_experimental` takes a new one).
+ */
+export type WatchPaginatedQueryOptions = { initialNumItems: number; id: number; componentPath?: string };
 export type MutationOptions<Args extends Record<string, Value>> = { optimisticUpdate?: OptimisticUpdate<Args> };
 
 /** The part of the base client this one uses: a test or an embedding may pass its own (`baseClient`). */
@@ -48,6 +64,7 @@ export type BaseClientInterface = Pick<
   BaseBunvexClient,
   | "subscribe"
   | "localQueryResult"
+  | "localQueryResultByToken"
   | "localQueryLogs"
   | "queryJournal"
   | "mutation"
@@ -105,7 +122,8 @@ export function createAction<A extends Ref<"action">>(ref: A, client: BunvexReac
 export class BunvexReactClient {
   private readonly address: string;
   private cachedSync: BaseClientInterface | undefined;
-  private listeners = new Map<QueryToken, Set<() => void>>();
+  private cachedPaginatedQueryClient: PaginatedQueryClient | undefined;
+  private listeners = new Map<QueryToken | PaginatedQueryToken, Set<() => void>>();
   private readonly options: BunvexReactClientOptions;
   private closed = false;
   private adminAuth: string | undefined;
@@ -129,15 +147,25 @@ export class BunvexReactClient {
     return this.address;
   }
 
-  /** The base client, created on first use. */
+  /**
+   * The base client, created on first use, with the paginated query client over it: every transition is
+   * reported through the paginated client, with the paginated queries it changed.
+   */
   get sync(): BaseClientInterface {
     if (this.closed) throw new Error("BunvexReactClient has already been closed.");
     if (this.cachedSync) return this.cachedSync;
     const sync = this.options.baseClient ?? new BaseBunvexClient(this.address, () => {}, this.options);
-    sync.addOnTransitionHandler((t) => this.transition(t.queries.map((q) => q.token)));
     if (this.adminAuth) sync.setAdminAuth(this.adminAuth);
     this.cachedSync = sync;
+    this.cachedPaginatedQueryClient = new PaginatedQueryClient(sync, (t) => this.handleTransition(t));
     return sync;
+  }
+
+  /** @internal The paginated query client, created with the base client. */
+  get paginatedQueryClient(): PaginatedQueryClient {
+    void this.sync;
+    if (this.cachedPaginatedQueryClient) return this.cachedPaginatedQueryClient;
+    throw new Error("Should already be instantiated");
   }
 
   /** @internal An admin key (the dashboard). */
@@ -194,6 +222,43 @@ export class BunvexReactClient {
       localQueryResult: () => this.cachedSync?.localQueryResult(name, argsObject) as FunctionReturnType<Q> | undefined,
       localQueryLogs: () => this.cachedSync?.localQueryLogs(name, argsObject),
       journal: () => this.cachedSync?.queryJournal(name, argsObject),
+    };
+  }
+
+  /**
+   * @internal Watch a paginated query (`args` without `paginationOpts`): nothing is subscribed until the first
+   * `onUpdate`. Use `usePaginatedQuery_experimental` rather than this.
+   */
+  watchPaginatedQuery<Q extends Ref<"query">>(
+    query: Q,
+    args: FunctionArgs<Q>,
+    options: WatchPaginatedQueryOptions,
+  ): PaginatedWatch<FunctionReturnType<Q>> {
+    const name = getFunctionName(query);
+    const argsObject = (args ?? {}) as Record<string, Value>;
+    const paginationOptions = { initialNumItems: options.initialNumItems, id: options.id };
+    return {
+      onUpdate: (callback) => {
+        const { paginatedQueryToken, unsubscribe } = this.paginatedQueryClient.subscribe(
+          name,
+          argsObject,
+          paginationOptions,
+        );
+        const set = this.listeners.get(paginatedQueryToken);
+        if (set) set.add(callback);
+        else this.listeners.set(paginatedQueryToken, new Set([callback]));
+        return () => {
+          if (this.closed) return;
+          const current = this.listeners.get(paginatedQueryToken)!;
+          current.delete(callback);
+          if (current.size === 0) this.listeners.delete(paginatedQueryToken);
+          unsubscribe();
+        };
+      },
+      localQueryResult: () =>
+        this.paginatedQueryClient.localQueryResult(name, argsObject, paginationOptions) as
+          | ReturnType<PaginatedWatch<FunctionReturnType<Q>>["localQueryResult"]>
+          | undefined,
     };
   }
 
@@ -254,11 +319,16 @@ export class BunvexReactClient {
     if (this.cachedSync) {
       const sync = this.cachedSync;
       this.cachedSync = undefined;
+      this.cachedPaginatedQueryClient = undefined;
       await sync.close();
     }
   }
 
-  private transition(updated: QueryToken[]) {
+  private handleTransition(transition: ExtendedTransition) {
+    this.transition([...transition.queries.map((q) => q.token), ...transition.paginatedQueries.map((q) => q.token)]);
+  }
+
+  private transition(updated: (QueryToken | PaginatedQueryToken)[]) {
     for (const token of updated) {
       const callbacks = this.listeners.get(token);
       if (callbacks) for (const cb of callbacks) cb();

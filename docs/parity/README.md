@@ -6,13 +6,13 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 25 | 36 | ~170 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 103 | 18 | ~43 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 3 | 21 | ~208 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 145 | 26 | 62 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 118 | 14 | 27 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 108 | 38 | 100 |
 
-These counts were taken on 2026-09-29, with #6 (catalog) and #7 (ids) counted as done; client-sync was
-recounted on 2026-09-30 with protocol v1 step 2. A few rows have
-no single status.
+These counts were taken on 2026-10-03 (main at #222) from each row's status column: a row counts as done,
+partial or missing by the word its status starts with. A few rows have no single status and are not
+counted.
 
 ## How to use it
 
@@ -108,11 +108,13 @@ In this order:
    `env set|get|list|remove`);
 10. the Docker image and docker-compose (credentials bootstrap), so a self-hosted app can be brought up as
     with Convex;
-11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit;
+11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit
+    (STUDY-41) — done, with N2, N3 and N6 built in #213;
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
     functions it reads), then live logs;
 13. built-in auth (STUDY-28) phases;
-14. import/export in Convex's snapshot format, so data can move between Convex and bunvex.
+14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
+    done; shape inference, cloud backups and the upgrade path remain (platform §18).
 
 Items 7–12 were ordered by the owner on 2026-10-01 to reach a self-hosted example app end to end (bring the
 containers up, deploy functions, see them work) before the remaining platform items.

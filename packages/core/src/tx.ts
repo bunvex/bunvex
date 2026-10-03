@@ -8,13 +8,17 @@
 
 import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
+  type CommitTsPlaceholder,
   checkValue,
+  commitTsPlaceholder,
   copyValue,
   decodeId,
   encodeId,
   fromJsonValue,
   type GenericValidator,
+  isCommitTsPlaceholder,
   isSimpleObject,
+  MAX_COMMIT_TS,
   toJsonValue,
   type Value,
   v,
@@ -33,7 +37,7 @@ import {
   type TableMeta,
 } from "./catalog.ts";
 import type { Interval, SearchRead } from "./committer.ts";
-import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
+import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -257,7 +261,40 @@ export type Savepoint = {
   docsWritten: number;
   bytesWritten: number;
   pendingViolation: { table: string; error: string } | null;
+  commitTs: Map<string, Path[]>;
 };
+
+/** A field's place in a document: object keys and array positions (STUDY-53). */
+type Path = (string | number)[];
+
+/** `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. */
+function extractCommitTs(value: unknown, at: Path = [], paths: Path[] = []): { value: unknown; paths: Path[] } {
+  if (isCommitTsPlaceholder(value)) {
+    paths.push(at);
+    return { value: MAX_COMMIT_TS, paths };
+  }
+  if (Array.isArray(value)) {
+    const out = value.map((x, i) => extractCommitTs(x, [...at, i], paths).value);
+    return { value: out, paths };
+  }
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, [...at, k], paths).value;
+    return { value: out, paths };
+  }
+  return { value, paths };
+}
+
+/** A copy of `doc` with `by` at each of `paths`. */
+function setAt(doc: Doc, paths: Path[], by: unknown): Doc {
+  const out = structuredClone(doc) as Record<string | number, unknown>;
+  for (const p of paths) {
+    let o = out;
+    for (let i = 0; i < p.length - 1; i++) o = o[p[i]!] as Record<string | number, unknown>;
+    o[p[p.length - 1]!] = by;
+  }
+  return out as Doc;
+}
 
 /** An imported document's `_id` refused (STUDY-42), with Convex's code. */
 export class ImportIdError extends Error {
@@ -282,8 +319,10 @@ export class Tx {
     }
     return this.readList;
   }
-  /** The instance secret that signs pagination cursors (STUDY-17). */
-  instanceSecret = "";
+  /** Seals and opens pagination cursors (cursor.ts); set by the engine. */
+  cursorCodec: () => CursorCodec = () => {
+    throw new Error("pagination cursors need an initialized engine");
+  };
   /**
    * Reactive pagination's journal: the end cursor of this query's previous run (a subscription re-run
    * keeps its page boundary), and the one this run ends at.
@@ -330,6 +369,37 @@ export class Tx {
   private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
+  /**
+   * Where each written document holds `db.vars.commitTs` (STUDY-53): stored as the largest int64 until the
+   * commit, handed back to the function as the placeholder, replaced by the commit timestamp at commit.
+   */
+  private commitTs = new Map<string, Path[]>();
+
+  /** Convex's `db.vars` (mutations): `commitTs`, the placeholder of this transaction's commit timestamp. */
+  get vars(): { commitTs: CommitTsPlaceholder } | undefined {
+    return this.writable ? { commitTs: commitTsPlaceholder } : undefined;
+  }
+
+  /** Whether a write holds a commit timestamp to resolve at commit. */
+  get hasCommitTs() {
+    return this.commitTs.size > 0;
+  }
+
+  /** A document as the function sees it: its commit timestamps as the placeholder. */
+  private handOut<D extends Doc | null>(d: D): D {
+    if (!d || !this.commitTs.size) return d;
+    const paths = this.commitTs.get(d._id as string);
+    return (paths ? setAt(d, paths, commitTsPlaceholder) : d) as D;
+  }
+
+  /** The commit: each commit timestamp replaced by `ns` (the commit ts in nanoseconds) in the writes. */
+  resolveCommitTs(ns: bigint) {
+    for (const [id, paths] of this.commitTs) {
+      const w = this.writes.get(id);
+      if (w?.next) this.writes.set(id, { ...w, next: setAt(w.next, paths, ns) });
+    }
+    this.commitTs.clear();
+  }
   constructor(
     private catalog: Catalog,
     private persistence: Persistence,
@@ -552,9 +622,9 @@ export class Tx {
 
   /** `db.get(table, id)`, or Convex's one-argument `db.get(id)`: the id names its table. */
   async get(tableOrId: string, id?: string): Promise<Doc | null> {
-    if (id !== undefined) return this.read(tableOrId, id, "db.get");
+    if (id !== undefined) return this.handOut(await this.read(tableOrId, id, "db.get"));
     const table = this.tableOfIdArg(tableOrId, "db.get");
-    return table === undefined ? null : this.read(table, tableOrId, "db.get");
+    return table === undefined ? null : this.handOut(await this.read(table, tableOrId, "db.get"));
   }
 
   /** The table an id argument names (one-argument forms); undefined when it names no known table. */
@@ -712,7 +782,7 @@ export class Tx {
       reads.reached(d);
       if (!st.filters.every((f) => passes(f, d))) continue;
       reads.handOut();
-      yield d;
+      yield this.handOut(d);
     }
     reads.exhausted();
   }
@@ -804,7 +874,7 @@ export class Tx {
       hi: st.range.hi,
       desc: st.desc,
     });
-    const secret = this.instanceSecret;
+    const secret = this.cursorCodec();
     const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr ? decodeCursor(secret, endStr, fp) : null;
@@ -874,7 +944,7 @@ export class Tx {
       bytesRead += valueSize(d as unknown as Value);
       last = indexKey(st.ix, d);
       if (st.filters.every((f) => passes(f, d))) {
-        page.push(d);
+        page.push(this.handOut(d));
         keys.push(last);
         // As Convex: a full page stops without looking further, so its cursor is "after the last
         // document" even if nothing follows (the next page is then empty and done).
@@ -923,7 +993,7 @@ export class Tx {
         reads.reached(docs[docs.length - 1]);
         reads.handOut();
       }
-      return docs;
+      return this.commitTs.size ? docs.map((d) => this.handOut(d)) : docs;
     }
     // With filters: stream until `limit` documents pass (reads count toward the limits as they happen).
     // Documents the filter drops were scanned all the same: they extend the read-set.
@@ -935,7 +1005,7 @@ export class Tx {
     }
     if (out.length < limit) reads.exhausted();
     else reads.handOut();
-    return out;
+    return this.commitTs.size ? out.map((d) => this.handOut(d)) : out;
   }
 
   /**
@@ -1060,10 +1130,17 @@ export class Tx {
     this.nextCreationTime = nextUp(creationTime);
     // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
     // mutating `fields` afterwards cannot change what is written.
-    const doc = { ...copyFields(fields, "insert"), _id: id, _creationTime: creationTime };
+    const x = extractCommitTs(fields);
+    const doc = { ...copyFields(x.value as Record<string, unknown>, "insert"), _id: id, _creationTime: creationTime };
     checkSystemFields(doc, fields, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
+    this.setCommitTs(id, x.paths);
     return id;
+  }
+
+  private setCommitTs(id: string, paths: Path[]) {
+    if (paths.length) this.commitTs.set(id, paths);
+    else this.commitTs.delete(id);
   }
 
   /** `db.patch(table, id, fields)`, or Convex's `db.patch(id, fields)`. */
@@ -1082,11 +1159,15 @@ export class Tx {
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
+    const x = extractCommitTs(fields);
     const next: Record<string, unknown> = { ...cur };
     for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
-    Object.assign(next, copyFields(fields, "patch"));
+    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch"));
     checkSystemFields(next, fields, id, cur._creationTime);
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
+    // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
+    const kept = (this.commitTs.get(id) ?? []).filter((p) => !(String(p[0]) in fields));
+    this.setCommitTs(id, [...kept, ...x.paths]);
   }
 
   /** Convex's `db.replace(table, id, value)` or `db.replace(id, value)`: every non-system field is replaced. */
@@ -1104,13 +1185,15 @@ export class Tx {
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
+    const x = extractCommitTs(value);
     const next: Record<string, unknown> = {
-      ...copyFields(value, "replace"),
+      ...copyFields(x.value as Record<string, unknown>, "replace"),
       _id: id,
       _creationTime: cur._creationTime,
     };
     checkSystemFields(next, value, id, cur._creationTime);
     this.stage(t, id, old, sortFields(next));
+    this.setCommitTs(id, x.paths);
   }
 
   /** `db.delete(table, id)`, or Convex's `db.delete(id)`. */
@@ -1128,6 +1211,7 @@ export class Tx {
     const cur = await this.read(table, id, "db.delete");
     if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
+    this.commitTs.delete(id);
   }
 
   /**
@@ -1144,6 +1228,7 @@ export class Tx {
       docsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
       pendingViolation: this.pendingViolation,
+      commitTs: new Map(this.commitTs),
     };
   }
 
@@ -1156,6 +1241,7 @@ export class Tx {
     this.docsWritten = sp.docsWritten;
     this.bytesWritten = sp.bytesWritten;
     this.pendingViolation = sp.pendingViolation;
+    this.commitTs = sp.commitTs;
   }
 
   /** The writes as persistence rows: the new version of each doc and the index entries that changed. */

@@ -240,6 +240,11 @@ type PendingCommit = {
    * cache's invalidation and subscriptions would otherwise scan them all for nothing).
    */
   logWrites?: boolean;
+  /**
+   * Called with the ts as soon as it is assigned, before anything is logged or written: the commit's final
+   * documents and index entries (a commit timestamp resolved in them, STUDY-53).
+   */
+  atTs?: (ts: number) => { docs: DocWrite[]; idx: IndexWrite[] };
   /** Called with the ts once the commit is visible, before the commit listeners (a catalog change). */
   onVisible?: (ts: number) => void;
   /**
@@ -502,6 +507,7 @@ export class Committer {
         // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
         const ts = Math.max(this.appliedTs + 1, this.clockUs());
         this.appliedTs = ts;
+        if (p.atTs) ({ docs: p.docs, idx: p.idx } = p.atTs(ts));
         const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
         if (p.logExtra) writes.push(...p.logExtra);
         const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };

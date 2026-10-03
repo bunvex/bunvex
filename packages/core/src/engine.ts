@@ -3,17 +3,29 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
-import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
+import {
+  checkValue,
+  fromJsonValue,
+  type GenericValidator,
+  hasCommitTs,
+  resolveCommitTs,
+  toJsonValue,
+  type Value,
+  v,
+} from "@bunvex/values";
 import {
   activeTables,
   bootstrapCatalog,
   buildCatalog,
+  CANONICAL_URLS_TABLE,
   type Catalog,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FUNCTION_HANDLES_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -47,6 +59,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+import type { CursorCodec } from "./cursor.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -138,7 +151,8 @@ export class OccError extends Error {
   readonly code = "OptimisticConcurrencyControlFailure";
   constructor(
     message: string,
-    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number },
+    /** `retries`: how many times the mutation had already been re-run. */
+    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number; retries: number },
   ) {
     super(message);
   }
@@ -205,6 +219,12 @@ export class Engine {
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
    */
   stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
+  /**
+   * Called when a mutation attempt lost an OCC conflict and will run again (`failures`: the attempts lost so
+   * far), in the mutation's own async context: the server logs each such attempt, as Convex's
+   * `log_mutation_occ_error` with `will_retry` (STUDY-47).
+   */
+  onOccRetry: ((error: OccError, failures: number) => void) | null = null;
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
@@ -459,6 +479,16 @@ export class Engine {
     return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
   }
 
+  private cursorCodecCache: CursorCodec | null = null;
+  /** Pagination cursors' key (`derivedKey("cursor")`, as Convex's keybroker) and the instance they name. */
+  private readonly cursorCodecOf = (): CursorCodec => this.cursorCodec;
+  get cursorCodec(): CursorCodec {
+    const c = this.cursorCodecCache;
+    if (c && c.instanceName === this.instanceName) return c;
+    this.cursorCodecCache = { key: this.derivedKey("cursor"), instanceName: this.instanceName };
+    return this.cursorCodecCache;
+  }
+
   /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
   async instanceSetting(name: string, make: () => string): Promise<string> {
     return this.runMutation(async (db) => {
@@ -503,6 +533,13 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: DEPLOYMENT_AUDIT_LOG_TABLE,
+        indexes: { by_action_and_creation_time: ["action", "_creationTime"] },
+        document: v.any(),
+      },
+      { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
     ];
     return [...systemTables, ...schema.tables.values()];
   }
@@ -1130,14 +1167,15 @@ export class Engine {
    * not exist is skipped; a system table is refused; one the active schema declares, or points to with
    * `v.id`, is refused with Convex's `SchemaEnforcementError` messages; a pending schema that does fails.
    */
-  async deleteTables(names: string[]) {
+  /** `body` runs in the deletion's transaction (the server records its audit-log event there). */
+  async deleteTables(names: string[], body?: (db: Tx) => Promise<void>) {
     for (const name of names) {
       if (name.startsWith("_")) throw new Error(`cannot delete system table ${name}`);
       const refusal = deletionRefusal(this.schema, name);
       if (refusal) throw new SchemaEnforcementError(refusal);
     }
     const pending = this.pendingPush;
-    await this.activateTables([], names);
+    await this.activateTables([], names, body);
     if (pending)
       for (const name of names) {
         const refusal = deletionRefusal(pending.schema, name);
@@ -1239,7 +1277,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
@@ -1425,7 +1463,7 @@ export class Engine {
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.retention = this.retention;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
     tx.request = caller.request ?? null;
@@ -1524,8 +1562,13 @@ export class Engine {
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
-      if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
+      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
+      const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
+      if (!tx.hasWrites) {
+        const value = resolved(tx.snapshot);
+        return withTs ? { value, ts: tx.snapshot } : value;
+      }
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({
@@ -1535,7 +1578,16 @@ export class Engine {
           idx,
           source,
           ...this.searchCommit(tx, this.withPendingCheck(tx)),
+          ...(tx.hasCommitTs
+            ? {
+                atTs: (ts: number) => {
+                  tx.resolveCommitTs(BigInt(ts) * 1000n);
+                  return tx.toWrites();
+                },
+              }
+            : {}),
         });
+        const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)
@@ -1553,8 +1605,9 @@ export class Engine {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
         // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
-        if (failures >= maxRetries) throw this.occError(e.conflict, source);
+        if (failures >= maxRetries) throw this.occError(e.conflict, source, failures);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
+        this.onOccRetry?.(this.occError(e.conflict, source, failures), failures + 1);
         failures++;
         this.stats.retries++;
         await new Promise((r) => setTimeout(r, sleep));
@@ -1565,7 +1618,7 @@ export class Engine {
   }
 
   /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
-  private occError(conflict: Conflict, source: string | undefined): OccError {
+  private occError(conflict: Conflict, source: string | undefined, retries: number): OccError {
     let table: string | undefined;
     if (conflict.index !== undefined)
       for (const t of this.catalog.tables.values())
@@ -1581,7 +1634,7 @@ export class Engine {
     const where = table === undefined ? "some table" : `the "${table}" table`;
     return new OccError(
       `Documents read from or written to ${where} changed while this mutation was being run and on every subsequent retry.${changedBy}`,
-      { table, documentId, writeSource, writeTs: conflict.writeTs },
+      { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
 }

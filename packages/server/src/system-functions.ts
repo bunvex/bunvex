@@ -7,24 +7,31 @@
 // Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
+  type AuditLogActor,
+  type Caller,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   cancelJob,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   type Engine,
   EXPORTS_TABLE,
+  insertAuditLogEvents,
   type JobDoc,
   type PaginationOptions,
   type PaginationResult,
   SCHEDULED_FUNCTIONS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_ACTOR,
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
+import { auditActor, auditEvents } from "./audit-log.ts";
+import { readCanonicalUrls } from "./canonical-urls.ts";
 import type { Functions } from "./functions.ts";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { FileStorage } from "./storage.ts";
@@ -103,8 +110,18 @@ const importDoc = (d: Record<string, unknown> | null) => {
   return rest;
 };
 
+/**
+ * Convex's `clampForAuditLogRetention`: `-1` days keeps everything; otherwise nothing older than the
+ * retention and a day. bunvex's retention is the server's (STUDY-48 A1).
+ */
+function clampForRetention(minDate: number, env: SystemEnv): number {
+  const days = env.functions?.auditLogRetentionDays ?? -1;
+  if (days === -1) return minDate;
+  return Math.max(minDate, Date.now() - ((days ?? 0) + 1) * 24 * 60 * 60 * 1000);
+}
+
 /** What a system function may use besides its transaction. */
-export type SystemEnv = { files: FileStorage | null; functions?: Functions };
+export type SystemEnv = { files: FileStorage | null; functions?: Functions; caller?: Caller };
 /** A system query or mutation: its argument validators (checked as Convex's) and its handler. */
 export type SystemQuery = {
   args: Record<string, GenericValidator>;
@@ -119,8 +136,8 @@ const noFiles = (): never => {
   throw new Error("File storage is not configured on this server.");
 };
 /** A `_storage` document with its URL first, as Convex's `FileMetadata`. */
-const withUrl = (files: FileStorage, d: Record<string, unknown>, row: { storageId: string }) => ({
-  url: `${files.origin}/api/storage/${row.storageId}`,
+const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: string }) => ({
+  url: `${origin}/api/storage/${row.storageId}`,
   ...d,
 });
 const componentId = v.optional(v.union(v.string(), v.null()));
@@ -189,7 +206,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   // by rule 5): the deployment's `BUNVEX_CLOUD_URL`.
   "_system/cli/deploymentUrl:cloudUrl": {
     args: {},
-    handler: async (_db, _args, env) => env.functions?.builtinEnv.BUNVEX_CLOUD_URL ?? null,
+    handler: async (db, _args, env) =>
+      (await readCanonicalUrls(db)).cloud ?? env.functions?.builtinEnv.BUNVEX_CLOUD_URL ?? null,
   },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
@@ -242,6 +260,83 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const id = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, argsId));
       const d = id && ((await db.asSystem(() => db.get(SCHEDULED_FUNCTIONS_TABLE, id))) as unknown as JobDoc | null);
       return d ? { _id: d._id, _creationTime: d._creationTime, args: argsBytes(d.args) } : null;
+    },
+  },
+  // The audit log (STUDY-48), as Convex's `paginatedDeploymentEvents`: newest first from `minDate` (clamped
+  // to the retention), up to `maxDate`, of the given members and actions.
+  "_system/frontend/paginatedDeploymentEvents": {
+    args: {
+      paginationOpts: paginationOptsValidator,
+      filters: v.object({
+        minDate: v.number(),
+        maxDate: v.optional(v.number()),
+        authorMemberIds: v.optional(v.array(v.int64())),
+        actions: v.optional(v.array(v.string())),
+      }),
+    },
+    op: "ViewAuditLog",
+    handler: async (
+      db,
+      {
+        paginationOpts,
+        filters,
+      }: {
+        paginationOpts: PaginationOptions;
+        filters: { minDate: number; maxDate?: number; authorMemberIds?: bigint[]; actions?: string[] };
+      },
+      env,
+    ) => {
+      const minDate = clampForRetention(filters.minDate, env);
+      return db.asSystem(() =>
+        db
+          .query(DEPLOYMENT_AUDIT_LOG_TABLE)
+          .withIndex("by_creation_time", (q) => {
+            const from = q.gte("_creationTime", minDate);
+            return filters.maxDate ? from.lte("_creationTime", filters.maxDate) : from;
+          })
+          .order("desc")
+          .filter((q) => {
+            const all = [];
+            if (filters.authorMemberIds !== undefined)
+              all.push(q.or(...filters.authorMemberIds.map((id) => q.eq(id, q.field("member_id")))));
+            if (filters.actions !== undefined)
+              all.push(q.or(...filters.actions.map((a) => q.eq(a, q.field("action")))));
+            return q.and(...all);
+          })
+          .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
+      );
+    },
+  },
+  // Convex's `listDeploymentEventsFromTime`: every event from `fromTimestamp` (clamped), oldest first.
+  "_system/frontend/listDeploymentEventsFromTime": {
+    args: { fromTimestamp: v.number() },
+    op: "ViewAuditLog",
+    handler: async (db, { fromTimestamp }: { fromTimestamp: number }, env) => {
+      const from = clampForRetention(fromTimestamp, env);
+      return db.asSystem(() =>
+        db
+          .query(DEPLOYMENT_AUDIT_LOG_TABLE)
+          .withIndex("by_creation_time", (q) => q.gte("_creationTime", from))
+          .collect(),
+      );
+    },
+  },
+  // Convex's `deploymentEvents:lastPushEvent`: the newest push event, or null.
+  "_system/frontend/deploymentEvents:lastPushEvent": {
+    args: {},
+    handler: async (db) => {
+      const newest = (action: string) =>
+        db.asSystem(() =>
+          db
+            .query(DEPLOYMENT_AUDIT_LOG_TABLE)
+            .withIndex("by_action_and_creation_time", (q) => q.eq("action", action))
+            .order("desc")
+            .first(),
+        );
+      const [a, b] = await Promise.all([newest("push_config"), newest("push_config_with_components")]);
+      if (!a) return b;
+      if (!b) return a;
+      return (a._creationTime as number) > (b._creationTime as number) ? a : b;
     },
   },
   "_system/frontend/listCronJobs": {
@@ -307,7 +402,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
           : q;
       const page = await ranged.order(filters?.order ?? "desc").paginate(paginationOpts);
       const rows = await Promise.all(page.page.map((d) => fs.resolve(db, d._id, "storage.getUrl")));
-      return { ...page, page: page.page.map((d, i) => withUrl(fs, d, rows[i]!)) };
+      const origin = await fs.originIn(db);
+      return { ...page, page: page.page.map((d, i) => withUrl(origin, d, rows[i]!)) };
     },
   },
   "_system/frontend/fileStorageV2:getFile": {
@@ -317,7 +413,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const d = await db.system.get(storageId);
       if (!d) return null;
       const row = await fs.resolve(db, d._id, "storage.getUrl");
-      return withUrl(fs, d, row!);
+      return withUrl(await fs.originIn(db), d, row!);
     },
   },
   "_system/frontend/listCronJobRuns": {
@@ -327,24 +423,31 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   },
 };
 
-/** Convex's file mutations for the dashboard (fileStorageV2). Convex also writes audit-log entries; bunvex has no audit log yet. */
+/** Convex's file mutations for the dashboard (fileStorageV2), each with its audit-log event (STUDY-48). */
 export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
   "_system/frontend/fileStorageV2:deleteFile": {
     args: { storageId: v.id(STORAGE_TABLE), componentId },
-    handler: async (db, { storageId }: { storageId: string }, { files }) => {
+    handler: async (db, { storageId }: { storageId: string }, { files, caller }) => {
       await (files ?? noFiles()).deleteIn(db, storageId);
+      await insertAuditLogEvents(db, [auditEvents.deleteFiles([storageId])], auditActor(caller));
     },
   },
   "_system/frontend/fileStorageV2:deleteFiles": {
     args: { storageIds: v.array(v.id(STORAGE_TABLE)), componentId },
-    handler: async (db, { storageIds }: { storageIds: string[] }, { files }) => {
+    handler: async (db, { storageIds }: { storageIds: string[] }, { files, caller }) => {
       const fs = files ?? noFiles();
       for (const id of storageIds) await fs.deleteIn(db, id);
+      await insertAuditLogEvents(db, [auditEvents.deleteFiles(storageIds)], auditActor(caller));
     },
   },
   "_system/frontend/fileStorageV2:generateUploadUrl": {
     args: { componentId },
-    handler: async (_db, _args, { files }) => (files ?? noFiles()).uploadUrl(),
+    handler: async (db, _args, { files, caller }) => {
+      const fs = files ?? noFiles();
+      const url = fs.uploadUrl(await fs.originIn(db));
+      await insertAuditLogEvents(db, [auditEvents.generateUploadUrl()], auditActor(caller));
+      return url;
+    },
   },
 };
 
@@ -352,11 +455,14 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
 export const MAX_JOBS_CANCEL_BATCH = 1000;
 
 /** Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. */
-export async function cancelScheduledJob(engine: Engine, id: string) {
+export async function cancelScheduledJob(engine: Engine, id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
   await engine.mutation(async (db) => {
     const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, id));
     if (!jobId) throw new Error(`Invalid ID "${id}" for table _scheduled_jobs`);
+    const job = (await db.asSystem(() => db.get(SCHEDULED_FUNCTIONS_TABLE, jobId))) as unknown as JobDoc | null;
     await cancelJob(db, jobId, Date.now());
+    // As Convex, in the cancel's transaction, whether the job was still pending or not.
+    await insertAuditLogEvents(db, [auditEvents.cancelScheduledFunction(id, job?.name ?? null)], actor);
   }, "cancel_job");
 }
 
@@ -367,6 +473,7 @@ export async function cancelScheduledJob(engine: Engine, id: string) {
 export async function cancelAllScheduledJobs(
   engine: Engine,
   opts: { udfPath?: string; startNextTs?: bigint; endNextTs?: bigint } = {},
+  actor: AuditLogActor = SYSTEM_ACTOR,
 ): Promise<number> {
   const lo = opts.startNextTs === undefined ? null : Number(opts.startNextTs) / 1_000_000;
   const hi = opts.endNextTs === undefined ? null : Number(opts.endNextTs) / 1_000_000;
@@ -388,6 +495,8 @@ export async function cancelAllScheduledJobs(
       )) as unknown as JobDoc[];
       const now = Date.now();
       for (const j of jobs) await cancelJob(db, j._id, now);
+      // As Convex: one event per batch that canceled anything.
+      if (jobs.length > 0) await insertAuditLogEvents(db, [auditEvents.cancelAllScheduledFunctions()], actor);
       return jobs.length;
     }, "cancel_all_jobs");
     total += n;

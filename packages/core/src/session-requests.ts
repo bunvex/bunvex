@@ -11,6 +11,8 @@
 //   exactly when the mutation committed. A failed run records nothing: it wrote nothing, and a resend
 //   simply runs it again.
 // - Records older than the retention window (two weeks by default) are deleted in the background.
+
+import { type CommitTsPlaceholder, commitTsPlaceholder, resolveCommitTsJson } from "@bunvex/values";
 import { SESSION_REQUESTS_TABLE } from "./catalog.ts";
 import type { Tx } from "./tx.ts";
 
@@ -31,6 +33,8 @@ type SessionRequestDoc = {
   requestId: bigint;
   outcome: { type: "mutation"; result: string; logLines: string[] };
   identity: string;
+  /** Set when the result holds a commit timestamp: resolved, with it, at the commit. */
+  commitTs?: bigint | CommitTsPlaceholder;
 };
 
 /** The recorded outcome of `id`, if that request already committed. */
@@ -43,7 +47,11 @@ export async function findSessionRequest(db: Tx, id: SessionRequestId): Promise<
   )) as unknown as SessionRequestDoc[];
   if (docs.length > 1) throw new Error("Expected at most one session request record.");
   const d = docs[0];
-  return d ? { result: d.outcome.result, logLines: d.outcome.logLines } : null;
+  if (!d) return null;
+  // A result holding `db.vars.commitTs` was recorded with Convex's token; the record's own `commitTs`
+  // resolved to the commit's timestamp (STUDY-53).
+  const result = typeof d.commitTs === "bigint" ? resolveCommitTsJson(d.outcome.result, d.commitTs) : d.outcome.result;
+  return { result, logLines: d.outcome.logLines };
 }
 
 /** Record `id`'s outcome, in the transaction that commits the mutation's writes. */
@@ -54,6 +62,7 @@ export async function recordSessionRequest(db: Tx, id: SessionRequestId, outcome
     requestId: BigInt(id.requestId),
     outcome: { type: "mutation", result: outcome.result, logLines: outcome.logLines },
     identity: "unknown",
+    ...(outcome.result.includes('"$commitTs"') ? { commitTs: commitTsPlaceholder } : {}),
   };
   await db.asSystem(() => db.insert(SESSION_REQUESTS_TABLE, doc));
 }
