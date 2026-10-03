@@ -152,7 +152,7 @@ not flagging cache hits, the nested caller, an unbounded ring and missing query 
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | `returnBytes` is the value's size as bunvex counts it for limits (Convex's `ConvexValue::size`), not Rust's `heap_size` | `heap_size` measures Rust memory; there is no equivalent in JS. **Not possible.** The number is close but not equal | DV-250, accepted (owner, 2026-10-03) |
+| L1 | `returnBytes` is the value's size as bunvex counts it for limits (Convex's `ConvexValue::size`), not Rust's `heap_size` | `heap_size` measures Rust memory; there is no equivalent in JS. **Not possible.** The number is close but not equal | DV-274, accepted (owner, 2026-10-03) |
 | L2 | `usageStats`: `databaseIoReadBytes`/`databaseIoWriteBytes` equal the read and written bytes; index rows, storage, vector, text, egress and memory are 0 | bunvex does not meter them yet. **Not done yet** | DV-251, accepted (owner, 2026-10-03) |
 | L3 | `userExecutionTime` equals `executionTime` | bunvex runs user code in-process; it does not split user time from system time in the log yet. **Not done yet** | DV-252, accepted (owner, 2026-10-03) |
 | L4 | No `Tester` caller: the dashboard's function runner runs through `/api/function` and logs as `HttpApi` | Convex's runner calls `/api/run_test_function`, which bunvex has not built. **Not done yet** | DV-253, accepted (owner, 2026-10-03) |

@@ -291,7 +291,7 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
-/** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-250). */
+/** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
 const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
 /** The same for a result already as JSON: its length. */
 const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
