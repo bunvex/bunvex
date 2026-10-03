@@ -121,7 +121,7 @@ function withoutComments(text: string): string {
  * exact string literals. Each needs the decision that allows it; messages and API names never qualify.
  */
 const WIRE_NAMES: Record<string, string> = {
-  convex_encoded_json: "DV-307: streaming export `format`",
+  convex_encoded_json: "DV-307: streaming export and HTTP function API `format`",
   convex_json: "DV-307: streaming export `format` (legacy alias)",
   convex_clean_json: "DV-307: streaming export `format` (legacy alias)",
   actionComputeConvexGbHours: "DV-308: usage limit metric",

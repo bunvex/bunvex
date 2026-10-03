@@ -147,7 +147,11 @@ async function setup() {
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
   const call = (kind: string, path: string) =>
-    fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args: {} }) });
+    fetch(`${api}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    });
   const now = Date.now();
   const window = JSON.stringify({
     start: { secs_since_epoch: Math.floor(now / 1000) - 600, nanos_since_epoch: 0 },
@@ -250,6 +254,9 @@ test("function_concurrency's gauges and the scheduler's lag", async () => {
     "outstanding_functions:isolate:Mutation:running",
     "outstanding_functions:isolate:Query:queued",
     "outstanding_functions:isolate:Query:running",
+    // Each limiter reports from start, the Node actions' too (STUDY-68).
+    "outstanding_functions:node:Action:queued",
+    "outstanding_functions:node:Action:running",
   ]);
   expect(t.one(c["outstanding_functions:isolate:Action:running"])).toBe(1);
   // No job yet: no sample. A job an hour away: a lag of 0.
@@ -257,4 +264,18 @@ test("function_concurrency's gauges and the scheduler's lag", async () => {
   await t.call("mutation", "m:later");
   for (let i = 0; i < 100 && t.one((await t.get("scheduled_job_lag", {})).body) === null; i++) await Bun.sleep(10);
   expect(t.one((await t.get("scheduled_job_lag", {})).body)).toBe(0);
+});
+
+test("each call's read of the run state counts one `_backend_state` row, from the scan or the cache", async () => {
+  const t = await setup();
+  // A stored state document (pause, unpause): every user function reads it first, as Convex's.
+  const post = (path: string) =>
+    fetch(`${t.api}/api/v1/${path}`, { method: "POST", headers: { authorization: `Bunvex ${KEY}` } });
+  await post("pause_deployment");
+  await post("unpause_deployment");
+  await t.call("query", "m:list"); // the scan
+  await t.call("mutation", "m:add"); // the cache
+  const width = 660;
+  const read = t.one((await t.get("table_rate", { name: "_backend_state", metric: "rowsRead" })).body);
+  expect(Math.round(read! * width)).toBe(2);
 });

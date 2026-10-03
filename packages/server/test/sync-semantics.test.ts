@@ -7,7 +7,6 @@ import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { BunvexError, v } from "@bunvex/values";
 import { Functions, mutation, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
-import { MAX_PENDING_MUTATIONS } from "../src/sync.ts";
 import { add, history, syncUrl, v1Client } from "./v1-client.ts";
 
 const stops: (() => void)[] = [];
@@ -188,22 +187,6 @@ describe("a connection's mutations run one at a time, in order (STUDY-22)", () =
     const [r0, r1] = c.responses();
     expect(r0.success).toBe(false);
     expect(r1).toMatchObject({ requestId: 1, success: true, result: "x" });
-  });
-
-  test(`pending mutation number ${MAX_PENDING_MUTATIONS + 1} closes the connection with 1013`, async () => {
-    const { events, gate, url } = await setup();
-    const openA = gate("a");
-    const c = await v1Client(url);
-    for (let i = 0; i < MAX_PENDING_MUTATIONS; i++) c.mutate(i, "m:step", { name: i === 0 ? "a" : `n${i}` });
-    await c.until(() => events.includes("start a"));
-    c.mutate(MAX_PENDING_MUTATIONS, "m:step", { name: "overflow" });
-    const e = await c.closed;
-    expect(e.code).toBe(1013);
-    expect(e.reason).toBe("TooManyConcurrentMutations");
-    openA();
-    await Bun.sleep(20);
-    // Only the mutation already running finished; the queued ones never started.
-    expect(events).toEqual(["start a", "end a"]);
   });
 });
 

@@ -53,6 +53,7 @@ test("every query shape returns the public projection only", async () => {
         .withIndex("by_creation_time", (b) => b.gt("_creationTime", 0))
         .collect(),
       scan: await q().fullTableScan().collect(),
+      limited: await q().order("desc").limit(3).collect(),
       page: await q().paginate({ numItems: 3, cursor: null }),
       iterated,
     };
@@ -65,10 +66,20 @@ test("every query shape returns the public projection only", async () => {
   expect(r.noneUnique).toBeNull();
   expect(r.byCreation.map((d) => d.size)).toEqual([10, 20, 30, 40]);
   expect(r.scan.length).toBe(4);
+  expect(r.limited.map((d) => d.size)).toEqual([40, 30, 20]);
   expect(r.page.page.map((d) => d.size)).toEqual([10, 20, 30]);
   expect(r.page.isDone).toBe(false);
   expect(r.iterated.map((d) => d.size)).toEqual([40, 30, 20, 10]);
-  for (const d of [...r.take, r.first, r.unique, ...r.byCreation, ...r.scan, ...r.page.page, ...r.iterated]) {
+  for (const d of [
+    ...r.take,
+    r.first,
+    r.unique,
+    ...r.byCreation,
+    ...r.scan,
+    ...r.limited,
+    ...r.page.page,
+    ...r.iterated,
+  ]) {
     expect(keysOf(d)).toEqual(PUBLIC_KEYS);
   }
   await e.close();

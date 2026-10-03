@@ -431,7 +431,11 @@ export class ScheduledJobExecutor {
     if (!started) return;
     let state: JobDoc["state"];
     try {
-      await this.functions.runAction(job.name, job.args[0], asJob(job._id), { job: job._id, internal: true });
+      await this.functions.runAction(job.name, job.args[0], asJob(job._id), {
+        job: job._id,
+        internal: true,
+        waitForPermit: true,
+      });
       state = { kind: "success" };
     } catch (e) {
       state = { kind: "failed", error: describeUncaught(e).message };
