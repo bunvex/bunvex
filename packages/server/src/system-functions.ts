@@ -31,6 +31,7 @@ import {
 import { type GenericValidator, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
 import { auditActor, auditEvents } from "./audit-log.ts";
+import { readCanonicalUrls } from "./canonical-urls.ts";
 import type { Functions } from "./functions.ts";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { FileStorage } from "./storage.ts";
@@ -135,8 +136,8 @@ const noFiles = (): never => {
   throw new Error("File storage is not configured on this server.");
 };
 /** A `_storage` document with its URL first, as Convex's `FileMetadata`. */
-const withUrl = (files: FileStorage, d: Record<string, unknown>, row: { storageId: string }) => ({
-  url: `${files.origin}/api/storage/${row.storageId}`,
+const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: string }) => ({
+  url: `${origin}/api/storage/${row.storageId}`,
   ...d,
 });
 const componentId = v.optional(v.union(v.string(), v.null()));
@@ -205,7 +206,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   // by rule 5): the deployment's `BUNVEX_CLOUD_URL`.
   "_system/cli/deploymentUrl:cloudUrl": {
     args: {},
-    handler: async (_db, _args, env) => env.functions?.builtinEnv.BUNVEX_CLOUD_URL ?? null,
+    handler: async (db, _args, env) =>
+      (await readCanonicalUrls(db)).cloud ?? env.functions?.builtinEnv.BUNVEX_CLOUD_URL ?? null,
   },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
@@ -400,7 +402,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
           : q;
       const page = await ranged.order(filters?.order ?? "desc").paginate(paginationOpts);
       const rows = await Promise.all(page.page.map((d) => fs.resolve(db, d._id, "storage.getUrl")));
-      return { ...page, page: page.page.map((d, i) => withUrl(fs, d, rows[i]!)) };
+      const origin = await fs.originIn(db);
+      return { ...page, page: page.page.map((d, i) => withUrl(origin, d, rows[i]!)) };
     },
   },
   "_system/frontend/fileStorageV2:getFile": {
@@ -410,7 +413,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const d = await db.system.get(storageId);
       if (!d) return null;
       const row = await fs.resolve(db, d._id, "storage.getUrl");
-      return withUrl(fs, d, row!);
+      return withUrl(await fs.originIn(db), d, row!);
     },
   },
   "_system/frontend/listCronJobRuns": {
@@ -440,7 +443,8 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
   "_system/frontend/fileStorageV2:generateUploadUrl": {
     args: { componentId },
     handler: async (db, _args, { files, caller }) => {
-      const url = await (files ?? noFiles()).uploadUrl();
+      const fs = files ?? noFiles();
+      const url = fs.uploadUrl(await fs.originIn(db));
       await insertAuditLogEvents(db, [auditEvents.generateUploadUrl()], auditActor(caller));
       return url;
     },

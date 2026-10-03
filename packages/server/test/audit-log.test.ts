@@ -179,6 +179,13 @@ test("file storage system mutations: generate_upload_url and delete_files", asyn
   ]);
 });
 
+test("file URLs use the canonical cloud URL when one is set (STUDY-49)", async () => {
+  const t = await setup();
+  await t.post("/api/v1/update_canonical_url", { requestDestination: "bunvexCloud", url: "https://files.example.com" });
+  const url = await t.call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl", {});
+  expect(url.value).toStartWith("https://files.example.com/api/storage/upload?token=");
+});
+
 test("the dashboard's queries: newest first with filters; from a time; the last push", async () => {
   const t = await setup();
   for (const name of ["A", "B", "C"])

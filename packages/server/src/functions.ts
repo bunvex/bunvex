@@ -41,6 +41,7 @@ import {
   type DeploymentOp,
   OperationNotPermittedError,
 } from "./admin-keys.ts";
+import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
@@ -302,14 +303,18 @@ export class Functions {
   private async txEnv(db: Tx): Promise<EnvReader | null> {
     if (!this.deployed) return null;
     const read = await this.engine.environment.reader(db);
-    return (name) => read(name) ?? this.builtinEnv[name];
+    // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
+    const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
+    return (name) => read(name) ?? builtin[name];
   }
 
   /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
   private async actionEnv(): Promise<{ all: Record<string, string>; read: EnvReader } | null> {
     if (!this.deployed) return null;
-    const vars = await this.engine.query((db) => this.engine.environment.snapshot(db));
-    const all = { ...this.builtinEnv, ...Object.fromEntries(vars) };
+    const [vars, canonical] = await this.engine.query(
+      async (db) => [await this.engine.environment.snapshot(db), await readCanonicalUrls(db)] as const,
+    );
+    const all = { ...withCanonical(this.builtinEnv, canonical), ...Object.fromEntries(vars) };
     return {
       all,
       read: (name) => {

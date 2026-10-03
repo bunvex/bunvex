@@ -8,6 +8,7 @@ export {
 } from "./audit-log.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,

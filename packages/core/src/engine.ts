@@ -8,6 +8,7 @@ import {
   activeTables,
   bootstrapCatalog,
   buildCatalog,
+  CANONICAL_URLS_TABLE,
   type Catalog,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
@@ -482,6 +483,7 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
       {
         name: DEPLOYMENT_AUDIT_LOG_TABLE,
         indexes: { by_action_and_creation_time: ["action", "_creationTime"] },

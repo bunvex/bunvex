@@ -31,6 +31,13 @@ import {
   splitActingAs,
 } from "./admin-keys.ts";
 import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
+import {
+  REQUEST_DESTINATIONS,
+  type RequestDestination,
+  readCanonicalUrls,
+  setCanonicalUrl,
+  withCanonical,
+} from "./canonical-urls.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
@@ -455,6 +462,9 @@ export function createServer(opts: ServerOptions) {
     requestError(503, "NotReady", "the server is starting");
   let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  /** The canonical URL routes (STUDY-49), set once the server's origins are known. */
+  let canonicalRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
   let envRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
@@ -525,6 +535,8 @@ export function createServer(opts: ServerOptions) {
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
+    if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
+      return canonicalRoute(url, req, caller);
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -652,6 +664,8 @@ export function createServer(opts: ServerOptions) {
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
+        /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
+        url.pathname === "/api/v1/get_canonical_urls" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -773,10 +787,12 @@ export function createServer(opts: ServerOptions) {
   functions.builtinEnv = builtinEnv;
   functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
-  const deploymentEnv = async () => ({
-    ...builtinEnv,
-    ...Object.fromEntries(await engine.query((db) => engine.environment.snapshot(db))),
-  });
+  const deploymentEnv = async () => {
+    const [vars, canonical] = await engine.query(
+      async (db) => [await engine.environment.snapshot(db), await readCanonicalUrls(db)] as const,
+    );
+    return { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(vars) };
+  };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
   const useAuth = (providers: unknown[] | null) => {
@@ -1033,6 +1049,69 @@ export function createServer(opts: ServerOptions) {
     },
     deploymentEnv,
   });
+  /**
+   * Convex's `GET /api/v1/get_canonical_urls` (any admin: the URLs, or the server's origins) and
+   * `POST /api/v1/update_canonical_url {requestDestination, url?}` (WriteEnvironmentVariables): set or unset
+   * one, with its audit-log event, after checking the deployed `auth.config` still evaluates with it.
+   */
+  canonicalRoute = async (url, req, caller) => {
+    if (url.pathname.endsWith("/get_canonical_urls")) {
+      if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError(engine.instanceName);
+      const c = await engine.query((db) => readCanonicalUrls(db));
+      return json({
+        bunvexCloudUrl: c.cloud ?? builtinEnv.BUNVEX_CLOUD_URL,
+        bunvexSiteUrl: c.site ?? builtinEnv.BUNVEX_SITE_URL ?? null,
+      });
+    }
+    if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    functions.requireOperation(caller, "WriteEnvironmentVariables");
+    let body: { requestDestination?: unknown; url?: unknown };
+    try {
+      body = JSON.parse(await new Response(capped(req).body).text()) ?? {};
+    } catch (e) {
+      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+    }
+    const destination = body.requestDestination as RequestDestination;
+    if (!REQUEST_DESTINATIONS.includes(destination))
+      return requestError(
+        400,
+        "BadJsonBody",
+        `invalid JSON body: unknown variant \`${String(destination)}\`, expected \`bunvexCloud\` or \`bunvexSite\``,
+      );
+    if (body.url !== undefined && body.url !== null && typeof body.url !== "string")
+      return requestError(400, "BadJsonBody", "invalid JSON body: invalid type for `url`: expected a string");
+    const next = (body.url as string | null | undefined) ?? null;
+    try {
+      let providers: unknown[] | null = null;
+      if (authModule) {
+        const env = await deploymentEnv();
+        const name = destination === "bunvexCloud" ? "BUNVEX_CLOUD_URL" : "BUNVEX_SITE_URL";
+        const origin = destination === "bunvexCloud" ? builtinEnv.BUNVEX_CLOUD_URL : builtinEnv.BUNVEX_SITE_URL;
+        const value = next ?? origin;
+        if (value === undefined) delete env[name];
+        else env[name] = value;
+        providers = await evaluateAuthConfig(engine, authModule, env, "This change would make the auth config invalid");
+      }
+      await engine.mutation(async (db) => {
+        await setCanonicalUrl(db, destination, next);
+        await insertAuditLogEvents(
+          db,
+          [
+            next === null
+              ? auditEvents.deleteCanonicalUrl(destination)
+              : auditEvents.updateCanonicalUrl(destination, next),
+          ],
+          auditActor(caller),
+        );
+      }, "update_canonical_url");
+      if (authModule) useAuth(providers);
+      return new Response(null, { status: 200 });
+    } catch (e) {
+      if (e instanceof PushError) return requestError(400, e.code, e.message);
+      throw e;
+    }
+  };
   envRoute = async (url, req, caller) => {
     if (url.pathname.endsWith("/list_environment_variables")) {
       if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);

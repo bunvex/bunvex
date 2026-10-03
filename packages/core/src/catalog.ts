@@ -32,6 +32,8 @@ export const SCHEMAS_TABLE = "_schemas";
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
 export const EXPORTS_TABLE = "_exports";
+/** The deployment's canonical URLs (STUDY-49), as Convex's `_canonical_urls`: `{requestDestination, url}`. */
+export const CANONICAL_URLS_TABLE = "_canonical_urls";
 /** The deployment's audit log (STUDY-48), as Convex's `_deployment_audit_log`: one document per event. */
 export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 /** Snapshot imports (STUDY-42), as Convex's `_snapshot_imports`: one row per import, its state and checkpoints. */
@@ -70,6 +72,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _scheduled_functions: 539,
   _storage: 540,
   _snapshot_imports: 541,
+  _canonical_urls: 546,
   _cron_next_run: 547,
   _index_backfills: 548,
   // bunvex's own.

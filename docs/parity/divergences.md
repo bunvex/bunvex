@@ -301,13 +301,14 @@ DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-
 [Resolved to match Convex](#resolved-to-match-convex).
 DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits on components ([Waiting on a dependency](#waiting-on-a-dependency)).
 
-DV-260–DV-262 (STUDY-48 A1–A3, the audit log) await the owner; the PR implements each recommendation:
+DV-260–DV-262 (STUDY-48 A1–A3, the audit log) and DV-263 (STUDY-49 C1, canonical URLs) await the owner; the PRs implement each recommendation:
 
 | ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
 |---|---|---|---|---|---|
 | DV-260 | The audit log is readable by default (`auditLogRetentionDays` -1; null or days as Convex's) | self-hosted: no `_backend_info`, so the HTTP list is 403 `AuditLogsDisabled` and the History page off | yes (operators, dashboard) | Convex's is a cloud plan's limit. Accept | [STUDY-48 A1](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-261 | No `push_config_with_components` event yet | recorded at `finish_push` | yes (dashboard) | Not done yet: a follow-up PR. Accept until then | [STUDY-48 A2](../study/STUDY-48-audit-log.md#4-divergences) |
 | DV-262 | `snapshot_import` has no `member_id` | the importer's member | yes (dashboard) | Not done yet: imports record no member (STUDY-42). Accept | [STUDY-48 A3](../study/STUDY-48-audit-log.md#4-divergences) |
+| DV-263 | Canonical URL destinations are `bunvexCloud` / `bunvexSite`; `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | `convexCloud` / `convexSite`, `{convexCloudUrl, convexSiteUrl}` | yes (operators' API) | Not possible: rule 5, as `BUNVEX_CLOUD_URL`. Accept | [STUDY-49 C1](../study/STUDY-49-canonical-urls.md#4-divergences) |
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
@@ -322,7 +323,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Log streaming** (item 12) | DV-77, DV-141, DV-184 | stop printing captured log lines to stdout; scheduled and cron runs' lines in the log stream; `dev --tail-logs` on by default (`pause-on-deploy`) |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
-| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, canonical URLs, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
+| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |

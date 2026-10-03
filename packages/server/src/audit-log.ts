@@ -39,6 +39,9 @@ export const auditEvents = {
       table_names_deleted: [{ component: null, table_names: o.deleted.slice(0, 20) }],
       table_count_deleted: BigInt(o.deleted.length),
     }),
+  updateCanonicalUrl: (destination: string, url: string) =>
+    event("update_canonical_url", { request_destination: destination, url }),
+  deleteCanonicalUrl: (destination: string) => event("delete_canonical_url", { request_destination: destination }),
   deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
   generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),
 };
