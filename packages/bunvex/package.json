@@ -8,12 +8,24 @@
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
-    "./values": "./src/values.ts"
+    "./values": "./src/values.ts",
+    "./browser": "./src/browser.ts",
+    "./react": "./src/react.ts"
   },
   "dependencies": {
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
+    "@bunvex/client": "workspace:*",
+    "@bunvex/react": "workspace:*",
     "@bunvex/cli": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "repository": {
     "type": "git",

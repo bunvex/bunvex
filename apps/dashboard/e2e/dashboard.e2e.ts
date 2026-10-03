@@ -2,7 +2,7 @@
 // keys), layout (the object editor's popover), colour contrast, reduced motion. Against the built app
 // (`vite preview`), in Chromium: the system Chrome locally, Playwright's Chromium in CI
 // (`E2E_BROWSER=chromium`). Run with `bun run e2e`.
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { type Browser, chromium, type Page } from "playwright-core";
@@ -15,57 +15,32 @@ const KNOBS = "writes=0&latency=0&demo=1";
 const url = (path: string) => `${ORIGIN}${path}${path.includes("?") ? "&" : "?"}${KNOBS}`;
 const AXE = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
 
-let server: ReturnType<typeof Bun.spawn>;
-/** `vite preview`'s output, kept so a crash in CI comes with its own stack trace (it died with a bare "write after end"). */
-const serverLog: string[] = [];
-let serverExit: number | null = null;
-async function keep(stream: ReadableStream<Uint8Array>, name: string) {
-  const decoder = new TextDecoder();
-  const reader = stream.getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    const text = decoder.decode(value);
-    serverLog.push(`[${new Date().toISOString()} ${name}] ${text}`);
-    process.stderr.write(text);
-  }
-}
+// The built app (`bun run build`, the script runs it first), served by Bun.serve: its files, and index.html
+// for every other path (the SPA fallback a static host gives). It replaced `vite preview`, which died in CI
+// mid-run with "write after end" (ERR_STREAM_WRITE_AFTER_END) thrown from Bun's node:http compatibility
+// layer (emitResponseFinish → advanceResponsePipeline, Bun 1.4.2), taking every later test down with it.
+const DIST = `${import.meta.dir}/../dist`;
+let server: ReturnType<typeof Bun.serve>;
 let browser: Browser;
 
 beforeAll(async () => {
-  server = Bun.spawn(["bun", "--bun", "vite", "preview", "--port", String(PORT), "--strictPort"], {
-    cwd: `${import.meta.dir}/..`,
-    stdout: "pipe",
-    stderr: "pipe",
+  server = Bun.serve({
+    port: PORT,
+    async fetch(req) {
+      const path = decodeURIComponent(new URL(req.url).pathname);
+      if (!path.includes("..") && path !== "/") {
+        const file = Bun.file(`${DIST}${path}`);
+        if (await file.exists()) return new Response(file);
+      }
+      return new Response(Bun.file(`${DIST}/index.html`), { headers: { "content-type": "text/html" } });
+    },
   });
-  void keep(server.stdout as ReadableStream<Uint8Array>, "stdout");
-  void keep(server.stderr as ReadableStream<Uint8Array>, "stderr");
-  void server.exited.then((code) => {
-    serverExit = code;
-  });
-  for (let i = 0; ; i++) {
-    if (
-      await fetch(ORIGIN).then(
-        (r) => r.ok,
-        () => false,
-      )
-    )
-      break;
-    if (i > 100) throw new Error("vite preview did not start");
-    await Bun.sleep(100);
-  }
   browser = await chromium.launch(process.env.E2E_BROWSER === "chromium" ? {} : { channel: "chrome" });
-});
-
-// A crashed server would fail every later test with "connection refused" after a 30 s wait: say what happened
-beforeEach(() => {
-  if (serverExit !== null)
-    throw new Error(`vite preview exited with code ${serverExit}; its output:\n${serverLog.slice(-40).join("")}`);
 });
 
 afterAll(async () => {
   await browser?.close();
-  server?.kill("SIGINT");
+  await server?.stop(true);
 });
 
 /** A page that records every request leaving the app's origin, and every uncaught error. */
@@ -398,6 +373,9 @@ describe("the dashboard in a browser", () => {
       const { page, errors, external, close } = await open("/schema", { colorScheme });
       await heading(page, "Schema");
       await page.locator(".react-flow__node-table").nth(3).waitFor();
+      // edges are drawn once the nodes are measured and laid out (ELK, a worker fetched on first use): wait for
+      // them rather than count at once, which raced the layout on a cold first load
+      await page.locator(".react-flow__edge").nth(1).waitFor();
       expect(await page.locator(".react-flow__edge").count()).toBe(2);
       await page.addScriptTag({ content: AXE });
       const violations = await page.evaluate(async () => {

@@ -191,6 +191,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-250 | A page of a paginated query that failed (e.g. `InvalidCursor`) never escapes the paginated client's transition: the error reaches `onPaginatedUpdate_experimental`'s `onError` and `usePaginatedQuery_experimental` (reset, `status: "error"`, error boundary) | the failed page is read outside any `try` in the transition, so the error is thrown out of the WebSocket message handler: `onError` is never called and the hook never sees the error from a transition (checked with the official client) | yes (only when a page fails) | keep bunvex's: it is where Convex's own code means the error to go | owner, 2026-10-03 (as recommended) | [STUDY-26 P3](../study/STUDY-26-sync-client.md#83-divergences) |
 
 ## Resolved to match Convex
 
@@ -304,6 +305,8 @@ DV-224 (STUDY-43 D1) was accepted as recommended (owner, 2026-10-02); it waits o
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 
+DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
@@ -337,6 +340,6 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-12 L6](../study/STUDY-12-dashboard.md#73-divergences) | Dashboard logs: deployment events, usage and identity, "act as a user", run history, live runner results |
 | [STUDY-12 S2, H2](../study/STUDY-12-dashboard.md#93-divergences) | Dashboard: component picker; server-recorded events (pushes, index builds) |
 | [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: `usePreloadedQuery` (with `@bunvex/nextjs`); `usePaginatedQuery` and the auth helpers (STUDY-27) landed |
-| [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery` |
+| [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | ~~The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery`~~ — closed by STUDY-26 §8.4 (with `usePaginatedQuery_experimental`) |
 | [STUDY-26 H3](../study/STUDY-26-sync-client.md#93-divergences) | HTTP client `function(name, componentPath, args)` and `/api/function` (with components) |
 | [STUDY-27 A5](../study/STUDY-27-auth.md#4-divergences) | React: `BunvexProviderWithClerk` / `BunvexProviderWithAuth0` (after `BunvexProviderWithAuth`) |
