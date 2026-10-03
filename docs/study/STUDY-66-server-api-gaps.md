@@ -1,6 +1,7 @@
 # STUDY-66 — Small server-API gaps: `.limit(n)`, the operator cap, `db.table()`, returned queries, the restricted globals, bad tokens, schema helpers, registration guards
 
-- **Status:** draft; each section is built in its own PR ("Now" describes the PR's change)
+- **Status:** draft; each section is built in its own PR ("Now" describes the PR's change): §1 #291, §2 #296,
+  §3 #297, §4 #294, §5 #306, §6 #304, §7 #305
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-03](STUDY-03-deterministic-execution.md) (deterministic execution),
   [STUDY-07](STUDY-07-query-semantics.md) and [STUDY-16](STUDY-16-query-chaining.md) (queries),
