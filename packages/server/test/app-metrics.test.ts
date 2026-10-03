@@ -147,7 +147,11 @@ async function setup() {
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
   const call = (kind: string, path: string) =>
-    fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args: {} }) });
+    fetch(`${api}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    });
   const now = Date.now();
   const window = JSON.stringify({
     start: { secs_since_epoch: Math.floor(now / 1000) - 600, nanos_since_epoch: 0 },
@@ -250,6 +254,9 @@ test("function_concurrency's gauges and the scheduler's lag", async () => {
     "outstanding_functions:isolate:Mutation:running",
     "outstanding_functions:isolate:Query:queued",
     "outstanding_functions:isolate:Query:running",
+    // Each limiter reports from start, the Node actions' too (STUDY-68).
+    "outstanding_functions:node:Action:queued",
+    "outstanding_functions:node:Action:running",
   ]);
   expect(t.one(c["outstanding_functions:isolate:Action:running"])).toBe(1);
   // No job yet: no sample. A job an hour away: a lag of 0.

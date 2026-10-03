@@ -44,6 +44,7 @@ test("HTTP: a mutation out of retention answers 503 InternalServerError, run onc
   const { engine, port, runs } = await setup();
   const r = await fetch(`http://127.0.0.1:${port}/api/mutation`, {
     method: "POST",
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ path: "m:slow", args: {} }),
   });
   expect(r.status).toBe(503);
@@ -83,6 +84,7 @@ test("query_at_ts further back than MAX_TRANSACTION_WINDOW (10 s) answers 503; w
   const at = (ts: number) =>
     fetch(`http://127.0.0.1:${port}/api/query_at_ts`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "m:count", args: {}, ts: v1.encodeU64(BigInt(ts) * 1000n) }),
     });
   // The window reaches back to 14 s; the snapshot in force then is the 12 s commit's.

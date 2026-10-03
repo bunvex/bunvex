@@ -91,11 +91,16 @@ export type {
 } from "./data-model.ts";
 export type {
   BaseDatabaseReader,
+  BaseDatabaseReaderWithTable,
+  BaseTableReader,
+  BaseTableWriter,
   ExpressionOrValueOf,
   FieldTypeFromFieldPath,
   FilterBuilder,
   GenericDatabaseReader,
+  GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
   IndexRange,
   IndexRangeBuilder,
   LowerBoundIndexRangeBuilder,
@@ -118,6 +123,7 @@ export {
   installDeterminismIn,
   newUserTimer,
   observeTime,
+  outsideExecution,
   PersistenceReadError,
   pausingUserTime,
   runImportPhase,
@@ -191,6 +197,7 @@ export {
   UnsureCommitError,
 } from "./persistence/index.ts";
 export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
@@ -257,12 +264,15 @@ export {
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   formatBytes,
   ImportIdError,
+  isQueryObject,
   type PaginationOptions,
   type PaginationResult,
+  QueryCursorError,
   type Savepoint,
   Tx,
   type TxLimits,
