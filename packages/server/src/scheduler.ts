@@ -37,6 +37,7 @@ import {
 } from "@bunvex/protocol";
 import { type GenericId, isSimpleObject, type Value, valueSize } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
+import { functionNameOf } from "./function-handles.ts";
 import type { Functions, SourcedCaller } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
@@ -103,7 +104,10 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the future`);
     if (tsMs - now < -FIVE_YEARS_MS)
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the past`);
-    const name = functions.scheduledTarget(getFunctionName(fn as AnyFunctionReference));
+    // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
+    const name = functions.scheduledTarget(
+      await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
+    );
     return write(async (db) => {
       // What a canceled running action schedules is born canceled (Convex's parent check).
       const parent = target.job ? await getJob(db, target.job) : null;

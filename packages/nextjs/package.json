@@ -1,0 +1,32 @@
+{
+  "name": "@bunvex/nextjs",
+  "version": "0.1.0-alpha.0",
+  "description": "Next.js and server rendering: fetchQuery, fetchMutation, fetchAction and preloadQuery.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/values": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/nextjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

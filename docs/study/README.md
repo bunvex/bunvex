@@ -81,7 +81,13 @@ to a spec.
 | [STUDY-44](STUDY-44-ctx-meta.md) | `ctx.meta`: function, transaction, deployment, snapshot and request metadata | built; no divergence |
 | [STUDY-45](STUDY-45-text-search.md) | Full-text search: `searchIndex`, `withSearchIndex`, tokens, BM25, limits, reactivity | accepted: S1–S6 as recommended (owner, 2026-10-02) |
 | [STUDY-47](STUDY-47-log-streaming.md) | Function log streaming: the execution log, `stream_function_logs`, `bunvex logs`, `dev --tail-logs` | accepted: L1–L4, L6 as recommended (owner, 2026-10-03) |
+| [STUDY-50](STUDY-50-function-handles.md) | Function handles: `createFunctionHandle`, `_function_handles`, handles in `runX` and the scheduler | accepted: H1 as recommended (owner, 2026-10-03) |
+| [STUDY-52](STUDY-52-shape-inference.md) | Table shape inference: the counted lattice, `/api/shapes2` | accepted: A1–A2 as recommended (owner, 2026-10-03) |
+| [STUDY-53](STUDY-53-commit-timestamp.md) | The commit timestamp: `db.vars.commitTs`, `v.commitTs()`, resolution at commit | accepted: T1–T2 as recommended (owner, 2026-10-03) |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
+| [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
+| [STUDY-47](STUDY-47-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
+| [STUDY-48](STUDY-48-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

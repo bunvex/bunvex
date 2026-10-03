@@ -15,3 +15,23 @@ export type QueryToken = string & { __queryToken: true };
 export function serializePathAndArgs(udfPath: string, args: Record<string, Value>): QueryToken {
   return JSON.stringify({ udfPath: canonicalizeUdfPath(udfPath), args: toJsonValue(args) }) as QueryToken;
 }
+
+/** A paginated query's name, arguments (without `paginationOpts`) and options as one string. */
+export type PaginatedQueryToken = string & { __paginatedQueryToken: true };
+
+export function serializePaginatedPathAndArgs(
+  udfPath: string,
+  args: Record<string, Value>,
+  options: { initialNumItems: number; id: number },
+): PaginatedQueryToken {
+  return JSON.stringify({
+    type: "paginated",
+    udfPath: canonicalizeUdfPath(udfPath),
+    args: toJsonValue(args),
+    options: toJsonValue({ initialNumItems: options.initialNumItems, id: options.id }),
+  }) as PaginatedQueryToken;
+}
+
+export function serializedQueryTokenIsPaginated(token: QueryToken | PaginatedQueryToken): token is PaginatedQueryToken {
+  return (JSON.parse(token) as { type?: string }).type === "paginated";
+}

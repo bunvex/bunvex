@@ -27,6 +27,7 @@ import {
   checkValue,
   displayValue,
   type GenericValidator,
+  hasCommitTs,
   type Infer,
   isBunvexError,
   isSimpleObject,
@@ -46,6 +47,7 @@ import {
 } from "./admin-keys.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
+import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
   type Completion,
@@ -612,6 +614,17 @@ export class Functions {
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
+    const body = this.queryBodyOf(name, args, fromClient, caller);
+    return async (db: Tx) => {
+      const value = await body(db);
+      // Convex's check: only a mutation's result may hold `db.vars.commitTs` (STUDY-53).
+      if (hasCommitTs(value))
+        throw new Error(`Function ${name} return value invalid: queries cannot return an unresolved commit timestamp`);
+      return value;
+    };
+  }
+
+  private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const f = this.fn(name, "query", fromClient, caller);
     return async (db: Tx) => {
@@ -667,7 +680,19 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args);
+    return inHandleScope({ db, engine: this.engine }, () =>
+      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    );
+  }
+
+  /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
+  engineOf(): Engine {
+    return this.engine;
+  }
+
+  /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
+  functionPaths(): string[] {
+    return [...this.fns.keys()].map(canonicalPath);
   }
 
   /**
@@ -758,7 +783,7 @@ export class Functions {
     opts: NestedOptions | undefined,
     depth: number,
   ): Promise<unknown> {
-    const name = registryKey(getFunctionName(ref));
+    const name = registryKey(await functionNameOf(ref, db, this.engine));
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -1076,7 +1101,9 @@ export class Functions {
         const ctx = this.actionCtx(caller, null, opts.job, f);
         const a = this.checkArgs(f, args);
         return this.actionPermits.run(() =>
-          this.inActionEnv(() => f.handler(ctx, a)).then((r) => this.checkReturns(f, r)),
+          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then((r) =>
+            this.checkReturns(f, r),
+          ),
         );
       },
       returned,
@@ -1096,9 +1123,12 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: (n: FunctionRef, a?: unknown) => this.runQuery(registryKey(getFunctionName(n)), a, false, caller),
-      runMutation: (n: FunctionRef, a?: unknown) => this.runMutation(registryKey(getFunctionName(n)), a, false, caller),
-      runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
+      runQuery: async (n: FunctionRef, a?: unknown) =>
+        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runMutation: async (n: FunctionRef, a?: unknown) =>
+        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+      runAction: async (n: FunctionRef, a?: unknown) =>
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
@@ -1119,7 +1149,10 @@ export class Functions {
       "HttpAction",
       route,
       caller,
-      () => this.actionPermits.run(async () => this.inActionEnv(() => handler(ctx, request))),
+      () =>
+        this.actionPermits.run(async () =>
+          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+        ),
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
     );
   }

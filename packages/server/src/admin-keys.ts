@@ -7,7 +7,9 @@
 // (POLYVAL, the tag, CTR mode with a 32-bit little-endian counter). Keys are a few dozen bytes and a checked
 // key is cached by its string, so this costs one decryption per new key.
 import { createCipheriv, randomBytes, timingSafeEqual } from "node:crypto";
-import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "@bunvex/core";
+import { aes128GcmSivOpen, aes128GcmSivSeal, instanceSecretBytes, kbkdfCtrHmacSha256 } from "@bunvex/core";
+
+export { aes128GcmSivOpen, aes128GcmSivSeal };
 
 /** Convex's ADMIN_KEY_VERSION: the first byte of a key, also the cipher's associated data. */
 export const ADMIN_KEY_VERSION = 1;
@@ -74,112 +76,6 @@ export class BadAdminKeyError extends Error {
     super("The provided admin key was invalid for this instance");
     this.name = "BadAdminKeyError";
   }
-}
-
-// ---- AES-128-GCM-SIV (RFC 8452) -------------------------------------------------------------------------
-
-const aesBlock = (key: Uint8Array, block: Uint8Array) => {
-  const c = createCipheriv("aes-128-ecb", key, null);
-  c.setAutoPadding(false);
-  return new Uint8Array(Buffer.concat([c.update(block), c.final()]));
-};
-const leToBig = (b: Uint8Array) => {
-  let x = 0n;
-  for (let i = b.length - 1; i >= 0; i--) x = (x << 8n) | BigInt(b[i]!);
-  return x;
-};
-const bigToLe = (x: bigint) => {
-  const b = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) {
-    b[i] = Number(x & 0xffn);
-    x >>= 8n;
-  }
-  return b;
-};
-/** POLYVAL's field: x^128 + x^127 + x^126 + x^121 + 1, little-endian. */
-const POLY = (1n << 128n) | (1n << 127n) | (1n << 126n) | (1n << 121n) | 1n;
-/** a · b · x^-128 in POLYVAL's field. */
-function dot(a: bigint, b: bigint) {
-  let c = 0n;
-  for (let i = 0n; i < 128n; i++) if ((b >> i) & 1n) c ^= a << i;
-  for (let i = 0; i < 128; i++) {
-    if (c & 1n) c ^= POLY;
-    c >>= 1n;
-  }
-  return c;
-}
-function polyval(h: Uint8Array, data: Uint8Array) {
-  const H = leToBig(h);
-  let s = 0n;
-  for (let i = 0; i < data.length; i += 16) s = dot(s ^ leToBig(data.subarray(i, i + 16)), H);
-  return bigToLe(s);
-}
-const padded = (b: Uint8Array) => {
-  const out = new Uint8Array(Math.ceil(b.length / 16) * 16);
-  out.set(b);
-  return out;
-};
-function sivKeys(key: Uint8Array, nonce: Uint8Array) {
-  const half = (i: number) => {
-    const b = new Uint8Array(16);
-    new DataView(b.buffer).setUint32(0, i, true);
-    b.set(nonce, 4);
-    return aesBlock(key, b).subarray(0, 8);
-  };
-  const auth = new Uint8Array(16);
-  auth.set(half(0), 0);
-  auth.set(half(1), 8);
-  const enc = new Uint8Array(16);
-  enc.set(half(2), 0);
-  enc.set(half(3), 8);
-  return { auth, enc };
-}
-function sivTag(keys: { auth: Uint8Array; enc: Uint8Array }, nonce: Uint8Array, aad: Uint8Array, pt: Uint8Array) {
-  const lengths = new Uint8Array(16);
-  const dv = new DataView(lengths.buffer);
-  dv.setBigUint64(0, BigInt(aad.length * 8), true);
-  dv.setBigUint64(8, BigInt(pt.length * 8), true);
-  const pa = padded(aad);
-  const pp = padded(pt);
-  const all = new Uint8Array(pa.length + pp.length + 16);
-  all.set(pa, 0);
-  all.set(pp, pa.length);
-  all.set(lengths, pa.length + pp.length);
-  const s = polyval(keys.auth, all);
-  for (let i = 0; i < 12; i++) s[i]! ^= nonce[i]!;
-  s[15]! &= 0x7f;
-  return aesBlock(keys.enc, s);
-}
-function sivCtr(key: Uint8Array, tag: Uint8Array, data: Uint8Array) {
-  const block = new Uint8Array(tag);
-  block[15]! |= 0x80;
-  const dv = new DataView(block.buffer);
-  const out = new Uint8Array(data.length);
-  for (let i = 0; i < data.length; i += 16) {
-    const ks = aesBlock(key, block);
-    for (let j = 0; j < 16 && i + j < data.length; j++) out[i + j] = data[i + j]! ^ ks[j]!;
-    dv.setUint32(0, (dv.getUint32(0, true) + 1) >>> 0, true);
-  }
-  return out;
-}
-
-/** AES-128-GCM-SIV: the ciphertext followed by its 16-byte tag. */
-export function aes128GcmSivSeal(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, plaintext: Uint8Array) {
-  const keys = sivKeys(key, nonce);
-  const tag = sivTag(keys, nonce, aad, plaintext);
-  const out = new Uint8Array(plaintext.length + 16);
-  out.set(sivCtr(keys.enc, tag, plaintext));
-  out.set(tag, plaintext.length);
-  return out;
-}
-
-/** The plaintext, or null when the tag does not match. */
-export function aes128GcmSivOpen(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, sealed: Uint8Array) {
-  if (sealed.length < 16) return null;
-  const keys = sivKeys(key, nonce);
-  const tag = sealed.subarray(sealed.length - 16);
-  const pt = sivCtr(keys.enc, tag, sealed.subarray(0, sealed.length - 16));
-  return timingSafeEqual(sivTag(keys, nonce, aad, pt), tag) ? pt : null;
 }
 
 // ---- The AdminKey proto (crates/pb/protos/convex_keys.proto), proto3 -----------------------------------

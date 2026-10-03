@@ -40,7 +40,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | done (STUDY-27) | `@bunvex/client`; see client-sync.md. |
 | Query cache keyed by identity | `crates/keybroker` `Identity::cache_key` | done (STUDY-27) | Keyed by the identity's attributes only when the run read it, as Convex (`observed_identity`). |
 | Acting as a user (admin impersonation, `actingAs`) | `crates/application/lib.rs` `authenticate`; header `Convex <key>:<b64 identity>` | done (STUDY-34) | `Bunvex <key>:<b64 identity>` (DV-97) and sync's `impersonating`; needs `ActAsUser`; `tokenIdentifier`, or `issuer|subject`; a malformed identity is 400 `HeaderParseFailure`; never with a system key. |
-| Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | missing | ARCHITECTURE lists clerk and auth0 as D. They are only OIDC configurations plus client glue. |
+| Clerk / Auth0 / Convex Auth / WorkOS helpers | docs; `npm/convex` react-clerk, react-auth0; `crates/workos_client` | partial | Clerk and Auth0: `@bunvex/react-clerk`, `@bunvex/react-auth0` (STUDY-47); the rest are OIDC configurations. WorkOS and Convex Auth helpers missing. |
 
 ### 2. Deployment auth, admin keys, operations
 
@@ -84,7 +84,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference or a name. Function handles come with components. |
+| `ctx.scheduler.runAfter(ms, fn, args)` / `runAt(ts\|Date, fn, args)` | `npm/convex/server/scheduler.ts`; `impl/scheduler_impl.ts` | done (STUDY-30) | Mutations and actions; a reference, a name or a function handle (STUDY-50). |
 | Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | done (STUDY-30) | From actions, each call commits at once. |
 | Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
 | Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
@@ -180,7 +180,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `defineComponent(name)` and a component's own schema and functions | same; `crates/model/components` | missing | |
 | Table and function isolation per component (`TableNamespace`) | `crates/model/components`; `_components`, `_component_definitions` tables | missing | |
 | Calling a component: `ctx.runQuery(components.x.fn, args)` | `server/impl/actions_impl.ts` | missing | Also works from mutations via `ctx.runMutation`, at depth up to 8. |
-| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | missing | Used by the scheduler and by components. |
+| Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | done (STUDY-50) | `function://<id>#<path>`; rows per function kept by each push (tombstoned, revived); resolved in the caller's transaction by `runQuery` / `runMutation` / `runAction` and the scheduler. Synced just after the push's commit (DV-264, accepted). |
 | Component type checking on push | `crates/model/components/type_checking.rs` | missing | |
 | Ecosystem components (ratelimiter, workpool, aggregate, …) | `npm-packages/components/`; external `@convex-dev/*` | missing | Popular apps depend on these, so they are the main reason to support components. |
 
@@ -243,7 +243,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | Index/table limits: 64 indexes per table (docs say 32), 10 000 tables, names up to 64 chars | `crates/common/schemas/mod.rs`; `database/bootstrap_model/table.rs` | missing | |
 | `_tables` (Active, Hidden, Deleting) and `_index` metadata tables | `crates/common/bootstrap_model/tables.rs`, `index/mod.rs` | done (#6, STUDY-42) | `_tables` states `active` / `hidden` / `deleting`: a hidden table is invisible to functions and may share an active table's name and number (`createHiddenTable`, with a chosen number and copied indexes); `activateTables` makes hidden tables active and the ones they replace `deleting` in one commit. Every transaction that uses a table reads its `_tables` document, so an activation conflicts with mutations that wrote the old table and invalidates queries that read it (measured: within noise). |
 | Deleting tables and clearing tables (dashboard / API) | `/api/delete_tables`; `system-udfs clearTablePage.ts` | partial | `POST /api/delete_tables {tableNames, componentId}` (WriteData), as Convex's: the tables deleted in one commit (their documents removed in the background, STUDY-42), a missing one skipped, a system table an internal error, a table the active schema declares or points to with `v.id` refused (`SchemaEnforcementError`, Convex's messages), a pending schema that uses one failed; no audit-log entry (no audit log yet). Clearing (`_system/frontend/clearTablePage`) comes with the dashboard's data source (item 12). |
-| Table size and shape (`/api/shapes2`, `tableSize`) | `crates/shape_inference`; `system-udfs/_system/frontend/tableSize.ts` | missing | |
+| Table size and shape (`/api/shapes2`, `tableSize`) | `crates/shape_inference`; `system-udfs/_system/frontend/tableSize.ts` | partial (STUDY-52) | `/api/shapes2` (ViewData) in Convex's dashboard form, computed at one snapshot when asked (DV-265, accepted). `tableSize` not yet. |
 
 ### 16. Retention / GC
 
@@ -270,7 +270,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_modules`, `_source_packages`, `_udf_config`, `_external_deps_packages` | `crates/model/modules` etc. | partial | `_modules`, `_source_packages`, `_udf_config` as Convex's (STUDY-35). No `_external_deps_packages` (Node actions, Phase 4). |
 | `_auth` | `crates/model/auth` | missing | |
 | `_environment_variables` | `crates/model/environment_variables` | done (STUDY-37) | `{ name, value }`, indexed `by_name`, as Convex's. |
-| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | missing | |
+| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | partial | `_function_handles` done (STUDY-50, number 545); the component tables come with components. |
 | `_session_requests` | `crates/model/session_requests` | done (STUDY-23) | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | done (STUDY-42) | Convex's fields, states and indexes (timestamps in ns); `_snapshot_imports` also keeps the upload's size (`object_size`, not returned by `queryImport`). |
 | `_log_sinks` | `crates/model/log_sinks` | missing | |
@@ -291,7 +291,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Snapshot import: CSV, JSONL, JSON array, ZIP | `crates/application/snapshot_import/*` | done (STUDY-42) | Convex's value rules (CSV floats by Rust's `f64` grammar else strings; JSON numbers float64, `$` keys refused; ZIP tables in the lossless encoding when `"uniform"`), its messages ("Hit an error while importing:" …) and limits (JSON array 16 MiB); ZIPs read by byte ranges (ZIP64, CRC checked); `_tables`, `_storage` and its files restored; other system tables skipped. Components refused (DV-215); legacy encoding only for empty tables (DV-219); the JSON parser's wording (DV-222). The dashboard imports all four on the mock (UI-01 §19.2). |
 | Import modes RequireEmpty (default), Append, Replace, ReplaceAll; confirmation step | `snapshot_import/mod.rs`; `_snapshot_imports` states | done (STUDY-42) | `_snapshot_imports` with Convex's fields, states and transitions, checkpoints and the `table \| create \| delete` summary (manual confirmation when anything is deleted); each table written into a hidden table and all activated in one commit (an append writes the live table, as Convex); schema checked with the import's tables, `ImportForeignKey`, schema-changed check; a failed or canceled import leaves nothing. A system error is retried with Convex's backoff (5 times) and an interrupted import resumes from its hidden tables (DV-220, DV-221 resolved). The dashboard offers the modes on the mock (UI-01 §19.2). |
 | Resumable upload (`start_upload`, `upload_part`, `finish_upload`, `perform_import`, `cancel_import`) | `/api/import/*` | done (STUDY-42) | Also the one-shot `/api/import`; ImportBackups; parts in the `snapshot_imports` blob store use case (`S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET`), each part token signed for its upload; Convex's argument errors; `_system/cli/queryImport` and `:list` (ViewBackups). |
-| Shape inference / generated schema | `crates/shape_inference` | missing | Also used by the dashboard's "generate schema". |
+| Shape inference / generated schema | `crates/shape_inference` | partial (STUDY-52) | Convex's counted lattice (disjoint unions of ≤ 16, the contraction order, 64-field objects) in `@bunvex/core` `shapes.ts`. Not yet: kept per commit, removal, `/api/json_schemas`, the schema-walk shortcut. |
 | Preserving `_id` and `_creationTime` on import | `snapshot_import` | done (STUDY-42) | An `_id` of the table's number kept (else Convex's `ImportConflict`), a float `_creationTime` kept; table numbers from `_tables`, the first `_id` or the existing table, with Convex's conflict checks; duplicate ids in a batch refused. |
 | Periodic cloud backups and restore | `dashboard/…/Backups.tsx` | missing | Cloud-only; self-hosted uses export/import. Can be skipped. |
 | Upgrade path via export and `import --replace-all` | `self-hosted/advanced/upgrading.md` | missing | |

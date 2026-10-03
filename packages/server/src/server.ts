@@ -42,6 +42,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
+import { syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
@@ -52,6 +53,7 @@ import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
+import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
 import {
   fromWireTs,
@@ -518,6 +520,14 @@ export function createServer(opts: ServerOptions) {
       functions.requireOperation(caller, "ViewLogs");
       return streamLogs(url, req, stream[1] === "function_logs");
     }
+    // Convex's `/api/shapes2?component=` (ViewData): each user table's inferred shape (STUDY-52).
+    if (url.pathname === "/api/shapes2" && req.method === "GET") {
+      functions.requireOperation(caller, "ViewData");
+      const component = url.searchParams.get("component");
+      if (component !== null && component !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      return json(await tableShapes(engine));
+    }
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -639,6 +649,7 @@ export function createServer(opts: ServerOptions) {
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
         STREAM_ROUTE.test(url.pathname) ||
+        url.pathname === "/api/shapes2" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -990,13 +1001,18 @@ export function createServer(opts: ServerOptions) {
         authModule = code.authConfig;
         if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
       })
-    : Promise.resolve();
+    : // An embedded server's functions are registered in process: their handles now.
+      engine
+        .mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles")
+        .then(() => {});
   codeReady.catch((e) =>
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
+    // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
+    await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
     if (o.auth !== undefined)
       verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));
