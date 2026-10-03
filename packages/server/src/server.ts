@@ -1382,7 +1382,9 @@ export function createServer(opts: ServerOptions) {
       // deployment's (else it starts over).
       let providers: unknown[] | null = null;
       for (let attempt = 0; ; attempt++) {
-        const base = await engine.query((db) => engine.environment.list(db));
+        const [base, canonical] = await engine.query(
+          async (db) => [await engine.environment.list(db), await readCanonicalUrls(db)] as const,
+        );
         const after = new Map(base.map((v) => [v.name, v.value]));
         for (const c of changes) if (c.value === null) after.delete(c.name);
         for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
@@ -1392,7 +1394,8 @@ export function createServer(opts: ServerOptions) {
           providers = await evaluateAuthConfig(
             engine,
             authModule,
-            { ...builtinEnv, ...Object.fromEntries(after) },
+            // The built-ins as every other evaluation sees them: overridden by their canonical URLs.
+            { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
           );
         const same = await engine.mutation(async (db) => {
