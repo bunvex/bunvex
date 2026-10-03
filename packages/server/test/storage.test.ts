@@ -310,7 +310,15 @@ describe("F3 and F4", () => {
   test("uploads have no size limit; every other route keeps maxRequestBodySize", async () => {
     const { upload, api, server } = await setup({ maxRequestBodySize: 1024 });
     expect((await upload("x".repeat(64 * 1024))).status).toBe(200);
-    expect((await fetch(`${api}/api/query`, { method: "POST", body: "x".repeat(4096) })).status).toBe(413);
+    expect(
+      (
+        await fetch(`${api}/api/query`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "x".repeat(4096),
+        })
+      ).status,
+    ).toBe(413);
     expect((await fetch(`${api}/http/echo`, { method: "POST", body: "x".repeat(4096) })).status).toBe(413);
     expect((await fetch(`${server.siteUrl}/echo`, { method: "POST", body: "x".repeat(4096) })).status).toBe(413);
   });

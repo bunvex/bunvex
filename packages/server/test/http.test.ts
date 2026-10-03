@@ -24,6 +24,7 @@ test("the HTTP API speaks Convex JSON: $integer args and results round-trip (STU
     (
       await fetch(`http://127.0.0.1:${server!.port}/api/${kind}`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, args }),
       })
     ).json();
