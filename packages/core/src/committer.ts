@@ -25,7 +25,38 @@ export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
  * One commit in the write log: its index-key writes (`id` is the document whose entry it is, null for a
  * removed entry) and its write source (the mutation's name, when the caller gave one).
  */
-export type LogEntry = { ts: number; writes: { index: number; key: Uint8Array; id: string | null }[]; source?: string };
+export type LogEntry = {
+  ts: number;
+  writes: { index: number; key: Uint8Array; id: string | null }[];
+  source?: string;
+  /** The documents a commit wrote into search indexes, before and after (STUDY-45 PR 3), for OCC. */
+  searchDocs?: SearchDoc[];
+};
+
+/** A written document as one search index sees it: its tokens and filter keys (a version: old or new). */
+export type SearchDoc = {
+  index: number;
+  id: string;
+  tokens: ReadonlySet<string>;
+  filters: Readonly<Record<string, string>>;
+};
+/** A mutation's search: its index, its query terms (the last maybe a prefix) and its `eq` filters. */
+export type SearchRead = { index: number; terms: { term: string; prefix: boolean }[]; filters: [string, string][] };
+
+/**
+ * Convex's OCC rule for searches (`QueryReads::overlaps`, crates/search/src/query.rs): a written version
+ * conflicts when it has every filter of the search and one of its terms.
+ */
+export function searchOverlaps(read: SearchRead, doc: SearchDoc): boolean {
+  if (read.index !== doc.index) return false;
+  for (const [field, key] of read.filters) if (doc.filters[field] !== key) return false;
+  if (!read.terms.length) return true;
+  for (const t of read.terms)
+    if (t.prefix) {
+      for (const token of doc.tokens) if (token.startsWith(t.term)) return true;
+    } else if (doc.tokens.has(t.term)) return true;
+  return false;
+}
 
 /** The first write of `writes` inside one of `reads`, if any. */
 export function firstOverlap(writes: LogEntry["writes"], reads: Interval[]): LogEntry["writes"][number] | undefined {
@@ -98,6 +129,10 @@ const DEFAULT_RETENTION: WriteLogRetention = {
 export function logEntryBytes(e: LogEntry): number {
   let n = ENTRY_OVERHEAD + (e.source === undefined ? 0 : e.source.length);
   for (const w of e.writes) n += WRITE_OVERHEAD + w.key.byteLength + (w.id === null ? 0 : w.id.length);
+  for (const d of e.searchDocs ?? []) {
+    n += WRITE_OVERHEAD + d.id.length;
+    for (const t of d.tokens) n += 32 + t.length;
+  }
   return n;
 }
 const ENTRY_OVERHEAD = 96;
@@ -205,8 +240,21 @@ type PendingCommit = {
    * cache's invalidation and subscriptions would otherwise scan them all for nothing).
    */
   logWrites?: boolean;
+  /**
+   * Called with the ts as soon as it is assigned, before anything is logged or written: the commit's final
+   * documents and index entries (a commit timestamp resolved in them, STUDY-53).
+   */
+  atTs?: (ts: number) => { docs: DocWrite[]; idx: IndexWrite[] };
   /** Called with the ts once the commit is visible, before the commit listeners (a catalog change). */
   onVisible?: (ts: number) => void;
+  /**
+   * Log-only writes (STUDY-45 PR 3): the synthetic keys of the search indexes, for the query cache and
+   * subscriptions; never persisted.
+   */
+  logExtra?: { index: number; key: Uint8Array; id: string | null }[];
+  /** The search indexes' versions this commit writes, and the searches it read, for OCC. */
+  searchDocs?: SearchDoc[];
+  searchReads?: SearchRead[];
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
@@ -395,7 +443,21 @@ export class Committer {
     // As Convex's `is_stale`: a snapshot older than the log cannot be validated, whatever it read (this
     // holds with an empty log too: a snapshot from before the store was opened is refused; STUDY-24 S4).
     if (p.snapshot < this.purgedTs) return new OutOfRetentionError(p.snapshot, this.purgedTs);
-    if (p.reads.length === 0 || p.snapshot >= this.appliedTs) return null;
+    if (p.snapshot >= this.appliedTs) return null;
+    if (p.searchReads?.length) {
+      // A search read-set: the versions written into its index since the snapshot, scanned in ts order.
+      for (let i = this.logHead; i < this.log.length; i++) {
+        const entry = this.log[i];
+        if (entry.ts <= p.snapshot || !entry.searchDocs) continue;
+        for (const d of entry.searchDocs)
+          for (const r of p.searchReads)
+            if (searchOverlaps(r, d))
+              return entry.source === undefined
+                ? { writeTs: entry.ts, id: d.id }
+                : { writeTs: entry.ts, id: d.id, source: entry.source };
+      }
+    }
+    if (p.reads.length === 0) return null;
     // As Convex's `commit_has_conflict`: any write in (snapshot, latest] inside the read-set, first among the
     // published commits (`is_stale` on the write log), then among this group's commits applied but not yet
     // flushed (Convex's `pending_writes`), which the log also holds.
@@ -445,8 +507,11 @@ export class Committer {
         // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
         const ts = Math.max(this.appliedTs + 1, this.clockUs());
         this.appliedTs = ts;
+        if (p.atTs) ({ docs: p.docs, idx: p.idx } = p.atTs(ts));
         const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
+        if (p.logExtra) writes.push(...p.logExtra);
         const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };
+        if (p.searchDocs?.length) entry.searchDocs = p.searchDocs;
         accepted.push([p, entry]);
         this.log.push(entry); // seen by the validation of the NEXT commits of this group
         this.byIndex.append(entry);

@@ -2,7 +2,12 @@
 // over the data model, registered functions that carry their kind, visibility, arguments and result (what
 // `ApiFromModules` reads), and the builders `_generated/server` binds to an app's data model. Types only:
 // the runtime is functions.ts, which hands every handler the same objects whatever the types say.
-import type { GenericDatabaseReader, GenericDatabaseWriter, GenericDataModel } from "@bunvex/core";
+import type {
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+  GenericDataModel,
+  TableNamesInDataModel,
+} from "@bunvex/core";
 import type {
   DefaultFunctionArgs,
   EmptyObject,
@@ -12,7 +17,15 @@ import type {
   FunctionVisibility,
   OptionalRestArgs,
 } from "@bunvex/protocol";
-import type { GenericValidator, Infer, ObjectType, PropertyValidators, Validator } from "@bunvex/values";
+import type {
+  GenericId,
+  GenericValidator,
+  Infer,
+  ObjectType,
+  PropertyValidators,
+  Validator,
+  Value,
+} from "@bunvex/values";
 import type { Auth, FunctionDef, StorageActionWriter, StorageReader, StorageWriter } from "./functions.ts";
 import type { ActionMeta, MutationMeta, QueryMeta } from "./meta.ts";
 import type { PublicHttpAction } from "./router.ts";
@@ -119,7 +132,30 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
   scheduler: Scheduler;
   /** The function's, deployment's and request's metadata (STUDY-44). */
   meta: ActionMeta;
+  /**
+   * Convex's vector search (STUDY-51): the documents of `tableName` whose `vectorField` is most similar to
+   * `query.vector` (cosine), `{_id, _score}` best first; `limit` 10 by default, at most 256; `filter` an OR
+   * of `q.eq` on the index's filter fields.
+   */
+  vectorSearch<TableName extends TableNamesInDataModel<DataModel>, IndexName extends string>(
+    tableName: TableName,
+    indexName: IndexName,
+    query: VectorSearchQuery,
+  ): Promise<{ _id: GenericId<TableName>; _score: number }[]>;
 }
+
+/** A vector search's filter builder (Convex's `VectorFilterBuilder`). */
+export type VectorFilterBuilder = {
+  eq(fieldName: string, value: Value): VectorFilterExpression;
+  or(...exprs: VectorFilterExpression[]): VectorFilterExpression;
+};
+export type VectorFilterExpression = { readonly __isVectorFilter: true };
+/** Convex's `VectorSearchQuery`. */
+export type VectorSearchQuery = {
+  vector: number[];
+  limit?: number;
+  filter?: (q: VectorFilterBuilder) => VectorFilterExpression;
+};
 
 /** A function's arguments: one object, or none. */
 type OneArgArray<ArgsObject extends DefaultFunctionArgs = DefaultFunctionArgs> = [ArgsObject];

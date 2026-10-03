@@ -1,0 +1,39 @@
+{
+  "name": "@bunvex/react-auth0",
+  "version": "0.1.0-alpha.0",
+  "description": "BunvexProviderWithAuth0: the React client authenticated with Auth0.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bunvex/react": "workspace:*"
+  },
+  "peerDependencies": {
+    "@auth0/auth0-react": "^2.0.1",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@auth0/auth0-react": "2.28.2",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/react-auth0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

@@ -21,7 +21,7 @@ import { installDeterminismIn, runImportPhase } from "@bunvex/core";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
 import { describeUncaught } from "./errors.ts";
-import { type FunctionDef, isFunctionDef } from "./functions.ts";
+import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 
 /** A pushed module, as Convex's `ModuleConfig`: its path in the functions directory, e.g. `dir/file.js`. */
@@ -284,6 +284,7 @@ export class CodeVersion {
             `Failed to analyze ${path}: \`${exported}\` is a ${value.kind}, but "use node" files may only define actions`,
           );
         functions.set(`${name}:${exported}`, value);
+        if (l.source.environment === "node") NODE_FUNCTIONS.add(value);
         fns.push({
           name: exported,
           udfType: value.kind === "query" ? "Query" : value.kind === "mutation" ? "Mutation" : "Action",

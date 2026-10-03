@@ -4,9 +4,11 @@ import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } 
 import {
   type Caller,
   checkIdentifier,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
+  insertAuditLogEvents,
   OccError,
   parseValue,
   SchemaEnforcementError,
@@ -14,7 +16,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
-import { decodeId } from "@bunvex/values";
+import { decodeId, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import {
@@ -28,6 +30,14 @@ import {
   removeTypePrefix,
   splitActingAs,
 } from "./admin-keys.ts";
+import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
+import {
+  REQUEST_DESTINATIONS,
+  type RequestDestination,
+  readCanonicalUrls,
+  setCanonicalUrl,
+  withCanonical,
+} from "./canonical-urls.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
@@ -42,6 +52,8 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
+import { syncFunctionHandles } from "./function-handles.ts";
+import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -51,6 +63,7 @@ import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
+import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
 import {
   fromWireTs,
@@ -72,6 +85,11 @@ type WsData = { session: SyncSession };
 export type ServerOptions = {
   engine: Engine;
   functions: Functions;
+  /**
+   * How many days of the audit log may be read (STUDY-48, Convex's `_backend_info.auditLogRetentionDays`):
+   * -1 (the default) all of it, null none. Events are always recorded.
+   */
+  auditLogRetentionDays?: number | null;
   port?: number;
   /** The interface both ports listen on (Convex's `--interface`; default Bun's, all interfaces). */
   hostname?: string;
@@ -184,8 +202,16 @@ const envFlag = (v: string | undefined) => v !== undefined && v !== "";
 const linesField = (field: string, lines: string[], redact: boolean) =>
   redact || lines.length === 0 ? "" : `,${JSON.stringify(field)}:${JSON.stringify(lines)}`;
 
+/** The log stream routes (Convex mounts both under `/api/` and `/api/app_metrics/`). */
+const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
+
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  if (opts.auditLogRetentionDays !== undefined) functions.auditLogRetentionDays = opts.auditLogRetentionDays;
+  // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
+  const functionLog = new FunctionLog();
+  functions.functionLog = functionLog;
+  engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
   const makeVerifier = (auth: AuthConfig | undefined) =>
     new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
@@ -446,9 +472,87 @@ export function createServer(opts: ServerOptions) {
     requestError(503, "NotReady", "the server is starting");
   let pushRoute: (url: URL, req: Request) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  /** The canonical URL routes (STUDY-49), set once the server's origins are known. */
+  let canonicalRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
+    requestError(503, "NotReady", "the server is starting");
   /** The environment-variable routes (STUDY-37), set once the server's origins are known. */
   let envRoute: (url: URL, req: Request, caller: Caller) => Promise<Response> = async () =>
     requestError(503, "NotReady", "the server is starting");
+  /**
+   * Convex's `GET /api/v1/list_audit_log_events?from=&limit=&cursor=` (STUDY-48): events from `from` (ms),
+   * oldest first, `limit` (1–100, default 15) per page; refused when the retention allows no access or
+   * `from` is older than it.
+   */
+  const listAuditLogEvents = async (url: URL, caller: Caller): Promise<Response> => {
+    functions.requireOperation(caller, "ViewAuditLog");
+    const q = url.searchParams;
+    const fromRaw = q.get("from");
+    if (fromRaw === null) return requestError(400, "BadQueryArgs", "missing field `from`");
+    if (!/^\d+$/.test(fromRaw)) return requestError(400, "BadQueryArgs", "from: invalid digit found in string");
+    const from = Number(fromRaw);
+    const limitRaw = q.get("limit");
+    if (limitRaw !== null && !/^\d+$/.test(limitRaw))
+      return requestError(400, "BadQueryArgs", "limit: invalid digit found in string");
+    const limit = limitRaw === null ? DEFAULT_AUDIT_LOG_LIMIT : Number(limitRaw);
+    if (limit === 0 || limit > MAX_AUDIT_LOG_LIMIT)
+      return requestError(
+        400,
+        "LimitOutOfRange",
+        `The limit for audit logs must be between 1 and ${MAX_AUDIT_LOG_LIMIT}`,
+      );
+    const days = functions.auditLogRetentionDays;
+    if (days === null)
+      return requestError(403, "AuditLogsDisabled", "Audit logs are not available on this deployment.");
+    if (days !== -1 && from < Date.now() - days * 24 * 60 * 60 * 1000)
+      return requestError(403, "AuditLogsTooOld", `Audit logs are only available for the last ${days} days.`);
+    const cursor = q.get("cursor");
+    const page = await engine.query((db) =>
+      db.asSystem(() =>
+        db
+          .query(DEPLOYMENT_AUDIT_LOG_TABLE)
+          .withIndex("by_creation_time", (r) => r.gte("_creationTime", from))
+          .paginate({ numItems: limit, cursor }),
+      ),
+    );
+    return json({
+      items: page.page.map((d) => auditEventJson(d as Record<string, Value>)),
+      pagination: page.isDone ? { hasMore: false } : { hasMore: true, nextCursor: page.continueCursor },
+    });
+  };
+
+  /**
+   * Convex's log streams (`logs.rs`): `stream_function_logs` (Completions and Progress events, an action's
+   * lines only as Progress; for one WebSocket request with `sessionId` + `clientRequestCounter`) and
+   * `stream_udf_execution` (Completions with their lines). A long poll: entries after `cursor` as soon as
+   * there are any, or none and the same cursor after 60 s.
+   */
+  const streamLogs = async (url: URL, req: Request, parts: boolean): Promise<Response> => {
+    const q = url.searchParams;
+    const raw = q.get("cursor");
+    const cursor = raw === null ? Number.NaN : Number(raw);
+    if (raw === null) return requestError(400, "BadQueryArgs", "missing field `cursor`");
+    if (!Number.isFinite(cursor)) return requestError(400, "BadQueryArgs", "cursor: invalid float literal");
+    let requestId: string | null = null;
+    const session = q.get("sessionId");
+    const counter = q.get("clientRequestCounter");
+    if (parts && session !== null && counter !== null) {
+      if (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff)
+        return requestError(400, "BadQueryArgs", "clientRequestCounter: invalid digit found in string");
+      requestId = wsRequestId(session, Number(counter));
+    }
+    const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
+    const structured = parts && wantsStructuredLines(req.headers.get("bunvex-client"));
+    const entries = found
+      .filter((p) => parts || p.kind === "Completion")
+      .filter(
+        (p) =>
+          requestId === null ||
+          (p.requestId === requestId && (p.kind === "Progress" ? p.root : p.parentExecutionId === null)),
+      )
+      .map((p) => partJson(p, { structured, parts }));
+    return json({ entries, newCursor });
+  };
+
   /** The admin routes; the caller is already identified. */
   const adminRoute = async (url: URL, req: Request, caller: Caller): Promise<Response> => {
     const admin = (caller as AdminCaller).admin;
@@ -472,6 +576,23 @@ export function createServer(opts: ServerOptions) {
       });
     }
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
+    if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
+      return listAuditLogEvents(url, caller);
+    if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
+      return canonicalRoute(url, req, caller);
+    const stream = STREAM_ROUTE.exec(url.pathname);
+    if (stream && req.method === "GET") {
+      functions.requireOperation(caller, "ViewLogs");
+      return streamLogs(url, req, stream[1] === "function_logs");
+    }
+    // Convex's `/api/shapes2?component=` (ViewData): each user table's inferred shape (STUDY-52).
+    if (url.pathname === "/api/shapes2" && req.method === "GET") {
+      functions.requireOperation(caller, "ViewData");
+      const component = url.searchParams.get("component");
+      if (component !== null && component !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      return json(await tableShapes(engine));
+    }
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
     let body: Record<string, unknown>;
     try {
@@ -484,16 +605,20 @@ export function createServer(opts: ServerOptions) {
     // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
     if (url.pathname === "/api/cancel_job") {
       if (typeof body.id !== "string") return requestError(400, "BadJsonBody", "missing field `id`");
-      await cancelScheduledJob(engine, body.id);
+      await cancelScheduledJob(engine, body.id, auditActor(caller));
       return new Response(null, { status: 200 });
     }
     if (url.pathname === "/api/cancel_all_jobs") {
       const ns = (x: unknown) => (typeof x === "number" ? BigInt(Math.trunc(x)) : undefined);
-      await cancelAllScheduledJobs(engine, {
-        ...(typeof body.udfPath === "string" ? { udfPath: body.udfPath } : {}),
-        ...(ns(body.startNextTs) === undefined ? {} : { startNextTs: ns(body.startNextTs) }),
-        ...(ns(body.endNextTs) === undefined ? {} : { endNextTs: ns(body.endNextTs) }),
-      });
+      await cancelAllScheduledJobs(
+        engine,
+        {
+          ...(typeof body.udfPath === "string" ? { udfPath: body.udfPath } : {}),
+          ...(ns(body.startNextTs) === undefined ? {} : { startNextTs: ns(body.startNextTs) }),
+          ...(ns(body.endNextTs) === undefined ? {} : { endNextTs: ns(body.endNextTs) }),
+        },
+        auditActor(caller),
+      );
       return new Response(null, { status: 200 });
     }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
@@ -505,7 +630,9 @@ export function createServer(opts: ServerOptions) {
       const names = body.tableNames as string[];
       try {
         for (const n of names) checkIdentifier("table", n);
-        await engine.deleteTables(names);
+        await engine.deleteTables(names, (db) =>
+          insertAuditLogEvents(db, [auditEvents.deleteTables(names)], auditActor(caller)),
+        );
       } catch (e) {
         if (e instanceof SchemaEnforcementError) return requestError(400, e.code, e.message);
         if (e instanceof Error && /^Invalid table name/.test(e.message))
@@ -592,6 +719,11 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/v1/list_audit_log_events" ||
+        /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
+        url.pathname === "/api/v1/get_canonical_urls" ||
+        STREAM_ROUTE.test(url.pathname) ||
+        url.pathname === "/api/shapes2" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
@@ -713,10 +845,12 @@ export function createServer(opts: ServerOptions) {
   functions.builtinEnv = builtinEnv;
   functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
-  const deploymentEnv = async () => ({
-    ...builtinEnv,
-    ...Object.fromEntries(await engine.query((db) => engine.environment.snapshot(db))),
-  });
+  const deploymentEnv = async () => {
+    const [vars, canonical] = await engine.query(
+      async (db) => [await engine.environment.snapshot(db), await readCanonicalUrls(db)] as const,
+    );
+    return { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(vars) };
+  };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
   const useAuth = (providers: unknown[] | null) => {
@@ -771,7 +905,7 @@ export function createServer(opts: ServerOptions) {
       if (caller instanceof Response) return caller;
       if (parts[0] === "request" && parts[1] === "zip" && parts.length === 2) {
         functions.requireOperation(caller, "CreateBackups");
-        await exportService.request(url.searchParams.get("includeStorage") === "true");
+        await exportService.request(url.searchParams.get("includeStorage") === "true", auditActor(caller));
         return new Response(null, { status: 200 });
       }
       if (parts[0] === "zip" && parts[2] === "token" && parts.length === 3) {
@@ -783,13 +917,13 @@ export function createServer(opts: ServerOptions) {
         const body = JSON.parse((await new Response(capped(req).body).text()) || "{}") as { expirationTsNs?: unknown };
         if (typeof body.expirationTsNs !== "number" && typeof body.expirationTsNs !== "string")
           return requestError(400, "BadJsonBody", "missing field `expirationTsNs`");
-        await exportService.setExpiration(parts[1]!, BigInt(body.expirationTsNs));
+        await exportService.setExpiration(parts[1]!, BigInt(body.expirationTsNs), auditActor(caller));
         return new Response(null, { status: 200 });
       }
       if (parts[0] === "cancel" && parts.length === 2) {
         // Convex checks ImportBackups here.
         functions.requireOperation(caller, "ImportBackups");
-        await exportService.cancel(parts[1]!);
+        await exportService.cancel(parts[1]!, auditActor(caller));
         return new Response(null, { status: 200 });
       }
       return requestError(404, "NotFound", `no route for ${url.pathname}`);
@@ -943,13 +1077,18 @@ export function createServer(opts: ServerOptions) {
         authModule = code.authConfig;
         if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
       })
-    : Promise.resolve();
+    : // An embedded server's functions are registered in process: their handles now.
+      engine
+        .mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles")
+        .then(() => {});
   codeReady.catch((e) =>
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
+    // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
+    await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
     if (o.auth !== undefined)
       verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));
@@ -973,6 +1112,69 @@ export function createServer(opts: ServerOptions) {
     },
     deploymentEnv,
   });
+  /**
+   * Convex's `GET /api/v1/get_canonical_urls` (any admin: the URLs, or the server's origins) and
+   * `POST /api/v1/update_canonical_url {requestDestination, url?}` (WriteEnvironmentVariables): set or unset
+   * one, with its audit-log event, after checking the deployed `auth.config` still evaluates with it.
+   */
+  canonicalRoute = async (url, req, caller) => {
+    if (url.pathname.endsWith("/get_canonical_urls")) {
+      if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError(engine.instanceName);
+      const c = await engine.query((db) => readCanonicalUrls(db));
+      return json({
+        bunvexCloudUrl: c.cloud ?? builtinEnv.BUNVEX_CLOUD_URL,
+        bunvexSiteUrl: c.site ?? builtinEnv.BUNVEX_SITE_URL ?? null,
+      });
+    }
+    if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    functions.requireOperation(caller, "WriteEnvironmentVariables");
+    let body: { requestDestination?: unknown; url?: unknown };
+    try {
+      body = JSON.parse(await new Response(capped(req).body).text()) ?? {};
+    } catch (e) {
+      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+    }
+    const destination = body.requestDestination as RequestDestination;
+    if (!REQUEST_DESTINATIONS.includes(destination))
+      return requestError(
+        400,
+        "BadJsonBody",
+        `invalid JSON body: unknown variant \`${String(destination)}\`, expected \`bunvexCloud\` or \`bunvexSite\``,
+      );
+    if (body.url !== undefined && body.url !== null && typeof body.url !== "string")
+      return requestError(400, "BadJsonBody", "invalid JSON body: invalid type for `url`: expected a string");
+    const next = (body.url as string | null | undefined) ?? null;
+    try {
+      let providers: unknown[] | null = null;
+      if (authModule) {
+        const env = await deploymentEnv();
+        const name = destination === "bunvexCloud" ? "BUNVEX_CLOUD_URL" : "BUNVEX_SITE_URL";
+        const origin = destination === "bunvexCloud" ? builtinEnv.BUNVEX_CLOUD_URL : builtinEnv.BUNVEX_SITE_URL;
+        const value = next ?? origin;
+        if (value === undefined) delete env[name];
+        else env[name] = value;
+        providers = await evaluateAuthConfig(engine, authModule, env, "This change would make the auth config invalid");
+      }
+      await engine.mutation(async (db) => {
+        await setCanonicalUrl(db, destination, next);
+        await insertAuditLogEvents(
+          db,
+          [
+            next === null
+              ? auditEvents.deleteCanonicalUrl(destination)
+              : auditEvents.updateCanonicalUrl(destination, next),
+          ],
+          auditActor(caller),
+        );
+      }, "update_canonical_url");
+      if (authModule) useAuth(providers);
+      return new Response(null, { status: 200 });
+    } catch (e) {
+      if (e instanceof PushError) return requestError(400, e.code, e.message);
+      throw e;
+    }
+  };
   envRoute = async (url, req, caller) => {
     if (url.pathname.endsWith("/list_environment_variables")) {
       if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
@@ -1019,6 +1221,21 @@ export function createServer(opts: ServerOptions) {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
+          // Convex's events (lib.rs `update_environment_variables`): a set creates or updates, an unset
+          // of an existing variable deletes; in the update's transaction.
+          const existing = new Set(now.map((x) => x.name));
+          const events = changes.flatMap((c) =>
+            c.value === null
+              ? existing.has(c.name)
+                ? [auditEvents.deleteEnvironmentVariable(c.name)]
+                : []
+              : [
+                  existing.has(c.name)
+                    ? auditEvents.updateEnvironmentVariable(c.name)
+                    : auditEvents.createEnvironmentVariable(c.name),
+                ],
+          );
+          await insertAuditLogEvents(db, events, auditActor(caller));
           return true;
         }, "update_env_vars");
         if (same) break;
@@ -1092,7 +1309,10 @@ export function createServer(opts: ServerOptions) {
     sync,
     scheduler,
     cronsReady,
+    /** The function execution log (STUDY-47). */
+    functionLog,
     stop: () => {
+      functionLog.close();
       void exportService?.stop();
       void importService?.stop();
       void scheduler.stop();

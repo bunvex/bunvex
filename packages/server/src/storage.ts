@@ -11,6 +11,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { type Engine, STORAGE_DELETIONS_TABLE, STORAGE_TABLE, type Tx } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId } from "@bunvex/values";
+import { readCanonicalUrls } from "./canonical-urls.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Convex's STORE_FILE_AUTHORIZATION_VALIDITY. */
@@ -70,8 +71,17 @@ export class FileStorage {
     return Buffer.concat([version, nonce, body, cipher.getAuthTag()]).toString("hex");
   }
 
-  uploadUrl(): string {
-    return `${this.origin}/api/storage/upload?token=${this.uploadToken()}`;
+  /** An upload URL under `origin` (the canonical cloud URL, if set; else the server's). */
+  uploadUrl(origin = this.origin): string {
+    return `${origin}/api/storage/upload?token=${this.uploadToken()}`;
+  }
+
+  /**
+   * The public origin of file URLs, read in `db`'s transaction: the canonical cloud URL if set (Convex's
+   * `generate_upload_url` and `get_url`), else the server's.
+   */
+  async originIn(db: Tx): Promise<string> {
+    return (await readCanonicalUrls(db)).cloud?.replace(/\/$/, "") ?? this.origin;
   }
 
   /** Convex's checks of a token: it decodes, and was issued less than an hour ago. Not single-use. */
@@ -131,8 +141,8 @@ export class FileStorage {
     )) as unknown as StorageRow | null;
   }
 
-  urlOf(row: StorageRow) {
-    return `${this.origin}/api/storage/${row.storageId}`;
+  urlOf(row: StorageRow, origin = this.origin) {
+    return `${origin}/api/storage/${row.storageId}`;
   }
 
   /** The row of a stored blob, committed after the upload, in its own transaction (Convex: "to avoid OCC risk"). */
@@ -194,7 +204,7 @@ export class FileStorage {
       getUrl: async (storageId: string) => {
         if (storageId === undefined) throw new TypeError("Must provide arg 1 `storageId` to `getUrl`");
         const row = await this.resolve(db, storageId, "storage.getUrl");
-        return row ? this.urlOf(row) : null;
+        return row ? this.urlOf(row, await this.originIn(db)) : null;
       },
       getMetadata: async (storageId: string) => {
         const row = await this.resolve(db, storageId, "storage.getMetadata");
@@ -209,7 +219,7 @@ export class FileStorage {
   writer(db: Tx) {
     return {
       ...this.reader(db),
-      generateUploadUrl: async () => this.uploadUrl(),
+      generateUploadUrl: async () => this.uploadUrl(await this.originIn(db)),
       delete: async (storageId: string) => this.deleteIn(db, storageId),
       store: async (_blob: Blob, _opts?: { sha256?: string }): Promise<string> => {
         throw new Error(
@@ -225,7 +235,7 @@ export class FileStorage {
     return {
       getUrl: (storageId: string) => q((db) => this.reader(db).getUrl(storageId)),
       getMetadata: (storageId: string) => q((db) => this.reader(db).getMetadata(storageId)),
-      generateUploadUrl: async () => this.uploadUrl(),
+      generateUploadUrl: async () => this.uploadUrl(await q((db) => this.originIn(db))),
       delete: (storageId: string) => this.engine.mutation((db) => this.deleteIn(db, storageId), "_system/storage"),
       get: async (storageId: string): Promise<Blob | null> => {
         if (typeof storageId !== "string")

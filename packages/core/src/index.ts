@@ -1,12 +1,22 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
 
+export { aes128GcmSivOpen, aes128GcmSivSeal } from "./aead.ts";
+export {
+  type AuditLogActor,
+  type AuditLogEvent,
+  insertAuditLogEvents,
+  SYSTEM_ACTOR,
+} from "./audit-log.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FUNCTION_HANDLES_TABLE,
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
@@ -82,6 +92,9 @@ export type {
   PatchValue,
   Query,
   QueryInitializer,
+  SearchFilter,
+  SearchFilterBuilder,
+  SearchFilterFinalizer,
   SystemDataModel,
   UpperBoundIndexRangeBuilder,
 } from "./database-types.ts";
@@ -215,6 +228,15 @@ export {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
+export {
+  type DashboardShape,
+  isSubtype,
+  reduceShape,
+  type Shape,
+  shapeOf,
+  tableShape,
+  UnionBuilder,
+} from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
 export {
   ImportIdError,

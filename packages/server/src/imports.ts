@@ -16,15 +16,18 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   type Engine,
   ImportIdError,
+  insertAuditLogEvents,
   OccError,
   referencedTables,
   SNAPSHOT_IMPORTS_TABLE,
+  SYSTEM_ACTOR,
   schemaToJson,
   type TableDef,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId, type Value } from "@bunvex/values";
+import { auditEvents } from "./audit-log.ts";
 import { INTERNAL_SERVER_ERROR_MESSAGE, isSystemError } from "./errors.ts";
 import {
   confirmationMessage,
@@ -771,6 +774,19 @@ export class ImportService {
             "ImportSchemaChanged",
             "Could not complete import because schema changed. Avoid modifying schema.ts while importing tables",
           );
+        // Convex's `snapshot_import` event, in the finishing transaction, as the import's member (none here).
+        await insertAuditLogEvents(
+          db,
+          [
+            auditEvents.snapshotImport({
+              tables: [...imported].sort(byteOrder),
+              deleted: deleteNames,
+              mode,
+              format: row.format as unknown as Value,
+            }),
+          ],
+          SYSTEM_ACTOR,
+        );
         // A schema table outside the import that points into it must not see that table's number change
         // (Convex's `ImportSchemaConstraints`).
         for (const [table, declared] of schema.tables) {

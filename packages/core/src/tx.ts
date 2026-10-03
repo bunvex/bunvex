@@ -6,14 +6,19 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
+  type CommitTsPlaceholder,
   checkValue,
+  commitTsPlaceholder,
   copyValue,
   decodeId,
   encodeId,
   fromJsonValue,
   type GenericValidator,
+  isCommitTsPlaceholder,
   isSimpleObject,
+  MAX_COMMIT_TS,
   toJsonValue,
   type Value,
   v,
@@ -31,8 +36,8 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import type { Interval } from "./committer.ts";
-import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
+import type { Interval, SearchRead } from "./committer.ts";
+import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -47,6 +52,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
+import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { SystemReader } from "./system-reader.ts";
 
 const ANY = v.any();
@@ -190,11 +196,22 @@ type QState = {
   stage: "initializer" | "query";
   closed: boolean;
   iterated: boolean;
+  /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
+  search?: SearchSpec;
 };
+
+type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
+type SearchSpec = { name: string; filters: SearchFilter[] };
+
+/** Convex's `SearchQueryScannedTooManyDocumentsError`. */
+const SCANNED_TOO_MANY = `Search query scanned too many documents (fetched ${MAX_CANDIDATE_REVISIONS}). Consider using a smaller limit, paginating the query, or using a filter field to limit the number of documents pulled from the search index.`;
+/** Convex's MAX_FILTER_CONDITIONS: `eq`s in one search query. */
+const MAX_SEARCH_FILTER_CONDITIONS = 8;
 
 /** A query under construction (Convex's QueryInitializer / Query / OrderedQuery in one shape). */
 export type TxQuery = {
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery;
+  withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery;
   fullTableScan(): TxQuery;
   order(dir: "asc" | "desc"): TxQuery;
   filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery;
@@ -244,7 +261,40 @@ export type Savepoint = {
   docsWritten: number;
   bytesWritten: number;
   pendingViolation: { table: string; error: string } | null;
+  commitTs: Map<string, Path[]>;
 };
+
+/** A field's place in a document: object keys and array positions (STUDY-53). */
+type Path = (string | number)[];
+
+/** `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. */
+function extractCommitTs(value: unknown, at: Path = [], paths: Path[] = []): { value: unknown; paths: Path[] } {
+  if (isCommitTsPlaceholder(value)) {
+    paths.push(at);
+    return { value: MAX_COMMIT_TS, paths };
+  }
+  if (Array.isArray(value)) {
+    const out = value.map((x, i) => extractCommitTs(x, [...at, i], paths).value);
+    return { value: out, paths };
+  }
+  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, [...at, k], paths).value;
+    return { value: out, paths };
+  }
+  return { value, paths };
+}
+
+/** A copy of `doc` with `by` at each of `paths`. */
+function setAt(doc: Doc, paths: Path[], by: unknown): Doc {
+  const out = structuredClone(doc) as Record<string | number, unknown>;
+  for (const p of paths) {
+    let o = out;
+    for (let i = 0; i < p.length - 1; i++) o = o[p[i]!] as Record<string | number, unknown>;
+    o[p[p.length - 1]!] = by;
+  }
+  return out as Doc;
+}
 
 /** An imported document's `_id` refused (STUDY-42), with Convex's code. */
 export class ImportIdError extends Error {
@@ -269,8 +319,10 @@ export class Tx {
     }
     return this.readList;
   }
-  /** The instance secret that signs pagination cursors (STUDY-17). */
-  instanceSecret = "";
+  /** Seals and opens pagination cursors (cursor.ts); set by the engine. */
+  cursorCodec: () => CursorCodec = () => {
+    throw new Error("pagination cursors need an initialized engine");
+  };
   /**
    * Reactive pagination's journal: the end cursor of this query's previous run (a subscription re-run
    * keeps its page boundary), and the one this run ends at.
@@ -317,6 +369,37 @@ export class Tx {
   private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
+  /**
+   * Where each written document holds `db.vars.commitTs` (STUDY-53): stored as the largest int64 until the
+   * commit, handed back to the function as the placeholder, replaced by the commit timestamp at commit.
+   */
+  private commitTs = new Map<string, Path[]>();
+
+  /** Convex's `db.vars` (mutations): `commitTs`, the placeholder of this transaction's commit timestamp. */
+  get vars(): { commitTs: CommitTsPlaceholder } | undefined {
+    return this.writable ? { commitTs: commitTsPlaceholder } : undefined;
+  }
+
+  /** Whether a write holds a commit timestamp to resolve at commit. */
+  get hasCommitTs() {
+    return this.commitTs.size > 0;
+  }
+
+  /** A document as the function sees it: its commit timestamps as the placeholder. */
+  private handOut<D extends Doc | null>(d: D): D {
+    if (!d || !this.commitTs.size) return d;
+    const paths = this.commitTs.get(d._id as string);
+    return (paths ? setAt(d, paths, commitTsPlaceholder) : d) as D;
+  }
+
+  /** The commit: each commit timestamp replaced by `ns` (the commit ts in nanoseconds) in the writes. */
+  resolveCommitTs(ns: bigint) {
+    for (const [id, paths] of this.commitTs) {
+      const w = this.writes.get(id);
+      if (w?.next) this.writes.set(id, { ...w, next: setAt(w.next, paths, ns) });
+    }
+    this.commitTs.clear();
+  }
   constructor(
     private catalog: Catalog,
     private persistence: Persistence,
@@ -458,6 +541,7 @@ export class Tx {
    */
   resolveIndex(t: TableDef, name: string): IndexDef {
     const ix = t.indexes.get(name);
+    if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
     // An index enabled after this snapshot was still being built at it.
     if (ix && (ix.readyTs ?? 0) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
@@ -538,9 +622,9 @@ export class Tx {
 
   /** `db.get(table, id)`, or Convex's one-argument `db.get(id)`: the id names its table. */
   async get(tableOrId: string, id?: string): Promise<Doc | null> {
-    if (id !== undefined) return this.read(tableOrId, id, "db.get");
+    if (id !== undefined) return this.handOut(await this.read(tableOrId, id, "db.get"));
     const table = this.tableOfIdArg(tableOrId, "db.get");
-    return table === undefined ? null : this.read(table, tableOrId, "db.get");
+    return table === undefined ? null : this.handOut(await this.read(table, tableOrId, "db.get"));
   }
 
   /** The table an id argument names (one-argument forms); undefined when it names no known table. */
@@ -687,13 +771,18 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async *iterate(st: QState): AsyncGenerator<Doc> {
+    if (st.search) {
+      if (!st.t) return;
+      for await (const { doc } of this.searchDocs(st)) if (st.filters.every((f) => passes(f, doc))) yield doc;
+      return;
+    }
     if (!st.t || !st.ix) return;
     const reads = new ScanReads(this, st);
     for await (const d of this.stream(st)) {
       reads.reached(d);
       if (!st.filters.every((f) => passes(f, d))) continue;
       reads.handOut();
-      yield d;
+      yield this.handOut(d);
     }
     reads.exhausted();
   }
@@ -778,11 +867,14 @@ export class Tx {
     const fp = queryFingerprint({
       tablet: st.t?.id ?? 0,
       index: st.ix?.id ?? 0,
-      lo: st.range.lo,
+      // A search's cursor belongs to its index and filters.
+      lo: st.search
+        ? new TextEncoder().encode(JSON.stringify(st.search, (_k, x) => (typeof x === "bigint" ? `${x}n` : x)))
+        : st.range.lo,
       hi: st.range.hi,
       desc: st.desc,
     });
-    const secret = this.instanceSecret;
+    const secret = this.cursorCodec();
     const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr ? decodeCursor(secret, endStr, fp) : null;
@@ -791,6 +883,27 @@ export class Tx {
       this.nextEndCursor = continueCursor;
       return { page, isDone: pos === "end", continueCursor, splitCursor: split, pageStatus: status };
     };
+    if (st.search) {
+      // As Convex's search pagination: the search runs again for each page, which keeps what comes after the
+      // cursor; never past the candidates it fetches, and no read limits (Convex passes none).
+      if (!st.t || start === "end") return done([], "end", null, null);
+      const page: Doc[] = [];
+      let last: Uint8Array | null = null;
+      let exhausted = true;
+      for await (const { doc, key } of this.searchDocs(st, start?.after)) {
+        if (end && end !== "end" && compareKeys(key, end.after) > 0) break;
+        last = key;
+        if (!st.filters.every((f) => passes(f, doc))) continue;
+        page.push(doc);
+        if (!end && page.length >= pageSize) {
+          exhausted = false;
+          break;
+        }
+      }
+      const status = page.length > (MAX_CANDIDATE_REVISIONS * 3) / 4 ? "SplitRecommended" : null;
+      const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last! });
+      return done(page, pos, status, null);
+    }
     if (!st.t || !st.ix) return done([], "end", null, null);
     if (start === "end") {
       this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
@@ -831,7 +944,7 @@ export class Tx {
       bytesRead += valueSize(d as unknown as Value);
       last = indexKey(st.ix, d);
       if (st.filters.every((f) => passes(f, d))) {
-        page.push(d);
+        page.push(this.handOut(d));
         keys.push(last);
         // As Convex: a full page stops without looking further, so its cursor is "after the last
         // document" even if nothing follows (the next page is then empty and done).
@@ -867,6 +980,7 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async runQuery(st: QState, limit: number): Promise<Doc[]> {
+    if (st.search) return this.searchRun(st, limit);
     // As Convex's `limit` operator: `take(0)` never pulls from the scan, so it reads nothing.
     if (limit <= 0 || !st.t || !st.ix) return [];
     const reads = new ScanReads(this, st);
@@ -879,7 +993,7 @@ export class Tx {
         reads.reached(docs[docs.length - 1]);
         reads.handOut();
       }
-      return docs;
+      return this.commitTs.size ? docs.map((d) => this.handOut(d)) : docs;
     }
     // With filters: stream until `limit` documents pass (reads count toward the limits as they happen).
     // Documents the filter drops were scanned all the same: they extend the read-set.
@@ -891,7 +1005,7 @@ export class Tx {
     }
     if (out.length < limit) reads.exhausted();
     else reads.handOut();
-    return out;
+    return this.commitTs.size ? out.map((d) => this.handOut(d)) : out;
   }
 
   /**
@@ -1016,10 +1130,17 @@ export class Tx {
     this.nextCreationTime = nextUp(creationTime);
     // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
     // mutating `fields` afterwards cannot change what is written.
-    const doc = { ...copyFields(fields, "insert"), _id: id, _creationTime: creationTime };
+    const x = extractCommitTs(fields);
+    const doc = { ...copyFields(x.value as Record<string, unknown>, "insert"), _id: id, _creationTime: creationTime };
     checkSystemFields(doc, fields, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
+    this.setCommitTs(id, x.paths);
     return id;
+  }
+
+  private setCommitTs(id: string, paths: Path[]) {
+    if (paths.length) this.commitTs.set(id, paths);
+    else this.commitTs.delete(id);
   }
 
   /** `db.patch(table, id, fields)`, or Convex's `db.patch(id, fields)`. */
@@ -1038,11 +1159,15 @@ export class Tx {
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
+    const x = extractCommitTs(fields);
     const next: Record<string, unknown> = { ...cur };
     for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
-    Object.assign(next, copyFields(fields, "patch"));
+    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch"));
     checkSystemFields(next, fields, id, cur._creationTime);
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
+    // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
+    const kept = (this.commitTs.get(id) ?? []).filter((p) => !(String(p[0]) in fields));
+    this.setCommitTs(id, [...kept, ...x.paths]);
   }
 
   /** Convex's `db.replace(table, id, value)` or `db.replace(id, value)`: every non-system field is replaced. */
@@ -1060,13 +1185,15 @@ export class Tx {
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
+    const x = extractCommitTs(value);
     const next: Record<string, unknown> = {
-      ...copyFields(value, "replace"),
+      ...copyFields(x.value as Record<string, unknown>, "replace"),
       _id: id,
       _creationTime: cur._creationTime,
     };
     checkSystemFields(next, value, id, cur._creationTime);
     this.stage(t, id, old, sortFields(next));
+    this.setCommitTs(id, x.paths);
   }
 
   /** `db.delete(table, id)`, or Convex's `db.delete(id)`. */
@@ -1084,6 +1211,7 @@ export class Tx {
     const cur = await this.read(table, id, "db.delete");
     if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);
     this.stage(t, id, this.writes.get(id)?.old ?? cur, null);
+    this.commitTs.delete(id);
   }
 
   /**
@@ -1100,6 +1228,7 @@ export class Tx {
       docsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
       pendingViolation: this.pendingViolation,
+      commitTs: new Map(this.commitTs),
     };
   }
 
@@ -1112,6 +1241,7 @@ export class Tx {
     this.docsWritten = sp.docsWritten;
     this.bytesWritten = sp.bytesWritten;
     this.pendingViolation = sp.pendingViolation;
+    this.commitTs = sp.commitTs;
   }
 
   /** The writes as persistence rows: the new version of each doc and the index entries that changed. */
@@ -1139,6 +1269,108 @@ export class Tx {
   get hasWrites() {
     return this.writes.size > 0;
   }
+
+  /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
+  searchIndexes: SearchIndexes | null = null;
+
+  /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
+  writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {
+    return [...this.writes].map(([id, w]) => ({ table: w.table, id, old: w.old, next: w.next }));
+  }
+
+  /**
+   * A mutation's searches (STUDY-45 PR 3), checked at commit by Convex's OCC rule (every filter and one term
+   * of a version written since the snapshot). A query records them as read-set intervals instead.
+   */
+  readonly searchReads: SearchRead[] = [];
+
+  /**
+   * The ranked ids of a search (Convex's `SearchQuery`): Convex's checks of the index and the filters, then
+   * the index as of this snapshot with this transaction's own writes.
+   */
+  private searchHits(st: QState) {
+    const t = st.t!;
+    const spec = st.search!;
+    const label = `${t.name}.${spec.name}`;
+    const e = this.searchIndexes?.get(t, spec.name);
+    if (!e) {
+      if (t.indexes.has(spec.name) || t.pending.some((p) => p.name === spec.name))
+        throw new Error(`Index ${label} is not a search index`);
+      throw new Error(`Index ${label} not found.`);
+    }
+    if (e.staged) throw new IndexStagedError(label);
+    if (!e.ready) throw new IndexBackfillingError(label);
+    let text: string | undefined;
+    const eqs: [string, string][] = [];
+    for (const f of spec.filters) {
+      if (f.type === "Search") {
+        if (f.field !== e.def.searchField)
+          throw new Error(
+            `Search query against ${label} contains a search filter against "${f.field}", which doesn't match the indexed \`searchField\` "${e.def.searchField}".`,
+          );
+        if (text !== undefined)
+          throw new Error(
+            `Search query against ${label} contains multiple search filters against "${f.field}". Only one is allowed.`,
+          );
+        text = f.value;
+      } else {
+        if (!e.def.filterFields.includes(f.field))
+          throw new Error(
+            `Search query against ${label} contains an equality filter on "${f.field}" but that field isn't indexed for filtering in \`filterFields\`.`,
+          );
+        eqs.push([f.field, filterKey(f.value)]);
+      }
+    }
+    if (text === undefined)
+      throw new Error(
+        `Search query against ${label} does not contain any search filters. You must include a search filter like \`q.search(""${e.def.searchField}"", searchText)\`.`,
+      );
+    if (eqs.length > MAX_SEARCH_FILTER_CONDITIONS)
+      throw new Error(
+        `Search query against ${label} has too many filter conditions. Max: ${MAX_SEARCH_FILTER_CONDITIONS} Actual: ${eqs.length}`,
+      );
+    const tokens = tokenize(text).slice(0, MAX_QUERY_TERMS);
+    // The read-set (Convex's `QueryReads`): each query term — the last also as a prefix — and each filter.
+    const terms = tokens.map((term, i) => ({ term, prefix: i === tokens.length - 1 }));
+    if (this.writable) this.searchReads.push({ index: e.readIndex, terms, filters: eqs });
+    else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
+    const pending = new Map<string, Doc | null>();
+    for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
+    const hits = this.searchIndexes!.search(e, { tokens, prefixLast: true, filters: eqs }, this.snapshot, pending);
+    return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
+  }
+
+  /** A search's documents in relevance order; reading past the candidates Convex fetches is an error. */
+  private async *searchDocs(st: QState, after?: Uint8Array): AsyncGenerator<{ doc: Doc; key: Uint8Array }> {
+    const { hits, full } = this.searchHits(st);
+    for (const h of hits) {
+      const key = searchKey(h);
+      if (after && compareKeys(key, after) <= 0) continue;
+      const doc = await this.read(st.t!.name, h.id, "withSearchIndex");
+      if (doc) yield { doc, key };
+    }
+    if (full) throw new Error(SCANNED_TOO_MANY);
+  }
+
+  private async searchRun(st: QState, limit: number): Promise<Doc[]> {
+    const out: Doc[] = [];
+    if (limit <= 0 || !st.t) return out;
+    for await (const { doc } of this.searchDocs(st)) {
+      if (!st.filters.every((f) => passes(f, doc))) continue;
+      out.push(doc);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+}
+
+/**
+ * A search result's position, as Convex's search cursor `(-score, -_creationTime, id)`: byte order is the
+ * results' order (the id's bytes complemented, so ties keep the results' newest-id-first order).
+ */
+function searchKey(h: { id: string; score: number; creationTime: number }): Uint8Array {
+  const internal = decodeId(h.id).internalId.map((b) => 255 - b);
+  return encodeKey([-h.score, -h.creationTime, internal.buffer as ArrayBuffer]);
 }
 
 /**
@@ -1287,6 +1519,46 @@ const reusedError = () => new Error("This query has been chained with another op
  * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
  * allocated per query: this is the hot path of every read).
  */
+/**
+ * `q` of `withSearchIndex(name, q => q.search(field, text).eq(field, value)…)`, as Convex's
+ * `SearchFilterBuilderImpl`: each builder is used once; `eq(field, undefined)` matches a missing field.
+ */
+export class SearchFilterBuilder {
+  private used = false;
+  constructor(private readonly parts: SearchFilter[]) {}
+
+  private next(part: SearchFilter): SearchFilterBuilder {
+    if (this.used)
+      throw new Error(
+        "SearchFilterBuilder has already been used! Chain your method calls like `q => q.search(...).eq(...)`.",
+      );
+    this.used = true;
+    return new SearchFilterBuilder([...this.parts, part]);
+  }
+
+  search(fieldName: string, query: string): SearchFilterBuilder {
+    if (fieldName === undefined) throw new TypeError("Must provide arg 1 `fieldName` to `search`");
+    if (query === undefined) throw new TypeError("Must provide arg 2 `query` to `search`");
+    return this.next({ type: "Search", field: fieldName, value: query });
+  }
+
+  eq(fieldName: string, value: unknown): SearchFilterBuilder {
+    if (fieldName === undefined) throw new TypeError("Must provide arg 1 `fieldName` to `eq`");
+    // Convex's own label for a missing value (its check names `search`); an explicit undefined is allowed.
+    if (arguments.length !== 2) throw new TypeError("Must provide arg 2 `value` to `search`");
+    return this.next({
+      type: "Eq",
+      field: fieldName,
+      value: value === undefined ? undefined : copyValue(value as Value),
+    });
+  }
+
+  /** @internal */
+  filters(): SearchFilter[] {
+    return this.parts;
+  }
+}
+
 class QueryImpl implements TxQuery {
   constructor(
     private readonly tx: Tx,
@@ -1326,12 +1598,24 @@ class QueryImpl implements TxQuery {
     });
   }
 
+  /** Convex's `withSearchIndex`: results in relevance order (STUDY-45). */
+  withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery {
+    this.onlyInitializer("withSearchIndex()");
+    if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
+    const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
+    return this.chain((n) => {
+      n.search = { name, filters };
+    });
+  }
+
   fullTableScan(): TxQuery {
     this.onlyInitializer("fullTableScan()");
     return this.chain(() => {});
   }
 
   order(dir: "asc" | "desc"): TxQuery {
+    if (this.st.search)
+      throw new Error("Search queries must always be in relevance order. Can not set order manually.");
     if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
     return this.chain((n) => {
       n.desc = dir === "desc";

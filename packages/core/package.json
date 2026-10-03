@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@bunvex/values": "workspace:*",
-    "sorted-btree": "^2.1.0"
+    "sorted-btree": "^2.1.0",
+    "@bunvex/search": "workspace:*"
   },
   "repository": {
     "type": "git",

@@ -1,4 +1,4 @@
-// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `dev` (STUDY-37, STUDY-40), `export` and `import` (STUDY-42), `data` (STUDY-43).
+// Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `dev` (STUDY-37, STUDY-40), `export` and `import` (STUDY-42), `data` (STUDY-43), `logs` (STUDY-47).
 import { adminKeyCommand } from "./admin-key.ts";
 import { codegenCommand } from "./codegen-command.ts";
 import { dataCommand } from "./data.ts";
@@ -9,6 +9,7 @@ import { exportCommand } from "./export.ts";
 import { functionSpecCommand } from "./function-spec.ts";
 import { importCommand } from "./import.ts";
 import { type Io, processIo } from "./io.ts";
+import { logsCommand } from "./logs.ts";
 import { runCommand } from "./run.ts";
 
 export type { Io } from "./io.ts";
@@ -25,6 +26,7 @@ Commands:
   export      export the deployment's data into a ZIP file
   function-spec  list the functions' arguments and return values, as JSON
   import      import data from a file (CSV, JSON, JSON Lines, or a snapshot ZIP) into the deployment
+  logs        watch the deployment's function logs
   run         run a function (query, mutation or action) on the deployment
 
 Run \`bunvex <command> --help\` for a command's options, \`bunvex --version\` for the version.`;
@@ -39,6 +41,7 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   export: (args, io) => exportCommand(args, io),
   "function-spec": (args, io) => functionSpecCommand(args, io),
   import: (args, io) => importCommand(args, io),
+  logs: (args, io) => logsCommand(args, io),
   run: runCommand,
 };
 

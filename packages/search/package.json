@@ -1,0 +1,30 @@
+{
+  "name": "@bunvex/search",
+  "version": "0.1.0-alpha.0",
+  "description": "Full-text search: the tokenizer, the in-memory inverted index and BM25 ranking, as Convex's.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/search"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "dependencies": {
+    "@bunvex/values": "workspace:*"
+  }
+}

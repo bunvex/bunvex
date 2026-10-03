@@ -67,6 +67,8 @@ export type {
   FunctionReferenceFromExport,
 } from "./api-types.ts";
 export { type CronJob, Crons, cronJobs, type DayOfWeek, type Schedule } from "./cron.ts";
+// Function handles (STUDY-50), as Convex's `createFunctionHandle` / `FunctionHandle`.
+export { createFunctionHandle, type FunctionHandle } from "./function-handles.ts";
 export {
   type ActionCtx,
   type ArgsOf,

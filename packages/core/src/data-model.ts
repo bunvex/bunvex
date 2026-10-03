@@ -102,7 +102,7 @@ type WithSystemFields<TableName extends string, D> = D extends unknown
 
 /** One table's info from its definition. */
 type TableInfoOf<TableName extends string, T> =
-  T extends TableDefinition<infer DocumentType, infer TableIndexes, infer SearchIndexes>
+  T extends TableDefinition<infer DocumentType, infer TableIndexes, infer SearchIndexes, infer VectorIndexes>
     ? DocumentType extends GenericValidator
       ? {
           document: unknown extends DocumentType["type"]
@@ -114,7 +114,7 @@ type TableInfoOf<TableName extends string, T> =
             : "_id" | "_creationTime" | PathsOf<DocumentType["type"]>;
           indexes: Expand<TableIndexes & SystemIndexes>;
           searchIndexes: SearchIndexes;
-          vectorIndexes: {};
+          vectorIndexes: VectorIndexes;
         }
       : never
     : never;

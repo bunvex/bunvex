@@ -450,6 +450,66 @@ describe("environment variables (STUDY-37)", () => {
     expect(keys).not.toContain("HOME");
   });
 
+  test("canonical URLs (STUDY-49): get, set, unset; process.env and actions see them; audited", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([envMod]);
+    const get = async () =>
+      (await (
+        await fetch(`${d.api}/api/v1/get_canonical_urls`, { headers: { authorization: `Bunvex ${KEY}` } })
+      ).json()) as {
+        bunvexCloudUrl: string;
+        bunvexSiteUrl: string;
+      };
+    const site = (await get()).bunvexSiteUrl;
+    expect(await get()).toEqual({ bunvexCloudUrl: d.api, bunvexSiteUrl: expect.stringMatching(/^http:\/\/127/) });
+    expect((await d.call("query", "env:read", { name: "BUNVEX_CLOUD_URL" })).value).toBe(d.api);
+    const set = (body: object) => d.post("/api/v1/update_canonical_url", body);
+    expect((await set({ requestDestination: "bunvexCloud", url: "https://api.example.com" })).status).toBe(200);
+    expect((await d.call("query", "env:read", { name: "BUNVEX_CLOUD_URL" })).value).toBe("https://api.example.com");
+    expect((await d.call("action", "env:inAction", { name: "BUNVEX_CLOUD_URL" })).value).toBe(
+      "https://api.example.com",
+    );
+    expect((await d.call("query", "_system/cli/deploymentUrl:cloudUrl", {}, `Bunvex ${KEY}`)).value).toBe(
+      "https://api.example.com",
+    );
+    expect(await get()).toEqual({ bunvexCloudUrl: "https://api.example.com", bunvexSiteUrl: site });
+    expect((await set({ requestDestination: "bunvexCloud" })).status).toBe(200);
+    expect((await d.call("query", "env:read", { name: "BUNVEX_CLOUD_URL" })).value).toBe(d.api);
+    const bad = await set({ requestDestination: "convexCloud", url: "x" });
+    expect(bad.status).toBe(400);
+    const events = (await d.engine.query((db) =>
+      db.asSystem(() => db.query("_deployment_audit_log").collect()),
+    )) as unknown as { action: string; metadata: unknown }[];
+    expect(events.filter((e) => e.action.endsWith("_canonical_url")).map((e) => [e.action, e.metadata])).toEqual([
+      ["update_canonical_url", { request_destination: "bunvexCloud", url: "https://api.example.com" }],
+      ["delete_canonical_url", { request_destination: "bunvexCloud" }],
+    ]);
+  });
+
+  test('the function log names a "use node" action\'s environment (STUDY-47)', async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([
+      envMod,
+      {
+        path: "nodeAct.js",
+        environment: "node",
+        source: `"use node";
+         import { action } from "@bunvex/server";
+         export const go = action(async () => 1);`,
+      },
+    ]);
+    await d.call("action", "nodeAct:go");
+    await d.call("action", "env:inAction", { name: "X" });
+    const { parts } = await d.s.functionLog.after(0, 1000);
+    const done = parts.filter((p) => p.kind === "Completion") as { identifier: string; environment: string }[];
+    expect(done.map((p) => [p.identifier, p.environment])).toEqual([
+      ["nodeAct:go", "node"],
+      ["env:inAction", "isolate"],
+    ]);
+  });
+
   test("a subscription re-runs when a variable it read changes", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

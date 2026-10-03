@@ -2,7 +2,7 @@
 // index_range_builder.ts, filter_builder.ts): what `ctx.db` is to an app whose data model is known — tables,
 // ids, documents, index names and fields, field paths. Types only: at run time `ctx.db` is the engine's `Tx`,
 // which accepts every one of these calls.
-import type { GenericId, Value } from "@bunvex/values";
+import type { CommitTsPlaceholder, GenericId, Value } from "@bunvex/values";
 import type {
   DocumentByInfo,
   DocumentByName,
@@ -127,6 +127,23 @@ export interface OrderedQuery<TableInfo extends GenericTableInfo> extends AsyncI
 export interface Query<TableInfo extends GenericTableInfo> extends OrderedQuery<TableInfo> {
   order(order: "asc" | "desc"): OrderedQuery<TableInfo>;
 }
+/** What a search filter callback returns (Convex's `SearchFilter`). */
+export interface SearchFilter {
+  readonly __isSearchFilter?: undefined;
+}
+/** Convex's `SearchFilterBuilder`: the search first. */
+export interface SearchFilterBuilder<Document, Config extends { searchField: string; filterFields: string }> {
+  search(fieldName: Config["searchField"], query: string): SearchFilterFinalizer<Document, Config>;
+}
+/** Convex's `SearchFilterFinalizer`: equality filters on the index's filter fields. */
+export interface SearchFilterFinalizer<Document, Config extends { searchField: string; filterFields: string }>
+  extends SearchFilter {
+  eq<FieldName extends Config["filterFields"]>(
+    fieldName: FieldName,
+    value: FieldTypeFromFieldPath<Document, FieldName>,
+  ): SearchFilterFinalizer<Document, Config>;
+}
+
 /** Convex's `QueryInitializer`: the whole table, or an index range. */
 export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Query<TableInfo> {
   fullTableScan(): Query<TableInfo>;
@@ -134,6 +151,13 @@ export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Qu
     indexName: IndexName,
     indexRange?: (q: IndexRangeBuilder<DocumentByInfo<TableInfo>, NamedIndex<TableInfo, IndexName>>) => IndexRange,
   ): Query<TableInfo>;
+  /** A full-text search (STUDY-45): always in relevance order. */
+  withSearchIndex<IndexName extends keyof TableInfo["searchIndexes"] & string>(
+    indexName: IndexName,
+    searchFilter: (
+      q: SearchFilterBuilder<DocumentByInfo<TableInfo>, TableInfo["searchIndexes"][IndexName]>,
+    ) => SearchFilter,
+  ): OrderedQuery<TableInfo>;
 }
 
 /** A table's name from one of its ids. */
@@ -208,6 +232,12 @@ type WithoutSystemFieldsLoose<Document> =
 
 /** Convex's `GenericDatabaseWriter`: `ctx.db` in a mutation. */
 export interface GenericDatabaseWriter<DataModel extends GenericDataModel> extends GenericDatabaseReader<DataModel> {
+  /**
+   * Convex's `db.vars` (STUDY-53): `commitTs`, the placeholder for this transaction's commit timestamp. Write
+   * it in a document (or return it); it resolves at the commit to an int64 (`bigint`) of nanoseconds,
+   * ordered by commit order. Read back within the mutation it is still the placeholder.
+   */
+  readonly vars: { readonly commitTs: CommitTsPlaceholder };
   insert<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     value: WithoutSystemFields<DocumentByName<DataModel, TableName>>,

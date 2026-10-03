@@ -3,17 +3,29 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
-import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
+import {
+  checkValue,
+  fromJsonValue,
+  type GenericValidator,
+  hasCommitTs,
+  resolveCommitTs,
+  toJsonValue,
+  type Value,
+  v,
+} from "@bunvex/values";
 import {
   activeTables,
   bootstrapCatalog,
   buildCatalog,
+  CANONICAL_URLS_TABLE,
   type Catalog,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FUNCTION_HANDLES_TABLE,
   finishCatalog,
   hasChanges,
   hasFinishChanges,
@@ -21,8 +33,10 @@ import {
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
   INSTANCE_TABLE,
+  IndexBackfillingError,
   type IndexBackfillMeta,
   type IndexMeta,
+  IndexStagedError,
   MODULES_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
@@ -45,6 +59,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+import type { CursorCodec } from "./cursor.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -70,13 +85,16 @@ import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
+  type Doc,
   documentValidator,
+  MAX_VECTOR_DIMENSIONS,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
+import { filterKey, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -87,6 +105,14 @@ import {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 import { Tx } from "./tx.ts";
+import {
+  DEFAULT_VECTOR_LIMIT,
+  MAX_VECTOR_FILTER_CONDITIONS,
+  MAX_VECTOR_RESULTS,
+  type VectorFilter,
+  type VectorIndexEntry,
+  VectorIndexes,
+} from "./vector-indexes.ts";
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -125,7 +151,8 @@ export class OccError extends Error {
   readonly code = "OptimisticConcurrencyControlFailure";
   constructor(
     message: string,
-    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number },
+    /** `retries`: how many times the mutation had already been re-run. */
+    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number; retries: number },
   ) {
     super(message);
   }
@@ -182,11 +209,22 @@ export class Engine {
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
   private cacheEpoch = 0;
+  /** The search indexes of the active tables, in memory (STUDY-45 S1). */
+  readonly searchIndexes = new SearchIndexes();
+  /** Vector indexes (STUDY-51): exact, in memory. */
+  readonly vectorIndexes = new VectorIndexes();
+  private searchBackfills = new Set<Promise<void>>();
   /**
    * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
    */
   stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
+  /**
+   * Called when a mutation attempt lost an OCC conflict and will run again (`failures`: the attempts lost so
+   * far), in the mutation's own async context: the server logs each such attempt, as Convex's
+   * `log_mutation_occ_error` with `will_retry` (STUDY-47).
+   */
+  onOccRetry: ((error: OccError, failures: number) => void) | null = null;
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
@@ -197,6 +235,8 @@ export class Engine {
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
       cacheClock?: () => number;
+      /** Awaited before each page a search index's backfill reads (tests hold the backfill with it). */
+      beforeSearchBackfillPage?: () => Promise<void>;
       /** Retries after an OCC conflict (default: Convex's 4). */
       maxRetries?: number;
       /** Backoff between retries, in ms (default: Convex's 100 ms doubling up to 2 s, full jitter). */
@@ -276,6 +316,8 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
+    this.reconcileSearch();
+    this.reconcileVector();
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -437,6 +479,16 @@ export class Engine {
     return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
   }
 
+  private cursorCodecCache: CursorCodec | null = null;
+  /** Pagination cursors' key (`derivedKey("cursor")`, as Convex's keybroker) and the instance they name. */
+  private readonly cursorCodecOf = (): CursorCodec => this.cursorCodec;
+  get cursorCodec(): CursorCodec {
+    const c = this.cursorCodecCache;
+    if (c && c.instanceName === this.instanceName) return c;
+    this.cursorCodecCache = { key: this.derivedKey("cursor"), instanceName: this.instanceName };
+    return this.cursorCodecCache;
+  }
+
   /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
   async instanceSetting(name: string, make: () => string): Promise<string> {
     return this.runMutation(async (db) => {
@@ -481,6 +533,13 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: DEPLOYMENT_AUDIT_LOG_TABLE,
+        indexes: { by_action_and_creation_time: ["action", "_creationTime"] },
+        document: v.any(),
+      },
+      { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
     ];
     return [...systemTables, ...schema.tables.values()];
   }
@@ -556,6 +615,182 @@ export class Engine {
   private pendingValidators: Map<string, GenericValidator> | null = null;
   /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
   private validation: Promise<unknown> | null = null;
+
+  /** A commit's search part (STUDY-45 PR 3): its searches to check, its versions and their read-set keys. */
+  private searchCommit(tx: Tx, own: ((ts: number) => void) | undefined) {
+    const writes = tx.writtenDocs();
+    const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
+    // A commit timestamp (STUDY-53) is written into the documents at `atTs`, after this commit is built: the
+    // indexes then take the resolved versions. The OCC and log keys above keep the placeholder's, which no
+    // search can name before the commit has its timestamp.
+    const resolvesLater = tx.hasCommitTs;
+    return {
+      // The search indexes are brought up to date with the commit as it becomes visible, in commit order.
+      onVisible: (ts: number) => {
+        own?.(ts);
+        const final = resolvesLater ? tx.writtenDocs() : writes;
+        this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
+        this.vectorIndexes.apply(final);
+      },
+      ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
+      ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
+    };
+  }
+
+  /**
+   * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
+   * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
+   */
+  private reconcileSearch() {
+    const wanted = [];
+    for (const [name, declared] of this.schema.tables) {
+      const t = this.catalog.tables.get(name);
+      if (!t || !declared.searchIndexes) continue;
+      const staged = new Set(declared.stagedSearch ?? []);
+      for (const [index, def] of Object.entries(declared.searchIndexes))
+        wanted.push({ table: t, name: index, def, staged: staged.has(index) });
+    }
+    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs)) {
+      const p = this.backfillSearch(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: search index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+  }
+
+  /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
+  private reconcileVector() {
+    const wanted = [];
+    for (const [name, declared] of this.schema.tables) {
+      const t = this.catalog.tables.get(name);
+      if (!t || !declared.vectorIndexes) continue;
+      const staged = new Set(declared.stagedVector ?? []);
+      for (const [index, def] of Object.entries(declared.vectorIndexes))
+        wanted.push({ table: t, name: index, def, staged: staged.has(index) });
+    }
+    for (const e of this.vectorIndexes.reconcile(wanted)) {
+      const p = this.backfillVector(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: vector index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+  }
+
+  private async backfillVector(e: VectorIndexEntry) {
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return;
+    const at = this.committer.visibleTs;
+    let last: string | null = null;
+    for (;;) {
+      if (this.closed) return;
+      const page = (await this.query(
+        (db) =>
+          db.asSystem(() =>
+            db
+              .queryDef(t)
+              .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+              .take(1000),
+          ),
+        undefined,
+        undefined,
+        undefined,
+        at,
+      )) as Doc[];
+      for (const d of page) this.vectorIndexes.backfill(e, d);
+      if (page.length < 1000) break;
+      last = page[page.length - 1]!._id as string;
+      await new Promise((r) => setImmediate(r));
+    }
+    this.vectorIndexes.done(e);
+  }
+
+  /**
+   * Convex's vector search (`Database::vector_search`, STUDY-51): the `limit` (default 10, at most 256)
+   * documents of `table` nearest `vector` in index `index`, among those matching `filter` (an OR of `q.eq`s on
+   * the index's filter fields), as `{_id, _score}`, best first. Against the latest visible state; a missing
+   * table has no results.
+   */
+  vectorSearch(
+    table: string,
+    index: string,
+    query: { vector: number[]; limit?: number; filter?: unknown },
+  ): { _id: string; _score: number }[] {
+    const t = this.catalog.tables.get(table);
+    if (!t) return [];
+    const name = `${table}.${index}`;
+    const declared = this.schema.tables.get(table);
+    const e = this.vectorIndexes.get(t, index);
+    if (!e) {
+      if (t.indexes.has(index) || declared?.searchIndexes?.[index])
+        throw new Error(`Index ${name} is not a vector index`);
+      throw new Error(`Index ${name} not found.`);
+    }
+    if (e.staged) throw new IndexStagedError(name);
+    if (!e.ready) throw new IndexBackfillingError(name);
+    const v = query.vector;
+    const limit = query.limit ?? DEFAULT_VECTOR_LIMIT;
+    if (!Number.isInteger(limit) || limit < 0)
+      throw new Error(`InvalidVectorQuery: limit: invalid value: ${limit}, expected u32`);
+    if (v.length > MAX_VECTOR_DIMENSIONS)
+      throw new Error(`Expected a vector with dimensions ${MAX_VECTOR_DIMENSIONS}, received ${v.length}.`);
+    if (limit > MAX_VECTOR_RESULTS)
+      throw new Error(`Vector queries can fetch at most ${MAX_VECTOR_RESULTS} results, requested ${limit}.`);
+    const filter = query.filter === undefined ? null : vectorFilter(query.filter);
+    if (filter) {
+      let conditions = 0;
+      for (const [field, keys] of filter) {
+        if (!e.def.filterFields.includes(field))
+          throw new Error(
+            `Vector query against ${name} contains a filter on ${JSON.stringify(field)} but that field isn't indexed for filtering in \`filterFields\`.`,
+          );
+        conditions += keys.size;
+      }
+      if (conditions > MAX_VECTOR_FILTER_CONDITIONS)
+        throw new Error(
+          `Vector query against ${name} has too many conditions. Max: ${MAX_VECTOR_FILTER_CONDITIONS} Actual: ${conditions}`,
+        );
+    }
+    if (v.length !== e.def.dimensions)
+      throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
+    return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
+  }
+
+  private async backfillSearch(e: SearchIndexEntry) {
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return;
+    const at = this.committer.visibleTs;
+    let last: string | null = null;
+    for (;;) {
+      await this.opts.beforeSearchBackfillPage?.();
+      if (this.closed) return;
+      const page = (await this.query(
+        (db) =>
+          db.asSystem(() =>
+            db
+              .queryDef(t)
+              .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
+              .take(1000),
+          ),
+        undefined,
+        undefined,
+        undefined,
+        at,
+      )) as Doc[];
+      for (const d of page) this.searchIndexes.backfill(e, d);
+      if (page.length < 1000) break;
+      last = page[page.length - 1]!._id as string;
+      // A background job: let the server's own work run between pages.
+      await new Promise((r) => setImmediate(r));
+    }
+    this.searchIndexes.done(e);
+  }
+
+  /** Wait until every search index is built (tests). */
+  async searchReady() {
+    while (this.searchBackfills.size) await Promise.all([...this.searchBackfills]);
+  }
 
   /** A transaction's commit hook, plus failing the pending schema when one of its writes did not match it. */
   private withPendingCheck(tx: Tx): ((ts: number) => void) | undefined {
@@ -768,6 +1003,8 @@ export class Engine {
           this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
           this.schema = pending.schema;
           this.installValidators(pending.schema);
+          this.reconcileSearch();
+          this.reconcileVector();
           if (this.pendingPush?.id === schemaId) {
             this.pendingPush = null;
             this.pendingValidators = null;
@@ -879,6 +1116,8 @@ export class Engine {
           this.catalog = this.catalog.withTableStates({ activate: tablets, delete: deleteList });
           this.cache.clear();
           this.cacheEpoch++;
+          this.reconcileSearch();
+          this.reconcileVector();
         };
       },
       true,
@@ -933,14 +1172,15 @@ export class Engine {
    * not exist is skipped; a system table is refused; one the active schema declares, or points to with
    * `v.id`, is refused with Convex's `SchemaEnforcementError` messages; a pending schema that does fails.
    */
-  async deleteTables(names: string[]) {
+  /** `body` runs in the deletion's transaction (the server records its audit-log event there). */
+  async deleteTables(names: string[], body?: (db: Tx) => Promise<void>) {
     for (const name of names) {
       if (name.startsWith("_")) throw new Error(`cannot delete system table ${name}`);
       const refusal = deletionRefusal(this.schema, name);
       if (refusal) throw new SchemaEnforcementError(refusal);
     }
     const pending = this.pendingPush;
-    await this.activateTables([], names);
+    await this.activateTables([], names, body);
     if (pending)
       for (const name of names) {
         const refusal = deletionRefusal(pending.schema, name);
@@ -1042,7 +1282,8 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
+    tx.searchIndexes = this.searchIndexes;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1227,8 +1468,9 @@ export class Engine {
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.retention = this.retention;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
+    tx.searchIndexes = this.searchIndexes;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;
@@ -1325,8 +1567,13 @@ export class Engine {
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
-      if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
+      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
+      const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
+      if (!tx.hasWrites) {
+        const value = resolved(tx.snapshot);
+        return withTs ? { value, ts: tx.snapshot } : value;
+      }
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({
@@ -1335,8 +1582,17 @@ export class Engine {
           docs,
           idx,
           source,
-          onVisible: this.withPendingCheck(tx),
+          ...this.searchCommit(tx, this.withPendingCheck(tx)),
+          ...(tx.hasCommitTs
+            ? {
+                atTs: (ts: number) => {
+                  tx.resolveCommitTs(BigInt(ts) * 1000n);
+                  return tx.toWrites();
+                },
+              }
+            : {}),
         });
+        const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)
@@ -1354,8 +1610,9 @@ export class Engine {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
         // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
-        if (failures >= maxRetries) throw this.occError(e.conflict, source);
+        if (failures >= maxRetries) throw this.occError(e.conflict, source, failures);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
+        this.onOccRetry?.(this.occError(e.conflict, source, failures), failures + 1);
         failures++;
         this.stats.retries++;
         await new Promise((r) => setTimeout(r, sleep));
@@ -1366,7 +1623,7 @@ export class Engine {
   }
 
   /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
-  private occError(conflict: Conflict, source: string | undefined): OccError {
+  private occError(conflict: Conflict, source: string | undefined, retries: number): OccError {
     let table: string | undefined;
     if (conflict.index !== undefined)
       for (const t of this.catalog.tables.values())
@@ -1382,7 +1639,7 @@ export class Engine {
     const where = table === undefined ? "some table" : `the "${table}" table`;
     return new OccError(
       `Documents read from or written to ${where} changed while this mutation was being run and on every subsequent retry.${changedBy}`,
-      { table, documentId, writeSource, writeTs: conflict.writeTs },
+      { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
 }
@@ -1461,4 +1718,26 @@ async function deleteBackfillProgress(db: Tx, indexMetaId: string) {
     .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexMetaId))
     .first()) as unknown as IndexBackfillMeta | null;
   if (p) await db.delete(INDEX_BACKFILLS_TABLE, p._id);
+}
+
+/**
+ * A vector search filter (Convex's `VectorSearchExpression`, STUDY-51): `{$eq: [{$field}, {$literal}]}`
+ * and `{$or: [...]}`, flattened to each field's set of values (their sort keys).
+ */
+function vectorFilter(x: unknown, out: VectorFilter = new Map()): VectorFilter {
+  const o = x as Record<string, unknown>;
+  if (o && typeof o === "object" && Array.isArray(o.$or) && Object.keys(o).length === 1) {
+    for (const e of o.$or) vectorFilter(e, out);
+    return out;
+  }
+  if (o && typeof o === "object" && Array.isArray(o.$eq) && Object.keys(o).length === 1) {
+    const [f, l] = o.$eq as [Record<string, unknown>, Record<string, unknown>];
+    if (!f || typeof f.$field !== "string" || !l || !("$literal" in l))
+      throw new Error("`q.eq` must take a field path as its first argument and a value as its second");
+    const keys = out.get(f.$field) ?? new Set<string>();
+    keys.add(filterKey(l.$literal as never));
+    out.set(f.$field, keys);
+    return out;
+  }
+  throw new Error("Filters should be a combination of `q.eq` and `q.or`.");
 }

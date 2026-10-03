@@ -13,7 +13,7 @@
     "bench"
   ],
   "scripts": {
-    "typecheck": "tsc -p . && tsc -p packages/react && tsc -p packages/sync-e2e/react && tsc -p packages/ui && tsc -p packages/dashboard && tsc -p apps/dashboard && tsc -p apps/site",
+    "typecheck": "tsc -p . && tsc -p packages/react && tsc -p packages/react-clerk && tsc -p packages/react-auth0 && tsc -p packages/sync-e2e/react && tsc -p packages/ui && tsc -p packages/dashboard && tsc -p apps/dashboard && tsc -p apps/site",
     "lint": "biome ci .",
     "format": "biome check --write .",
     "check:deps": "bun scripts/check-deps.ts",

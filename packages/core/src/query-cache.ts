@@ -53,7 +53,7 @@ const ENTRY_OVERHEAD = 360;
 /** Rough heap bytes per read interval beyond its key bytes: the object and two Uint8Array headers. */
 const INTERVAL_OVERHEAD = 96;
 
-/** A rough size of what a companion stored (log lines are an array of strings). */
+/** A rough size of what a companion stored (log lines: an array of small objects of strings). */
 function extraSize(extra: unknown): number {
   if (extra == null) return 0;
   if (typeof extra === "string") return extra.length;
@@ -62,7 +62,12 @@ function extraSize(extra: unknown): number {
     for (const x of extra) n += 16 + extraSize(x);
     return n;
   }
-  return 64;
+  if (typeof extra === "object") {
+    let n = 32;
+    for (const v of Object.values(extra)) n += 16 + extraSize(v);
+    return n;
+  }
+  return 8;
 }
 
 /** Approximate heap bytes of a ready entry under `key`, as Convex sizes its key plus its result and token. */

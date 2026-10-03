@@ -5,6 +5,7 @@
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import type { DataModelFromSchemaDefinition } from "../src/data-model.ts";
+import type { GenericDatabaseReader } from "../src/database-types.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
@@ -85,4 +86,24 @@ test("the data model carries the search indexes' types", () => {
   // @ts-expect-error: not a filter field of this index
   const wrong: DM["messages"]["searchIndexes"]["search_body"]["filterFields"] = "author";
   expect([field, filter, wrong as string]).toEqual(["body", "channel", "author"]);
+});
+
+test("withSearchIndex is typed by the index: its search field, its filter fields and their values", () => {
+  const schema = defineSchema({
+    messages: messages().searchIndex("search_body", { searchField: "body", filterFields: ["channel"] }),
+  });
+  type DM = DataModelFromSchemaDefinition<typeof schema>;
+  // Type checks only: never called.
+  const typed = (db: GenericDatabaseReader<DM>) => [
+    db.query("messages").withSearchIndex("search_body", (q) => q.search("body", "x").eq("channel", "general")),
+    // @ts-expect-error: not the index's search field
+    db.query("messages").withSearchIndex("search_body", (q) => q.search("author", "x")),
+    // @ts-expect-error: not one of its filter fields
+    db.query("messages").withSearchIndex("search_body", (q) => q.search("body", "x").eq("author", "a")),
+    // @ts-expect-error: a filter value of the wrong type
+    db.query("messages").withSearchIndex("search_body", (q) => q.search("body", "x").eq("channel", 1)),
+    // @ts-expect-error: not a search index
+    db.query("messages").withSearchIndex("nope", (q) => q.search("body", "x")),
+  ];
+  expect(typeof typed).toBe("function");
 });

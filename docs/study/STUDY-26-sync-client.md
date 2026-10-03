@@ -1,6 +1,6 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
 
-- **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30)
+- **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30); P2 built (§8.4); P3 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** STUDY-23 (sync protocol v1; this is its step 7), #50 (sessions), #63 (`_session_requests`),
   ARCH-01 §6 open decision 1 (types: codegen or inference)
@@ -347,12 +347,73 @@ The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 
 ### 8.3 Divergences
 
-Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96 (decided), P2 under Gaps.
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): P1 as DV-96 (decided), P2 closed by §8.4,
+P3 as DV-250 (decided).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | P1 | The server's `InvalidCursor` for a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}` (Convex: `isConvexSystemError`); the client recognizes it by that data or by its message, as Convex's | Owner's naming rule for the key; it closes STUDY-17 D4. The official client still recognizes it by the message | **accepted**: option (a) |
-| P2 | `onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later | `usePaginatedQuery` does not use them, in Convex either | **accepted** later |
+| P2 | ~~`onPaginatedUpdate_experimental` (`BunvexClient`) and `watchPaginatedQuery` (`BunvexReactClient`), the non-React paginated client, come later~~ | `usePaginatedQuery` does not use them, in Convex either | **accepted** later; **built** (§8.4) |
+| P3 | A page that failed never escapes the paginated client's transition: the transition still reaches the listeners, and the error comes out where it is read (`onError`, the hook's reset / `status: "error"` / error boundary). Convex reads the failed page outside any `try` in the transition, so the error is thrown out of the WebSocket message handler | Convex's path loses the error: `onError` is never called, and `usePaginatedQuery_experimental` never reaches its `InvalidCursor` reset or its error states from a transition (§8.4) | accepted as recommended (owner, 2026-10-03): DV-250 |
+
+### 8.4 The paginated query client (`onPaginatedUpdate_experimental`, `watchPaginatedQuery`, `usePaginatedQuery_experimental`)
+
+**How Convex does it.**
+
+- **One core: `PaginatedQueryClient`** (`browser/sync/paginated_query_client.ts`). It keeps each paginated
+  query as an ordered list of page subscriptions on the base client, the same page and split rules as §8.1,
+  but in the client instead of in React state.
+  - A paginated query's token is `JSON.stringify({type: "paginated", udfPath, args, options: {initialNumItems,
+    id}})` (`udf_path_utils.ts` `serializePaginatedPathAndArgs`). Equal subscriptions share one entry, counted.
+  - `localQueryResult` concatenates the active pages: `LoadingFirstPage` with no page; `LoadingMore` (or
+    `LoadingFirstPage` if nothing loaded) when any page is loading, *still including the loaded pages after
+    it*; `Exhausted` when the last page `isDone`; else `CanLoadMore`. A `SplitRequired` page is included as
+    it is.
+  - `loadMore(n)` returns `false` while the last page loads or once it is done; else it adds a page and
+    emits a transition of its own, with the last base transition's timestamp.
+  - The base client's own `onTransition` is a no-op; the paginated client registers the only transition
+    handler and reports `ExtendedTransition`s (`queries` plus `paginatedQueries`), so plain and paginated
+    queries change in the same synchronous call.
+- **`ConvexClient.onPaginatedUpdate_experimental(query, args, {initialNumItems}, callback, onError)`**
+  (`browser/simple_client.ts`): subscribes with `id: -1` (no separate pagination per caller), calls back with
+  `{results, status, loadMore}` soon after subscribing (a paginated query always has a result, at least
+  `LoadingFirstPage`) and on every change; returns an `Unsubscribe` whose `getCurrentValue` is that result and
+  `getQueryLogs` is `[]`.
+- **`ConvexReactClient.watchPaginatedQuery(query, args, {initialNumItems, id})`** (`react/client.ts`,
+  `@internal`): a `PaginatedWatch` with `onUpdate` and `localQueryResult`. `useQueries` routes a request
+  with `paginationOptions` to it (`react/use_queries.ts`, `queries_observer.ts`).
+- **`usePaginatedQuery_experimental`** (`react/use_paginated_query2.ts`): one paginated query through
+  `useQueries`, a new pagination `id` per new function, arguments or `"skip"`, and the `InvalidCursor` reset.
+  Two forms: positional, `usePaginatedQuery`'s result, errors thrown; an options object
+  `{query, args, initialNumItems, throwOnError?}`, returning `{data, status: "pending" | "success" | "error",
+  canLoadMore, isLoading, error, loadMore}`, errors returned unless `throwOnError`. `data` is `undefined` only
+  while the first page loads.
+- **Errors (P3).** A failed page makes the base client's `localQueryResultByToken` throw. The paginated
+  client calls it outside any `try` while processing splits, and `ConvexClient._transition` does too while
+  checking whether a result is ready, so the error is thrown out of the WebSocket message handler. Checked
+  with the official client against a bunvex server: an `InvalidCursor` page is an uncaught exception, and
+  `onError` is never called.
+
+**What apps observe:** the three APIs' shapes and statuses, `loadMore`'s boolean, live growth, splits that
+keep the results whole, the hook's reset and error forms, and (P3) where a failed page's error goes.
+
+**How bunvex does it.** `@bunvex/client`'s `PaginatedQueryClient` (`paginated-query-client.ts`) with the same
+rules, the paginated token (`udf-path.ts`) and `PaginatedQueryResult` (`pagination.ts`). `BunvexClient` and
+`BunvexReactClient` create it with their base client and take every transition from it.
+`BunvexReactClient.watchPaginatedQuery` and the `paginationOptions` path of `useQueries` /
+`QueriesObserver` are as Convex's. `usePaginatedQuery_experimental` (`use-paginated-query2.ts`) has both
+forms. The positional `usePaginatedQuery` keeps its own state machine (§8.2), as Convex's does. The one
+difference is P3: split processing treats a failed page as "not loaded", and `BunvexClient` reads results in
+its `try`, so the error reaches `onError` and the hook.
+
+The tests (`packages/sync-e2e/test/paginated-client.test.ts`, `react/paginated-experimental.test.tsx`) cover:
+- `onPaginatedUpdate_experimental`: first page, `loadMore` (and its `false`s), exhaustion, live growth,
+  `getCurrentValue`, unsubscribe — **step by step equal to the official client's** on the same server;
+- splits keeping the results whole; shared subscriptions; the disabled client;
+- P3: an `InvalidCursor` page reaches `onError`, nothing uncaught;
+- `usePaginatedQuery_experimental`, both forms: pages, `loadMore`, splits, the `InvalidCursor` reset, `"skip"`,
+  errors thrown (positional) or returned (object), `initialNumItems` checked;
+- `watchPaginatedQuery`: lazy subscription, the result, `loadMore`.
 
 ## 9. The HTTP client (`BunvexHttpClient`)
 

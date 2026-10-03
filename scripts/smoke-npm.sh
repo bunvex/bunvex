@@ -12,7 +12,7 @@ fail() { echo "smoke-npm: $*" >&2; exit 1; }
 bun "$ROOT/scripts/publish-npm.ts" --dry-run >/dev/null
 VERSION=$(bun -e "console.log(require('$ROOT/packages/server/package.json').version)")
 bun -e "
-const names = ['values','protocol','core','auth','file-storage','persistence','server','client','react','cli'];
+const names = ['values','search','protocol','core','auth','file-storage','persistence','server','client','react','react-clerk','react-auth0','react-query','nextjs','cli'];
 const f = (n) => 'file:$ROOT/dist/npm/bunvex-' + n + '-$VERSION.tgz';
 await Bun.write('$APP/package.json', JSON.stringify({
   name: 'smoke-app', private: true, type: 'module',

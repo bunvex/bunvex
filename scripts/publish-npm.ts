@@ -15,6 +15,7 @@ const ROOT = resolve(import.meta.dir, "..");
 /** Dependency order: each after the packages it depends on. */
 export const PACKAGES = [
   "values",
+  "search",
   "protocol",
   "core",
   "auth",
@@ -23,6 +24,10 @@ export const PACKAGES = [
   "server",
   "client",
   "react",
+  "react-clerk",
+  "react-auth0",
+  "react-query",
+  "nextjs",
   "cli",
 ];
 

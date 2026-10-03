@@ -19,7 +19,9 @@ const APPS = join(ROOT, "apps");
 /** Which @bunvex packages each package may import (by directory name; apps as "apps/<dir>"). */
 const ALLOWED: Record<string, string[]> = {
   values: [],
-  core: ["values"],
+  // STUDY-45 (owner, 2026-10-02: search in a package of its own): the tokenizer, index and ranking.
+  search: ["values"],
+  core: ["values", "search"],
   persistence: ["core"],
   "persistence-conformance": ["core", "values"],
   protocol: [],
@@ -27,13 +29,27 @@ const ALLOWED: Record<string, string[]> = {
   client: ["protocol", "values"],
   react: ["client", "values"],
   nextjs: ["react", "client", "values"],
+  "react-clerk": ["react"],
+  "react-auth0": ["react"],
+  "react-query": ["react", "client", "values"],
   auth: ["values"],
   "file-storage": [],
   // STUDY-37 E5 (owner, 2026-10-02): the CLI subscribes as Convex's does (`run --watch`).
   cli: ["server", "core", "values", "client", "protocol"],
   testing: ["server", "core", "values"],
   // Test-only, never published: end-to-end sync tests (a server and clients in one process, STUDY-26).
-  "sync-e2e": ["client", "react", "server", "core", "protocol", "values"],
+  "sync-e2e": [
+    "client",
+    "react",
+    "nextjs",
+    "react-clerk",
+    "react-auth0",
+    "react-query",
+    "server",
+    "core",
+    "protocol",
+    "values",
+  ],
   // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
   bunvex: ["server", "values", "client", "react", "nextjs", "cli", "core", "persistence"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
