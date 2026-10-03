@@ -62,7 +62,11 @@ async function setup() {
   stops.push(() => s.stop());
   const api = `http://127.0.0.1:${s.server.port}/api`;
   const call = async (kind: string, path: string, args: object = {}) => {
-    const r = await fetch(`${api}/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) });
+    const r = await fetch(`${api}/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args }),
+    });
     return { status: r.status, body: (await r.json()) as any };
   };
   return { s, call, limits };

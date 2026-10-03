@@ -20,6 +20,9 @@ const KNOBS = {
   SYNC_WORKER_QUERY_RETRY_INITIAL_BACKOFF_MS: "5",
   SYNC_WORKER_QUERY_RETRY_MAX_BACKOFF_SECS: "1",
   SYNC_WORKER_UPDATE_QUERIES_RETRY_INITIAL_BACKOFF_MS: "5",
+  // The deployment-wide query limit (STUDY-68, 16 by default) would cap a connection below its own 20: the
+  // per-connection bound is what these tests measure.
+  APPLICATION_MAX_CONCURRENT_QUERIES: "100",
 };
 beforeAll(() => Object.assign(process.env, KNOBS));
 afterAll(() => {
