@@ -92,6 +92,7 @@ export {
   formatDuration,
   installDeterminismIn,
   newUserTimer,
+  observeTime,
   pausingUserTime,
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
@@ -102,6 +103,7 @@ export {
 export {
   type CacheCompanion,
   type Caller,
+  type CallRequest,
   DEFAULT_INSTANCE_NAME,
   Engine,
   INDEX_BACKFILL_DEFAULTS,
