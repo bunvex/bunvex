@@ -348,6 +348,14 @@ DV-302 (STUDY-58, the app metrics' concurrency gauges) awaits the owner; the dra
 |---|---|---|---|---|---|
 | DV-302 | `function_concurrency`: actions and HTTP actions report the one shared permit pool's counts; queries and mutations report how many are in flight (`queued` always 0); no `node` gauges | one limiter per function type and environment, each reporting its running and queued permits | dashboard only (the Health page's concurrency chart) | Not done yet: bunvex has no per-type limiters (STUDY-31). Accept for now; the gauges follow if limiters are split | [STUDY-58 §4](../study/STUDY-58-app-metrics.md#4-divergences) |
 
+DV-303–DV-305 (STUDY-59, log streams) await the owner; the draft PR implements the recommendations:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-303 | Datadog, Axiom, Sentry, PostHog Logs and PostHog Error Tracking streams are created, listed and updated as Convex's, but fail to start ("… log streams are not supported by bunvex yet.") | each sends to its service | yes: those integrations never become active | Not done yet: each needs its client (and Sentry its SDK). Accept for now; add them one by one later | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+| DV-304 | A webhook or local event's deployment metadata is under `deployment` (not `convex`); the verification event's message is "Log stream connection test" (not "Convex connection test"); the `custom_audit` refusal has no plans link | `convex: {…}`, "Convex connection test" | yes, to the receiving endpoint | Rule 5 (no "convex" in shipped strings). Accept: receivers written for Convex read `convex.deployment_name` and would need `deployment.deployment_name` | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+| DV-305 | `function_execution`: `run_reason` of a subscribed query is always `initialSubscription` (never `dataChange` / `identityChange`); `scheduler_info`, `function_args_bytes` and `mutation_retry_count` are null; an exception's `frames` are null; usage as the function log's (DV-251) | the rerun's reason, the job, the sizes, the stack frames | yes, in those fields | Not done yet: the function log does not carry them. Accept for now | [STUDY-59 §4](../study/STUDY-59-log-streams.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group
@@ -357,7 +365,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 |---|---|---|
 | **The dashboard on a real deployment** (item 12) | DV-189, DV-194, DV-202, DV-217 | the `dashboard` service in docker-compose; `dashboard.zip` in the binary release; the local dashboard in `bunvex dev`; dashboard links in the export/import CLI output |
 | **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component` |
-| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, log sinks (`*_integration`), data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
+| **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: usage limits, pause/unpause, system stop state, `clear_tables`, components (`delete_component`), `delete_scheduled_jobs_table`, data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-227/DV-228 (persisted search segments), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |

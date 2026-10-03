@@ -60,6 +60,8 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import type { FunctionSource, LogEvent, RunReason } from "./log-events.ts";
+import type { LogManager } from "./log-sinks.ts";
 import {
   cachedQueryLogs,
   currentLogLines,
@@ -288,6 +290,26 @@ export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
 /** A function's path as the function log names it (Convex's stripped `UdfPath`): no `.js`, no `:default`. */
+/** Convex's `FunctionRunReason` from the caller (a subscription's query reads as its first run). */
+function runReason(caller: CallerName, udfType: UdfType): RunReason {
+  switch (caller) {
+    case "SyncWorker":
+      return udfType === "Query" ? "initialSubscription" : "webSocket";
+    case "HttpApi":
+      return "httpApi";
+    case "HttpEndpoint":
+      return "httpEndpoint";
+    case "Cron":
+      return "cron";
+    case "Scheduler":
+      return "scheduler";
+    case "Action":
+      return "action";
+    case "Tester":
+      return "tester";
+  }
+}
+
 const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
 
 /** The transaction the current logged execution runs in, for its usage. */
@@ -438,7 +460,7 @@ export class Functions {
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
     if (udfType === "Action" || udfType === "HttpAction")
-      r.onLine = (line) =>
+      r.onLine = (line) => {
         log.append({
           kind: "Progress",
           udfType,
@@ -449,6 +471,12 @@ export class Functions {
           executionId: r.executionId,
           root: parent === null,
         });
+        // An action's lines stream out as they come (Convex's progress Console events).
+        if (this.logManager?.active)
+          this.logManager.send([
+            { timestamp: line.timestamp, event: { topic: "console", source: this.eventSource(r, null), line } },
+          ]);
+      };
     r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
     const inflight = udfType === "Query" || udfType === "Mutation" ? this.inflight[udfType] : null;
     if (inflight) {
@@ -496,8 +524,65 @@ export class Functions {
   private inflight = { Query: { running: 0 }, Mutation: { running: 0 } };
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
+  /** Where an event of `r` comes from (Convex's `FunctionEventSource`). */
+  private eventSource(r: Running, cached: boolean | null): FunctionSource {
+    return {
+      path: r.udfType === "HttpAction" ? r.identifier : this.metricsNameOf(r.identifier),
+      udfType: r.udfType,
+      cached,
+      requestId: r.requestId,
+      mutationRetryCount: null,
+    };
+  }
+
+  /** Running and queued executions per kind, for the log streams' `concurrency_stats`. */
+  concurrency() {
+    const p = this.actionPermits.outstanding;
+    return {
+      query: { running: this.inflight.Query.running, queued: 0 },
+      mutation: { running: this.inflight.Mutation.running, queued: 0 },
+      action: { ...p.Action },
+      nodeAction: { running: 0, queued: 0 },
+      httpAction: { ...p.HttpAction },
+    };
+  }
+
+  /** Log streams (STUDY-59); set by `createServer`. */
+  logManager: LogManager | null = null;
+
+  /** Convex's events for a completion: its lines (not an action's, already sent), the execution, an exception. */
+  private streamCompletion(r: Running, c: Completion) {
+    const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null);
+    const at = c.timestamp * 1000;
+    const events: LogEvent[] = [];
+    if (c.udfType !== "Action" && c.udfType !== "HttpAction")
+      for (const line of c.logLines)
+        events.push({ timestamp: line.timestamp, event: { topic: "console", source, line } });
+    events.push({
+      timestamp: at,
+      event: {
+        topic: "function_execution",
+        source,
+        error: c.error,
+        executionTime: c.executionTime,
+        userExecutionTime: c.userExecutionTime,
+        usage: c.usageStats,
+        argsBytes: null,
+        returnBytes: c.returnBytes,
+        occInfo: c.occInfo,
+        willRetry: c.willRetry,
+        schedulerJobId: null,
+        runReason: runReason(c.caller, c.udfType),
+      },
+    });
+    if (c.error !== null)
+      events.push({ timestamp: at, event: { topic: "exception", source, message: c.error, userIdentifier: null } });
+    this.logManager!.send(events);
+  }
+
   private logCompletion(log: FunctionLog, r: Running, c: Completion) {
     log.append(c);
+    if (this.logManager?.active) this.streamCompletion(r, c);
     this.appMetrics?.recordExecution({
       udfType: c.udfType,
       name: r.metricsName,

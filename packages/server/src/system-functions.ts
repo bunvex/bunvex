@@ -19,6 +19,7 @@ import {
   EXPORTS_TABLE,
   insertAuditLogEvents,
   type JobDoc,
+  LOG_SINKS_TABLE,
   type PaginationOptions,
   type PaginationResult,
   SCHEDULED_FUNCTIONS_TABLE,
@@ -143,6 +144,22 @@ const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: s
 const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
+  // The dashboard's integrations page (STUDY-59), as Convex's: every `_log_sinks` row, S3 export's secret
+  // key left out.
+  "_system/frontend/listConfiguredSinks": {
+    args: {},
+    op: "ViewIntegrations",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(LOG_SINKS_TABLE).collect())) as unknown as {
+        config: Record<string, unknown>;
+      }[];
+      return rows.map((r) => {
+        if (r.config.type !== "s3Export") return r;
+        const { secretAccessKey: _, ...config } = r.config;
+        return { ...r, config };
+      });
+    },
+  },
   // The CLI's `export` waits on it (Convex's `_system/cli/exports:getLatest`): the newest export, or null.
   "_system/cli/exports:getLatest": {
     args: {},

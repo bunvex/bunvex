@@ -60,6 +60,8 @@ import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./fun
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
+import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
+import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -125,6 +127,13 @@ export type ServerOptions = {
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
    */
   scheduler?: SchedulerOptions;
+  /**
+   * Log streams (STUDY-59): a file every event is appended to, as Convex's `--local-log-sink <path>`.
+   * Default: the `BUNVEX_LOCAL_LOG_SINK` environment variable.
+   */
+  localLogSink?: string;
+  /** Log streams' knobs (tests shorten them). */
+  logSinks?: Partial<LogSinkOptions>;
   /**
    * The deployment's cron jobs (STUDY-30 S1): the default export of the app's `crons.ts`, as Convex's
    * `convex/crons.ts`. Checked at start (an invalid one throws here) and diffed with the stored ones by name.
@@ -215,6 +224,12 @@ export function createServer(opts: ServerOptions) {
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
   functions.functionLog = functionLog;
+  // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
+  const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), ...opts.logSinks });
+  functions.logManager = logManager;
+  logManager.watchConcurrency(() => functions.concurrency());
+  const logSinksReady = logManager.start(opts.localLogSink ?? (process.env.BUNVEX_LOCAL_LOG_SINK || undefined));
+  logSinksReady.catch((e) => console.error("log streams: failed to start", e));
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
@@ -603,6 +618,20 @@ export function createServer(opts: ServerOptions) {
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
       return canonicalRoute(url, req, caller);
+    const logStream = LOG_STREAM_ROUTE.exec(url.pathname);
+    if (logStream)
+      try {
+        return await logStreamRoute(
+          { engine, functions, wake: () => logManager.wake() },
+          logStream[1]!,
+          logStream[2],
+          req,
+          caller,
+        );
+      } catch (e) {
+        if (e instanceof LogSinkError) return requestError(e.status, e.code, e.message);
+        throw e;
+      }
     const metricsRoute = METRICS_ROUTE.exec(url.pathname);
     if (metricsRoute && APP_METRICS_ROUTES.has(metricsRoute[1]!) && req.method === "GET") {
       functions.requireOperation(caller, "ViewMetrics");
@@ -758,6 +787,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/v1/get_canonical_urls" ||
         STREAM_ROUTE.test(url.pathname) ||
         METRICS_ROUTE.test(url.pathname) ||
+        LOG_STREAM_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
@@ -1346,8 +1376,12 @@ export function createServer(opts: ServerOptions) {
     cronsReady,
     /** The function execution log (STUDY-47). */
     functionLog,
+    /** Log streams (STUDY-59): settled once the stored sinks were started. */
+    logManager,
+    logSinksReady,
     stop: () => {
       functionLog.close();
+      logManager.stop();
       void exportService?.stop();
       void importService?.stop();
       void scheduler.stop();

@@ -20,6 +20,7 @@ export {
   IndexBackfillingError,
   IndexStagedError,
   type IndexState,
+  LOG_SINKS_TABLE,
   MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,

@@ -37,6 +37,7 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   IndexStagedError,
+  LOG_SINKS_TABLE,
   MODULES_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
@@ -533,6 +534,7 @@ export class Engine {
         document: v.any(),
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
+      { name: LOG_SINKS_TABLE, indexes: {}, document: v.any() },
       { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
       {
         name: DEPLOYMENT_AUDIT_LOG_TABLE,

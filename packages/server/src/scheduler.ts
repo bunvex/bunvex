@@ -298,6 +298,19 @@ export class ScheduledJobExecutor {
     const moved = last === null || ready === null ? last !== ready : Math.abs(last - ready) >= 30_000;
     if (moved || (ready !== null && ready <= now && now - this.lastStatsLog >= 30_000)) {
       this.functions.appMetrics?.recordScheduledJobs(ready, now);
+      // And to log streams (Convex's `ScheduledJobLag` when late, `SchedulerStats` when late or busy).
+      const lag = ready === null ? Number.NEGATIVE_INFINITY : (now - ready) / 1000;
+      const logs = this.functions.logManager;
+      if (logs?.active) {
+        if (lag > 0) logs.send([{ timestamp: now, event: { topic: "scheduled_job_lag", lagSeconds: lag } }]);
+        if (lag > 0 || this.running.size > 0)
+          logs.send([
+            {
+              timestamp: now,
+              event: { topic: "scheduler_stats", lagSeconds: Math.max(lag, 0), numRunningJobs: this.running.size },
+            },
+          ]);
+      }
       this.lastReady = ready;
       this.lastStatsLog = now;
     }
