@@ -41,4 +41,4 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| C1 | The destinations are `bunvexCloud` / `bunvexSite` and `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | Rule 5: no "convex" in shipped strings, as `BUNVEX_CLOUD_URL` (STUDY-37). **Not possible** under the rule | DV-263, accepted (owner, 2026-10-03) |
+| C1 | The destinations are `bunvexCloud` / `bunvexSite` and `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | Rule 5: no "convex" in shipped strings, as `BUNVEX_CLOUD_URL` (STUDY-37). **Not possible** under the rule | DV-278, accepted (owner, 2026-10-03) |

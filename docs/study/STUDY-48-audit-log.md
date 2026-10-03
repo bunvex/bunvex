@@ -89,8 +89,8 @@ system queries and the HTTP list.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| A1 | The audit log is readable by default (`auditLogRetentionDays` -1; null or a number of days as Convex's) | Convex's self-hosted backend has no `_backend_info`, so its log is recorded but unreadable (403, the History page off): a cloud plan's limit, not a feature. **Possible to match**; recommended not to | DV-260, accepted (owner, 2026-10-03) |
-| A2 | No `push_config_with_components` event yet | **Not done yet**: the push's diffs (modules, crons, indexes, schema, auth) are a follow-up PR | DV-261, accepted (owner, 2026-10-03) |
-| A3 | `snapshot_import`'s `member_id` is null | bunvex's import rows have no member (STUDY-42). **Not done yet** | DV-262, accepted (owner, 2026-10-03) |
+| A1 | The audit log is readable by default (`auditLogRetentionDays` -1; null or a number of days as Convex's) | Convex's self-hosted backend has no `_backend_info`, so its log is recorded but unreadable (403, the History page off): a cloud plan's limit, not a feature. **Possible to match**; recommended not to | DV-275, accepted (owner, 2026-10-03) |
+| A2 | No `push_config_with_components` event yet | **Not done yet**: the push's diffs (modules, crons, indexes, schema, auth) are a follow-up PR | DV-276, accepted (owner, 2026-10-03) |
+| A3 | `snapshot_import`'s `member_id` is null | bunvex's import rows have no member (STUDY-42). **Not done yet** | DV-277, accepted (owner, 2026-10-03) |
 
 The events of features bunvex lacks wait for those features (ledger, "Waiting on a dependency").

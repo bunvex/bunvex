@@ -3,7 +3,7 @@
 // HTTP actions (`bunvexSite`). It replaces the server's origin in `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL`,
 // in file upload and download URLs, and for `auth.config`. It is read in the caller's transaction, so a
 // change re-runs what read it. Convex's destinations are `convexCloud` and `convexSite` (rule 5: bunvex's
-// own words, DV-263).
+// own words, DV-278).
 import { CANONICAL_URLS_TABLE, type Tx } from "@bunvex/core";
 
 export type RequestDestination = "bunvexCloud" | "bunvexSite";
