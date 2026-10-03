@@ -52,8 +52,8 @@ describe("regressions", () => {
   // server; the client's resend failed on a store error, which the client was told as the mutation's failure
   // (DV-80: a store failure is a function error) — and the first attempt then committed. Convex treats a
   // store failure as a system error: the connection closes, the client resends again and gets the recorded
-  // answer, so a mutation the app was told failed never takes effect.
-  test.failing("a mutation reported failed never takes effect (a resend's store error)", async () => {
+  // answer, so a mutation the app was told failed never takes effect. Fixed by #273.
+  test("a mutation reported failed never takes effect (a resend's store error)", async () => {
     const server = serverOn("memory", {
       JEPSEN_STORE_FAULTS: "1",
       JEPSEN_STORE_RATES: JSON.stringify({
