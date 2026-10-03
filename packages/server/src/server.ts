@@ -3,11 +3,13 @@
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
   type Caller,
+  checkIdentifier,
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
   OccError,
   parseValue,
+  SchemaEnforcementError,
   stringifyValue,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
@@ -493,6 +495,27 @@ export function createServer(opts: ServerOptions) {
       });
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
+    if (url.pathname === "/api/delete_tables") {
+      if (!Array.isArray(body.tableNames) || !body.tableNames.every((t) => typeof t === "string"))
+        return requestError(400, "BadJsonBody", "missing field `tableNames`");
+      if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      const names = body.tableNames as string[];
+      try {
+        for (const n of names) checkIdentifier("table", n);
+        await engine.deleteTables(names);
+      } catch (e) {
+        if (e instanceof SchemaEnforcementError) return requestError(400, e.code, e.message);
+        if (e instanceof Error && /^Invalid table name/.test(e.message))
+          return requestError(400, "InvalidTableName", e.message);
+        // A system table: Convex's `ensure` without an error code, an internal error to the caller.
+        if (e instanceof Error && e.message.startsWith("cannot delete system table"))
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        throw e;
+      }
+      return new Response(null, { status: 200 });
+    }
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
@@ -566,6 +589,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/stats" ||
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
+        url.pathname === "/api/delete_tables" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {
         const caller = await callerOfRequest(req);
