@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  isQueryObject,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -18,6 +19,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
   stringifyValue,
+  TableReader,
   type Tx,
   type UserTimer,
   wallClock,
@@ -292,6 +294,19 @@ export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
+/**
+ * Convex's `validateReturnValue` (registration_impl.ts, STUDY-66 §3): a query or mutation that returns a query
+ * object, not its results, fails before its result is validated.
+ */
+async function notAQuery(result: unknown): Promise<unknown> {
+  const value = await result;
+  if (isQueryObject(value))
+    throw new Error(
+      "Return value is a Query. Results must be retrieved with `.collect()`, `.take(n), `.unique()`, or `.first()`.",
+    );
+  return value;
+}
+
 /** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
 const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
 /**
@@ -302,6 +317,8 @@ function readerView(db: Tx): Tx {
   return new Proxy(db, {
     get(target, prop) {
       if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      // `db.table(name)` gives a reader too (STUDY-66 §2).
+      if (prop === "table") return (name: string) => new TableReader(target, name);
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -972,8 +989,10 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return inHandleScope({ db, engine: this.engine }, () =>
-      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    return notAQuery(
+      inHandleScope({ db, engine: this.engine }, () =>
+        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+      ),
     );
   }
 

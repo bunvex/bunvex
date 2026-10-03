@@ -22,7 +22,11 @@ async function serve(fns: Record<string, FunctionDef>, opts: Partial<ServerOptio
   stops.push(stop);
   const base = `http://127.0.0.1:${server!.port}`;
   const call = async (kind: string, path: string, args: unknown = {}) => {
-    const r = await fetch(`${base}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) });
+    const r = await fetch(`${base}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
+    });
     return { status: r.status, body: (await r.json()) as any };
   };
   return { call, base, engine, persistence, port: server!.port };
@@ -319,7 +323,11 @@ test("a system failure is a 500 with the fixed message, not the function's error
 
 test("request errors use Convex's {code, message} body; args may be wrapped in an array", async () => {
   const { call, base } = await serve({ echo: query((_ctx, args) => args) });
-  const bad = await fetch(`${base}/api/query`, { method: "POST", body: "{nope" });
+  const bad = await fetch(`${base}/api/query`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{nope",
+  });
   expect(bad.status).toBe(400);
   expect(((await bad.json()) as any).code).toBe("BadJsonBody");
   const missing = await fetch(`${base}/api/nothing`, { method: "POST", body: "{}" });

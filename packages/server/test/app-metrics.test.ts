@@ -147,7 +147,11 @@ async function setup() {
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
   const call = (kind: string, path: string) =>
-    fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args: {} }) });
+    fetch(`${api}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    });
   const now = Date.now();
   const window = JSON.stringify({
     start: { secs_since_epoch: Math.floor(now / 1000) - 600, nanos_since_epoch: 0 },
