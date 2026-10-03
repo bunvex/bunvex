@@ -90,7 +90,11 @@ async function setup(opts: { localLogSink?: string; engine?: Engine } = {}) {
     return { status: r.status, body: text ? JSON.parse(text) : null };
   };
   const call = (path: string) =>
-    fetch(`${api}/mutation`, { method: "POST", body: JSON.stringify({ path, args: {} }) }).then((r) => r.json());
+    fetch(`${api}/mutation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    }).then((r) => r.json());
   const status = async (id: string) => (await req(`get_log_stream/${id}`)).body?.status;
   const audit = async () =>
     ((await engine.query((db) => db.asSystem(() => db.query(DEPLOYMENT_AUDIT_LOG_TABLE).collect()))) as any[]).map(

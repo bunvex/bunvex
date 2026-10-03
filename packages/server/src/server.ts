@@ -66,6 +66,14 @@ import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./fun
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
+import {
+  BadJsonBody,
+  QUERY_BATCH,
+  readJsonBody,
+  UDF_POST,
+  UDF_POST_WITH_COMPONENT,
+  UDF_POST_WITH_TS,
+} from "./json-body.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -96,6 +104,7 @@ import {
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
+import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
 
 export { MAX_PENDING_MUTATIONS };
 
@@ -342,6 +351,19 @@ export function createServer(opts: ServerOptions) {
     const caller = await identifyRequest(req);
     return caller instanceof Response ? caller : withRequest(caller, req);
   };
+  /**
+   * The `Authorization` header's syntax alone (Convex's `ExtractAuthenticationToken`, which runs before the
+   * body is read): a key or a token is checked later, after the body.
+   */
+  const authHeaderSyntaxError = (req: Request): Response | null => {
+    const header = req.headers.get("authorization");
+    if (header === null) return null;
+    if (header.length < 7) return requestError(400, "InvalidHeaderFailure", "Invalid authentication header");
+    const scheme = header.slice(0, 7).toLowerCase();
+    if (scheme !== "bunvex " && (scheme !== "bearer " || header.length === 7))
+      return requestError(400, "InvalidAdminKey", "Invalid admin key");
+    return null;
+  };
   const identifyRequest = async (req: Request): Promise<Caller | Response> => {
     const header = req.headers.get("authorization");
     try {
@@ -425,9 +447,20 @@ export function createServer(opts: ServerOptions) {
   /**
    * The response to a function call, as Convex's `UdfResponse`: `{status:"success", value, logLines?}`, or
    * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
-   * A system failure is a 500 with the fixed internal message.
+   * A system failure is a 500 with the fixed internal message. `value` and `errorData` are in the request's
+   * `format`, else its client's default (STUDY-67 H3); a bad format is a 400 once the function has run, as
+   * Convex parses it after the run.
    */
-  const udfResponse = (r: WithLogLines<string>, kind: string) => {
+  const udfResponse = (r: WithLogLines<string>, kind: string, req: { format?: unknown; client: string | null }) => {
+    const b = udfBody(r, kind, req);
+    return typeof b === "string" ? jsonText(b) : b;
+  };
+  /** The `UdfResponse` JSON of a run, or the request's error response when the run failed the request. */
+  const udfBody = (
+    r: WithLogLines<string>,
+    kind: string,
+    req: { format?: unknown; client: string | null },
+  ): string | Response => {
     // A mutation that exhausted its OCC retries is not the function's error in Convex: the request fails
     // with 503 and the OCC code (`ErrorCode::OCC` → SERVICE_UNAVAILABLE, crates/errors/src/lib.rs). Inside
     // an action, the same error is just an exception the action may catch.
@@ -441,14 +474,48 @@ export function createServer(opts: ServerOptions) {
       const denied = accessError(r.error);
       if (denied) return denied;
     }
-    if (r.ok) return jsonText(`{"status":"success","value":${r.value}${linesField("logLines", r.logLines, redact)}}`);
-    if (isSystemError(r.error))
+    if (!r.ok && isSystemError(r.error))
       return requestError(isTryAgainError(r.error) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+    let format: Format;
+    try {
+      format = typeof req.format === "string" ? parseFormat(req.format) : defaultFormat(req.client);
+    } catch (e) {
+      if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    if (r.ok)
+      return `{"status":"success","value":${reformat(r.value, format)}${linesField("logLines", r.logLines, redact)}}`;
     const e = formatError(r.error);
-    const data = e.data === undefined ? "" : `,"errorData":${e.data}`;
-    return jsonText(
-      `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`,
-    );
+    const data = e.data === undefined ? "" : `,"errorData":${reformat(e.data, format)}`;
+    return `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`;
+  };
+
+  /**
+   * `POST /api/query_batch` (Convex's `public_query_batch_post`, STUDY-67 H9): every query at one timestamp,
+   * the latest when the request came, each answered as `/api/query` would answer it, in order. A query's bad
+   * format, or a run that fails the request (a system error), fails the whole batch.
+   */
+  const queryBatch = async (
+    queries: { path: string; args: unknown; format?: string | null }[],
+    at: number,
+    caller: Caller,
+    client: string | null,
+  ): Promise<Response> => {
+    const results: string[] = [];
+    for (const q of queries) {
+      if (typeof q.format === "string")
+        try {
+          parseFormat(q.format);
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          throw e;
+        }
+      const r = await collectLogs(async () => functions.runQueryAtJson(q.path, fromWire(q.args, q.path), at, caller));
+      const b = udfBody(r, "query", { format: q.format, client });
+      if (typeof b !== "string") return b;
+      results.push(b);
+    }
+    return jsonText(`{"results":[${results.join(",")}]}`);
   };
 
   const sync = new SyncHub({
@@ -917,23 +984,62 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts|function)$/.exec(url.pathname);
-      if (req.method !== "POST" || !route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
-      let body: { path: string; args: unknown; ts?: unknown };
-      try {
-        body = JSON.parse(await new Response(capped(req).body).text()) as typeof body;
-      } catch (e) {
-        return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
-      }
-      if (typeof body?.path !== "string") return requestError(400, "BadJsonBody", "missing field `path`");
+      const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function)$/.exec(url.pathname);
+      if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
+      if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
       let kind = route[1]!;
+      // Convex's extractors, in order: the auth header's syntax, then the body (STUDY-67 H4).
+      const badHeader = authHeaderSyntaxError(req);
+      if (badHeader) return badHeader;
+      let body: {
+        path: string;
+        args: unknown;
+        ts?: string;
+        format?: string | null;
+        componentPath?: string | null;
+        queries?: { path: string; args: unknown; format?: string | null }[];
+      };
+      try {
+        body = await readJsonBody(
+          req,
+          async () => {
+            try {
+              return await new Response(capped(req).body).text();
+            } catch {
+              throw new BadJsonBody("Failed to buffer the request body: length limit exceeded");
+            }
+          },
+          kind === "query_at_ts"
+            ? UDF_POST_WITH_TS
+            : kind === "function"
+              ? UDF_POST_WITH_COMPONENT
+              : kind === "query_batch"
+                ? QUERY_BATCH
+                : UDF_POST,
+        );
+      } catch (e) {
+        if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+        throw e;
+      }
+      const formatRequest = { format: body.format, client: req.headers.get("bunvex-client") };
+      // Convex takes the batch's timestamp before it authenticates.
+      const batchTs = engine.committer.visibleTs;
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
-      // Convex's `/api/function` (`execute_any_function`): the function's own kind; an admin may run an
-      // internal one (its key's operation is checked as for any call), others only public ones.
+      if (kind === "query_batch") return queryBatch(body.queries!, batchTs, caller, formatRequest.client);
+      // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
+      // a user), on the root component; the function's own kind, internal ones included.
       if (kind === "function") {
+        if ((caller as AdminCaller).admin?.kind !== "admin") {
+          const denied = new BadDeployKeyError();
+          return requestError(denied.status, denied.code, denied.message);
+        }
+        // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
+        if (typeof body.componentPath === "string" && body.componentPath !== "")
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
         const found = functions.kindOf(body.path);
-        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+        if (!found)
           return udfResponse(
             {
               ok: false,
@@ -943,6 +1049,7 @@ export function createServer(opts: ServerOptions) {
               logLines: [],
             } as never,
             kind,
+            formatRequest,
           );
         kind = found;
       }
@@ -969,6 +1076,7 @@ export function createServer(opts: ServerOptions) {
           return stringifyValue(value);
         }),
         kind,
+        formatRequest,
       );
     },
   });
