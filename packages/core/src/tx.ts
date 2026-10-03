@@ -172,7 +172,7 @@ export const TRANSACTION_MAX_NUM_USER_WRITES = 16_000;
 export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   const units = ["B", "KiB", "MiB", "GiB"];
   let i = 0;
   let x = n;
@@ -1145,6 +1145,11 @@ export class Tx {
 
   private countRowsRead(table: string, n: number) {
     if (n > 0) this.tableStat(table).rowsRead += n;
+  }
+
+  /** @internal Rows a cached read stands for (backend-state.ts): counted as the scan it replaces would be. */
+  countRowsReadOf(table: string, n: number) {
+    this.countRowsRead(table, n);
   }
 
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
