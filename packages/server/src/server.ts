@@ -30,6 +30,8 @@ import {
   removeTypePrefix,
   splitActingAs,
 } from "./admin-keys.ts";
+import { AppMetrics } from "./app-metrics.ts";
+import { APP_METRICS_ROUTES, appMetricsRoute, MetricsRequestError } from "./app-metrics-routes.ts";
 import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
 import {
   REQUEST_DESTINATIONS,
@@ -52,7 +54,7 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
-import { syncFunctionHandles } from "./function-handles.ts";
+import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
@@ -204,6 +206,8 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 
 /** The log stream routes (Convex mounts both under `/api/` and `/api/app_metrics/`). */
 const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
+/** Convex's metric routes (STUDY-58), `/api/app_metrics/<route>`. */
+const METRICS_ROUTE = /^\/api\/app_metrics\/([a-z_]+)$/;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
@@ -211,6 +215,13 @@ export function createServer(opts: ServerOptions) {
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
   functions.functionLog = functionLog;
+  // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
+  const appMetrics = new AppMetrics();
+  functions.appMetrics = appMetrics;
+  functions.actionPermits.onChange = (kind) => {
+    const o = functions.actionPermits.outstanding[kind];
+    appMetrics.recordOutstanding("isolate", kind, o.running, o.queued);
+  };
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
   const makeVerifier = (auth: AuthConfig | undefined) =>
@@ -398,6 +409,18 @@ export function createServer(opts: ServerOptions) {
     formatError,
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
+    // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
+    onInvalidations: (events) => {
+      const bySource = new Map<string, Map<string, number>>();
+      for (const e of events) {
+        if (e.source === undefined) continue;
+        const source = functions.kindOf(e.source) === null ? e.source : canonicalPath(e.source);
+        const m = bySource.get(source) ?? new Map<string, number>();
+        m.set(e.table, (m.get(e.table) ?? 0) + e.count);
+        bySource.set(source, m);
+      }
+      for (const [source, m] of bySource) appMetrics.recordInvalidations(source, m);
+    },
     verifyToken: (token) => verifier.verify(token),
     adminCaller: (key, impersonating) => {
       const admin = adminKeys.check(removeTypePrefix(key));
@@ -580,6 +603,17 @@ export function createServer(opts: ServerOptions) {
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
       return canonicalRoute(url, req, caller);
+    const metricsRoute = METRICS_ROUTE.exec(url.pathname);
+    if (metricsRoute && APP_METRICS_ROUTES.has(metricsRoute[1]!) && req.method === "GET") {
+      functions.requireOperation(caller, "ViewMetrics");
+      try {
+        return json(appMetricsRoute(appMetrics, metricsRoute[1]!, url.searchParams));
+      } catch (e) {
+        if (e instanceof MetricsRequestError) return requestError(400, e.code, e.message);
+        // Convex's untyped errors (a bad window, metric or path): an internal error.
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+      }
+    }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
       functions.requireOperation(caller, "ViewLogs");
@@ -723,6 +757,7 @@ export function createServer(opts: ServerOptions) {
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||
         STREAM_ROUTE.test(url.pathname) ||
+        METRICS_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
       ) {

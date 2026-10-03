@@ -45,6 +45,7 @@ import {
   type DeploymentOp,
   OperationNotPermittedError,
 } from "./admin-keys.ts";
+import type { AppMetrics } from "./app-metrics.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
@@ -418,6 +419,8 @@ export class Functions {
     caller: Caller | undefined,
     run: () => Promise<T>,
     outcome?: (value: T) => Outcome,
+    /** An HTTP action's route path, its name in the app metrics. */
+    routePath?: string,
   ): Promise<T> {
     const log = this.functionLog;
     if (!log || isSystemPath(name)) return run();
@@ -446,9 +449,19 @@ export class Functions {
           executionId: r.executionId,
           root: parent === null,
         });
+    r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
+    const inflight = udfType === "Query" || udfType === "Mutation" ? this.inflight[udfType] : null;
+    if (inflight) {
+      inflight.running++;
+      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
+    }
     const res = await withOwner(r, run);
+    if (inflight) {
+      inflight.running--;
+      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
+    }
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) log.append(this.completion(r, res.lines, o, false));
+    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false));
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -462,7 +475,38 @@ export class Functions {
   logOccRetry(error: OccError) {
     const r = currentOwner();
     if (this.functionLog && r instanceof Running)
-      this.functionLog.append(this.completion(r, currentOwnLines(), { error }, true));
+      this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true));
+  }
+
+  private metricsNames = new Map<string, string>();
+  /** A function's canonical path, its app metrics name (cached: names come from code). */
+  private metricsNameOf(identifier: string): string {
+    let n = this.metricsNames.get(identifier);
+    if (n === undefined) {
+      if (this.metricsNames.size >= 10_000) this.metricsNames.clear();
+      n = canonicalPath(identifier);
+      this.metricsNames.set(identifier, n);
+    }
+    return n;
+  }
+
+  /** The app metrics (STUDY-58); set by `createServer`. */
+  appMetrics: AppMetrics | null = null;
+  /** Queries and mutations running now, for the metrics' `function_concurrency`. */
+  private inflight = { Query: { running: 0 }, Mutation: { running: 0 } };
+
+  /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
+  private logCompletion(log: FunctionLog, r: Running, c: Completion) {
+    log.append(c);
+    this.appMetrics?.recordExecution({
+      udfType: c.udfType,
+      name: r.metricsName,
+      at: c.timestamp * 1000,
+      failed: c.error !== null,
+      cached: c.cachedResult,
+      executionTime: c.executionTime,
+      ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
+    });
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
@@ -1180,6 +1224,8 @@ export class Functions {
     request: Request,
     caller: Caller,
     authError: Error | null,
+    /** The route matched (its `path` or `pathPrefix`): the app metrics' name for it, as Convex's. */
+    routePath?: string,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
     // Logged under its route, as Convex's `HttpActionRoute` (`<METHOD> <path>`).
@@ -1189,10 +1235,13 @@ export class Functions {
       route,
       caller,
       () =>
-        this.actionPermits.run(async () =>
-          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+        this.actionPermits.run(
+          async () =>
+            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+          "HttpAction",
         ),
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
+      routePath ?? new URL(request.url).pathname,
     );
   }
 }

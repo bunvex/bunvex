@@ -244,10 +244,15 @@ export class ScheduledJobExecutor {
       try {
         const now = wallClock();
         const free = this.o.parallelism - this.running.size;
+        // The next job ready to start, for the app metrics' lag: a due job left waiting, else the next one.
+        let ready: number | null | undefined;
         if (free > 0) {
           const due = await this.engine.query((db) => dueJobs(db, now, free + this.running.size));
           for (const job of due) {
-            if (this.running.size >= this.o.parallelism) break;
+            if (this.running.size >= this.o.parallelism) {
+              if (!this.running.has(job._id)) ready = job.nextTs;
+              break;
+            }
             if (this.running.has(job._id)) continue;
             const p = this.execute(job).finally(() => {
               this.running.delete(job._id);
@@ -257,6 +262,8 @@ export class ScheduledJobExecutor {
           }
         }
         nextAt = await this.engine.query((db) => nextJobTs(db, now));
+        // At full capacity Convex keeps the time it had.
+        this.logStats(free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady, now);
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
@@ -276,6 +283,23 @@ export class ScheduledJobExecutor {
           };
         }
       });
+    }
+  }
+
+  private lastStatsLog = 0;
+  private lastReady: number | null = null;
+
+  /**
+   * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready
+   * time moves by 30 s or more, appears or goes, and every 30 s while a job is overdue.
+   */
+  private logStats(ready: number | null, now: number) {
+    const last = this.lastReady;
+    const moved = last === null || ready === null ? last !== ready : Math.abs(last - ready) >= 30_000;
+    if (moved || (ready !== null && ready <= now && now - this.lastStatsLog >= 30_000)) {
+      this.functions.appMetrics?.recordScheduledJobs(ready, now);
+      this.lastReady = ready;
+      this.lastStatsLog = now;
     }
   }
 

@@ -19,6 +19,7 @@ import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
   type Caller,
   type Engine,
+  firstOverlap,
   type Interval,
   type LogEntry,
   OccError,
@@ -140,6 +141,11 @@ export type SyncDeps = {
    * tokens are refused.
    */
   adminCaller?: (key: string, impersonating: unknown) => Caller;
+  /**
+   * The subscriptions each commit invalidated, by the write that did it (its write source and table), as
+   * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
+   */
+  onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -252,6 +258,9 @@ export class SyncHub {
     // still pending is not counted again: in Convex it left the subscription map when it was invalidated.
     const touched = new Map<SyncSession, { n: number; keys: string[] }>();
     let count = 0;
+    const events = this.deps.onInvalidations
+      ? new Map<string, { source: string | undefined; table: string; count: number }>()
+      : null;
     for (const key of hit) {
       const sessions = this.watchers.get(key);
       if (!sessions) continue;
@@ -259,6 +268,7 @@ export class SyncHub {
         const n = s.newlyInvalidated(key);
         if (n === 0) continue;
         count += n;
+        if (events) this.attribute(events, key, entries, n);
         const t = touched.get(s);
         if (t) {
           t.n += n;
@@ -266,6 +276,7 @@ export class SyncHub {
         } else touched.set(s, { n, keys: [key] });
       }
     }
+    if (events && events.size > 0) this.deps.onInvalidations!([...events.values()]);
     const { threshold, multiplierMs, random } = this.splay;
     if (count <= threshold || multiplierMs === 0) {
       for (const s of touched.keys()) s.schedule();
@@ -279,6 +290,44 @@ export class SyncHub {
       for (let i = 0; i < n; i++) delay = Math.min(delay, Math.floor(random() * (window + 1)));
       s.scheduleAfter(delay, keys);
     }
+  }
+
+  /** Count `n` invalidations of `key` against the first write that overlaps its reads, as Convex's. */
+  private attribute(
+    events: Map<string, { source: string | undefined; table: string; count: number }>,
+    key: string,
+    entries: LogEntry[],
+    n: number,
+  ) {
+    const reads = this.latest.get(key)?.reads;
+    if (!reads) return;
+    for (const e of entries) {
+      const w = firstOverlap(e.writes, reads);
+      if (!w) continue;
+      const table = this.tableOfIndex(w.index);
+      if (table === undefined) return;
+      const k = `${e.source ?? ""}\u0000${table}`;
+      const ev = events.get(k);
+      if (ev) ev.count += n;
+      else events.set(k, { source: e.source, table, count: n });
+      return;
+    }
+  }
+
+  private indexTables: { catalog: unknown; map: Map<number, string> } | null = null;
+
+  /** The table an index belongs to (rebuilt when the catalog changes). */
+  private tableOfIndex(index: number): string | undefined {
+    const catalog = this.deps.engine.catalog;
+    if (this.indexTables?.catalog !== catalog) {
+      const map = new Map<number, string>();
+      for (const t of catalog.tables.values()) {
+        for (const ix of t.indexes.values()) map.set(ix.id, t.name);
+        for (const ix of t.pending) map.set(ix.id, t.name);
+      }
+      this.indexTables = { catalog, map };
+    }
+    return this.indexTables.map.get(index);
   }
 
   /**

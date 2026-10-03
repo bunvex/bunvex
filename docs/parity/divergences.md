@@ -342,6 +342,12 @@ DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built i
 DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 DV-251–DV-253, DV-255 and DV-274 (STUDY-47 L2–L4, L6 and L1; the function execution log and `bunvex logs`) were accepted as recommended (owner, 2026-10-03) and are in [Decided divergences](#decided-divergences).
 
+DV-302 (STUDY-58, the app metrics' concurrency gauges) awaits the owner; the draft PR implements the recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-302 | `function_concurrency`: actions and HTTP actions report the one shared permit pool's counts; queries and mutations report how many are in flight (`queued` always 0); no `node` gauges | one limiter per function type and environment, each reporting its running and queued permits | dashboard only (the Health page's concurrency chart) | Not done yet: bunvex has no per-type limiters (STUDY-31). Accept for now; the gauges follow if limiters are split | [STUDY-58 §4](../study/STUDY-58-app-metrics.md#4-divergences) |
+
 ## Waiting on a dependency
 
 Accepted differences that close once something else is built: when one of these lands, take its group

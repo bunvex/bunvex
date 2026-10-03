@@ -662,6 +662,7 @@ export class Tx {
       return null;
     }
     if (!this.checkId(table, id, method)) return null;
+    this.countRowsRead(t.name, 1);
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
     if (w) return w.next && structuredClone(w.next);
@@ -797,6 +798,7 @@ export class Tx {
       const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
       this.retention?.check(this.snapshot);
       for (const j of rows) this.recordDoc(j);
+      this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
     }
     const ids = await storeCall(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
@@ -808,6 +810,7 @@ export class Tx {
         out.push(decodeDoc(json));
       }
     }
+    this.countRowsRead(t.name, out.length);
     this.retention?.check(this.snapshot);
     return out;
   }
@@ -1035,6 +1038,26 @@ export class Tx {
   private docsWritten = 0;
   private bytesWritten = 0;
 
+  /**
+   * Rows read and written per table (Convex's `TableStats`, a function's `tables_touched`): a `get` counts
+   * one read whether or not the document exists, a scan one per document it fetched, a write one. A rolled
+   * back nested call's stay counted, as Convex's. The app metrics' `table_rate` (STUDY-58).
+   */
+  readonly tableStats = new Map<string, { rowsRead: number; rowsWritten: number }>();
+
+  private tableStat(table: string) {
+    let s = this.tableStats.get(table);
+    if (!s) {
+      s = { rowsRead: 0, rowsWritten: 0 };
+      this.tableStats.set(table, s);
+    }
+    return s;
+  }
+
+  private countRowsRead(table: string, n: number) {
+    if (n > 0) this.tableStat(table).rowsRead += n;
+  }
+
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
   private checkWriteLimits(next: Doc | null) {
     if (next) {
@@ -1075,6 +1098,7 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     if (!t.name.startsWith("_")) this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
