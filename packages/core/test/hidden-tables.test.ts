@@ -173,3 +173,21 @@ test("stale hidden tables (a crashed import's) are dropped after their age, as C
   expect(await names(e)).toEqual([1]);
   await e.close();
 });
+
+test("deleteTables: one commit; a pending schema that uses a deleted table fails, as Convex's enforce_table_deletion", async () => {
+  const e = await memory();
+  await e.mutation((db) => db.insert("loose", { n: 1 }));
+  await e.mutation((db) => db.insert("other", { n: 1 }));
+  // A pending schema that declares `loose` (the push waits on nothing else here).
+  const { schemaId } = await e.startSchemaPush(
+    defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]), loose: defineTable(v.any()) }),
+  );
+  await e.deleteTables(["loose", "other"]);
+  await deleted(e);
+  expect(e.catalog.tables.has("loose")).toBe(false);
+  expect(e.catalog.tables.has("other")).toBe(false);
+  const row = (await e.query((db) => db.asSystem(() => db.get("_schemas", schemaId)))) as Record<string, unknown>;
+  expect(row.state).toBe("failed");
+  expect(row.error).toBe('Failed to delete table "loose" because it appears in the schema');
+  await e.close();
+});

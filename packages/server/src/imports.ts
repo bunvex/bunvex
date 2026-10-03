@@ -17,13 +17,14 @@ import {
   type Engine,
   ImportIdError,
   OccError,
+  referencedTables,
   SNAPSHOT_IMPORTS_TABLE,
   schemaToJson,
   type TableDef,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
-import { decodeId, type ValidatorJSON, type Value } from "@bunvex/values";
+import { decodeId, type Value } from "@bunvex/values";
 import { INTERNAL_SERVER_ERROR_MESSAGE, isSystemError } from "./errors.ts";
 import {
   confirmationMessage,
@@ -112,29 +113,6 @@ const STABLE = new Set(["waiting_for_confirmation", "completed", "failed"]);
 const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 const commas = (n: number) => n.toLocaleString("en-US");
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
-
-/** Table names a document validator points to with `v.id` (Convex's `foreign_keys`). */
-function foreignKeys(v: ValidatorJSON, out = new Set<string>()): Set<string> {
-  switch (v.type) {
-    case "id":
-      out.add(v.tableName);
-      break;
-    case "array":
-      foreignKeys(v.value, out);
-      break;
-    case "object":
-      for (const f of Object.values(v.value)) foreignKeys(f.fieldType, out);
-      break;
-    case "record":
-      foreignKeys(v.keys, out);
-      foreignKeys(v.values.fieldType, out);
-      break;
-    case "union":
-      for (const u of v.value) foreignKeys(u, out);
-      break;
-  }
-  return out;
-}
 
 export type ImportOptions = {
   /** The current time in ms (tests). */
@@ -799,7 +777,7 @@ export class ImportService {
           if (imported.has(table)) continue;
           const holder = this.engine.catalog.tables.get(table);
           if (!holder) continue;
-          for (const fk of foreignKeys(declared.document.json)) {
+          for (const fk of referencedTables(declared.document.json)) {
             const def = defs.get(fk);
             const existing = this.engine.catalog.tables.get(fk);
             if (!def || !existing || existing.number === def.number) continue;

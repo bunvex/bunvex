@@ -8,6 +8,7 @@ import {
   isBytes,
   type ObjectType,
   type PropertyValidators,
+  type ValidatorJSON,
   type VObject,
   v,
 } from "@bunvex/values";
@@ -209,4 +210,27 @@ export function indexKeyValues(ix: IndexDef, doc: Doc): KeyValue[] {
   const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
   vals.push(doc._id);
   return vals;
+}
+
+/** Table names a document validator points to with `v.id` (Convex's `foreign_keys`). */
+export function referencedTables(v: ValidatorJSON, out = new Set<string>()): Set<string> {
+  switch (v.type) {
+    case "id":
+      out.add(v.tableName);
+      break;
+    case "array":
+      referencedTables(v.value, out);
+      break;
+    case "object":
+      for (const f of Object.values(v.value)) referencedTables(f.fieldType, out);
+      break;
+    case "record":
+      referencedTables(v.keys, out);
+      referencedTables(v.values.fieldType, out);
+      break;
+    case "union":
+      for (const u of v.value) referencedTables(u, out);
+      break;
+  }
+  return out;
 }
