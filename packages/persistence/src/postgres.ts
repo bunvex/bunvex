@@ -35,6 +35,7 @@ import {
   checkLayoutVersion,
   checkUnversionedTables,
   chunkRows,
+  DanglingReferenceError,
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
@@ -604,20 +605,26 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
            select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, deleted, document_id
            from indexes where index_id = $1 and key_prefix >= $2 and key_prefix < $3 and ts <= $4
            order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc)
-         select d.json_value, octet_length(e.key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long from e
-         cross join lateral (select json_value, deleted from documents
-                             where table_id = $5 and id = e.document_id and ts <= $4 order by ts desc limit 1) d
-         where not e.deleted and not d.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $6`,
+         select e.document_id, d.json_value, d.deleted, octet_length(e.key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long from e
+         left join lateral (select json_value, deleted from documents
+                            where table_id = $5 and id = e.document_id and ts <= $4 order by ts desc limit 1) d on true
+         where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $6`,
           [index, Buffer.from(lo), Buffer.from(hi), ts, table, limit] as any,
         ),
       );
-      if (!rows.some((r) => r.long)) return rows.map((r) => r.json_value as string);
+      if (!rows.some((r) => r.long))
+        return rows.map((r) => {
+          // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
+          if (r.deleted !== false) throw new DanglingReferenceError(index, r.document_id, ts, r.deleted === true);
+          return r.json_value as string;
+        });
     }
     // Long keys: the exact scan, then one fetch per document (rare).
     const out: string[] = [];
     for (const id of await this.scan(index, lo, hi, ts, limit, desc)) {
       const j = await this.get(table, id, ts);
-      if (j !== null) out.push(j);
+      if (j === null) throw new DanglingReferenceError(index, id, ts, false);
+      out.push(j);
     }
     return out;
   }

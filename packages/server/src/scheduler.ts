@@ -11,6 +11,7 @@
 //     "Transient error while executing action" and never runs again.
 // - Completed jobs are deleted after the retention window (7 days).
 import {
+  BACKEND_STATE_TABLE,
   type Caller,
   CommitterStoppedError,
   cancelJob,
@@ -21,10 +22,12 @@ import {
   getJob,
   insertJob,
   isJobId,
+  isStopped,
   type JobDoc,
   nextJobTs,
   OccError,
   patchJob,
+  readBackendState,
   stringifyValue,
   type Tx,
   wallClock,
@@ -35,7 +38,7 @@ import {
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
-import { type GenericId, isSimpleObject, type Value, valueSize } from "@bunvex/values";
+import { type GenericId, hasCommitTs, isSimpleObject, type Value, valueSize } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import { functionNameOf } from "./function-handles.ts";
 import type { Functions, SourcedCaller } from "./functions.ts";
@@ -108,6 +111,10 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     const name = functions.scheduledTarget(
       await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
     );
+    // As Convex's `validate_schedule_args`: arguments travel as plain values, so a commit timestamp
+    // placeholder cannot (STUDY-53).
+    if (hasCommitTs(args))
+      throw new Error(`Invalid arguments for ${name}: Field name $commitTs starts with '$', which is reserved.`);
     return write(async (db) => {
       // What a canceled running action schedules is born canceled (Convex's parent check).
       const parent = target.job ? await getJob(db, target.job) : null;
@@ -215,8 +222,10 @@ export class ScheduledJobExecutor {
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
     const byNextTs = this.engine.catalog.table("_scheduled_functions").indexes.get("by_next_ts")!.id;
+    // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
+    const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
-      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs))) this.poke();
+      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
     });
     this.loop = this.run();
     this.scheduleGc(1000);
@@ -244,10 +253,24 @@ export class ScheduledJobExecutor {
       try {
         const now = wallClock();
         const free = this.o.parallelism - this.running.size;
+        // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
+        if (await this.engine.query(async (db) => isStopped(await readBackendState(db)))) {
+          if (this.stopped) return;
+          if (this.pokes !== pokesSeen) continue;
+          await new Promise<void>((resolve) => {
+            this.wake = resolve;
+          });
+          continue;
+        }
+        // The next job ready to start, for the app metrics' lag: a due job left waiting, else the next one.
+        let ready: number | null | undefined;
         if (free > 0) {
           const due = await this.engine.query((db) => dueJobs(db, now, free + this.running.size));
           for (const job of due) {
-            if (this.running.size >= this.o.parallelism) break;
+            if (this.running.size >= this.o.parallelism) {
+              if (!this.running.has(job._id)) ready = job.nextTs;
+              break;
+            }
             if (this.running.has(job._id)) continue;
             const p = this.execute(job).finally(() => {
               this.running.delete(job._id);
@@ -257,6 +280,8 @@ export class ScheduledJobExecutor {
           }
         }
         nextAt = await this.engine.query((db) => nextJobTs(db, now));
+        // At full capacity Convex keeps the time it had.
+        this.logStats(free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady, now);
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
@@ -276,6 +301,36 @@ export class ScheduledJobExecutor {
           };
         }
       });
+    }
+  }
+
+  private lastStatsLog = 0;
+  private lastReady: number | null = null;
+
+  /**
+   * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready
+   * time moves by 30 s or more, appears or goes, and every 30 s while a job is overdue.
+   */
+  private logStats(ready: number | null, now: number) {
+    const last = this.lastReady;
+    const moved = last === null || ready === null ? last !== ready : Math.abs(last - ready) >= 30_000;
+    if (moved || (ready !== null && ready <= now && now - this.lastStatsLog >= 30_000)) {
+      this.functions.appMetrics?.recordScheduledJobs(ready, now);
+      // And to log streams (Convex's `ScheduledJobLag` when late, `SchedulerStats` when late or busy).
+      const lag = ready === null ? Number.NEGATIVE_INFINITY : (now - ready) / 1000;
+      const logs = this.functions.logManager;
+      if (logs?.active) {
+        if (lag > 0) logs.send([{ timestamp: now, event: { topic: "scheduled_job_lag", lagSeconds: lag } }]);
+        if (lag > 0 || this.running.size > 0)
+          logs.send([
+            {
+              timestamp: now,
+              event: { topic: "scheduler_stats", lagSeconds: Math.max(lag, 0), numRunningJobs: this.running.size },
+            },
+          ]);
+      }
+      this.lastReady = ready;
+      this.lastStatsLog = now;
     }
   }
 

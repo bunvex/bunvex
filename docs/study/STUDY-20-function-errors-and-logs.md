@@ -1,6 +1,6 @@
 # STUDY-20 — Function errors, redaction and log lines
 
-- **Status:** implemented; divergences D1–D8 decided by the owner (2026-09-30); D3 and D6 resolved with protocol v1 (#50, v0 deleted in #94)
+- **Status:** implemented; divergences D1–D8 decided by the owner (2026-09-30), D8 built to match Convex (2026-10-03, §4.1); D3 and D6 resolved with protocol v1 (#50, v0 deleted in #94)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:**
   - [STUDY-11](STUDY-11-function-results-and-errors.md): the retroactive study of results and errors. This
@@ -169,7 +169,41 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
 | D5 | Captured lines are also printed to the server's stdout; Convex's backend sends them to log streams only | bunvex has no log streaming or dashboard log view yet; stdout is where developers see them today | later, once log streaming exists (owner, 2026-09-30; DV-77) |
 | D6 | A system error during a WebSocket mutation is sent as that mutation's error, with the fixed internal message; Convex fails the sync worker and the connection closes | bunvex's default `onFatal` exits the process anyway; revisit with protocol v1's `FatalError` | resolved with protocol v1: close 1011 (#50; DV-78) |
 | D7 | `REDACT_LOGS_TO_CLIENT=false` or `0` leaves redaction off; Convex's Docker script enables it for any non-empty value | Avoids a surprising reading of `false` | resolved: any non-empty value, as Convex (owner, 2026-09-30; DV-79) |
-| D8 | Only `CommitterStoppedError` is classified as a system error. Other internal failures (e.g. a driver error during a read) surface as function errors with their message | Convex tells them apart with `ErrorMetadata`; bunvex has no such tagging yet | later, gradually (owner, 2026-09-30; DV-80) |
+| D8 | Only `CommitterStoppedError` is classified as a system error. Other internal failures (e.g. a driver error during a read) surface as function errors with their message | Convex tells them apart with `ErrorMetadata`; bunvex has no such tagging yet. The jepsen harness (#262) showed the cost: a resend whose record lookup failed was told "failed", and the first attempt then committed | **decided (owner, 2026-10-03): match Convex now** — see §4.1 (DV-80) |
+
+### 4.1 D8 built: store failures are system errors
+
+How Convex does it:
+
+- A syscall's error that is not a deterministic user error is not turned into a JS exception: the isolate is
+  terminated with `IsolateTerminationReason::SystemError` (`crates/isolate/src/request_scope.rs`,
+  `environment/helpers/promise.rs`), so the function cannot catch it.
+- The sync worker awaits the mutation with `?` (`crates/sync/src/worker.rs`): a system error fails the worker
+  instead of becoming a `MutationResponse`. The WebSocket closes with `err.close_frame()`
+  (`crates/local_backend/src/subs/mod.rs`): an untagged error is `CloseCode::Error` (1011) with reason
+  `InternalServerError`; OCC, out of retention and overload are 1013 (`crates/errors/src/lib.rs`).
+- The client reconnects and resends the mutations it got no answer for. With the same session and request id,
+  `_session_requests` returns the recorded outcome when the first attempt committed.
+
+What apps observe: a mutation is never reported failed when it may still commit. A store failure is never a
+function error the app can catch or show; HTTP gets 500 with the fixed message.
+
+How bunvex does it:
+
+- `storeCall` (`packages/core/src/determinism.ts`), the one path from a function's `Tx` to the store, turns
+  any failure into a `PersistenceReadError` and fails the execution with it (`failExecution`, as nested calls'
+  system errors, STUDY-41 N6), so a `try`/`catch` in the function does not hide it.
+- `isSystemError` (`packages/server/src/errors.ts`) includes it. The paths that already handled system
+  errors then do Convex's: HTTP 500 `InternalServerError`; a sync mutation or action closes with 1011.
+- A subscribed query whose run hits a system error closes the connection with 1011 too, instead of a
+  `QueryFailed` (Convex's worker fails on it the same way); the client resubscribes on reconnect.
+- Tests: `packages/server/test/system-errors.test.ts` (a resend whose lookup fails gets 1011, and the next
+  resend gets the recorded outcome with one run; an uncatchable failure; a query; HTTP), and #262's jepsen
+  regression "a mutation reported failed never takes effect". Sabotage: dropping `PersistenceReadError`
+  from `isSystemError`, the `failExecution` call, or the query path's rethrow each fails a test.
+
+Divergences: none left for store reads. Failures outside a function's `Tx` (the committer, the lease) were
+already system errors.
 
 Not changed here, and left to the functions rewrite: the "function not found" wording (STUDY-11 D6), the
 value `format` (D4), and return-value validation before commit (D5).

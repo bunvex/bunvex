@@ -9,7 +9,8 @@
 // (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
 // driver; for drivers with the log by timestamp (C11, `readLog`), K25; K26 (bounded flushes: a group written
 // in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
-// log, pruning, globals), K27–K29.
+// log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden)
+// and K31 (one id in two tables is two documents) on every driver (C15).
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -43,6 +44,7 @@ import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
 import { logChecks } from "./log.ts";
 import { freezableProxy } from "./proxy.ts";
+import { referenceChecks } from "./references.ts";
 import { retentionChecks } from "./retention.ts";
 import {
   allOfTenant,
@@ -85,7 +87,7 @@ export type DriverModule = {
   strayLogRow?(ts: number): Promise<void>;
 };
 
-// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29
+// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30–K31
 export type Check =
   | "K1"
   | "K2"
@@ -102,7 +104,8 @@ export type Check =
   | "K24"
   | "K25"
   | "K26"
-  | "K27";
+  | "K27"
+  | "K30";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -1306,6 +1309,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   if (want("K27"))
     await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K27–K29 threw: ${e}`));
+  if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30–K31 threw: ${e}`));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K26"))

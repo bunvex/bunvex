@@ -1,6 +1,6 @@
 # STUDY-57 — Jepsen-style consistency testing
 
-- **Status:** draft (PR 1: harness, checker, invariants; PR 2: faults; PR 3: nightly on the external stores)
+- **Status:** draft (PR 1: harness, checker, invariants; PR 2: faults and two findings; PR 3: nightly on the external stores)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; Convex's tests from the last commits
   that still had them: `bea52bde0` (Rust, 2026-04-09) and `c358201e1` (TypeScript, 2026-04-08) — Convex
   removed its tests from the open repository in `ba16e0638` and `7a518c760`. Read to learn *what* Convex
@@ -125,6 +125,48 @@ Each of these was introduced on purpose and caught with seed 1 on the memory sto
 A failed run prints the seed, the findings, the smallest failing history and the command that reproduces it,
 and writes the full history to `.data/jepsen/<store>-<nemesis>-<seed>.json`.
 
+### 3.7 Faults (the nemesis)
+
+`--nemesis <name>` (`src/nemesis.ts`). Every fault but `none` puts a TCP proxy (`src/proxy.ts`) between the
+clients and the server, so the clients keep one address while the server moves, and injects one fault every
+150–600 ms; before the run quiesces everything is healed.
+
+| Nemesis | Fault | Guarantees under test |
+|---|---|---|
+| `partition` | cut every client connection, or refuse new ones for 100–600 ms | G3–G5: resends after a reconnect, exactly once, in order |
+| `kill` | SIGKILL the server, start it again on the same data (a new process) | G1, G5, G7: nothing acknowledged is lost; resends find their record |
+| `skew` | the same, the new process's clock up to 2 s ahead or behind (a preload, `src/skew.ts`) | timestamps and `_creationTime` stay monotonic across processes (STUDY-53) |
+| `store` | the store is slow (5 % of calls), fails reads (0.2 %), fails flushes before or after writing (2 % each, transient: the committer retries) or for good (0.2 %: fail-stop, the process exits and the nemesis restarts it) | G1, G5 under the committer's retry and fail-stop paths (STUDY-25) |
+| `all` | partition, kill and store together (not skew, until the bug below is fixed) | all of them |
+
+Store faults wrap the embedded stores in the server process (`src/store-faults.ts`, `JEPSEN_STORE_FAULTS=<seed>`;
+`JEPSEN_STORE_RATES` overrides the rates; SIGUSR1/SIGUSR2 force read errors / slow flushes for a scripted
+scenario); the remote stores get theirs from the network in the nightly run (PR 3). An injected store error
+is an expected failure; a *mutation* that failed on one is indeterminate (see finding 2). Clock skew matters:
+commit timestamps and `_creationTime` follow the wall clock.
+
+### 3.8 Findings
+
+Each is replayed step by step in `test/regressions.test.ts` as a `test.failing` (it passes while the bug is
+there; remove `.failing` with the fix).
+
+1. **`_creationTime` can go backwards across a restart** (`skew`, memory, seed 1: "client 3's mutation 202
+   committed after its mutation 243"). A server restarted with its clock 3 s behind inserts a document, in a
+   transaction that read another one, with a `_creationTime` 6 s *earlier* than it: the default order (and
+   `.order("desc").first()`) no longer follows commits. Convex floors a transaction's first creation time at
+   its snapshot: `CreationTime::for_transaction` = max(wall clock, snapshot ts rounded up to the ms)
+   (`crates/common/src/document.rs`). bunvex takes `preciseClock()` alone (`engine.ts` `execute()` and the
+   query path). The fix floors it the same way; it is a core change, outside this test track's scope.
+2. **A mutation the client was told failed can still take effect** (`all`, memory, seed 2: a compare-and-set
+   failed against the value its own client had just written and read). A mutation is running when the
+   connection drops; the client resends it; the resend's lookup of its `_session_requests` record fails on a
+   store error, which bunvex reports as the mutation's error (DV-80: store failures are function errors) —
+   the client rejects the promise — and the first attempt then commits. In Convex a store failure is a system
+   error: the connection closes, the client resends again and gets the recorded answer. Resolving DV-80 for
+   persistence errors (they become system errors: `internalError`, close 1011) fixes it.
+
+No finding in the fault-free runs.
+
 ## 4. Divergences
 
 None: this is a test of bunvex's behaviour against Convex's guarantees, not a feature.
@@ -139,11 +181,14 @@ None: this is a test of bunvex's behaviour against Convex's guarantees, not a fe
   execution, which must pass in under 2 s.
 - `packages/jepsen/test/run.test.ts`: the **short run in every PR's CI** (the owner's call, 2026-10-03):
   1.5 s per store on memory and SQLite, a new seed each run (`JEPSEN_SEED` pins one). About 4 s in all.
+- `packages/jepsen/test/run.test.ts` also runs 2.5 s on memory with the `all` nemesis (about 10 faults).
+- `packages/jepsen/test/regressions.test.ts`: the findings, scripted (§3.8). `test/invariants.test.ts`: the
+  invariants on hand-made histories.
 - The long runs: `bun packages/jepsen/src/cli.ts --store … --seconds … --runs …`; the nightly workflow on
   Postgres, MySQL and MongoDB comes with PR 3.
 
 ## 6. Open questions
 
-1. Faults (PR 2): client sockets dropped (a TCP proxy between clients and server), the server SIGKILLed and
-   restarted on the same data, store calls delayed or failed (a proxy in front of Postgres/MySQL).
+1. Finding 2 makes DV-80 ("later, gradually") a consistency issue, not only an error-classification one:
+   should persistence errors become system errors now? (Asked in the PR.)
 2. Running the same workload against a Convex local backend, as an oracle for G1–G8 — later, if useful.

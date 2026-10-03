@@ -25,6 +25,10 @@ export type RunOptions = {
 /** Something that injects faults during a run, and undoes them before the run quiesces. */
 export type Nemesis = {
   name: string;
+  /** Environment for the server process, from the run's seed (e.g. store faults). */
+  serverEnv?(seed: number): Record<string, string>;
+  /** A failure this nemesis causes on purpose (an injected store error), not a finding. */
+  expected?(error: string): boolean;
   /** Called once the server is up; returns the URL clients should use (a proxy, for network faults). */
   setup?(ctx: NemesisContext): Promise<string | undefined> | string | undefined;
   /** Called repeatedly while the workload runs. */
@@ -33,7 +37,7 @@ export type Nemesis = {
   heal(ctx: NemesisContext): Promise<void>;
   teardown?(): Promise<void> | void;
 };
-export type NemesisContext = { server: ServerProcess; serverUrl: string; events: string[]; now: () => number };
+export type NemesisContext = { seed: number; server: ServerProcess; events: string[]; now: () => number };
 
 export type RunResult = {
   ok: boolean;
@@ -51,6 +55,7 @@ export type RunResult = {
 };
 
 const KEYS = ["r0", "r1", "r2", "r3"];
+const READS = new Set(["reg:read", "bank:all", "set:all", "log:all"]);
 const ACCOUNTS = ["a0", "a1", "a2", "a3", "a4"];
 const EACH = 100;
 const TOTAL = EACH * ACCOUNTS.length;
@@ -60,7 +65,11 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   const nClients = opts.clients ?? 5;
   const duration = opts.durationMs ?? 2000;
   const dataDir = mkdtempSync(join(tmpdir(), "bunvex-jepsen-"));
-  const server = new ServerProcess({ store: opts.store, dataDir, env: opts.env });
+  const server = new ServerProcess({
+    store: opts.store,
+    dataDir,
+    env: { ...opts.env, ...opts.nemesis?.serverEnv?.(opts.seed) },
+  });
   const history = new History();
   const violations: string[] = [];
   const events: string[] = [];
@@ -73,9 +82,8 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   process.on("unhandledRejection", onUnhandled);
   try {
     const port = await server.start();
-    const serverUrl = `http://127.0.0.1:${port}`;
-    const ctx: NemesisContext = { server, serverUrl, events, now: () => history.now() };
-    const url = (await opts.nemesis?.setup?.(ctx)) ?? serverUrl;
+    const ctx: NemesisContext = { seed: opts.seed, server, events, now: () => history.now() };
+    const url = (await opts.nemesis?.setup?.(ctx)) ?? `http://127.0.0.1:${port}`;
     const open = () =>
       new BunvexClient(url, { logger: false, webSocket: { defaultInitialBackoffMs: 20, maxBackoffMs: 200 } });
 
@@ -89,7 +97,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     for (let c = 0; c < nClients; c++) {
       const client = open();
       clients.push(client);
-      workers.push(worker(c, client, rng(opts.seed * 1000 + c), history, deadline, violations));
+      workers.push(worker(c, client, rng(opts.seed * 1000 + c), history, deadline, violations, opts.nemesis?.expected));
     }
     let nemesisDone: Promise<void> = Promise.resolve();
     if (opts.nemesis) {
@@ -106,8 +114,8 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     const quiesceMs = Math.max(0, deadline - performance.now()) + (opts.quiesceMs ?? 15_000);
     await Promise.race([Promise.all(workers), Bun.sleep(quiesceMs)]);
 
-    // the final state, from a fresh client on the server itself
-    const reader = new BunvexClient(serverUrl, { logger: false });
+    // the final state, from a fresh client on the server itself (where it runs now: a restart moves it)
+    const reader = new BunvexClient(`http://127.0.0.1:${server.port}`, { logger: false });
     clients.push(reader);
     const nonce = 1e9;
     // a final read that fails is itself a finding (e.g. a register stored twice), not the end of the check
@@ -129,10 +137,18 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     // convergence: every client's live subscriptions reach the final state
     await converge(clients.slice(1, 1 + nClients), finalBank, violations);
 
+    // a mutation that failed on an injected store error may still take effect: its first attempt can be
+    // running when the connection drops, and the resend's failure is what the client is told (DV-80; the
+    // known bug in test/regressions.test.ts) — so such a failure is indeterminate, not "did not happen"
+    for (const op of history.ops)
+      if (op.status === "fail" && !READS.has(op.f) && opts.nemesis?.expected?.(op.error ?? "")) {
+        op.status = "info";
+        op.end = Infinity;
+      }
     // a failure other than a lost OCC race (which the client is told about, and retries are bounded) or an
     // indeterminate one is a bug: a function that cannot fail on correct data failed
     for (const op of history.ops)
-      if (op.status === "fail" && !expectedFailure(op.error ?? ""))
+      if (op.status === "fail" && !expectedFailure(op.error ?? "") && !opts.nemesis?.expected?.(op.error ?? ""))
         violations.push(`error: client ${op.client}'s ${op.f} failed: ${(op.error ?? "").split("\n")[0]}`);
     violations.push(...checkBank(history.ops, TOTAL, finalBank));
     violations.push(...checkSet(history.ops, finalSet));
@@ -176,7 +192,15 @@ export async function run(opts: RunOptions): Promise<RunResult> {
 }
 
 /** One client: a single operation at a time (a Jepsen process), plus bursts of pipelined mutations. */
-async function worker(c: number, client: BunvexClient, r: Rng, h: History, deadline: number, violations: string[]) {
+async function worker(
+  c: number,
+  client: BunvexClient,
+  r: Rng,
+  h: History,
+  deadline: number,
+  violations: string[],
+  expected: (error: string) => boolean = () => false,
+) {
   const own = `own${c}`;
   let next = 0;
   const value = () => c * 1_000_000 + ++next;
@@ -185,8 +209,9 @@ async function worker(c: number, client: BunvexClient, r: Rng, h: History, deadl
 
   // live subscriptions: this client's own register (read-your-writes) and each balance on its own, which
   // must always sum to the total — one transition moves every query to the same snapshot (STUDY-23)
-  const failed = (what: string) => (e: Error) =>
-    violations.push(`subscription: client ${c}'s ${what} failed: ${e.message}`);
+  const failed = (what: string) => (e: Error) => {
+    if (!expected(e.message)) violations.push(`subscription: client ${c}'s ${what} failed: ${e.message}`);
+  };
   const unsub: (() => void)[] = [client.onUpdate("reg:read", { key: own }, () => {}, failed(`reg:read ${own}`))];
   for (const name of ACCOUNTS)
     unsub.push(client.onUpdate("bank:balance", { name }, () => {}, failed(`bank:balance ${name}`)));
@@ -242,7 +267,7 @@ async function worker(c: number, client: BunvexClient, r: Rng, h: History, deadl
       );
       if (op.status === "ok") {
         const shown = local(client, "reg:read", { key: own });
-        if (shown !== v)
+        if (shown !== v && !(typeof shown === "string" && expected(shown)))
           violations.push(
             `read-your-writes: client ${c} wrote ${v} to ${own}, its subscription showed ${String(shown)}`,
           );

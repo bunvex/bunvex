@@ -1,6 +1,7 @@
 // The short run every PR's CI does (STUDY-57 §5, the owner's call): a few seconds of the workload on the two
 // embedded stores, a new seed each time (printed with any failure, so it reproduces). JEPSEN_SEED pins it.
 import { describe, expect, test } from "bun:test";
+import { nemesisByName } from "../src/nemesis.ts";
 import { describe as summary } from "../src/report.ts";
 import { run } from "../src/runner.ts";
 
@@ -16,6 +17,15 @@ describe("Jepsen-style short run", () => {
       expect(result.stats.ops).toBeGreaterThan(500);
       expect(Object.keys(result.stats.byFunction).length).toBe(7);
     }, 60_000);
+
+  // faults too (STUDY-57 §4): connections cut, the server killed and restarted, the store slow and failing
+  test("memory, with faults: the same checks hold", async () => {
+    const result = await run({ seed, store: "memory", clients: 5, durationMs: 2500, nemesis: nemesisByName("all") });
+    if (!result.ok) console.error(summary(result));
+    expect({ seed, violations: result.violations }).toEqual({ seed, violations: [] });
+    expect(result.events.length).toBeGreaterThan(0);
+    expect(result.stats.ops).toBeGreaterThan(100);
+  }, 60_000);
 });
 
 describe("quiesce", () => {
