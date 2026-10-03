@@ -1,7 +1,7 @@
 // `.filter(q => …)` (STUDY-15): the filter builder and its evaluation, with the semantics of Convex's
 // `Expression::eval` (crates/common/src/query.rs): comparisons in index-key order (a missing field is
 // `undefined`, below null), arithmetic only on two int64s or two float64s, booleans only for and/or/not.
-import { compareValues, displayValue, isBytes, type Value } from "@bunvex/values";
+import { compareValues, displayValue, hasCommitTs, isBytes, type Value } from "@bunvex/values";
 import type { Doc } from "./schema.ts";
 import { fieldValue } from "./schema.ts";
 
@@ -14,8 +14,12 @@ export class Expression<T = unknown> {
 }
 export type ExpressionOrValue<T = unknown> = Expression | (T & Value) | undefined;
 
-const toExpr = (x: ExpressionOrValue): Expression =>
-  x instanceof Expression ? x : new Expression(() => x as MaybeValue);
+const toExpr = (x: ExpressionOrValue): Expression => {
+  if (x instanceof Expression) return x;
+  // A literal is a plain value: Convex's expression JSON refuses the commit timestamp's token (STUDY-53).
+  if (hasCommitTs(x)) throw new Error("Field name $commitTs starts with '$', which is reserved.");
+  return new Expression(() => x as MaybeValue);
+};
 
 function typeName(v: MaybeValue): string {
   if (v === undefined) return "undefined";

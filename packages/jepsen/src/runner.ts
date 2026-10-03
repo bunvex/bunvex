@@ -18,6 +18,8 @@ export type RunOptions = {
   durationMs?: number;
   /** Faults to inject while the workload runs. */
   nemesis?: Nemesis;
+  /** How long operations still in flight at the deadline get to finish before the final read (15 s). */
+  quiesceMs?: number;
 };
 
 /** Something that injects faults during a run, and undoes them before the run quiesces. */
@@ -110,8 +112,11 @@ export async function run(opts: RunOptions): Promise<RunResult> {
       })();
     }
     await nemesisDone;
-    // quiesce: every operation still in flight gets a bounded while to finish (resends after a reconnect)
-    await Promise.race([Promise.all(workers), Bun.sleep(15_000)]);
+    // quiesce: every operation still in flight gets a bounded while to finish (resends after a reconnect),
+    // counted from the deadline: without a nemesis nothing above waited for it, and a final read taken while
+    // the workers still run misses their later writes
+    const quiesceMs = Math.max(0, deadline - performance.now()) + (opts.quiesceMs ?? 15_000);
+    await Promise.race([Promise.all(workers), Bun.sleep(quiesceMs)]);
 
     // the final state, from a fresh client on the server itself (where it runs now: a restart moves it)
     const reader = new BunvexClient(`http://127.0.0.1:${server.port}`, { logger: false });

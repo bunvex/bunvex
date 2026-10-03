@@ -10,20 +10,30 @@
     "./server": "./src/server.ts",
     "./values": "./src/values.ts",
     "./browser": "./src/browser.ts",
-    "./react": "./src/react.ts"
+    "./react": "./src/react.ts",
+    "./nextjs": "./src/nextjs.ts",
+    "./react-clerk": "./src/react-clerk.ts",
+    "./react-auth0": "./src/react-auth0.ts"
   },
   "dependencies": {
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@bunvex/client": "workspace:*",
     "@bunvex/react": "workspace:*",
+    "@bunvex/nextjs": "workspace:*",
+    "@bunvex/react-clerk": "workspace:*",
+    "@bunvex/react-auth0": "workspace:*",
     "@bunvex/cli": "workspace:*"
   },
   "peerDependencies": {
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "@auth0/auth0-react": "^2.0.1"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "@auth0/auth0-react": {
       "optional": true
     }
   },

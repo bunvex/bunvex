@@ -19,6 +19,7 @@ import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
   type Caller,
   type Engine,
+  firstOverlap,
   type Interval,
   type LogEntry,
   OccError,
@@ -30,9 +31,9 @@ import { v1 } from "@bunvex/protocol";
 import { type Value, valueSize } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
 import { BadAdminKeyError } from "./admin-keys.ts";
-import { isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
+import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
-import { callerOf, Functions, type SourcedCaller } from "./functions.ts";
+import { type AdminCaller, callerOf, Functions, type SourcedCaller } from "./functions.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /** Mutations one connection may have queued or running (Convex's OPERATION_QUEUE_BUFFER_SIZE). */
@@ -129,7 +130,8 @@ export type SyncDeps = {
   /** A failed function run, for a client: its message (without request id) and the app's data as JSON. */
   formatError: (e: unknown) => { error: string; data?: string };
   /** Arguments in JSON form → values. */
-  fromWire: (args: unknown) => unknown;
+  /** A call's arguments from the wire (`path`: the function's, for Convex's "Invalid arguments for" error). */
+  fromWire: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
@@ -140,6 +142,11 @@ export type SyncDeps = {
    * tokens are refused.
    */
   adminCaller?: (key: string, impersonating: unknown) => Caller;
+  /**
+   * The subscriptions each commit invalidated, by the write that did it (its write source and table), as
+   * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
+   */
+  onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -161,6 +168,8 @@ type Execution = {
 
 type SessionQuery = {
   udfPath: string;
+  /** A non-root component path an admin asked for (STUDY-62 K8): bunvex has none, so the query fails. */
+  component?: string;
   args: v1.JSONValue[];
   argsJson: string;
   journal: string | null;
@@ -252,6 +261,9 @@ export class SyncHub {
     // still pending is not counted again: in Convex it left the subscription map when it was invalidated.
     const touched = new Map<SyncSession, { n: number; keys: string[] }>();
     let count = 0;
+    const events = this.deps.onInvalidations
+      ? new Map<string, { source: string | undefined; table: string; count: number }>()
+      : null;
     for (const key of hit) {
       const sessions = this.watchers.get(key);
       if (!sessions) continue;
@@ -259,6 +271,7 @@ export class SyncHub {
         const n = s.newlyInvalidated(key);
         if (n === 0) continue;
         count += n;
+        if (events) this.attribute(events, key, entries, n);
         const t = touched.get(s);
         if (t) {
           t.n += n;
@@ -266,6 +279,7 @@ export class SyncHub {
         } else touched.set(s, { n, keys: [key] });
       }
     }
+    if (events && events.size > 0) this.deps.onInvalidations!([...events.values()]);
     const { threshold, multiplierMs, random } = this.splay;
     if (count <= threshold || multiplierMs === 0) {
       for (const s of touched.keys()) s.schedule();
@@ -279,6 +293,44 @@ export class SyncHub {
       for (let i = 0; i < n; i++) delay = Math.min(delay, Math.floor(random() * (window + 1)));
       s.scheduleAfter(delay, keys);
     }
+  }
+
+  /** Count `n` invalidations of `key` against the first write that overlaps its reads, as Convex's. */
+  private attribute(
+    events: Map<string, { source: string | undefined; table: string; count: number }>,
+    key: string,
+    entries: LogEntry[],
+    n: number,
+  ) {
+    const reads = this.latest.get(key)?.reads;
+    if (!reads) return;
+    for (const e of entries) {
+      const w = firstOverlap(e.writes, reads);
+      if (!w) continue;
+      const table = this.tableOfIndex(w.index);
+      if (table === undefined) return;
+      const k = `${e.source ?? ""}\u0000${table}`;
+      const ev = events.get(k);
+      if (ev) ev.count += n;
+      else events.set(k, { source: e.source, table, count: n });
+      return;
+    }
+  }
+
+  private indexTables: { catalog: unknown; map: Map<number, string> } | null = null;
+
+  /** The table an index belongs to (rebuilt when the catalog changes). */
+  private tableOfIndex(index: number): string | undefined {
+    const catalog = this.deps.engine.catalog;
+    if (this.indexTables?.catalog !== catalog) {
+      const map = new Map<number, string>();
+      for (const t of catalog.tables.values()) {
+        for (const ix of t.indexes.values()) map.set(ix.id, t.name);
+        for (const ix of t.pending) map.set(ix.id, t.name);
+      }
+      this.indexTables = { catalog, map };
+    }
+    return this.indexTables.map.get(index);
   }
 
   /**
@@ -364,12 +416,18 @@ export class SyncHub {
     let f = this.inflight.get(key);
     if (!f) {
       const base = at.slice(0, at.lastIndexOf("\u0000"));
-      const p = this.execute(q, ts, caller).then((exec) => {
-        this.inflight.delete(key);
-        const idPart = exec.identityObserved ? mine : SHARED;
-        this.adopt(`${base}\u0000${idPart}`, exec);
-        return { exec, idPart };
-      });
+      const p = this.execute(q, ts, caller).then(
+        (exec) => {
+          this.inflight.delete(key);
+          const idPart = exec.identityObserved ? mine : SHARED;
+          this.adopt(`${base}\u0000${idPart}`, exec);
+          return { exec, idPart };
+        },
+        (e) => {
+          this.inflight.delete(key);
+          throw e;
+        },
+      );
       f = { p, owner: mine };
       this.inflight.set(key, f);
     }
@@ -389,12 +447,17 @@ export class SyncHub {
         q.udfPath,
         { ...caller, source: "SyncWorker" } as SourcedCaller,
         async () => {
-          const body = functions.queryBody(q.udfPath, fromWire(q.args), true, caller);
+          if (q.component !== undefined) throw componentNotFound(q.component);
+          const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
           return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
         },
         (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
       ),
     );
+    // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
+    // fails with it; STUDY-20 D8).
+    if (!r.ok && isSystemError(r.error)) throw r.error;
+    if (r.ok && !r.value.ok && isSystemError(r.value.error)) throw r.value.error;
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
       ? r.value
@@ -728,7 +791,9 @@ export class SyncSession {
     for (const m of this.pending.splice(0)) {
       if (m.type === "Add") {
         if (this.queries.has(m.queryId)) throw new Error(`Duplicate query ID: ${m.queryId}`);
+        const component = componentOf(m.componentPath, caller);
         const q: SessionQuery = {
+          ...(component === null ? {} : { component }),
           udfPath: canonicalizeUdfPath(m.udfPath),
           args: m.args,
           argsJson: this.canonicalArgs(m.args),
@@ -826,7 +891,7 @@ export class SyncSession {
   /** Arguments as canonical JSON (fields sorted), so equal arguments share executions. */
   private canonicalArgs(args: v1.JSONValue[]) {
     try {
-      return stringifyValue(this.hub.deps.fromWire(args) as never);
+      return stringifyValue(this.hub.deps.fromWire(args, "") as never);
     } catch {
       return JSON.stringify(args); // invalid: the run reports it
     }
@@ -844,16 +909,27 @@ export class SyncSession {
         const { functions, fromWire } = this.hub.deps;
         const caller = this.requestCaller(m.requestId);
         if (caller === null) return;
+        let component: string | null;
+        try {
+          component = componentOf(m.componentPath, caller);
+        } catch (e) {
+          return this.internalError(e);
+        }
+        if (component !== null) {
+          const missing = await collectLogs(async () => Promise.reject(componentNotFound(component!)));
+          this.send(this.response("MutationResponse", m.requestId, missing, null));
+          return;
+        }
         const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
         // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
         const session = this.sessionId;
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args), true, caller)
+            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller)
             : functions.runSessionMutation(
                 path,
-                fromWire(m.args),
+                fromWire(m.args, path),
                 { sessionId: session, requestId: m.requestId },
                 caller,
               ),
@@ -884,12 +960,24 @@ export class SyncSession {
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
     const caller = this.requestCaller(m.requestId);
     if (caller === null) return;
+    let component: string | null;
+    try {
+      component = componentOf(m.componentPath, caller);
+    } catch (e) {
+      return this.internalError(e);
+    }
+    if (component !== null) {
+      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) =>
+        this.send(this.response("ActionResponse", m.requestId, r)),
+      );
+      return;
+    }
     this.inflightActions++;
     void (async () => {
       try {
         const { functions, fromWire } = this.hub.deps;
         const r = await collectLogs(() =>
-          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args), caller),
+          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
         );
         if (this.closed) return;
         if (!r.ok && isSystemError(r.error)) return this.internalError(r.error);
@@ -922,7 +1010,24 @@ export class SyncSession {
 }
 
 /** Path, args and journal: what a run's result depends on besides the caller. */
-const baseKeyOf = (q: SessionQuery) => `${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
+const baseKeyOf = (q: SessionQuery) =>
+  `${q.component === undefined ? "" : `${q.component}\u0001`}${q.udfPath}\u0000${q.argsJson}\u0000${q.journal ?? ""}`;
+
+/**
+ * Convex's `parse_admin_component_path` (crates/sync/src/worker.rs, STUDY-62 K8): a function of a non-root
+ * component may be called directly only by an admin (not one acting as a user) or the system; anyone else
+ * ends the session (an untyped error). The component, or null for the root.
+ */
+function componentOf(componentPath: string | undefined, caller: Caller): string | null {
+  if (componentPath === undefined || componentPath === "") return null;
+  const admin = (caller as AdminCaller).admin;
+  if (!admin || caller.identity != null)
+    throw new Error("Only admin or system users can call functions on non-root components directly");
+  return componentPath;
+}
+
+/** Convex's `ComponentPathNotFound`: bunvex has no components (STUDY-62), so every non-root path is missing. */
+const componentNotFound = (path: string) => new FunctionPathError(`Component path '${path}' not found`);
 const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
 

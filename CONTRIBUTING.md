@@ -24,7 +24,9 @@ update its rows in the PR that changes them.
 
 bunvex's own code never says "convex" outside comments: no identifier, exported name, string, error message
 or URL may contain it (`check:deps` rule 5). Cite Convex in comments and in `docs/study/`; name things, and
-word messages, as bunvex.
+word messages, as bunvex. The one exception is a wire name Convex clients or connectors send or read (a
+`format` value, a metric name): the owner decides each one, and it is listed with its decision in
+`WIRE_NAMES` (`scripts/check-deps.ts`). Messages never qualify.
 
 Design decisions are recorded in [`docs/specs/`](docs/specs/). A change to the engine's guarantees, the
 persistence contract or the package layout starts with a spec (or an amendment to one).

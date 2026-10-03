@@ -104,7 +104,7 @@ export function httpActionServer(o: HttpActionOptions) {
       timer = setTimeout(() => resolve("timeout"), headTimeoutMs);
     });
     // The handler keeps running after a 408, as Convex's does.
-    const run = o.functions.runHttpAction(handler._handler, request, caller, error).then(
+    const run = o.functions.runHttpAction(handler._handler, request, caller, error, routePath).then(
       (r) => ({ ok: true as const, r }),
       (e: unknown) => ({ ok: false as const, e }),
     );

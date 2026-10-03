@@ -5,7 +5,7 @@ import { runConformance } from "@bunvex/persistence-conformance";
 
 for (const name of ["memory", "sqlite"]) {
   test(
-    `PERSIST-01 conformance K1–K29: ${name}`,
+    `PERSIST-01 conformance K1–K31: ${name}`,
     async () => {
       const lines: string[] = [];
       const { failures } = await runConformance({
