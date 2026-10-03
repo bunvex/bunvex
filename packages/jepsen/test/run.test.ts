@@ -1,8 +1,8 @@
 // The short run every PR's CI does (STUDY-57 §5, the owner's call): a few seconds of the workload on the two
 // embedded stores, a new seed each time (printed with any failure, so it reproduces). JEPSEN_SEED pins it.
 import { describe, expect, test } from "bun:test";
-import { describe as summary } from "../src/report.ts";
 import { nemesisByName } from "../src/nemesis.ts";
+import { describe as summary } from "../src/report.ts";
 import { run } from "../src/runner.ts";
 
 const seed = Number(process.env.JEPSEN_SEED ?? Math.floor(Math.random() * 2 ** 31));
