@@ -342,6 +342,12 @@ DV-300 (STUDY-52 A3, table summaries) awaits the owner; the draft PR implements 
 |---|---|---|---|---|---|
 | DV-300 | Table summaries (counts, sizes, shapes) are rebuilt on start from the documents | checkpointed in a persistence global, the log replayed on start | operational (a scan at start; `TableSummariesUnavailable` until done) | Not done yet: a checkpoint can come later. Accept for now | [STUDY-52 A3](../study/STUDY-52-shape-inference.md#4-divergences) |
 
+DV-301 (STUDY-56 P1, the push's checks) awaits the owner; the draft PR implements the recommendation:
+
+| ID | Divergence | Convex | Observable | Why (and the recommendation) | Source |
+|---|---|---|---|---|---|
+| DV-301 | `evaluate_schema`'s table outcome is `supersetOfEnforced` only for an unchanged validator, never `supersetOfShape` | a superset of the enforced validator or of the inferred shape skips the walk | yes (the slow-walk warning; the walk itself, STUDY-35) | Not done yet: needs validator subtyping. Accept for now | [STUDY-56 P1](../study/STUDY-56-push-checks.md#4-divergences) |
+
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
 

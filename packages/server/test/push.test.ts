@@ -131,6 +131,86 @@ const schema = mod(
 );
 
 describe("deploy2 over HTTP", () => {
+  test("evaluate_schema: what a push would do to indexes and tables, as Convex's prediction (STUDY-56)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    await d.call("mutation", "messages:send", { author: "ada", body: "hi" });
+    await d.engine.summariesReady();
+    const next = mod(
+      "schema.js",
+      schema.source.replace(
+        '.index("by_author", ["author"])',
+        '.index("by_body", ["body"]).searchIndex("search_body", { searchField: "body" })',
+      ),
+    );
+    const r = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: next, changedModules: [], unchangedModuleHashes: [] },
+      componentDefinitions: [],
+    });
+    expect(r.status).toBe(200);
+    const p = r.body.componentSchemaEvaluations[""];
+    expect(r.body.newComponentDefinitions).toEqual([]);
+    expect(p.definitionPath).toBe("");
+    expect(p.schemaValidation).toBe(true);
+    expect(p.indexes).toEqual([
+      {
+        name: "messages.by_body",
+        type: "database",
+        fields: ["body"],
+        staged: false,
+        change: "added",
+        needsBackfill: true,
+        numDocs: 1,
+      },
+      {
+        name: "messages.by_author",
+        type: "database",
+        fields: ["author"],
+        staged: false,
+        change: "dropped",
+        needsBackfill: false,
+        numDocs: 1,
+      },
+      {
+        name: "messages.search_body",
+        type: "search",
+        searchField: "body",
+        filterFields: [],
+        staged: false,
+        change: "added",
+        needsBackfill: true,
+        numDocs: 1,
+      },
+    ]);
+    expect(Object.keys(p.indexes[0])).toEqual([
+      "name",
+      "type",
+      "fields",
+      "staged",
+      "change",
+      "needsBackfill",
+      "numDocs",
+    ]);
+    expect(p.tables).toEqual([
+      { name: "messages", outcome: "supersetOfEnforced", numDocs: 1, sizeBytes: expect.any(Number) },
+    ]);
+    expect(p.tables[0].sizeBytes).toBeGreaterThan(0);
+    // The same schema is identical; no schema drops every index.
+    const same = await d.post("/api/deploy2/evaluate_schema", { appDefinition: { schema }, componentDefinitions: [] });
+    expect(same.body.componentSchemaEvaluations[""].indexes.map((i: { change: string }) => i.change)).toEqual([
+      "identical",
+    ]);
+    const none = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: null },
+      componentDefinitions: [],
+    });
+    expect(none.body.componentSchemaEvaluations[""]).toMatchObject({ schemaValidation: false, tables: [] });
+    expect(none.body.componentSchemaEvaluations[""].indexes.map((i: { change: string }) => i.change)).toEqual([
+      "dropped",
+    ]);
+  });
+
   test("each push records Convex's push_config_with_components in the audit log (STUDY-48, DV-276)", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

@@ -10,6 +10,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
+import {
+  type CheckMode,
+  checkLargeIndexBackfill,
+  checkLargeIndexDeletion,
+  checkSlowSchemaValidation,
+  defaultDeployMessage,
+  PushCanceled,
+  type SchemaEvaluation,
+} from "./index-checks.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
@@ -23,7 +32,12 @@ Bundle the functions directory and push it to a self-hosted deployment.
 Options:
 ${TARGET_OPTIONS}
   --dry-run            analyze the push without changing the deployment
-  --message <message>  a message to attach to this deployment in the audit log
+  --message <message>  a message to attach to this deployment in the audit log (default: the CI platform
+                       and commit, when one is detected)
+  --skip-large-indexes-check
+                       skip the confirmation when this push creates, changes or deletes an index on a large
+                       table (creating or changing one blocks the deploy until it is backfilled; consider
+                       staging it instead so it backfills in the background)
   --codegen <mode>     enable (default) or disable: regenerate _generated/
   --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
 
@@ -94,6 +108,8 @@ export function partitionModules(
 type Flags = TargetFlags & {
   dryRun: boolean;
   message?: string;
+  skipLargeIndexesCheck: boolean;
+  allowDeletingLargeIndexes: boolean;
   codegen: boolean;
   typecheck: TypecheckMode;
 };
@@ -101,11 +117,21 @@ function parseFlags(all: string[]): Flags | string {
   const taken = takeTargetFlags(all);
   if (typeof taken === "string") return taken;
   const args = taken.rest;
-  const f: Flags = { ...taken.flags, dryRun: false, codegen: true, typecheck: "try" };
+  const f: Flags = {
+    ...taken.flags,
+    dryRun: false,
+    codegen: true,
+    typecheck: "try",
+    skipLargeIndexesCheck: false,
+    allowDeletingLargeIndexes: false,
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--dry-run") f.dryRun = true;
+    else if (name === "--skip-large-indexes-check") f.skipLargeIndexesCheck = true;
+    // Its predecessor, hidden as in Convex: it skips the deletion confirmation only.
+    else if (name === "--allow-deleting-large-indexes") f.allowDeletingLargeIndexes = true;
     else if (name === "--message") {
       const v = inline ?? args[++i];
       if (v === undefined) return "--message needs a value";
@@ -146,18 +172,70 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     return 1;
   }
   try {
-    return (await deploy(acquired.target, flags, io)).code;
+    // As Convex's `deploy`: the large-index checks ask unless a flag allows it; the message defaults to the
+    // CI platform and commit.
+    const message = flags.message ?? defaultDeployMessage(io.env) ?? undefined;
+    return (
+      await deploy(
+        acquired.target,
+        {
+          ...flags,
+          ...(message === undefined ? {} : { message }),
+          largeIndexDeletionCheck:
+            flags.skipLargeIndexesCheck || flags.allowDeletingLargeIndexes
+              ? "has confirmation"
+              : "ask for confirmation",
+          largeIndexBackfillCheck: flags.skipLargeIndexesCheck ? "has confirmation" : "ask for confirmation",
+          warnOnSlowSchemaValidation: true,
+        },
+        io,
+      )
+    ).code;
   } finally {
     await acquired.release();
   }
 }
 
-/** `message`: attached to the push's audit-log event (Convex's `--message`). */
-export type DeployOptions = { dryRun: boolean; codegen: boolean; typecheck: TypecheckMode; message?: string };
+/**
+ * `message`: attached to the push's audit-log event (Convex's `--message`). The checks before the push
+ * (STUDY-56): `bunvex deploy` asks before deleting or blocking on large indexes; `bunvex dev` does not.
+ */
+export type DeployOptions = {
+  dryRun: boolean;
+  codegen: boolean;
+  typecheck: TypecheckMode;
+  message?: string;
+  largeIndexDeletionCheck?: CheckMode;
+  largeIndexBackfillCheck?: CheckMode;
+  warnOnSlowSchemaValidation?: boolean;
+};
 /** The exit code, and whether a failure is worth retrying (`bunvex dev`'s backoff). */
 export type DeployResult = { code: number; transient?: boolean };
 
 /** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
+/**
+ * `evaluate_schema` (STUDY-56), or null when the deployment has no such route. While the deployment is still
+ * building its table summaries it answers 503 `TableSummariesUnavailable`: retried, as Convex's CLI retries.
+ */
+async function evaluateSchema(
+  post: (path: string, body: object) => Promise<Record<string, unknown>>,
+  request: object,
+): Promise<SchemaEvaluation | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return (await post("/api/deploy2/evaluate_schema", request)) as unknown as SchemaEvaluation;
+    } catch (e) {
+      const m = (e as Error).message;
+      if (/no route for/.test(m)) return null;
+      if (/Table summary unavailable/.test(m) && attempt < 20) {
+        await Bun.sleep(500);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 export async function deploy(target: Target, flags: DeployOptions, io: Io): Promise<DeployResult> {
   const { url, adminKey } = target;
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
@@ -201,7 +279,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       environment: string;
     }[];
     const { changedModules, unchangedModuleHashes } = partitionModules(bundled.modules, hashes);
-    const start = await post("/api/deploy2/start_push", {
+    const request = {
       dryRun: flags.dryRun,
       functions: "bunvex",
       appDefinition: {
@@ -214,7 +292,25 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       },
       componentDefinitions: [],
       nodeDependencies: [],
-    });
+    };
+    // Convex's checks before the push, on one `evaluate_schema` (skipped against a deployment without it).
+    const deletion = flags.largeIndexDeletionCheck ?? "no verification";
+    const backfill = flags.largeIndexBackfillCheck ?? "no verification";
+    const slow = flags.dryRun && flags.warnOnSlowSchemaValidation;
+    if (deletion !== "no verification" || backfill !== "no verification" || slow) {
+      const evaluation = await evaluateSchema(post, request);
+      if (evaluation) {
+        checkLargeIndexDeletion(io, evaluation, deletion, url);
+        checkLargeIndexBackfill(
+          io,
+          evaluation,
+          flags.dryRun && backfill !== "no verification" ? "warn" : backfill,
+          url,
+        );
+        if (slow) checkSlowSchemaValidation(io, evaluation);
+      }
+    }
+    const start = await post("/api/deploy2/start_push", request);
     // Convex's final codegen and typecheck, after the push is analyzed and before it is finished.
     if (flags.codegen) runCodegen(dir, codegen);
     const checked = await typecheck(dir, io.cwd, flags.typecheck);
@@ -274,6 +370,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     io.out(`✔ Deployed functions to ${url}`);
     return { code: 0 };
   } catch (e) {
+    if (e instanceof PushCanceled) return { code: 1 };
     const message = (e as Error).message;
     io.err(`bunvex deploy: ${message}`);
     // As Convex's CLI: an unreachable deployment and a push race are worth retrying.

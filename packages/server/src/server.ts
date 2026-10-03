@@ -13,6 +13,7 @@ import {
   parseValue,
   SchemaEnforcementError,
   stringifyValue,
+  TableSummariesUnavailableError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -1176,6 +1177,7 @@ export function createServer(opts: ServerOptions) {
       if (authModule) useAuth(providers);
       return new Response(null, { status: 200 });
     } catch (e) {
+      if (e instanceof TableSummariesUnavailableError) return requestError(503, e.code, e.message);
       if (e instanceof PushError) return requestError(400, e.code, e.message);
       throw e;
     }
@@ -1281,6 +1283,7 @@ export function createServer(opts: ServerOptions) {
       if (step === "get_config_hashes") return json(await push.configHashes());
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
+      if (step === "evaluate_schema") return json(await push.evaluateSchema(body));
       if (step === "wait_for_schema") return json(await push.waitForSchema(body));
       if (step === "finish_push") return json(await push.finishPush(body, auditActor(caller)));
       if (step === "report_push_completed") return json({});

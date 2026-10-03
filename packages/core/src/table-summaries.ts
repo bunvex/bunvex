@@ -11,11 +11,11 @@ import { NEVER, removeValue, type Shape, ShapeRemovalError, shapeOf, union } fro
 
 export type TableSummary = { count: number; size: number; shape: Shape };
 
-/** Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, retriable). */
+/** Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, a 503: retry). */
 export class TableSummariesUnavailableError extends Error {
   readonly code = "TableSummariesUnavailable";
   constructor() {
-    super("Table summaries are still being computed. Try again soon.");
+    super("Table summary unavailable (still bootstrapping)");
     this.name = "TableSummariesUnavailableError";
   }
 }

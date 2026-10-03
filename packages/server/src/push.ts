@@ -195,6 +195,38 @@ export class PushService {
     }
   }
 
+  /**
+   * Convex's `evaluate_schema` (STUDY-56): the push's schema only (no function module is analyzed), and what
+   * pushing it would do to the indexes and the tables — the CLI's large-index and slow-validation checks.
+   */
+  async evaluateSchema(req: StartPushRequest) {
+    if (req.componentDefinitions?.length)
+      throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
+    let schema = emptySchema;
+    const schemaModule = req.appDefinition?.schema;
+    if (schemaModule) {
+      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
+      if (!(s?.tables instanceof Map))
+        throw new PushError(
+          "InvalidSchema",
+          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
+        );
+      schema = s;
+    }
+    const p = await this.deps.engine.evaluateSchema(schema);
+    return {
+      componentSchemaEvaluations: {
+        "": {
+          definitionPath: "",
+          schemaValidation: schemaModule ? p.schemaValidation : false,
+          tables: p.tables,
+          indexes: p.indexes,
+        },
+      },
+      newComponentDefinitions: [],
+    };
+  }
+
   async startPush(req: StartPushRequest) {
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
