@@ -111,8 +111,7 @@ A connector's view: pages, cursors, value encodings, field order, errors.
 | DV-307 | ~~The encoded format renamed `encoded_json`~~ — resolved: Convex's names, by an explicit rule-5 exception for wire names (`WIRE_NAMES` in `scripts/check-deps.ts`). | — | owner, 2026-10-03 |
 | DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s); older gives `SnapshotTooOld`. Each value's `_ts` is its revision's ts since PERSIST-01 C16 (`getVersions`; owner, 2026-10-03); the snapshot age limit stays. | Ainda não fizemos: Convex's table iterator rebuilds old snapshots from the document log. A connector paging one snapshot for more than 4 minutes would restart. | accepted (owner, 2026-10-03) |
 
-Not built yet (not a divergence): `/api/v1/data/sync`, `list_active_syncs`, `data_sync_cursor_from_deltas`,
-`_data_sync_progress`. These are the current Fivetran connector's API.
+Built since in [STUDY-69](STUDY-69-data-sync.md): `/api/v1/data/sync`, `list_active_syncs`, `data_sync_cursor_from_deltas`, `_data_sync_progress`.
 
 ## 5. Tests
 

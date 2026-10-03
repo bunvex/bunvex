@@ -279,7 +279,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_canonical_urls` | `crates/model/canonical_urls` | done (STUDY-49) | Number 546; `{requestDestination, url}`. |
 | `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | missing | |
 | `_usage_limits` | `crates/model/usage_limits` | done (STUDY-61) | Number 552, `by_selector`; `{metric, window, limitType, limit, enabled}`. |
-| `_data_sync_progress` | `crates/model/data_sync_progress` | missing | Streaming export / Fivetran. |
+| `_data_sync_progress` | `crates/model/data_sync_progress` | done (STUDY-69) | Number 553, `by_sync_id`, `by_last_updated`; Convex's states and write rules; `create_data_sync`. |
 | `_backend_info`, `_aws_lambda_versions`, `_next_persistence_index_id` | `crates/model/*` | missing | Internal bookkeeping (cloud entitlements, Lambda, id allocation); `_backend_info` can be skipped. |
 
 ### 18. Import / export / backups
@@ -302,7 +302,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 |---|---|---|---|
 | `list_snapshot` and `document_deltas` (paged snapshot plus change feed) | `crates/local_backend/streaming_export.rs`; `crates/application/streaming_export.rs` | partial (STUDY-60) | GET and POST, `ViewData`; nanosecond timestamps (exact over POST); selections (exact, `tableName`, `component`); `json`, `convex_encoded_json`, `export_json` and Convex's legacy aliases (rule 5's wire-name exception, DV-307). `list_snapshot`: one table a page, by tablet then id, 1024 documents, Convex's cursors and errors. `document_deltas`: the document log (PERSIST-01 C12) after the cursor, whole commits, 128 rows a page, deletes as `_deleted`, the retention window's error. Each value's `_ts` is its revision's (PERSIST-01 C16). Snapshots only within the index retention window (DV-306). |
 | `json_schemas`, `get_table_column_names`, `test_streaming_export_connection` | same | done (STUDY-60) | From the reduced shapes (computed on demand, as `/api/shapes2`), Convex's per-format leaf schemas, `deltaSchema`, `byComponent`. |
-| Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | missing | |
+| Data-sync v1 API (`/api/v1/data/sync…`, protobuf cursor) | `crates/streaming_export`; `crates/pb_data_sync` | done (STUDY-69) | `data/sync`, `list_active_syncs`, `sync/{id}`, `data_sync_cursor_from_deltas`; Convex's sealed protobuf cursor; by-id pages with revision timestamps (PERSIST-01 C16), then the log, whole commits, Convex's limits and freshness; truncates, statuses, `Convex-Client` (rule 5 wire-name exception). |
 | Fivetran source/destination connectors | `crates/fivetran_source`, `fivetran_destination` | missing | Separate programs; low priority. |
 | Streaming import (`/api/streaming_import/*`: Airbyte records, Fivetran operations, primary-key indexes) | `crates/application/airbyte_import.rs`; `crates/model/fivetran_import` | missing | |
 
