@@ -36,6 +36,7 @@ import {
   INTERNAL_SERVER_ERROR_MESSAGE,
   isSystemError,
   isTryAgainError,
+  newRequestId,
   withRequestId,
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
@@ -220,7 +221,39 @@ export function createServer(opts: ServerOptions) {
    * auth config; without a header, `?adminKey=` is an admin; otherwise no identity. A failure is the
    * request's error response.
    */
+  /**
+   * The request a call comes from (STUDY-44, Convex's `ExtractRequestMetadata`): the first `x-forwarded-for`
+   * entry, else the connection's address; the user agent; a new request id; the user's raw token.
+   */
+  const peer = (req: Request): string | null => {
+    for (const srv of [server, site] as ({ requestIP(r: Request): { address: string } | null } | null)[]) {
+      try {
+        const a = srv?.requestIP(req)?.address;
+        if (a) return a;
+      } catch {}
+    }
+    return null;
+  };
+  const withRequest = (caller: Caller, req: Request): Caller => {
+    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const header = req.headers.get("authorization");
+    const bearer = header && /^bearer /i.test(header) ? header.slice(7).trim() : null;
+    return {
+      ...caller,
+      request: {
+        ip: forwarded || peer(req),
+        userAgent: req.headers.get("user-agent"),
+        requestId: newRequestId(),
+        authToken: bearer && caller.identity !== null ? bearer : null,
+        scheduledFunctionId: null,
+      },
+    };
+  };
   const callerOfRequest = async (req: Request): Promise<Caller | Response> => {
+    const caller = await identifyRequest(req);
+    return caller instanceof Response ? caller : withRequest(caller, req);
+  };
+  const identifyRequest = async (req: Request): Promise<Caller | Response> => {
     const header = req.headers.get("authorization");
     try {
       if (header === null) {
@@ -269,7 +302,10 @@ export function createServer(opts: ServerOptions) {
   const httpOptions = {
     functions,
     router,
-    identify: identifyHttpAction,
+    identify: async (req: Request) => {
+      const r = await identifyHttpAction(req);
+      return { ...r, caller: withRequest(r.caller, req) };
+    },
     redact,
     headTimeoutMs: opts.httpActionHeadTimeoutMs,
   };
@@ -483,6 +519,10 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url);
       if (/^\/api\/[^/]+\/sync$/.test(url.pathname)) {
         const data: WsData = { session: new SyncSession(sync) };
+        data.session.peer = {
+          ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
+          userAgent: req.headers.get("user-agent"),
+        };
         if (srv.upgrade(req, { data })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
@@ -645,6 +685,7 @@ export function createServer(opts: ServerOptions) {
     ...(siteOrigin ? { BUNVEX_SITE_URL: siteOrigin.replace(/\/$/, "") } : {}),
   };
   functions.builtinEnv = builtinEnv;
+  functions.httpRoutes = () => (httpOptions.router?.getRoutes() ?? []).map(([path, method]) => [method, path] as const);
   /** The deployment's variables with the built-ins, as `auth.config` sees them. */
   const deploymentEnv = async () => ({
     ...builtinEnv,

@@ -381,6 +381,8 @@ export class Tx {
 
   /** Who runs this transaction: the server's identity object (opaque here), or null without a token. */
   identity: unknown = null;
+  /** The request it runs for (STUDY-44), for `ctx.meta.getRequestMetadata()`. */
+  request: import("./engine.ts").CallRequest | null = null;
   /** Whether the body read the identity (Convex's `observe_identity`): its result then depends on the caller. */
   identityObserved = false;
   /** The caller's identity, recording that the result depends on it (`ctx.auth.getUserIdentity()`). */

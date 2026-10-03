@@ -5,10 +5,12 @@
 import type { UserIdentity } from "@bunvex/auth";
 import {
   type Caller,
+  type CallRequest,
   checkEnvVarName,
   type Engine,
   failExecution,
   newUserTimer,
+  observeTime,
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -40,7 +42,7 @@ import {
   OperationNotPermittedError,
 } from "./admin-keys.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-import { describeUncaught, FunctionPathError, isSystemError } from "./errors.ts";
+import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
 import { cachedQueryLogs, currentLogLines, perAttempt } from "./logs.ts";
 import type {
   ActionBuilder,
@@ -120,6 +122,18 @@ export type MutationCtx = GenericMutationCtx<any>;
 export type ActionCtx = GenericActionCtx<any>;
 /** A function to call from an action: a reference (`api.module.fn`, `internal.module.fn`) or its name. */
 export type FunctionRef = AnyFunctionReference | string;
+
+/** What an HTTP action's `ctx.meta` names it: Convex runs it as `http.js:default`, stripped `http`. */
+const HTTP_ACTION = { kind: "action", visibility: "public", handler: () => undefined } as unknown as FunctionDef;
+
+/** A call that came with no request (a test, an embedded call): a fresh request id, nothing else. */
+const REQUESTLESS = (): CallRequest => ({
+  ip: null,
+  userAgent: null,
+  requestId: newRequestId(),
+  authToken: null,
+  scheduledFunctionId: null,
+});
 
 /** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
 export const callerOf = (identity: UserIdentity | null): Caller =>
@@ -246,6 +260,8 @@ export const internalAction = internalActionGeneric;
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
+  /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
+  private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
   private moduleHashes = new Map<string, string>();
 
@@ -279,6 +295,8 @@ export class Functions {
   private deployed = false;
   /** The built-in variables (the server's origins), read after the deployment's (which cannot hold them). */
   builtinEnv: Record<string, string> = {};
+  /** The HTTP routes served (method, path), for `apiSpec`; the server sets it. */
+  httpRoutes: () => readonly (readonly [string, string])[] = () => [];
 
   /** A query's or mutation's `process.env`: each read in `db`'s read set. */
   private async txEnv(db: Tx): Promise<EnvReader | null> {
@@ -352,7 +370,9 @@ export class Functions {
 
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
     // `dir/file` is its default export, and `.js` is optional, as Convex canonicalizes a path.
-    const f = this.fns.get(name) ?? this.fns.get(registryKey(name));
+    const key = this.fns.has(name) ? name : registryKey(name);
+    const f = this.fns.get(key);
+    if (f) this.names.set(f, key);
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
     // names the canonical path (`module.js:name`) and both kinds.
@@ -386,10 +406,14 @@ export class Functions {
     return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.visibility === "internal";
   }
 
-  /** Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators. */
+  /**
+   * Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
+   * HTTP routes as `{ functionType: "HttpAction", method, path }`.
+   */
   apiSpec() {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
-    return [...this.fns].map(([key, f]) => {
+    const routes = this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
+    const fns = [...this.fns].map(([key, f]) => {
       const i = key.lastIndexOf(":");
       return {
         identifier: `${key.slice(0, i)}.js:${key.slice(i + 1)}`,
@@ -399,6 +423,7 @@ export class Functions {
         returns: (f.returns?.json ?? { type: "any" }) as unknown as Value,
       };
     });
+    return [...fns, ...routes];
   }
 
   /** An id's table, for `v.id` (the engine's catalog). */
@@ -469,6 +494,7 @@ export class Functions {
             auth: txAuth(db),
             storage: this.fileStorage?.reader(db) ?? noStorage,
             runQuery: nested.runQuery,
+            meta: this.meta(f, db, undefined),
           }
         : {
             db: db as unknown as MutationCtx["db"],
@@ -477,8 +503,60 @@ export class Functions {
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
+            meta: this.meta(f, db, undefined),
           };
     return (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args);
+  }
+
+  /**
+   * `ctx.meta` (STUDY-44), as Convex's `setupQueryMeta` / `setupMutationMeta` / `setupActionMeta` and their
+   * syscalls: a query's has no request metadata, an action's no transaction metrics nor snapshot.
+   */
+  private meta(f: FunctionDef, db: Tx | null, caller: Caller | undefined) {
+    const key = f === HTTP_ACTION ? "http:default" : (this.names.get(f) ?? "");
+    const name = key.endsWith(":default") ? key.slice(0, -":default".length) : key;
+    const getFunctionMetadata = async () => ({ name, componentPath: "", type: f.kind, visibility: f.visibility });
+    // Self-hosted Convex: the instance name, no region, the smallest class.
+    const getDeploymentMetadata = async () => ({ name: this.engine.instanceName, region: null, class: "s16" });
+    const request = (): CallRequest => db?.request ?? caller?.request ?? REQUESTLESS();
+    const getRequestMetadata = async () => {
+      const r = request();
+      return {
+        ip: r.ip,
+        userAgent: r.userAgent,
+        requestId: r.requestId,
+        scheduledFunctionId: r.scheduledFunctionId,
+        authToken: r.authToken,
+      };
+    };
+    if (!db) return { getFunctionMetadata, getDeploymentMetadata, getRequestMetadata };
+    const getTransactionMetrics = async () => {
+      const used = db.usage;
+      const limit = db.limits;
+      const metric = (k: keyof typeof used) => ({ used: used[k], remaining: limit[k] - used[k] });
+      // Convex never counts file reads or writes in a transaction: used 0, its default limits.
+      const unused = (max: number) => ({ used: 0, remaining: max });
+      return {
+        bytesRead: metric("bytesRead"),
+        bytesWritten: metric("bytesWritten"),
+        databaseQueries: metric("databaseQueries"),
+        documentsRead: metric("documentsRead"),
+        documentsWritten: metric("documentsWritten"),
+        functionsScheduled: metric("functionsScheduled"),
+        scheduledFunctionArgsBytes: metric("scheduledFunctionArgsBytes"),
+        filesWritten: unused(10),
+        fileWriteBytes: unused(1 << 24),
+        filesRead: unused(10),
+        fileReadBytes: unused(1 << 24),
+      };
+    };
+    // The snapshot in nanoseconds; reading it makes the result time-dependent, as `Date.now()` does.
+    const getSnapshotTs = () => {
+      observeTime();
+      return BigInt(db.snapshot) * 1000n;
+    };
+    const meta = { getFunctionMetadata, getTransactionMetrics, getDeploymentMetadata, getSnapshotTs };
+    return f.kind === "mutation" ? { ...meta, getRequestMetadata } : meta;
   }
 
   /**
@@ -796,7 +874,7 @@ export class Functions {
     opts: { job?: string; internal?: boolean } = {},
   ): Promise<unknown> {
     const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-    const ctx = this.actionCtx(caller, null, opts.job);
+    const ctx = this.actionCtx(caller, null, opts.job, f);
     const a = this.checkArgs(f, args);
     return this.actionPermits.run(() => this.inActionEnv(() => f.handler(ctx, a)).then((r) => this.checkReturns(f, r)));
   }
@@ -805,7 +883,7 @@ export class Functions {
    * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
    * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
    */
-  private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string): ActionCtx {
+  private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     return {
       auth: {
@@ -819,6 +897,7 @@ export class Functions {
       runAction: (n: FunctionRef, a?: unknown) => this.runAction(getFunctionName(n), a, caller, { internal: true }),
       scheduler: makeScheduler(this, { engine: this.engine, job }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
+      ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx;
   }
 
@@ -829,7 +908,7 @@ export class Functions {
     caller: Caller,
     authError: Error | null,
   ): Promise<unknown> {
-    const ctx = this.actionCtx(caller, authError);
+    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
     return this.actionPermits.run(async () => this.inActionEnv(() => handler(ctx, request)));
   }
 }

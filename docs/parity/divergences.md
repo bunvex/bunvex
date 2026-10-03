@@ -183,6 +183,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-217 | No dashboard links in the CLI's export/import output | links to the dashboard | yes (text) | until item 12 | owner, 2026-10-02 (as recommended) | [STUDY-42 X3](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-218 | No audit-log entries for exports and imports | `RequestExport`, import events | dashboard only | until an audit log exists | owner, 2026-10-02 (as recommended) | [STUDY-42 X4](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-219 | Import reads the `"uniform"` ZIP encoding only, not the legacy inferred-schema one (a legacy table with no documents imports) | both | old Convex exports only | later if needed | owner, 2026-10-02 (as recommended) | [STUDY-42 X5](../study/STUDY-42-import-export.md#4-divergences) |
+| DV-226 | The system query that gives the CLI the API's URL is `_system/cli/deploymentUrl:cloudUrl` | `_system/cli/convexUrl:cloudUrl` | no (CLI only) | rule 5: no "convex" in shipped strings | owner, 2026-10-02 (as recommended) | [platform §CLI](platform.md) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
 
@@ -193,6 +194,11 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-69 | No read-only system tables or `db.system` | As Convex: `_` tables are read through `db.system` only, which has no writes; a function's `db.query`/`db.get` on one fails (`System table … is not accessible here.`) | yes | owner, 2026-10-01 (STUDY-32, STUDY-30) | [STUDY-10 D12](../study/STUDY-10-documents-and-values.md#4-divergences) |
+| DV-83 | The mutation-queue overflow closed the socket without a reason the client recognised | As Convex: over 1000 queued mutations close it with 1013 and `TooManyConcurrentMutations` (`sync.ts`) | yes | owner, 2026-10-01 (#50) | [STUDY-22 D1](../study/STUDY-22-ws-mutation-order.md#4-divergences) |
+| DV-84 | Storage ids were only document ids | As Convex: `Id<"_storage">` and legacy UUIDs both name a file (`storage.ts` `resolve`) | yes | owner, 2026-10-01 (#142) | [platform §3](platform.md#3-file-storage) |
+| DV-85 | Crons had no splay | As Convex: a stable random offset, up to an hour without a pinned minute, else up to 60 s (`cron-next.ts`) | yes | owner, 2026-10-01 (#124) | [platform §5](platform.md#5-cron-jobs) |
+| DV-86 | HTTP actions were not served | As Convex: `/http/*` on the API port and the site origin (port 3211) (`server.ts`, `http-actions.ts`) | yes | owner, 2026-10-01 (#130) | [platform §8](platform.md#8-http-actions) |
 | DV-205 | A nested error reached the caller with its message alone | As Convex's `JsError` display: "Uncaught Error: <message>" and the nested stack frames, each "    at …", ending with a newline; a timeout as its message and a newline; a `BunvexError` keeps its data | yes (the caught message) | owner, 2026-10-02 (#213) | [STUDY-41 N2](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-206 | `transactionLimits` applied to documents and bytes read and written only | As Convex: also `databaseQueries` (read-set intervals), `functionsScheduled` and `scheduledFunctionArgsBytes`, with Convex's messages printing the lowered limit; the file limits are accepted and, as in Convex (which never counts them), never reached | yes (rare) | owner, 2026-10-02 (#213) | [STUDY-41 N3](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
 | DV-209 | A store error in a nested call propagated as a catchable error | As Convex: a system error (`isSystemError`: the committer stopped, out of retention) fails the whole call; caught or not, it is thrown at the caller's next store call and when it ends | yes (only on a store failure) | owner, 2026-10-02 (#213) | [STUDY-41 N6](../study/STUDY-41-nested-calls-and-execution-limit.md#4-divergences) |
@@ -263,12 +269,7 @@ classed as bugs by their study; they are listed here because they change what op
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-59 | No `db.vars.commitTs` / `v.commitTs()` | has them | [STUDY-06 D8](../study/STUDY-06-transactions-and-occ.md#4-divergences), [STUDY-13 D2](../study/STUDY-13-validators.md#4-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
-| DV-69 | No read-only system tables or `db.system` (table-name rules are done, #6) | `_`-tables only via `db.system`, read-only | [STUDY-10 D12](../study/STUDY-10-documents-and-values.md#4-divergences) |
 | DV-73 | Pagination cursors are signed (HMAC), not encrypted | encrypted (with the key broker, Phase 3) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
-| DV-83 | The mutation-queue overflow closes the socket without a reason the client recognises | the client recognises the close reason (close 1013, STUDY-23 §4.5) | [STUDY-22 D1](../study/STUDY-22-ws-mutation-order.md#4-divergences) |
-| DV-84 | Storage ids: only document ids | `Id<"_storage">` and legacy UUIDs | [platform §3](platform.md#3-file-storage) |
-| DV-85 | Crons: no splay | runs without `minuteUTC` get a stable random offset in the hour | [platform §5](platform.md#5-cron-jobs) |
-| DV-86 | HTTP actions: not served yet | `/http/*` and a separate site origin (port 3211) | [platform §8](platform.md#8-http-actions) |
 
 ## Pending owner decisions
 
@@ -286,6 +287,8 @@ DV-193–DV-196 (STUDY-39 B1–B4) were decided by the owner on 2026-10-02 (B1 a
 DV-197–DV-203 (STUDY-40 L1–L7) were accepted as recommended (owner, 2026-10-02) and are in [Decided divergences](#decided-divergences).
 DV-204–DV-209 (STUDY-41 N1–N6) were accepted as recommended (owner, 2026-10-02); DV-205, DV-206 and DV-209 were built later (#213) and are in [Resolved to match Convex](#resolved-to-match-convex).
 DV-215–DV-219 (STUDY-42 X1–X5) were accepted as recommended (owner, 2026-10-02); what they wait on is in [Waiting on a dependency](#waiting-on-a-dependency).
+
+DV-226 was accepted as recommended (owner, 2026-10-02) and is in [Decided divergences](#decided-divergences).
 DV-220–DV-222 (STUDY-42 X6–X8) were accepted as recommended (owner, 2026-10-02): DV-222 is in
 [Decided divergences](#decided-divergences); DV-220 and DV-221 were built at once (#210) and are in
 [Resolved to match Convex](#resolved-to-match-convex).

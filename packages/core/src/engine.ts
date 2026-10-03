@@ -137,7 +137,20 @@ export class OccError extends Error {
  * of it. A cached query result is keyed by that string only if the run read the identity, as Convex's query
  * cache (`observed_identity`, crates/application/src/cache/mod.rs); otherwise it serves every caller.
  */
-export type Caller = { identity: unknown; key: string };
+/**
+ * The request a call comes from (STUDY-44, Convex's `RequestMetadata` and execution context), for
+ * `ctx.meta.getRequestMetadata()`: passed down to the functions it calls.
+ */
+export type CallRequest = {
+  ip: string | null;
+  userAgent: string | null;
+  requestId: string;
+  /** The user's raw token; null for an admin key or none. */
+  authToken: string | null;
+  /** The scheduled function this execution belongs to, if any. */
+  scheduledFunctionId: string | null;
+};
+export type Caller = { identity: unknown; key: string; request?: CallRequest };
 const ANONYMOUS: Caller = { identity: null, key: "" };
 /** Separates a cache key from its identity part; `*` is the identity-free entry. */
 const ID_SEP = "\u0001";
@@ -1079,6 +1092,7 @@ export class Engine {
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
     tx.retention = this.retention;
     tx.identity = caller.identity;
+    tx.request = caller.request ?? null;
     tx.instanceSecret = this.instanceSecret;
     tx.searchIndexes = this.searchIndexes;
     if (kind === "mutation") {
@@ -1268,6 +1282,7 @@ export class Engine {
     tx.instanceSecret = this.instanceSecret;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
+    tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
     tx.prevEndCursor = journal.endCursor ?? null;
     const out = () => ({

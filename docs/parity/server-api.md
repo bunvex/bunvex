@@ -126,9 +126,9 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | partial | `db`, `auth`, `storage`, `runQuery` (STUDY-41). No `meta`. |
-| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | partial | `db`, `auth`, `storage`, `scheduler`, `runQuery`, `runMutation` (STUDY-41). No `meta`. |
-| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`. |
+| QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | done | `db`, `auth`, `storage`, `runQuery` (STUDY-41), `meta` (STUDY-44). |
+| MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | done | `db`, `auth`, `storage`, `scheduler`, `runQuery`, `runMutation` (STUDY-41), `meta` (STUDY-44). |
+| ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | partial | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`, `storage`, `meta` (STUDY-44). No `vectorSearch` (search is Phase 4). |
 | `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | done (STUDY-41) | In the caller's transaction (its writes, identity, time; reads joining its read set), after the path, kind and arguments are checked with Convex's messages; internal functions allowed; returns checked after; errors catchable, as Convex's `JsError` display ("Uncaught Error: …" and the nested frames; `BunvexError` data kept), a store failure not catchable (DV-205, DV-209 resolved). Nested calls from one function run one at a time (DV-207). |
 | `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | done (STUDY-41) | `Tx.begin` / `rollback` (copy-on-write index trees): a failed nested mutation's writes and created tables are undone, its reads kept; the caller may catch and commit. A failed returns check keeps the writes, as Convex. |
 | `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Strings instead of references, and internal functions are allowed. |
@@ -136,11 +136,11 @@ Key bunvex facts behind the statuses:
 | `runQuery` option `useStaleSnapshot` (mutations only) | server/registration.ts (`AdvancedRunQueryOptions`) | done (STUDY-41) | A query at the transaction's snapshot, without its pending writes, its reads discarded; refused from a query with Convex's message. |
 | `transactionLimits` option on `runQuery` / `runMutation` (bytesRead, documentsRead/Written, databaseQueries, functionsScheduled, files…) | server/meta.ts, registration.ts | done (STUDY-41) | Documents and bytes read and written, database queries (read-set intervals), functions scheduled and their argument bytes, as Convex (usage so far plus the budget, never above the current limit; restored after; scheduling usage not given back by a rollback, as Convex). The file limits are accepted and never reached, as in Convex, which does not count them (DV-206 resolved). |
 | Maximum nesting of `runQuery`/`runMutation` calls (`MAX_REACTOR_CALL_DEPTH` = 8) | knobs.rs | done (STUDY-41) | 8 levels below the top function; Convex's message. |
-| `ctx.meta.getFunctionMetadata()` (name, componentPath, type, visibility) | server/meta.ts | missing | |
-| `ctx.meta.getTransactionMetrics()` (used/remaining per limit) | server/meta.ts | missing | |
-| `ctx.meta.getDeploymentMetadata()` | server/meta.ts | missing | |
-| `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | missing | |
-| `ctx.meta.getSnapshotTs()` (bigint, on the same clock as commitTs) | server/meta.ts; isolate syscall.rs | missing | |
+| `ctx.meta.getFunctionMetadata()` (name, componentPath, type, visibility) | server/meta.ts | done (STUDY-44) | The stripped path (`dir/module:fn`, a default export `dir/module`), `componentPath` `""`, the kind and visibility; an HTTP action is `http`, public, as Convex's `http.js:default`. |
+| `ctx.meta.getTransactionMetrics()` (used/remaining per limit) | server/meta.ts | done (STUDY-44) | Queries and mutations; `remaining` against the current (a nested call's lowered) limit; the internal file metrics `used: 0` and Convex's defaults, as Convex never counts them. |
+| `ctx.meta.getDeploymentMetadata()` | server/meta.ts | done (STUDY-44) | As self-hosted Convex: the instance name, `region: null`, `class: "s16"`. |
+| `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | done (STUDY-44) | Mutations and actions (HTTP actions too), not queries; `ip` the first `x-forwarded-for` entry else the connection's address, over HTTP and the sync protocol; a new request id per call, shared with the functions it calls; a scheduled function's id down its call tree; the user's raw token (null for an admin key). |
+| `ctx.meta.getSnapshotTs()` (bigint, on the same clock as commitTs) | server/meta.ts; isolate syscall.rs | done (STUDY-44) | The snapshot in nanoseconds, synchronous, shared with nested calls; it makes a query time-dependent, as `Date.now()`. `commitTs` itself is DV-59. |
 | `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | missing | |
 
 ### 7. Deterministic runtime and execution environment

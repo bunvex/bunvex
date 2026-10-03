@@ -185,6 +185,12 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         .order(order)
         .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
   },
+  // The CLI's `function-spec` reads the API's URL with it (Convex's `_system/cli/convexUrl:cloudUrl`, renamed
+  // by rule 5): the deployment's `BUNVEX_CLOUD_URL`.
+  "_system/cli/deploymentUrl:cloudUrl": {
+    args: {},
+    handler: async (_db, _args, env) => env.functions?.builtinEnv.BUNVEX_CLOUD_URL ?? null,
+  },
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
     args: { componentId },

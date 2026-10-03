@@ -98,6 +98,16 @@ export {
   type RunningLocalBackend,
   startLocalBackend,
 } from "./local-backend.ts";
+export type {
+  ActionMeta,
+  DeploymentMetadata,
+  FunctionMetadata,
+  MutationMeta,
+  QueryMeta,
+  RequestMetadata,
+  TransactionMetric,
+  TransactionMetrics,
+} from "./meta.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 export type {
