@@ -80,7 +80,7 @@ to a spec.
 | [STUDY-42](STUDY-42-import-export.md) | Snapshot export (ZIP, `_exports`, endpoints, `bunvex export`) and import (CSV/JSON/JSONL/ZIP, modes, hidden tables, `_snapshot_imports`, `bunvex import`) | accepted: all as recommended (owner, 2026-10-02) |
 | [STUDY-44](STUDY-44-ctx-meta.md) | `ctx.meta`: function, transaction, deployment, snapshot and request metadata | built; no divergence |
 | [STUDY-45](STUDY-45-text-search.md) | Full-text search: `searchIndex`, `withSearchIndex`, tokens, BM25, limits, reactivity | accepted: S1–S6 as recommended (owner, 2026-10-02) |
-| [STUDY-47](STUDY-47-log-streaming.md) | Function log streaming: the execution log, `stream_function_logs`, `bunvex logs`, `dev --tail-logs` | decision pending (owner): L1–L4 |
+| [STUDY-47](STUDY-47-log-streaming.md) | Function log streaming: the execution log, `stream_function_logs`, `bunvex logs`, `dev --tail-logs` | accepted: L1–L4 as recommended (owner, 2026-10-03) |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
