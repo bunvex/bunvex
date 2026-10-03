@@ -126,6 +126,28 @@ async function setup(opts: { start?: boolean; parallelism?: number; retentionSec
       await scheduler.runAfter(0, "m:bump", { tag: `child of ${tag}` });
       if (tag === "throws") throw new Error("action failed");
     }),
+    // Schedules through the functions it calls: a mutation, and another action.
+    actVia: action(async ({ runMutation, runAction }, { tag }: { tag: string }) => {
+      ran.push(`actVia:${tag}`);
+      await gates.get(tag);
+      await runMutation("m:schedule" as never, { delay: 0, args: { tag: `via mutation of ${tag}` } } as never);
+      await runAction("m:actChild" as never, { tag } as never);
+    }),
+    // Asks a mutation to cancel the job this action runs as.
+    cancelOwnJobViaMutation: action(async (ctx) => {
+      const { scheduledFunctionId } = await (
+        ctx as never as { meta: { getRequestMetadata(): Promise<{ scheduledFunctionId: string }> } }
+      ).meta.getRequestMetadata();
+      try {
+        await ctx.runMutation("m:cancel" as never, { id: scheduledFunctionId } as never);
+        ran.push("canceled");
+      } catch (e) {
+        ran.push((e as Error).message);
+      }
+    }),
+    actChild: action(async ({ scheduler }, { tag }: { tag: string }) => {
+      await scheduler.runAfter(0, "m:bump", { tag: `via action of ${tag}` });
+    }),
     scheduleFromActionThenThrow: action(async ({ scheduler }) => {
       await scheduler.runAfter(0, "m:bump", { tag: "from action" });
       throw new Error("action failed");
@@ -320,6 +342,37 @@ describe("the executor", () => {
     expect(await state(id)).toBe("canceled");
     const jobs = (await functions.runQuery("m:jobs", {})) as { args: { tag?: string }[]; state: { kind: string } }[];
     expect(jobs.find((j) => j.args[0].tag === "child of slow")?.state.kind).toBe("canceled");
+  });
+
+  test("canceling a running action also cancels what the functions it calls schedule (Convex: test_cancel_recursively_scheduled_job)", async () => {
+    const { functions, ran, state, gate } = await setup();
+    const open = gate("slow");
+    const id = (await functions.runMutation("m:schedule", {
+      delay: 0,
+      fn: "m:actVia",
+      args: { tag: "slow" },
+    })) as string;
+    await until(async () => (await state(id)) === "inProgress");
+    await functions.runMutation("m:cancel", { id });
+    open();
+    const children = async () =>
+      ((await functions.runQuery("m:jobs", {})) as { args: { tag?: string }[]; state: { kind: string } }[]).filter(
+        (j) => j.args[0].tag?.startsWith("via "),
+      );
+    await until(async () => (await children()).length === 2, "both children");
+    await Bun.sleep(100);
+    expect(ran).toEqual(["actVia:slow"]); // neither child ran
+    expect((await children()).map((j) => [j.args[0].tag, j.state.kind]).sort()).toEqual([
+      ["via action of slow", "canceled"],
+      ["via mutation of slow", "canceled"],
+    ]);
+  });
+
+  test("a mutation a scheduled action calls runs under its job: it cannot cancel that job (Convex's check)", async () => {
+    const { functions, ran, state } = await setup();
+    const id = (await functions.runMutation("m:schedule", { delay: 0, fn: "m:cancelOwnJobViaMutation" })) as string;
+    await until(async () => (await state(id)) === "success");
+    expect(ran).toEqual(["A mutation cannot cancel itself"]);
   });
 
   test("the wrong kind, or a function gone since, fails at run time", async () => {

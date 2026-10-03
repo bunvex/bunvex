@@ -9,6 +9,8 @@ import {
   checkEnvVarName,
   type Engine,
   failExecution,
+  formatBytes,
+  isQueryObject,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -17,6 +19,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
   stringifyValue,
+  TableReader,
   type Tx,
   type UserTimer,
   wallClock,
@@ -54,7 +57,7 @@ import {
 import type { AppMetrics } from "./app-metrics.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
+import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
 import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
@@ -296,6 +299,19 @@ export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
+/**
+ * Convex's `validateReturnValue` (registration_impl.ts, STUDY-66 §3): a query or mutation that returns a query
+ * object, not its results, fails before its result is validated.
+ */
+async function notAQuery(result: unknown): Promise<unknown> {
+  const value = await result;
+  if (isQueryObject(value))
+    throw new Error(
+      "Return value is a Query. Results must be retrieved with `.collect()`, `.take(n), `.unique()`, or `.first()`.",
+    );
+  return value;
+}
+
 /** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
 const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
 /**
@@ -306,6 +322,8 @@ function readerView(db: Tx): Tx {
   return new Proxy(db, {
     get(target, prop) {
       if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      // `db.table(name)` gives a reader too (STUDY-66 §2).
+      if (prop === "table") return (name: string) => new TableReader(target, name);
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -341,8 +359,34 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
+/** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
+export const FUNCTION_MAX_ARGS_SIZE = 1 << 24;
+export const FUNCTION_MAX_RESULT_SIZE = 1 << 24;
+
+/** A size limit from the environment (a non-negative integer of bytes), else Convex's default. */
+function sizeKnob(name: string, def: number, env: Record<string, string | undefined> = process.env): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name}: not a non-negative integer: ${raw}`);
+  return n;
+}
+
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
-const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
+const returned = (value: unknown): Outcome => ({ returnBytes: sizeOfResult(value) });
+
+/**
+ * Results' sizes as `checkReturns` measured them, so the function log does not walk a large result twice
+ * (an object or array is measured once; the size of a 1 MiB result is a few ms).
+ */
+const resultSizes = new WeakMap<object, number>();
+function sizeOfResult(value: unknown): number {
+  if (typeof value === "object" && value !== null) {
+    const known = resultSizes.get(value);
+    if (known !== undefined) return known;
+  }
+  return valueSize((value ?? null) as Value);
+}
 /** The same for a result already as JSON: its length. */
 const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
 
@@ -777,25 +821,60 @@ export class Functions {
   /** An id's table, for `v.id` (the engine's catalog). */
   private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
 
-  /** Arguments are an object, checked against `args` when the function declares it (Convex's rules). */
+  /**
+   * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
+   * §1.7): 16 MiB each, read from environment variables of the same names.
+   */
+  maxArgsSize = sizeKnob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
+  maxResultSize = sizeKnob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+
+  /**
+   * Arguments are an object, no larger than `maxArgsSize`, checked against `args` when the function declares
+   * it (Convex's rules and order: `ValidatedPathAndArgs` in crates/udf/src/validation.rs).
+   */
   private checkArgs(f: FunctionDef, args: unknown): AnyArgs {
-    const a = args ?? {};
-    if (!isSimpleObject(a))
-      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    // Without a validator, Convex hands the handler whatever came (a number, null); with one, the single
+    // argument must be an object (`check_args`).
+    const a = args === undefined ? {} : args;
+    if (f.args && !isSimpleObject(a))
+      throw ValidatorError.args(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
+      );
+    // Convex measures the positional args array, `[args]` (`validate_udf_args_size`, crates/udf/src/helpers.rs).
+    const size = valueSize([a as Value]);
+    if (size > this.maxArgsSize)
+      throw new FunctionPathError(
+        `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
+      );
     if (f.args) {
       const msg = checkValue(f.args, a as Value, this.tableOf);
-      if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+      if (msg) throw ValidatorError.args(msg);
     }
     return a as AnyArgs;
   }
 
-  /** The result, checked against `returns` when declared (`undefined` is null, as in Convex). */
+  /**
+   * The result: no larger than `maxResultSize` (Convex measures it as the run returns, in
+   * `deserialize_udf_result`, crates/isolate/src/helpers.rs), then checked against `returns` when declared
+   * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
+   */
   private checkReturns(f: FunctionDef, value: unknown) {
+    const size = valueSize((value ?? null) as Value);
+    if (typeof value === "object" && value !== null) resultSizes.set(value, size);
+    if (size > this.maxResultSize)
+      throw new FunctionPathError(
+        `Function ${this.pathOf(f)} return value is too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxResultSize)})`,
+      );
     if (f.returns) {
       const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
-      if (msg) throw new Error(`ReturnsValidationError: ${msg}`);
+      if (msg) throw ValidatorError.returns(msg);
     }
     return value;
+  }
+
+  /** A function's canonical path for a limit message, as Convex prints `CanonicalizedUdfPath`: `module.js:fn`. */
+  private pathOf(f: FunctionDef): string {
+    return canonicalPath(this.names.get(f) ?? "");
   }
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
@@ -829,8 +908,14 @@ export class Functions {
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
    */
-  private mutationBody(resolved: () => FunctionDef & { kind: "mutation" }, args: unknown, job?: string) {
+  private mutationBody(
+    resolved: () => FunctionDef & { kind: "mutation" },
+    args: unknown,
+    job?: string,
+    deadline?: Deadline,
+  ) {
     return perAttempt(async (db: Tx) => {
+      checkDeadline(deadline);
       noteTx(db);
       await this.failWhileNotRunning(db);
       const f = resolved();
@@ -838,7 +923,11 @@ export class Functions {
       const env = await this.txEnv(db);
       const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
-      return this.limits.mutation.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
+      return this.limits.mutation.run(async () => {
+        const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+        checkDeadline(deadline);
+        return value;
+      });
     });
   }
 
@@ -895,14 +984,19 @@ export class Functions {
         : {
             db: db as unknown as MutationCtx["db"],
             auth: txAuth(db),
-            scheduler: makeScheduler(this, { db, job }),
+            // The scheduled job this runs under, also when an action it ran called it (Convex propagates
+            // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
+            // born canceled, and it may not cancel that job.
+            scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return inHandleScope({ db, engine: this.engine }, () =>
-      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    return notAQuery(
+      inHandleScope({ db, engine: this.engine }, () =>
+        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+      ),
     );
   }
 
@@ -1106,13 +1200,29 @@ export class Functions {
     return `${module}.js:${fn}`;
   }
 
+  /**
+   * Arguments sent as an array of other than one (Convex's `UdfArgsJson`: each element an argument): a
+   * function with a validator refuses them (`check_args`), after its path resolves as the run's would; one
+   * without takes the first, as Convex's handler does (STUDY-67 H6).
+   */
+  checkArity(name: string, kind: FunctionDef["kind"], args: Value[], caller?: Caller): void {
+    if (args.length === 1 || isSystemPath(name)) return;
+    const f = this.fnLater(name, kind, true, caller)();
+    if (f.args)
+      throw ValidatorError.args(
+        `Expected to receive a single object as the function's argument. Instead received ${args.length} arguments: ${displayValue(args)}`,
+      );
+  }
+
   /** A system function's arguments, checked as Convex's validators. */
   private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
-    const a = args ?? {};
+    const a = args === undefined ? {} : args;
     if (!isSimpleObject(a))
-      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+      throw ValidatorError.args(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
+      );
     const msg = checkValue(v.object(validators), a as Value, this.tableOf);
-    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    if (msg) throw ValidatorError.args(msg);
     return a as never;
   }
 
@@ -1266,17 +1376,22 @@ export class Functions {
     args: unknown,
     fromClient = true,
     caller?: Caller,
+    deadline?: Deadline,
   ): Promise<{ value: unknown; ts: number }> {
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
     if (isSystemPath(name))
-      return this.engine.mutationWithTs(this.systemMutationBody(name, args, fromClient, caller), name, caller);
+      return this.engine.mutationWithTs(
+        untilAborted(this.systemMutationBody(name, args, fromClient, caller), deadline),
+        name,
+        caller,
+      );
     return this.logged(
       "Mutation",
       name,
       caller,
       () =>
         this.engine.mutationWithTs(
-          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args),
+          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline),
           name,
           caller,
         ),
@@ -1293,12 +1408,13 @@ export class Functions {
     args: unknown,
     request: SessionRequestId,
     caller?: Caller,
+    deadline?: Deadline,
   ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
     const run = () =>
       this.engine.sessionMutation(
         isSystemPath(name)
-          ? this.systemMutationBody(name, args, true, caller)
-          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args),
+          ? untilAborted(this.systemMutationBody(name, args, true, caller), deadline)
+          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args, undefined, deadline),
         name,
         request,
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
@@ -1361,7 +1477,11 @@ export class Functions {
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
         this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
-      scheduler: makeScheduler(this, { engine: this.engine, job }),
+      // As a mutation's: the job also reaches an action that a scheduled action ran.
+      scheduler: makeScheduler(this, {
+        engine: this.engine,
+        job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+      }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
@@ -1409,5 +1529,36 @@ export class Functions {
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
       routePath ?? new URL(request.url).pathname,
     );
+  }
+}
+
+/**
+ * A mutation stops once its `deadline` is set (a WebSocket mutation's 60 s limit, STUDY-64 §1.1): checked
+ * before each attempt and after the handler returns, so it never commits after the limit unless it had
+ * already reached the committer — what Convex's dropped future does. `mutationBody` checks it itself; this
+ * wraps a system mutation's body.
+ */
+function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | undefined): (db: Tx) => Promise<T> {
+  if (!deadline) return body;
+  return async (db) => {
+    checkDeadline(deadline);
+    const value = await body(db);
+    checkDeadline(deadline);
+    return value;
+  };
+}
+
+function checkDeadline(deadline: Deadline | undefined) {
+  if (deadline?.aborted) throw new MutationAbortedError();
+}
+
+/** Set once a mutation must stop (its WebSocket's time limit passed); checked between its steps. */
+export type Deadline = { aborted: boolean };
+
+/** A mutation stopped by its `Deadline`: nobody waits for its answer any more. */
+class MutationAbortedError extends Error {
+  override name = "MutationAbortedError";
+  constructor() {
+    super("The mutation was stopped: its time limit passed");
   }
 }
