@@ -18,6 +18,7 @@ import {
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
+  setFetchMeter,
   stringifyValue,
   TableReader,
   type Tx,
@@ -91,7 +92,7 @@ import type {
   VectorSearchQuery,
 } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
-import type { FileStorage } from "./storage.ts";
+import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
 
@@ -360,6 +361,30 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
+/** The running action a storage call or `fetch` is charged to (STUDY-71); a Node action's fetch is not. */
+function meteredAction(): Running | null {
+  const r = currentOwner();
+  return r instanceof Running && (r.udfType === "Action" || r.udfType === "HttpAction") ? r : null;
+}
+
+const storageMeter: StorageMeter = ({ read, written }) => {
+  const r = meteredAction();
+  if (!r) return;
+  r.io.storageCalls++;
+  r.io.storageReadBytes += read ?? 0;
+  r.io.storageWriteBytes += written ?? 0;
+};
+
+// Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
+// counter, 0 when self-hosted (STUDY-71 U2).
+setFetchMeter(() => {
+  const r = meteredAction();
+  if (!r || r.environment !== "isolate") return null;
+  return (bytes) => {
+    r.io.networkEgressBytes += bytes;
+  };
+});
+
 /** A query's or mutation's timer, for the log's user execution time (STUDY-71). */
 function timed(timer: UserTimer): UserTimer {
   const owner = currentOwner();
@@ -520,7 +545,9 @@ export class Functions {
     routePath?: string,
   ): Promise<T> {
     const log = this.functionLog;
-    if (!log || isSystemPath(name)) return run();
+    // System functions are not logged, as in Convex, but their compute and bandwidth are metered.
+    const system = isSystemPath(name);
+    if (!log || (system && !this.usageMeter)) return run();
     const up = currentOwner();
     const parent = up instanceof Running ? up : null;
     const r = new Running(
@@ -534,7 +561,7 @@ export class Functions {
       wallClock(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
-    if (udfType === "Action" || udfType === "HttpAction")
+    if (!system && (udfType === "Action" || udfType === "HttpAction"))
       r.onLine = (line) => {
         log.append({
           kind: "Progress",
@@ -555,7 +582,11 @@ export class Functions {
     r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
     const res = await withOwner(r, run);
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false));
+    if (!o.skip) {
+      const c = this.completion(r, res.lines, o, false);
+      if (system) this.meterCompletion(r, c, false);
+      else this.logCompletion(log, r, c);
+    }
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -649,6 +680,21 @@ export class Functions {
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
 
+  /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */
+  private meterCompletion(r: Running, c: Completion, tracked: boolean) {
+    this.usageMeter?.recordExecution({
+      udfType: c.udfType,
+      environment: c.environment,
+      executionTime: c.cachedResult ? 0 : c.executionTime,
+      userExecutionTime: c.userExecutionTime,
+      memoryMb: c.usageStats.memoryUsedMb,
+      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
+      dataEgressBytes: r.io.networkEgressBytes + r.io.storageReadBytes,
+      storageCalls: r.io.storageCalls,
+      tracked,
+    });
+  }
+
   private logCompletion(log: FunctionLog, r: Running, c: Completion) {
     log.append(c);
     if (this.logManager?.active) this.streamCompletion(r, c);
@@ -661,14 +707,7 @@ export class Functions {
       executionTime: c.executionTime,
       ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
     });
-    this.usageMeter?.recordExecution({
-      udfType: c.udfType,
-      environment: c.environment,
-      executionTime: c.cachedResult ? 0 : c.executionTime,
-      userExecutionTime: c.userExecutionTime,
-      memoryMb: c.usageStats.memoryUsedMb,
-      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
-    });
+    this.meterCompletion(r, c, true);
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
@@ -697,6 +736,9 @@ export class Functions {
       executionId: r.executionId,
       usageStats: {
         ...(used ? usageStats(used) : NO_USAGE),
+        storageReadBytes: r.io.storageReadBytes,
+        storageWriteBytes: r.io.storageWriteBytes,
+        networkEgressBytes: r.io.networkEgressBytes,
         // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
         // cached query (STUDY-61).
         memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
@@ -1262,7 +1304,10 @@ export class Functions {
     if (fromClient) this.systemAccess(n, q, "ViewData", caller);
     else if (!q) throw notFound(n);
     const a = this.systemArgs(args, q!.args);
-    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    return (db: Tx) => {
+      noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      return q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    };
   }
 
   private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
@@ -1271,7 +1316,10 @@ export class Functions {
     if (fromClient) this.systemAccess(n, m, "WriteData", caller);
     else if (!m) throw notFound(n);
     const a = this.systemArgs(args, m!.args);
-    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    return (db: Tx) => {
+      noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      return m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    };
   }
 
   /** A dashboard system query, in process (as the system: no key involved). */
@@ -1488,7 +1536,7 @@ export class Functions {
         engine: this.engine,
         job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
       }),
-      storage: this.fileStorage?.actionWriter() ?? noStorage,
+      storage: this.fileStorage?.actionWriter(storageMeter) ?? noStorage,
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];

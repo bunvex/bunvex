@@ -128,6 +128,7 @@ export {
   pausingUserTime,
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
+  setFetchMeter,
   type UserTimer,
   userTimeMs,
   wallClock,

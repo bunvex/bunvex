@@ -1,8 +1,8 @@
 # STUDY-71 — Usage metering: database I/O, user time, egress, storage and search bytes
 
 - **Status:** decisions taken (owner, 2026-10-03): text search bytes estimated from the index (U1); Node
-  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); PR 1 (database I/O) and
-  PR 2 (user time) are implemented.
+  actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); PRs 1–3 (database I/O,
+  user time, egress and storage) are implemented.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-61](STUDY-61-usage-limits.md) (the meter and limits; DV-309),
   [STUDY-47](STUDY-47-log-streaming.md) (the function log's `usageStats`; DV-251, DV-252)
@@ -102,7 +102,19 @@ Sources: `crates/usage_tracking/src/lib.rs` (`FunctionUsageTracker`, `UsageCount
   its wall time minus its pauses. An action's stays its wall time — what Convex reports, since it pauses an
   action's clock only while the isolate starts, which bunvex does not do per call. `actionComputeCpuGbHours`
   is unchanged for that reason. Cost: one clock read per run.
-- **Later PRs:** egress and storage (PR 3), search bytes (PR 4); §5.
+- **Egress and storage (PR 3).**
+  - An isolate action's `fetch` charges its request body's bytes once the request went out: through a hook
+    the core's `fetch` wrapper calls outside queries and mutations (`setFetchMeter`). The size of a string,
+    buffer, blob or URL parameters is known; any other body (a stream, form data, a `Request`'s) is cloned
+    and read. A Node action's fetch is not charged (U2).
+  - `ctx.storage.store` and `ctx.storage.get` in an action are a call each, with the bytes stored or read.
+  - The function log carries `networkEgressBytes`, `storageWriteBytes` and `storageReadBytes`. The meter
+    adds network and storage-read egress to `dataEgressGb` and the storage calls to `functionCalls`.
+  - `_system/` functions run under an owner that is metered but not logged: their compute and database
+    bandwidth count, their call does not. Their transactions are now noted, so their reads of user tables
+    count.
+  - Cost: none on the database paths; a clone of a streamed `fetch` body.
+- **Later PR:** search bytes (PR 4); §5.
 
 ## 4. Divergences
 
@@ -157,3 +169,21 @@ Found while reading, not divergences of this study:
   - the old behaviour (user = wall);
   - the query's or the mutation's timer not noted;
   - pauses not subtracted.
+
+### PR 3
+
+- `packages/server/test/usage-egress-storage.test.ts`:
+  - an action's fetches: strings, bytes, a `Request`, a `Blob`, no body, and a failed request;
+  - a Node action's fetch;
+  - an action's storage calls;
+  - a system query's call, logging and bandwidth.
+- Sabotage checks, each failing a test:
+  - a Node fetch metered;
+  - a failed fetch charged;
+  - request bodies skipped;
+  - `get` or `store` not metered;
+  - storage calls not counted as calls;
+  - egress not in the meter;
+  - a system call counted;
+  - system bandwidth not noted;
+  - system functions not metered.
