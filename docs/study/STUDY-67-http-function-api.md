@@ -169,17 +169,17 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | H1 | The API answers 200, not 560, for a function error | Convex's backend answers 200 too; 560 is the hosted service's | DV-58 (already decided): nothing to do |
-| H2 | No CORS on `/api/*` | gap | fix to match (PR fix/api-cors) |
-| H3 | `format` ignored; encoded JSON always | gap | fix to match (PR feat/http-api-format) |
-| H4 | Content-Type not required; `args` optional; body error messages | gap | fix to match (PR fix/http-api-request-errors) |
-| H5 | `/api/function` open to non-admins; `componentPath` ignored; 404 for a wrong method | gap | fix to match (same PR as H4) |
-| H6 | Argument errors rendered as an uncaught JS error, other messages, extra args accepted | gap | fix to match (PR fix/argument-errors) |
-| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **pending owner** (DV-312): recommended, a wire-name exception as DV-307 |
-| H8 | `/api/run/{path}` missing | gap | add (PR feat/api-run) |
-| H9 | `/api/query_batch` missing | gap | add (PR feat/api-query-batch) |
-| H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **pending owner** (DV-313): recommended, a working route (args as JSON text) |
-| H11 | `query_at_ts` with a bad or future `ts` answers 400 | bunvex chose clearer errors; Convex answers 500 | **pending owner** (DV-314): recommended, keep 400 |
-| H12 | The client header is not validated (`InvalidClientVersion`, `ClientVersionUnsupported`, deprecation headers) | the deprecation headers' names hold "convex" | **pending owner** (DV-315): recommended, validate as Convex (400s), without the deprecation headers |
+| H2 | No CORS on `/api/*` | gap | fix to match (#292) |
+| H3 | `format` ignored; encoded JSON always | gap | fix to match (#293) |
+| H4 | Content-Type not required; `args` optional; body error messages | gap | fix to match (#295) |
+| H5 | `/api/function` open to non-admins; `componentPath` ignored; 404 for a wrong method | gap | fix to match (#295) |
+| H6 | Argument errors rendered as an uncaught JS error, other messages, extra args accepted | gap | fix to match (#298) |
+| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **pending owner** (DV-312, draft #302): recommended, a wire-name exception as DV-307 |
+| H8 | `/api/run/{path}` missing | gap | add (#299) |
+| H9 | `/api/query_batch` missing | gap | add (#301) |
+| H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **pending owner** (DV-313, draft #303): recommended, a working route (args as JSON text) |
+| H11 | `query_at_ts` with a bad or future `ts` answers 400 | bunvex chose clearer errors; Convex answers 500 | **pending owner** (DV-314, draft #300): recommended, keep 400 |
+| H12 | The client header is not validated (`InvalidClientVersion`, `ClientVersionUnsupported`, deprecation headers) | the deprecation headers' names hold "convex" | **pending owner** (DV-315, draft #300): recommended, validate as Convex (400s), deprecation headers as `x-bunvex-*` |
 | H13 | Error frames | source maps | DV-76 (decided: later) |
 
 ## 5. Tests
