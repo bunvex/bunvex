@@ -8,6 +8,7 @@ import { OptimisticQueryResults } from "../src/optimistic-updates.ts";
 import { RemoteQuerySet } from "../src/remote-query-set.ts";
 import { RequestManager } from "../src/request-manager.ts";
 import { canonicalizeUdfPath, serializePathAndArgs } from "../src/udf-path.ts";
+import { VERSION } from "../src/version.ts";
 
 const logger = instantiateNoopLogger({ verbose: false });
 const version = (querySet: number, ts: bigint, identity = 0): v1.StateVersion => ({ querySet, ts, identity });
@@ -185,7 +186,7 @@ describe("BaseBunvexClient over a fake socket", () => {
     const c = make();
     c.subscribe("m:q", {});
     const ws = FakeSocket.last;
-    expect(ws.url).toBe("ws://example.test/api/0.0.0/sync");
+    expect(ws.url).toBe("ws://example.test/api/1.46.0/sync");
     ws.open();
     expect(ws.sent.map((m) => m.type)).toEqual(["Connect", "ModifyQuerySet"]);
     expect(ws.sent[0]).toMatchObject({
@@ -224,4 +225,9 @@ describe("BaseBunvexClient over a fake socket", () => {
     });
     void c.close();
   });
+});
+
+test("the client announces the Convex client version it follows, new enough for transition chunks (DV-225)", () => {
+  // A server sends `TransitionChunk`s to npm clients from 1.28.0 (Convex's MIN_NPM_VERSION_FOR_TRANSITION_CHUNKS).
+  expect(Bun.semver.order(VERSION, "1.28.0")).toBeGreaterThanOrEqual(0);
 });
