@@ -2,7 +2,7 @@
 // index_range_builder.ts, filter_builder.ts): what `ctx.db` is to an app whose data model is known — tables,
 // ids, documents, index names and fields, field paths. Types only: at run time `ctx.db` is the engine's `Tx`,
 // which accepts every one of these calls.
-import type { GenericId, Value } from "@bunvex/values";
+import type { CommitTsPlaceholder, GenericId, Value } from "@bunvex/values";
 import type {
   DocumentByInfo,
   DocumentByName,
@@ -208,6 +208,12 @@ type WithoutSystemFieldsLoose<Document> =
 
 /** Convex's `GenericDatabaseWriter`: `ctx.db` in a mutation. */
 export interface GenericDatabaseWriter<DataModel extends GenericDataModel> extends GenericDatabaseReader<DataModel> {
+  /**
+   * Convex's `db.vars` (STUDY-53): `commitTs`, the placeholder for this transaction's commit timestamp. Write
+   * it in a document (or return it); it resolves at the commit to an int64 (`bigint`) of nanoseconds,
+   * ordered by commit order. Read back within the mutation it is still the placeholder.
+   */
+  readonly vars: { readonly commitTs: CommitTsPlaceholder };
   insert<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     value: WithoutSystemFields<DocumentByName<DataModel, TableName>>,

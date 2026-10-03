@@ -1,5 +1,6 @@
 // Package @bunvex/core — the engine. See ARCHITECTURE.md for what lives where.
 
+export { aes128GcmSivOpen, aes128GcmSivSeal } from "./aead.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
   CRON_JOB_LOGS_TABLE,

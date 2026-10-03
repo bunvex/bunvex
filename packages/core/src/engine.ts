@@ -3,7 +3,16 @@
 // exposing functions is the server's job (@bunvex/server).
 
 import { hostname } from "node:os";
-import { checkValue, fromJsonValue, type GenericValidator, toJsonValue, type Value, v } from "@bunvex/values";
+import {
+  checkValue,
+  fromJsonValue,
+  type GenericValidator,
+  hasCommitTs,
+  resolveCommitTs,
+  toJsonValue,
+  type Value,
+  v,
+} from "@bunvex/values";
 import {
   activeTables,
   bootstrapCatalog,
@@ -45,6 +54,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+import type { CursorCodec } from "./cursor.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -435,6 +445,16 @@ export class Engine {
   derivedKey(purpose: string, length = 16): Uint8Array {
     if (!this.instanceSecret) throw new Error("derivedKey: the engine is not initialized");
     return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
+  }
+
+  private cursorCodecCache: CursorCodec | null = null;
+  /** Pagination cursors' key (`derivedKey("cursor")`, as Convex's keybroker) and the instance they name. */
+  private readonly cursorCodecOf = (): CursorCodec => this.cursorCodec;
+  get cursorCodec(): CursorCodec {
+    const c = this.cursorCodecCache;
+    if (c && c.instanceName === this.instanceName) return c;
+    this.cursorCodecCache = { key: this.derivedKey("cursor"), instanceName: this.instanceName };
+    return this.cursorCodecCache;
   }
 
   /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
@@ -1042,7 +1062,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
@@ -1227,7 +1247,7 @@ export class Engine {
     const now = preciseClock(); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     tx.retention = this.retention;
-    tx.instanceSecret = this.instanceSecret;
+    tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
@@ -1325,8 +1345,13 @@ export class Engine {
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
-      const { tx, value } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
-      if (!tx.hasWrites) return withTs ? { value, ts: tx.snapshot } : value;
+      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
+      const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
+      if (!tx.hasWrites) {
+        const value = resolved(tx.snapshot);
+        return withTs ? { value, ts: tx.snapshot } : value;
+      }
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({
@@ -1336,7 +1361,16 @@ export class Engine {
           idx,
           source,
           onVisible: this.withPendingCheck(tx),
+          ...(tx.hasCommitTs
+            ? {
+                atTs: (ts: number) => {
+                  tx.resolveCommitTs(BigInt(ts) * 1000n);
+                  return tx.toWrites();
+                },
+              }
+            : {}),
         });
+        const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
         for (const [name, c] of tx.createdTables)

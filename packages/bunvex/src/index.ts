@@ -1,2 +1,2 @@
-// bunvex — import from a subpath: bunvex/server, bunvex/values (bunvex/browser and bunvex/react later).
+// bunvex — import from a subpath: bunvex/server, bunvex/values, bunvex/browser, bunvex/react.
 export {};
