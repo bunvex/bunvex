@@ -886,9 +886,9 @@ export class Engine {
       const kinds = [
         {
           now: before?.searchIndexes ?? {},
-          then: declared?.searchIndexes ?? {},
+          pushed: declared?.searchIndexes ?? {},
           nowStaged: new Set(before?.stagedSearch ?? []),
-          thenStaged: new Set(declared?.stagedSearch ?? []),
+          pushedStaged: new Set(declared?.stagedSearch ?? []),
           spec: (d: { searchField: string; filterFields: string[] }) => ({
             type: "search",
             searchField: d.searchField,
@@ -899,9 +899,9 @@ export class Engine {
         },
         {
           now: before?.vectorIndexes ?? {},
-          then: declared?.vectorIndexes ?? {},
+          pushed: declared?.vectorIndexes ?? {},
           nowStaged: new Set(before?.stagedVector ?? []),
-          thenStaged: new Set(declared?.stagedVector ?? []),
+          pushedStaged: new Set(declared?.stagedVector ?? []),
           spec: (d: { vectorField: string; dimensions: number; filterFields: string[] }) => ({
             type: "vector",
             vectorField: d.vectorField,
@@ -914,11 +914,11 @@ export class Engine {
       ] as const;
       for (const k of kinds) {
         const nowAll = k.now as Record<string, never>;
-        const thenAll = k.then as Record<string, never>;
-        for (const [name, d] of Object.entries(thenAll)) {
+        const pushedAll = k.pushed as Record<string, never>;
+        for (const [name, d] of Object.entries(pushedAll)) {
           const spec = k.spec(d);
           const old = nowAll[name];
-          const staged = k.thenStaged.has(name);
+          const staged = k.pushedStaged.has(name);
           if (old === undefined || JSON.stringify(k.spec(old)) !== JSON.stringify(spec)) {
             push(table, name, spec, staged, "added", true);
             if (old !== undefined) push(table, name, k.spec(old), k.nowStaged.has(name), "dropped", false);
@@ -927,7 +927,7 @@ export class Engine {
           else push(table, name, spec, staged, "identical", !staged && !k.ready(name));
         }
         for (const [name, d] of Object.entries(nowAll))
-          if (thenAll[name] === undefined) push(table, name, k.spec(d), k.nowStaged.has(name), "dropped", false);
+          if (pushedAll[name] === undefined) push(table, name, k.spec(d), k.nowStaged.has(name), "dropped", false);
       }
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.

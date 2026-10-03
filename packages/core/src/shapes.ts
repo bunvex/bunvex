@@ -457,7 +457,9 @@ export function removeValue(shape: Shape, value: Value): Shape {
       const i = v.variants.findIndex((s) => isSubtype(shapeOf(value), s));
       if (i < 0) throw new ShapeRemovalError("value not in any variant");
       const b = new UnionBuilder();
-      v.variants.forEach((s, j) => b.push(j === i ? removeValue(s, value) : s));
+      v.variants.forEach((s, j) => {
+        b.push(j === i ? removeValue(s, value) : s);
+      });
       return b.build();
     }
     case "Array": {
