@@ -1,6 +1,6 @@
 # STUDY-52 — Table shape inference
 
-- **Status:** decision pending (owner): A1–A2; PR 1 (draft) implements the recommendations
+- **Status:** accepted: A1–A2 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03
 - **Related:** [STUDY-12](STUDY-12-dashboard.md) (the dashboard's schema views), [STUDY-35](STUDY-35-push.md)
 
@@ -79,5 +79,5 @@ Nothing from functions. Operators see `/api/shapes2` and the dashboard's generat
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| A1 | Shapes are exact and current: computed at one snapshot when asked (PR 1), then kept per commit (PR 2), never `Unknown` while warming up | Convex's checkpoints save work in a large multi-tenant backend; bunvex has one deployment in memory. **Possible to match**; recommended not to: the dashboard shows the truth | DV-265, pending |
-| A2 | After deletes, PR 1's shapes narrow back (they are recomputed); Convex's widened variants stay widened until their count is 0 | A consequence of A1 in PR 1. PR 2 keeps Convex's no-narrowing rule | DV-266, pending |
+| A1 | Shapes are exact and current: computed at one snapshot when asked (PR 1), then kept per commit (PR 2), never `Unknown` while warming up | Convex's checkpoints save work in a large multi-tenant backend; bunvex has one deployment in memory. **Possible to match**; recommended not to: the dashboard shows the truth | DV-265, accepted (owner, 2026-10-03) |
+| A2 | After deletes, PR 1's shapes narrow back (they are recomputed); Convex's widened variants stay widened until their count is 0 | A consequence of A1 in PR 1. PR 2 keeps Convex's no-narrowing rule | DV-266, accepted (owner, 2026-10-03) |
