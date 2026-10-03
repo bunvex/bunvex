@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { OutOfRetentionError } from "../src/committer.ts";
+import { PersistenceReadError } from "../src/determinism.ts";
 import { Engine } from "../src/engine.ts";
 import { DanglingReferenceError, type Persistence, type ScanDocs } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
@@ -61,9 +62,28 @@ describe("an index entry without its document (PERSIST-01 C15)", () => {
     (e.persistence as Persistence & ScanDocs).scanDocs = async (_t, index, _lo, _hi, ts) => {
       throw new DanglingReferenceError(index, "x", ts, true);
     };
+    // a store failure under a function is a system error (#273): the store's error is its cause
     const err = await e.query((db) => db.query("items").collect()).catch((x) => x);
-    expect(err).toBeInstanceOf(DanglingReferenceError);
+    expect(err).toBeInstanceOf(PersistenceReadError);
+    expect((err as Error).cause).toBeInstanceOf(DanglingReferenceError);
     expect(String(err)).toContain("Index reference to deleted document");
+  });
+
+  test("a remote store's reference that retention pruned during the read is out of retention, not a store failure", async () => {
+    let pruned = false;
+    const { e } = await seeded(3, (p) => p);
+    (e.persistence as Persistence & ScanDocs).scanDocs = async (_t, index, _lo, _hi, ts) => {
+      pruned = true;
+      throw new DanglingReferenceError(index, "x", ts, true);
+    };
+    e.retention = {
+      check(ts: number) {
+        if (pruned) throw new OutOfRetentionError(ts, ts + 1, `out of the window: ${ts}`);
+      },
+      stop: async () => {},
+    } as unknown as Retention;
+    const err = await e.query((db) => db.query("items").collect()).catch((x) => x);
+    expect(err).toBeInstanceOf(OutOfRetentionError);
   });
 
   test("a document pruned by retention during the read is a snapshot out of the window, not a corrupt store", async () => {

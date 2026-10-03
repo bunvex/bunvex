@@ -146,7 +146,9 @@ export async function storeCall<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
     value = await pausingUserTime(async () => outsideExecution(fn));
   } catch (e) {
-    const failure = new PersistenceReadError(e);
+    // Out of retention stays itself (a try-again error, Convex's OutOfRetention); any other store failure is
+    // a PersistenceReadError. Either way the function cannot catch it. (By name: committer.ts imports this.)
+    const failure = e instanceof Error && e.name === "OutOfRetentionError" ? e : new PersistenceReadError(e);
     failExecution(failure);
     throw failure;
   }

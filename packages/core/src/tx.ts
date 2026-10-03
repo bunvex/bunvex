@@ -841,7 +841,16 @@ export class Tx {
     const p = this.persistence as Persistence & Partial<ScanDocs>;
     if (p.scanDocs) {
       // Remote persistence fuses the index range and the document fetches into one round trip.
-      const rows = await storeCall(() => p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc));
+      const rows = await storeCall(async () => {
+        try {
+          return await p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
+        } catch (e) {
+          // As snapshotRange does for the engine path: a reference retention pruned during the read is a
+          // snapshot too old. Checked here, before storeCall makes the failure a PersistenceReadError.
+          if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
+          throw e;
+        }
+      });
       for (const j of rows) this.recordDoc(j);
       this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
