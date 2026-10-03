@@ -1,6 +1,6 @@
 # STUDY-58 — App metrics (`/api/app_metrics/*`)
 
-- **Status:** implemented; decision pending (owner): DV-302
+- **Status:** implemented; DV-302 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03; HdrHistogram_rust `main` (Convex
   pins `hdrhistogram = "7.5.4"`)
 - **Related:** [STUDY-47](STUDY-47-log-streaming.md) (the function log the metrics are fed from), STUDY-12
@@ -131,7 +131,7 @@ themselves see nothing.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-302 | `function_concurrency`: actions and HTTP actions share one permit pool (STUDY-31), reported as two gauges from that pool's counts. Queries and mutations have no limiter, so `running` is the number in flight and `queued` is always 0. There are no `node` gauges (a `"use node"` action runs in the same pool). | bunvex's limiters are not Convex's. "Ainda não fizemos": per-type limiters were never built. | pending |
+| DV-302 | `function_concurrency`: actions and HTTP actions share one permit pool (STUDY-31), reported as two gauges from that pool's counts. Queries and mutations have no limiter, so `running` is the number in flight and `queued` is always 0. There are no `node` gauges (a `"use node"` action runs in the same pool). | bunvex's limiters are not Convex's. "Ainda não fizemos": per-type limiters were never built. | accepted (owner, 2026-10-03) |
 
 Not divergences:
 
