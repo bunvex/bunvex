@@ -15,8 +15,18 @@
 // The pushed version waits in memory between start_push and finish_push (Convex echoes start_push's answer
 // back; a restart in between makes finish_push answer RaceDetected and the CLI push again).
 import { parseAuthConfig } from "@bunvex/auth";
-import { type Engine, type SchemaDefinition, SchemaPushError, schemaToJson } from "@bunvex/core";
+import {
+  type AuditLogActor,
+  type Engine,
+  insertAuditLogEvents,
+  SCHEMAS_TABLE,
+  type SchemaDefinition,
+  SchemaPushError,
+  SYSTEM_ACTOR,
+  schemaToJson,
+} from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
+import { auditEvents } from "./audit-log.ts";
 import {
   AUTH_CONFIG_MODULE,
   readPackage,
@@ -29,6 +39,7 @@ import {
 import { type AnalyzedModule, CodeVersion, InvalidModulesError, type ModuleSource } from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
+import { authAuditDiff, indexAuditDiff } from "./push-audit.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
 export class PushError extends Error {
@@ -75,6 +86,8 @@ export type PushDeps = {
   install: (version: CodeVersion, auth: unknown[] | null, authModule: ModuleSource | null) => Promise<unknown>;
   /** The deployment's variables and the built-ins, as `auth.config` sees them (STUDY-37). */
   deploymentEnv: () => Promise<Record<string, string>>;
+  /** The auth providers in force, for the push's audit-log event. */
+  currentAuth?: () => unknown[] | null;
 };
 
 /** The variables, canonically, to tell whether they changed during a push. */
@@ -182,6 +195,38 @@ export class PushService {
     }
   }
 
+  /**
+   * Convex's `evaluate_schema` (STUDY-56): the push's schema only (no function module is analyzed), and what
+   * pushing it would do to the indexes and the tables — the CLI's large-index and slow-validation checks.
+   */
+  async evaluateSchema(req: StartPushRequest) {
+    if (req.componentDefinitions?.length)
+      throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
+    let schema = emptySchema;
+    const schemaModule = req.appDefinition?.schema;
+    if (schemaModule) {
+      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
+      if (!(s?.tables instanceof Map))
+        throw new PushError(
+          "InvalidSchema",
+          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
+        );
+      schema = s;
+    }
+    const p = await this.deps.engine.evaluateSchema(schema);
+    return {
+      componentSchemaEvaluations: {
+        "": {
+          definitionPath: "",
+          schemaValidation: schemaModule ? p.schemaValidation : false,
+          tables: p.tables,
+          indexes: p.indexes,
+        },
+      },
+      newComponentDefinitions: [],
+    };
+  }
+
   async startPush(req: StartPushRequest) {
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
@@ -279,7 +324,14 @@ export class PushService {
   }
 
   /** Convex's `finish_push`: one commit makes everything live. */
-  async finishPush(req: { startPush?: { schemaChange?: { schemaIds?: Record<string, string> } }; dryRun?: boolean }) {
+  async finishPush(
+    req: { startPush?: { schemaChange?: { schemaIds?: Record<string, string> } }; dryRun?: boolean; message?: unknown },
+    actor: AuditLogActor = SYSTEM_ACTOR,
+  ) {
+    // Convex's `PushMessage`: at most 1024 bytes.
+    const message = typeof req.message === "string" ? req.message : null;
+    if (message !== null && new TextEncoder().encode(message).length > 1024)
+      throw new PushError("PushMessageTooLong", "Push messages can be at most 1024 bytes long");
     const schemaId = req.startPush?.schemaChange?.schemaIds?.[""];
     const p = schemaId ? this.pending.get(schemaId) : undefined;
     if (!p) throw new PushError("RaceDetected", "Schema was overwritten by another push.");
@@ -287,7 +339,25 @@ export class PushService {
     // As Convex: the push was evaluated with variables that must still be the deployment's.
     if (fingerprint(await this.deps.deploymentEnv()) !== p.env)
       throw new PushError("RaceDetected", "Environment variables have changed during push");
-    const before = new Set(((await storedModules(this.deps.engine))?.rows ?? []).map((r) => r.path));
+    const stored = await storedModules(this.deps.engine);
+    const before = new Set((stored?.rows ?? []).map((r) => r.path));
+    const after = new Set(p.version.modules.keys());
+    const moduleDiff = {
+      added: [...after].filter((m) => !before.has(m) && !m.startsWith("_deps/")),
+      removed: [...before].filter((m) => !after.has(m) && !m.startsWith("_deps/")),
+    };
+    // The schemas as `_schemas` stores them (JSON), before the push's commit replaces the active one.
+    const schemaRows = (await this.deps.engine.query((db) =>
+      db.asSystem(() => db.query(SCHEMAS_TABLE).collect()),
+    )) as unknown as {
+      _id: string;
+      state: string;
+      schema: string;
+    }[];
+    const previousSchema = schemaRows.find((r) => r.state === "active")?.schema ?? null;
+    const nextSchema = schemaRows.find((r) => r._id === p.schemaId)?.schema ?? null;
+    const activeSchema = this.deps.engine.schema;
+    const authDiff = authAuditDiff(this.deps.currentAuth?.() ?? null, p.auth);
     const pkg = await writePackage(this.deps.modulesStore, p.authModule ? [...p.modules, p.authModule] : p.modules);
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff };
@@ -295,10 +365,28 @@ export class PushService {
     try {
       // Analysis checked the targets (Convex's `validate_cron_jobs`) and kept the specs.
       const specs = new Map(Object.entries(p.version.analysis["crons.js"]?.cronSpecs ?? {}));
-      committed = (await this.deps.engine.commitSchemaPush(p.schemaId, async (db) => ({
-        unused: await writeCodeRows(db, pkg, p.version),
-        crons: (await this.deps.cronExecutor.applyIn(db, specs)) as CronDiff,
-      }))) as typeof committed;
+      committed = (await this.deps.engine.commitSchemaPush(p.schemaId, async (db) => {
+        const unused = await writeCodeRows(db, pkg, p.version);
+        const crons = (await this.deps.cronExecutor.applyIn(db, specs)) as CronDiff;
+        // Convex's `push_config_with_components`, in the push's commit.
+        await insertAuditLogEvents(
+          db,
+          [
+            auditEvents.pushConfigWithComponents({
+              authDiff,
+              create: !stored,
+              moduleDiff,
+              cronDiff: crons,
+              indexDiff: indexAuditDiff(activeSchema, p.schema),
+              schemaDiff:
+                previousSchema === nextSchema ? null : { previous_schema: previousSchema, next_schema: nextSchema },
+              message,
+            }),
+          ],
+          actor,
+        );
+        return { unused, crons };
+      })) as typeof committed;
     } catch (e) {
       await this.deps.modulesStore.delete(pkg.storageKey).catch(() => {});
       if (e instanceof SchemaPushError)
@@ -313,11 +401,6 @@ export class PushService {
     await this.deps.install(p.version, p.auth, p.authModule);
     this.deps.cronExecutor.refresh();
     for (const old of committed.value.unused) await this.deps.modulesStore.delete(old.storageKey).catch(() => {});
-    const after = new Set(p.version.modules.keys());
-    const moduleDiff = {
-      added: [...after].filter((m) => !before.has(m) && !m.startsWith("_deps/")),
-      removed: [...before].filter((m) => !after.has(m) && !m.startsWith("_deps/")),
-    };
     return this.diff(p, moduleDiff, committed.indexDiff, committed.value.crons);
   }
 

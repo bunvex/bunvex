@@ -1,7 +1,12 @@
 // Database selection from the environment: bunvex's names, Convex's as aliases (DV-88) with Convex's
 // precedence (run_backend.sh:17-32), DO_NOT_REQUIRE_SSL as Convex reads it, and the URL naming the database
 // (DV-110). STUDY-25 L8. And the remote drivers' call timeouts (STUDY-25 L3) under Convex's names.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { v } from "@bunvex/values";
 import { openPersistence, persistenceConfigFromEnv, urlDatabase } from "../src/persistence.ts";
 
 const PG = "postgres://u@db.example:5432/app";
@@ -120,5 +125,35 @@ describe("call timeouts (STUDY-25 L3)", () => {
   test("a driver selected by Convex's URL name reads its timeout too", () => {
     expect(cfg({ POSTGRES_URL: PG, POSTGRES_TIMEOUT_SECONDS: "4" }).timeoutMs).toBe(4000);
     expect(cfg({ MYSQL_URL: MY, MYSQL_TIMEOUT_SECONDS: "3" }).timeoutMs).toBe(3000);
+  });
+});
+
+describe("opening the local drivers", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+  const schema = defineSchema({ notes: defineTable(v.any()) });
+  const roundTrip = async (kind: string, file: string) => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), `bunvex-${kind}-`)), "nested", "data");
+    dirs.push(dataDir);
+    const first = await new Engine(schema, await openPersistence({ kind, dataDir })).init();
+    await first.mutation((db) => db.insert("notes", { body: kind }));
+    await first.close();
+    // The data directory is created, and a durable store is read back by the next process.
+    expect(existsSync(join(dataDir, file))).toBe(true);
+    const again = await new Engine(schema, await openPersistence({ kind, dataDir })).init();
+    expect((await again.query((db) => db.query("notes").collect())).map((d) => d.body)).toEqual([kind]);
+    await again.close();
+  };
+
+  test("memory keeps its log in the data directory", () => roundTrip("memory", "bunvex.log"));
+  test("sqlite keeps its file in the data directory", () => roundTrip("sqlite", "bunvex.sqlite"));
+
+  test("an unknown driver is refused, listing the known ones; MongoDB needs a URL", async () => {
+    await expect(openPersistence({ kind: "oracle" })).rejects.toThrow(
+      "unknown PERSISTENCE=oracle (memory, sqlite, postgres, mysql, mongodb)",
+    );
+    await expect(openPersistence({ kind: "mongodb" })).rejects.toThrow(/^PERSISTENCE=mongodb needs PERSISTENCE_URL$/);
   });
 });

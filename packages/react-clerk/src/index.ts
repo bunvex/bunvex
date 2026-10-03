@@ -1,4 +1,4 @@
-// Package @bunvex/react-clerk — the React client authenticated with Clerk (STUDY-47), the counterpart of
+// Package @bunvex/react-clerk — the React client authenticated with Clerk (STUDY-54), the counterpart of
 // Convex's `convex/react-clerk` (`ConvexProviderWithClerk`): Clerk's `useAuth` turned into the
 // `{isLoading, isAuthenticated, fetchAccessToken}` that `BunvexProviderWithAuth` takes.
 import { BunvexProviderWithAuth } from "@bunvex/react";
