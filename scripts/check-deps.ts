@@ -50,6 +50,8 @@ const ALLOWED: Record<string, string[]> = {
     "protocol",
     "values",
   ],
+  // Test-only, never published: Jepsen-style consistency runs against a server process (STUDY-57).
+  jepsen: ["client", "server", "core", "values"],
   // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
   bunvex: ["server", "values", "client", "react", "nextjs", "cli", "core", "persistence"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
