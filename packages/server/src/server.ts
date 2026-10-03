@@ -50,6 +50,7 @@ import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePack
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
+import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import {
   clientError,
   FunctionPathError,
@@ -709,6 +710,33 @@ export function createServer(opts: ServerOptions) {
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
     }
+    const dataSyncRoute = DATA_SYNC_ROUTE.exec(url.pathname);
+    if (dataSyncRoute) {
+      const [, kind, id, fromDeltas] = dataSyncRoute;
+      const ok =
+        (kind === "sync" && id === undefined && req.method === "POST") ||
+        (kind === "sync" && id !== undefined && req.method === "GET") ||
+        (kind === "list_active_syncs" && id === undefined && req.method === "GET") ||
+        (fromDeltas !== undefined && req.method === "POST");
+      if (ok) {
+        // Convex's order: the streaming export entitlement (always on here), then `ViewData` (STUDY-69).
+        functions.requireOperation(caller, "ViewData");
+        try {
+          const text =
+            fromDeltas !== undefined
+              ? await cursorFromDeltas(engine, req)
+              : kind === "list_active_syncs"
+                ? await listActiveSyncs(engine, url.searchParams)
+                : id !== undefined
+                  ? await activeSync(engine, decodeURIComponent(id))
+                  : await dataSync(engine, req, caller);
+          return jsonText(text);
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          throw e;
+        }
+      }
+    }
     const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
     if (streaming) {
       const route = streaming[1]!;
@@ -898,6 +926,7 @@ export function createServer(opts: ServerOptions) {
         METRICS_ROUTE.test(url.pathname) ||
         LOG_STREAM_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
+        DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
         USAGE_LIMIT_ROUTE.test(url.pathname) ||

@@ -125,6 +125,7 @@ const WIRE_NAMES: Record<string, string> = {
   convex_json: "DV-307: streaming export `format` (legacy alias)",
   convex_clean_json: "DV-307: streaming export `format` (legacy alias)",
   actionComputeConvexGbHours: "DV-308: usage limit metric",
+  "convex-client": "STUDY-69: the client header connectors send (`Convex-Client: fivetran-export-x.y.z`)",
 };
 const wireNameRe = new RegExp(`(["'\`])(?:${Object.keys(WIRE_NAMES).join("|")})\\1`, "g");
 

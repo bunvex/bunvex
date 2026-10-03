@@ -24,6 +24,7 @@ import {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DATA_SYNC_PROGRESS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -564,6 +565,14 @@ export class Engine {
         document: v.any(),
       },
       { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
+      {
+        name: DATA_SYNC_PROGRESS_TABLE,
+        indexes: {
+          by_sync_id: ["syncId", "_creationTime"],
+          by_last_updated: ["lastUpdatedMs", "_creationTime"],
+        },
+        document: v.any(),
+      },
       {
         name: USAGE_LIMITS_TABLE,
         indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },

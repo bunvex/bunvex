@@ -102,7 +102,7 @@ function docJson(table: string, tsNs: bigint, deleted: boolean | null, doc: Reco
 // ---------------------------------------------------------------- selection
 
 type Inclusion = "included" | "excluded";
-type Columns = Record<string, Inclusion> & { _other: Inclusion };
+export type Columns = Record<string, Inclusion> & { _other: Inclusion };
 type Tables = Record<string, Columns | "excluded"> & { _other: Inclusion | Columns };
 /** Convex's `Selection`: per component path (`""` the root), per table, per column. */
 export type Selection = Record<string, Tables | Inclusion> & { _other: Inclusion };
@@ -143,7 +143,7 @@ function checkSelection(raw: unknown): Selection {
 }
 
 /** Whether the selection takes `table` of the root component, and which of its columns. */
-function tableSelection(s: Selection, table: string): Columns | null {
+export function tableSelection(s: Selection, table: string): Columns | null {
   const comp = s[""] ?? s._other;
   if (comp === "excluded") return null;
   if (comp === "included") return { _other: "included" } as Columns;
@@ -156,7 +156,7 @@ function tableSelection(s: Selection, table: string): Columns | null {
   return cols;
 }
 
-function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, Value> {
+export function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, Value> {
   if (cols._other === "included" && Object.keys(cols).length === 1) return doc;
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(doc)) if (k === "_id" || (cols[k] ?? cols._other) === "included") out[k] = v;
@@ -168,7 +168,7 @@ function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, 
 type Deps = { engine: Engine };
 
 /** The user tables a stream reads: active and hidden (an import's), not system ones, by tablet. */
-function streamedTables(engine: Engine): TableDef[] {
+export function streamedTables(engine: Engine): TableDef[] {
   const c = engine.catalog;
   return [...c.tables.values(), ...c.hidden.values()]
     .filter((t) => !t.name.startsWith("_"))
