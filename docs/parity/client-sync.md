@@ -253,8 +253,8 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| Max function args 16 MiB (30 MB JSON at the edge) | `crates/common/src/knobs.rs` (`FUNCTION_MAX_ARGS_SIZE`, `USHER_MAX_JSON_ARGS_SIZE`) | partial | Implicitly limited by `maxPayloadLength` 8 MiB on WS; unlimited on HTTP. |
-| Max function result 16 MiB | `crates/common/src/knobs.rs` (`FUNCTION_MAX_RESULT_SIZE`) | missing | — |
+| Max function args 16 MiB (30 MB JSON at the edge) | `crates/common/src/knobs.rs` (`FUNCTION_MAX_ARGS_SIZE`, `USHER_MAX_JSON_ARGS_SIZE`) | done (STUDY-64 §1.7) | Checked after the "must be an object" check and before the validator, on every transport and nested call, with Convex's message; knob `FUNCTION_MAX_ARGS_SIZE`. The WebSocket frame cap is Convex's 16 MiB (was 8 MiB). The edge's 30 MB JSON cap is Usher's (n/a). No 80 % warning yet. |
+| Max function result 16 MiB | `crates/common/src/knobs.rs` (`FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64 §1.7) | Queries, mutations (nothing written) and actions, at any nesting depth (a nested failure is catchable); checked before the returns validator, as Convex; Convex's message; knob `FUNCTION_MAX_RESULT_SIZE`. `_system` functions' 24 MiB not applied (bunvex's own system functions); no 80 % warning yet. |
 | Per-transaction read limits (32 000 rows, 16 MiB, 4096 read-set intervals) that drive the pagination `maximumRowsRead/BytesRead` split logic | `crates/common/src/knobs.rs` | missing | Engine area; listed because the client reacts to it. |
 | Pending ops per socket (1000); WS mutation timeout (60 s) | `crates/sync/src/worker.rs` | missing | See §5. |
 | Arg-size metrics per ModifyQuerySet/Mutation/Action | `crates/sync/src/worker.rs` | missing | Observability only. |

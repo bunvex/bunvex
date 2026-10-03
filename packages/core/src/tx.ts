@@ -171,7 +171,7 @@ export const TRANSACTION_MAX_NUM_USER_WRITES = 16_000;
 export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   const units = ["B", "KiB", "MiB", "GiB"];
   let i = 0;
   let x = n;

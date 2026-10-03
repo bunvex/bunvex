@@ -257,6 +257,7 @@ export {
 export { SystemReader } from "./system-reader.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
+  formatBytes,
   ImportIdError,
   type PaginationOptions,
   type PaginationResult,

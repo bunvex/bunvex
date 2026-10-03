@@ -821,7 +821,7 @@ export function createServer(opts: ServerOptions) {
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
-      maxPayloadLength: 8 * 1024 * 1024,
+      maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
       idleTimeout: 960,
       open(ws) {
         ws.data.session.open(ws);

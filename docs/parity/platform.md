@@ -391,7 +391,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Read-set intervals | 4096, warning at 3072 (`TRANSACTION_MAX_READ_SET_INTERVALS`) | missing | |
 | Query / mutation user time | 1 s (`DATABASE_UDF_USER_TIMEOUT_SECONDS`); syscall time 15 s | missing | bunvex has no timeouts. |
 | Action timeout | V8 1800 s (docs say 10 min for cloud); Node 600 s | missing | |
-| Arguments / return value size | 16 MiB each (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | missing | |
+| Arguments / return value size | 16 MiB each (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64) | Same knobs. |
 | Document size / nesting | 1 MiB / 16 (`crates/common/document.rs`) | missing | |
 | Object fields / array length | 1024 / 8192 (`crates/value`) | missing | |
 | Identifier length | 64 for fields, tables and indexes; 1024 for nested keys | missing | |
@@ -403,7 +403,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | missing | Waiting for a slot times out after 5 s for queries/mutations and 10 s for actions. |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
 | Write throughput | 4 MiB/s (`MAX_BYTES_WRITTEN_PER_SECOND`) | missing | |
-| HTTP server | timeout 300 s, 1024 concurrent requests | missing | bunvex uses `idleTimeout` 120 s and an 8 MiB WebSocket payload limit. |
+| HTTP server | timeout 300 s, 1024 concurrent requests | missing | bunvex uses `idleTimeout` 120 s and a 16 MiB WebSocket payload limit (Convex's frame cap, STUDY-64). |
 | Log lines | 256 per function, 32 KiB each | missing | |
 | Scheduling / env vars / search / vector limits | see sections 4, 6, 7, 10 | missing | |
 
