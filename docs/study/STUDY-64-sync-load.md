@@ -10,6 +10,8 @@
   - [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md): the 1 s user and 15 s system time limits.
   - [STUDY-24](STUDY-24-horizontal-scaling.md): Usher and the remote subscription stream (why §1.6 does not apply).
   - Parity rows: [client-sync.md](../parity/client-sync.md) §4, §5, §6 and §16.
+  - Implementation, one PR per concern: #284 (mutation timeout and caps), #285 (single flight), #286 (rerun
+    concurrency and retries), #287 (W0 fix, W1 pending), #280 (result and argument sizes).
 
 This study covers the parts of Convex's sync worker that only matter when something is slow or failing:
 a mutation that never finishes, a client that reads slower than the server writes, a query that hits a
@@ -253,7 +255,9 @@ reason. Convex never drops a frame.
 - **Sizes (§1.7).** `Functions.checkReturns` (every query, mutation and action, at any nesting depth)
   fails a result over 16 MiB with Convex's message; `checkArgs` fails arguments over 16 MiB before the
   validator. Same knob names (`FUNCTION_MAX_RESULT_SIZE`, `FUNCTION_MAX_ARGS_SIZE`). The WebSocket frame
-  cap goes from 8 MiB to Convex's 16 MiB.
+  cap goes from 8 MiB to Convex's 16 MiB. The size is checked before the returns validator, as Convex's
+  (`deserialize_udf_result` in the isolate, then `ValidatedUdfOutcome::new`). Not covered: the 24 MiB limit
+  of bunvex's own `_system` functions (they do not go through `checkReturns`), and the 80 % warnings.
 
 ## 4. Divergences
 
