@@ -37,11 +37,20 @@ export {
 export type { Logger } from "./logging.ts";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./optimistic-updates.ts";
 export {
+  type ExtendedTransition,
+  type PaginatedBaseClient,
+  PaginatedQueryClient,
+  type PaginatedQueryModification,
+  type SubscribeToPaginatedQueryOptions,
+} from "./paginated-query-client.ts";
+export {
   asPaginationResult,
+  type LoadMoreOfPaginatedQuery,
+  type PaginatedQueryResult,
   type PaginationOptions,
   type PaginationResult,
   type PaginationStatus,
 } from "./pagination.ts";
 export { BunvexClient, type BunvexClientOptions, type Unsubscribe } from "./simple-client.ts";
-export type { QueryToken } from "./udf-path.ts";
+export type { PaginatedQueryToken, QueryToken } from "./udf-path.ts";
 export { VERSION } from "./version.ts";

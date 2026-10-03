@@ -111,6 +111,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-139 | Crons passed to the server and diffed at startup | discovered in `convex/crons.ts` at push | no (same API) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S1](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-140 | `_scheduled_functions` is a real system table, projected to the public shape | virtual table over `_scheduled_jobs` | no | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S2](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-141 | Scheduled and cron runs' log lines go to the server's output until log streaming | function execution log | yes (dashboard logs) | See STUDY-30 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S3](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
+| DV-73 | Pagination cursors were signed (HMAC), not encrypted | As Convex's keybroker: the `InstanceCursor` proto sealed with AES-128-GCM-SIV under KBKDF(secret, "cursor"), deterministic, version 7, hex (`cursor.ts`); a cursor of another instance gets `Key is invalid for instance` | yes (cursors are opaque) | owner, 2026-10-01 (STUDY-17 D1: match Convex) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 | DV-142 | Cron `L-nW` (day of month) from certain Mondays: answered, the comparison taken as false | saffron underflows and the process aborts | yes (Convex crashes) | A crash is not behaviour to copy; every other saffron quirk is kept | owner, 2026-10-01 (accepted as recommended) | [STUDY-30 S4](../study/STUDY-30-scheduler-and-crons.md#4-divergences) |
 | DV-143 | HTTP router passed to `createServer({ http })`, checked at start | discovered in `convex/http.ts` at push | no (same API) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H1](../study/STUDY-31-http-actions.md#4-divergences) |
 | DV-144 | Generated request-id header `bunvex-request-id` | `convex-request-id` | yes (header name) | See STUDY-31 §4 | owner, 2026-10-01 (accepted as recommended) | [STUDY-31 H2](../study/STUDY-31-http-actions.md#4-divergences) |
@@ -190,6 +191,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-231 | The last query term always also matches as a prefix | only for clients from 1.6.1000 | no (every current client gets it) | no version gate needed | owner, 2026-10-02 (as recommended) | [STUDY-45 S6](../study/STUDY-45-text-search.md#4-divergences) |
 | DV-222 | The JSON parser's detail in import messages is JavaScript's ("Row N wasn't valid JSON: …", "Not valid JSON: …"); a CSV's invalid UTF-8 is "Failed to parse CSV row 1: invalid UTF-8" | serde_json's and the `csv` crate's wording | yes (message text) | the message structure is Convex's; matching the detail would mean a JSON parser of our own | owner, 2026-10-02 (as recommended) | [STUDY-42 X8](../study/STUDY-42-import-export.md#4-divergences) |
 | DV-224 | `bunvex data --component` is refused | prints a component's tables and documents | CLI only | bunvex has no components yet | owner, 2026-10-02 (as recommended) | [STUDY-43 D1](../study/STUDY-43-data-command.md#4-divergences) |
+| DV-250 | A page of a paginated query that failed (e.g. `InvalidCursor`) never escapes the paginated client's transition: the error reaches `onPaginatedUpdate_experimental`'s `onError` and `usePaginatedQuery_experimental` (reset, `status: "error"`, error boundary) | the failed page is read outside any `try` in the transition, so the error is thrown out of the WebSocket message handler: `onError` is never called and the hook never sees the error from a transition (checked with the official client) | yes (only when a page fails) | keep bunvex's: it is where Convex's own code means the error to go | owner, 2026-10-03 (as recommended) | [STUDY-26 P3](../study/STUDY-26-sync-client.md#83-divergences) |
 | DV-267 | A query run by a mutation (`ctx.runQuery`) sees `db.vars` | a query's reader has no `vars` | barely | Not done yet | owner, 2026-10-03 (as recommended) | [STUDY-53 T1](../study/STUDY-53-commit-timestamp.md#4-divergences) |
 | DV-268 | The commit timestamp token in arguments that refuse it gets bunvex's value error | "Field name $commitTs starts with '$', which is reserved." | yes (an error message) | Not done yet: PR 2 | owner, 2026-10-03 (as recommended) | [STUDY-53 T2](../study/STUDY-53-commit-timestamp.md#4-divergences) |
 
@@ -277,7 +279,6 @@ classed as bugs by their study; they are listed here because they change what op
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
-| DV-73 | Pagination cursors are signed (HMAC), not encrypted | encrypted (with the key broker, Phase 3) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 
 ## Pending owner decisions
 
@@ -307,6 +308,8 @@ DV-267–DV-268 (STUDY-53 T1–T2, the commit timestamp) were accepted as recomm
 
 DV-223 (STUDY-42 X9) was accepted as recommended (owner, 2026-10-02) and built in #216: it is in
 [Resolved to match Convex](#resolved-to-match-convex).
+
+DV-250 (STUDY-26 P3) was accepted as recommended (owner, 2026-10-03) and is in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
@@ -341,6 +344,6 @@ the owner decides to keep one as a difference, it gets a `DV` row.
 | [STUDY-12 L6](../study/STUDY-12-dashboard.md#73-divergences) | Dashboard logs: deployment events, usage and identity, "act as a user", run history, live runner results |
 | [STUDY-12 S2, H2](../study/STUDY-12-dashboard.md#93-divergences) | Dashboard: component picker; server-recorded events (pushes, index builds) |
 | [STUDY-26 R3](../study/STUDY-26-sync-client.md#73-divergences) | React: `usePreloadedQuery` (with `@bunvex/nextjs`); `usePaginatedQuery` and the auth helpers (STUDY-27) landed |
-| [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery` |
+| [STUDY-26 P2](../study/STUDY-26-sync-client.md#83-divergences) | ~~The non-React paginated client: `BunvexClient.onPaginatedUpdate_experimental`, `BunvexReactClient.watchPaginatedQuery`~~ — closed by STUDY-26 §8.4 (with `usePaginatedQuery_experimental`) |
 | [STUDY-26 H3](../study/STUDY-26-sync-client.md#93-divergences) | HTTP client `function(name, componentPath, args)` and `/api/function` (with components) |
 | [STUDY-27 A5](../study/STUDY-27-auth.md#4-divergences) | React: `BunvexProviderWithClerk` / `BunvexProviderWithAuth0` (after `BunvexProviderWithAuth`) |

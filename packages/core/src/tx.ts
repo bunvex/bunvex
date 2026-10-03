@@ -36,7 +36,7 @@ import {
   type TableMeta,
 } from "./catalog.ts";
 import type { Interval } from "./committer.ts";
-import { type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
+import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
 import { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -306,8 +306,10 @@ export class Tx {
     }
     return this.readList;
   }
-  /** The instance secret that signs pagination cursors (STUDY-17). */
-  instanceSecret = "";
+  /** Seals and opens pagination cursors (cursor.ts); set by the engine. */
+  cursorCodec: () => CursorCodec = () => {
+    throw new Error("pagination cursors need an initialized engine");
+  };
   /**
    * Reactive pagination's journal: the end cursor of this query's previous run (a subscription re-run
    * keeps its page boundary), and the one this run ends at.
@@ -850,7 +852,7 @@ export class Tx {
       hi: st.range.hi,
       desc: st.desc,
     });
-    const secret = this.instanceSecret;
+    const secret = this.cursorCodec();
     const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr ? decodeCursor(secret, endStr, fp) : null;
