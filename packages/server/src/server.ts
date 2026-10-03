@@ -832,6 +832,9 @@ export function createServer(opts: ServerOptions) {
       close(ws) {
         ws.data.session.close();
       },
+      drain(ws) {
+        ws.data.session.drained();
+      },
     },
     async fetch(req, srv) {
       const url = new URL(req.url);

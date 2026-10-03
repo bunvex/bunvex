@@ -120,6 +120,7 @@ async function setup(splay: Partial<SplayOptions> = {}) {
       const frames: Frame[] = [];
       s.open({
         send: (f: string) => frames.push({ at: timers.now(), m: v1.parseServerMessage(f) }),
+        getBufferedAmount: () => 0,
         close() {},
       } as never);
       s.message(
