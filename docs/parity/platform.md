@@ -114,7 +114,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 
 | Feature | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `searchIndex(name, {searchField, filterFields?, staged?})` | `npm/convex/server/schema.ts` | missing | ARCHITECTURE marks search D, open decision #4. Up to 16 filter fields. |
+| `searchIndex(name, {searchField, filterFields?, staged?})` | `npm/convex/server/schema.ts` | partial (STUDY-45) | Declared, staged or not, with Convex's push-time checks and messages (16 filter fields, deduplicated; one index per `(searchField, filterFields)`; names unique across kinds and not reserved; field paths; 64 indexes per table), the schema JSON's `searchIndexes` / `stagedSearchIndexes`, and the data model's types. Not yet built or queryable (PR 2). Not checked: that the fields exist in the document schema (Convex's `check_index_references`, for database indexes too). |
 | `withSearchIndex(i, q => q.search(f, text).eq(ff, v)…)` | `npm/convex/server/search_filter_builder.ts` | missing | One `.search`, up to 8 `.eq`. |
 | Tokenizer: split on whitespace and punctuation, lowercase, drop terms over 32 chars, no stemming | `crates/search/constants.rs` (`convex_en`) | missing | Needed for identical results. |
 | Query limits: 16 terms (extras dropped), prefix match on the last term, fuzzy removed | `crates/search/lib.rs`, `query.rs` | missing | Up to 16 prefix expansions per term, 64 unique terms. |
