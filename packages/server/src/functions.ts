@@ -17,6 +17,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
   stringifyValue,
+  TableReader,
   type Tx,
   type UserTimer,
   wallClock,
@@ -301,6 +302,8 @@ function readerView(db: Tx): Tx {
   return new Proxy(db, {
     get(target, prop) {
       if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      // `db.table(name)` gives a reader too (STUDY-66 §2).
+      if (prop === "table") return (name: string) => new TableReader(target, name);
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },

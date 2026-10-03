@@ -91,11 +91,16 @@ export type {
 } from "./data-model.ts";
 export type {
   BaseDatabaseReader,
+  BaseDatabaseReaderWithTable,
+  BaseTableReader,
+  BaseTableWriter,
   ExpressionOrValueOf,
   FieldTypeFromFieldPath,
   FilterBuilder,
   GenericDatabaseReader,
+  GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
   IndexRange,
   IndexRangeBuilder,
   LowerBoundIndexRangeBuilder,
@@ -255,6 +260,7 @@ export {
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   ImportIdError,

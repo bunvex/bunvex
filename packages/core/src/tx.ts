@@ -60,6 +60,7 @@ import {
 } from "./schema.ts";
 import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { SystemReader } from "./system-reader.ts";
+import { TableReader, TableWriter } from "./table-scope.ts";
 
 const ANY = v.any();
 
@@ -503,6 +504,14 @@ export class Tx {
   /** Convex's `db.system`: read access to the system tables apps may see (`_scheduled_functions`). */
   get system(): SystemReader {
     return new SystemReader(this);
+  }
+
+  /**
+   * Convex's `db.table(name)` (STUDY-66 §2): this database scoped to one table — a writer in a mutation, a
+   * reader in a query.
+   */
+  table(name: string): TableReader | TableWriter {
+    return this.writable ? new TableWriter(this, name) : new TableReader(this, name);
   }
 
   /**

@@ -6,6 +6,7 @@ import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "./catalog.ts";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
 import { type JobDoc, publicJob } from "./scheduled-jobs.ts";
 import type { Doc } from "./schema.ts";
+import { TableReader } from "./table-scope.ts";
 import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuery } from "./tx.ts";
 
 const PUBLIC_INDEXES = new Set(["by_id", "by_creation_time"]);
@@ -54,6 +55,11 @@ export class SystemReader {
   normalizeId(table: string, id: string): string | null {
     if (!VISIBLE[table]) return null;
     return this.tx.asSystemSync(() => this.tx.normalizeId(table, id));
+  }
+
+  /** `db.system.table(name)` (STUDY-66 §2): a reader of one system table. */
+  table(name: string): TableReader {
+    return new TableReader(this, name);
   }
 
   query(table: string): TxQuery {
