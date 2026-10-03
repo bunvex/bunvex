@@ -111,7 +111,7 @@ themselves see nothing.
     function, as the function log.
   - The name is the canonical path. An HTTP action uses the router's matched path (a prefix route's ends
     in `*`).
-  - Per-table rows come from the transaction's new `tableStats`, counted as Convex's `TableStats`.
+  - Per-table rows come from the transaction's new `tableStats`, counted as Convex's `TableStats`, system tables included. The run-state check (STUDY-63) counts its `_backend_state` row whether it scanned or used its cache.
 - **Subscription invalidations**:
   - The sync hub attributes each newly invalidated session query to the first overlapping write of the
     commit (`firstOverlap`): its write source and its index's table.
