@@ -9,6 +9,7 @@ import {
   checkEnvVarName,
   type Engine,
   failExecution,
+  formatBytes,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -336,8 +337,34 @@ function noteTx(db: Tx) {
   if (owner) owner.tx = db;
 }
 
+/** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
+export const FUNCTION_MAX_ARGS_SIZE = 1 << 24;
+export const FUNCTION_MAX_RESULT_SIZE = 1 << 24;
+
+/** A size limit from the environment (a non-negative integer of bytes), else Convex's default. */
+function sizeKnob(name: string, def: number, env: Record<string, string | undefined> = process.env): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name}: not a non-negative integer: ${raw}`);
+  return n;
+}
+
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
-const returned = (value: unknown): Outcome => ({ returnBytes: valueSize((value ?? null) as Value) });
+const returned = (value: unknown): Outcome => ({ returnBytes: sizeOfResult(value) });
+
+/**
+ * Results' sizes as `checkReturns` measured them, so the function log does not walk a large result twice
+ * (an object or array is measured once; the size of a 1 MiB result is a few ms).
+ */
+const resultSizes = new WeakMap<object, number>();
+function sizeOfResult(value: unknown): number {
+  if (typeof value === "object" && value !== null) {
+    const known = resultSizes.get(value);
+    if (known !== undefined) return known;
+  }
+  return valueSize((value ?? null) as Value);
+}
 /** The same for a result already as JSON: its length. */
 const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
 
@@ -777,11 +804,27 @@ export class Functions {
   /** An id's table, for `v.id` (the engine's catalog). */
   private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
 
-  /** Arguments are an object, checked against `args` when the function declares it (Convex's rules). */
+  /**
+   * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
+   * §1.7): 16 MiB each, read from environment variables of the same names.
+   */
+  maxArgsSize = sizeKnob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
+  maxResultSize = sizeKnob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+
+  /**
+   * Arguments are an object, no larger than `maxArgsSize`, checked against `args` when the function declares
+   * it (Convex's rules and order: `ValidatedPathAndArgs` in crates/udf/src/validation.rs).
+   */
   private checkArgs(f: FunctionDef, args: unknown): AnyArgs {
     const a = args ?? {};
     if (!isSimpleObject(a))
       throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    // Convex measures the positional args array, `[args]` (`validate_udf_args_size`, crates/udf/src/helpers.rs).
+    const size = valueSize([a as Value]);
+    if (size > this.maxArgsSize)
+      throw new FunctionPathError(
+        `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
+      );
     if (f.args) {
       const msg = checkValue(f.args, a as Value, this.tableOf);
       if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
@@ -789,13 +832,28 @@ export class Functions {
     return a as AnyArgs;
   }
 
-  /** The result, checked against `returns` when declared (`undefined` is null, as in Convex). */
+  /**
+   * The result: no larger than `maxResultSize` (Convex measures it as the run returns, in
+   * `deserialize_udf_result`, crates/isolate/src/helpers.rs), then checked against `returns` when declared
+   * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
+   */
   private checkReturns(f: FunctionDef, value: unknown) {
+    const size = valueSize((value ?? null) as Value);
+    if (typeof value === "object" && value !== null) resultSizes.set(value, size);
+    if (size > this.maxResultSize)
+      throw new FunctionPathError(
+        `Function ${this.pathOf(f)} return value is too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxResultSize)})`,
+      );
     if (f.returns) {
       const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
       if (msg) throw new Error(`ReturnsValidationError: ${msg}`);
     }
     return value;
+  }
+
+  /** A function's canonical path for a limit message, as Convex prints `CanonicalizedUdfPath`: `module.js:fn`. */
+  private pathOf(f: FunctionDef): string {
+    return canonicalPath(this.names.get(f) ?? "");
   }
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
@@ -901,7 +959,10 @@ export class Functions {
         : {
             db: db as unknown as MutationCtx["db"],
             auth: txAuth(db),
-            scheduler: makeScheduler(this, { db, job }),
+            // The scheduled job this runs under, also when an action it ran called it (Convex propagates
+            // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
+            // born canceled, and it may not cancel that job.
+            scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
@@ -1369,7 +1430,11 @@ export class Functions {
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
         this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
-      scheduler: makeScheduler(this, { engine: this.engine, job }),
+      // As a mutation's: the job also reaches an action that a scheduled action ran.
+      scheduler: makeScheduler(this, {
+        engine: this.engine,
+        job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+      }),
       storage: this.fileStorage?.actionWriter() ?? noStorage,
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
