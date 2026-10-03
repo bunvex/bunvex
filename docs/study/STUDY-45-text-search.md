@@ -1,6 +1,6 @@
 # STUDY-45 — Full-text search (`searchIndex`, `withSearchIndex`)
 
-- **Status:** S1–S6 await the owner
+- **Status:** accepted: S1–S6 as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. Convex runs a fork of tantivy
   (`get-convex/tantivy` rev `2bb95afa`) that is not in that checkout: the tokenizer's and BM25's details marked
   *(tantivy)* come from upstream tantivy.
@@ -88,12 +88,12 @@ errors of a misused query; the index states while a search index is built.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| S1 | The index lives **in memory only**, rebuilt from the table at every start (queries meanwhile get `IndexBackfillingError`), where Convex keeps disk segments | bunvex has no segment store; a persisted index is a later step. Observable: memory, and searches unavailable while a big table is indexed at start | awaits owner (recommended: in memory now; persisted segments later, "Waiting on a dependency": none) |
-| S2 | No 100 MiB backpressure (`TextIndexTooLarge`) | there is no unflushed memory part to bound in S1's design | awaits owner (recommended: accept with S1) |
-| S3 | BM25 computed by bunvex: the same formula and parameters, but tantivy stores document lengths in one lossy byte (its fieldnorm code), which we could reproduce or not | exact scores — and so the order of near-ties — differ unless the encoding is copied | awaits owner (recommended: reproduce tantivy's fieldnorm encoding, so the order matches) |
-| S4 | The tokenizer follows upstream tantivy's `SimpleTokenizer` (`char::is_alphanumeric`) and `RemoveLongFilter` (< 32 bytes) | Convex's fork is not public in the checkout; if it differs, so do we | awaits owner (recommended: accept; verify against a Convex deployment when one is at hand) |
-| S5 | Merged reads of several searches on one index in one transaction: Convex ANDs all their filters, which seems to make conflicts on filters impossible (an apparent bug; inferred, not tested) | — | awaits owner (recommended: match Convex's documented intent — each search's own filters — and record it) |
-| S6 | The client version gate for prefix matching (≥ 1.6.1000) | bunvex's client announces 0.0.0 (DV-225) | awaits owner (recommended: always prefix-match the last term, as every current Convex client gets) |
+| S1 | The index lives **in memory only**, rebuilt from the table at every start (queries meanwhile get `IndexBackfillingError`), where Convex keeps disk segments | bunvex has no segment store; a persisted index is a later step. Observable: memory, and searches unavailable while a big table is indexed at start | accepted: in memory now; persisted segments later, "Waiting on a dependency": none (owner, 2026-10-02), DV-227 |
+| S2 | No 100 MiB backpressure (`TextIndexTooLarge`) | there is no unflushed memory part to bound in S1's design | accepted: accept with S1 (owner, 2026-10-02), DV-228 |
+| S3 | BM25 computed by bunvex: the same formula and parameters, but tantivy stores document lengths in one lossy byte (its fieldnorm code), which we could reproduce or not | exact scores — and so the order of near-ties — differ unless the encoding is copied | accepted: reproduce tantivy's fieldnorm encoding, so the order matches (owner, 2026-10-02) |
+| S4 | The tokenizer follows upstream tantivy's `SimpleTokenizer` (`char::is_alphanumeric`) and `RemoveLongFilter` (< 32 bytes) | Convex's fork is not public in the checkout; if it differs, so do we | accepted: accept; verify against a Convex deployment when one is at hand (owner, 2026-10-02), DV-229 |
+| S5 | Merged reads of several searches on one index in one transaction: Convex ANDs all their filters, which seems to make conflicts on filters impossible (an apparent bug; inferred, not tested) | — | accepted: match Convex's documented intent — each search's own filters — and record it (owner, 2026-10-02), DV-230 |
+| S6 | The client version gate for prefix matching (≥ 1.6.1000) | bunvex's client announces 0.0.0 (DV-225) | accepted: always prefix-match the last term, as every current Convex client gets (owner, 2026-10-02), DV-231 |
 
 ## 5. Tests
 
