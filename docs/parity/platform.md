@@ -34,7 +34,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Clock skew and required `exp` (custom JWT) | `crates/authentication/lib.rs` | done (STUDY-27) | 5 s leeway, `exp` required. |
 | `ctx.auth.getUserIdentity()` fields | `npm/convex/server/authentication.ts`; `crates/keybroker/broker.rs` `UserIdentity::from_token` | done (STUDY-27) |  |
 | Identity expiry at JWT `exp` (sync session `TokenExpired`) | `crates/sync/state.rs` | done (STUDY-27) | `Token identity expired`, `authUpdateAttempted: false`. |
-| Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | missing | A subtle behaviour that apps can observe. |
+| Invalid token: null in queries and mutations, throw in actions | `crates/isolate/environment/action/task_executor.rs` | done (STUDY-31, STUDY-66) | An HTTP action with a token that fails verification runs; `getUserIdentity()` throws the error there and in the actions it runs (`ctx.runAction`), and returns null in the queries and mutations it runs. `/api/*` and the sync protocol refuse a bad token up front, as Convex. |
 | WebSocket `Authenticate` message and `AuthError` reply | `crates/sync/worker.rs`; `sync_types/json.rs` | done (STUDY-27, STUDY-34) | `User` tokens and `Admin` keys (`impersonating` or `actingAs`); a bad admin key gets `AuthError` with `authUpdateAttempted: false`. |
 | HTTP `Authorization: Bearer <jwt>` | `crates/local_backend/authentication.rs` | done (STUDY-27) | 401 with Convex's codes for a bad token; `Bunvex <admin key>` is an admin (STUDY-34). |
 | Client `setAuth(fetcher)` and refresh (leeway 10 s, force refresh after confirm, 2 retries) | `npm/convex/browser/sync/authentication_manager.ts` | done (STUDY-27) | `@bunvex/client`; see client-sync.md. |
@@ -413,9 +413,9 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 
 | Status | Count |
 |---|---|
-| done | 4 |
+| done | 5 |
 | partial | 12 |
-| missing | 224 |
+| missing | 223 |
 
 - The four done rows are system indexes, database selection, the client-side timeouts on database calls and
   the retries of transient database errors.

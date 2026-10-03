@@ -1390,7 +1390,8 @@ export class Functions {
     name: string,
     args: unknown,
     caller?: Caller,
-    opts: { job?: string; internal?: boolean } = {},
+    /** `authError`: the calling action's token failed verification (an HTTP action's), passed on. */
+    opts: { job?: string; internal?: boolean; authError?: Error | null } = {},
   ): Promise<unknown> {
     return this.logged(
       "Action",
@@ -1399,7 +1400,7 @@ export class Functions {
       async () => {
         await this.failActionWhileNotRunning();
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-        const ctx = this.actionCtx(caller, null, opts.job, f);
+        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
         return this.actionPermits.run(() =>
           this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then((r) =>
@@ -1413,7 +1414,8 @@ export class Functions {
 
   /**
    * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
-   * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
+   * as in Convex): `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity.
+   * The actions it calls get the error too, as Convex passes them the same identity (STUDY-66 §5).
    */
   private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
@@ -1429,7 +1431,7 @@ export class Functions {
       runMutation: async (n: FunctionRef, a?: unknown) =>
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: makeScheduler(this, {
         engine: this.engine,
