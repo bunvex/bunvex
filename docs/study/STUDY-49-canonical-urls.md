@@ -1,6 +1,6 @@
 # STUDY-49 — Canonical URLs
 
-- **Status:** decision pending (owner): C1; the PR implements the recommendation
+- **Status:** accepted: C1 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02
 - **Related:** [STUDY-37](STUDY-37-cli-and-environment-variables.md) (the built-in variables),
   [STUDY-32](STUDY-32-file-storage.md) (file URLs), [STUDY-48](STUDY-48-audit-log.md) (its events)
@@ -41,4 +41,4 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| C1 | The destinations are `bunvexCloud` / `bunvexSite` and `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | Rule 5: no "convex" in shipped strings, as `BUNVEX_CLOUD_URL` (STUDY-37). **Not possible** under the rule | DV-263, pending |
+| C1 | The destinations are `bunvexCloud` / `bunvexSite` and `get_canonical_urls` answers `{bunvexCloudUrl, bunvexSiteUrl}` | Rule 5: no "convex" in shipped strings, as `BUNVEX_CLOUD_URL` (STUDY-37). **Not possible** under the rule | DV-263, accepted (owner, 2026-10-03) |

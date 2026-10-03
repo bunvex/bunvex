@@ -1,6 +1,6 @@
 # STUDY-48 — The deployment audit log
 
-- **Status:** decision pending (owner): A1–A3; the PR implements the recommendations
+- **Status:** accepted: A1–A3 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02
 - **Related:** [STUDY-42](STUDY-42-import-export.md) (DV-218), [STUDY-37](STUDY-37-cli-and-environment-variables.md),
   [STUDY-30](STUDY-30-scheduler-and-crons.md), [STUDY-32](STUDY-32-file-storage.md). Scope chosen by the owner
@@ -89,8 +89,8 @@ system queries and the HTTP list.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| A1 | The audit log is readable by default (`auditLogRetentionDays` -1; null or a number of days as Convex's) | Convex's self-hosted backend has no `_backend_info`, so its log is recorded but unreadable (403, the History page off): a cloud plan's limit, not a feature. **Possible to match**; recommended not to | DV-260, pending |
-| A2 | No `push_config_with_components` event yet | **Not done yet**: the push's diffs (modules, crons, indexes, schema, auth) are a follow-up PR | DV-261, pending |
-| A3 | `snapshot_import`'s `member_id` is null | bunvex's import rows have no member (STUDY-42). **Not done yet** | DV-262, pending |
+| A1 | The audit log is readable by default (`auditLogRetentionDays` -1; null or a number of days as Convex's) | Convex's self-hosted backend has no `_backend_info`, so its log is recorded but unreadable (403, the History page off): a cloud plan's limit, not a feature. **Possible to match**; recommended not to | DV-260, accepted (owner, 2026-10-03) |
+| A2 | No `push_config_with_components` event yet | **Not done yet**: the push's diffs (modules, crons, indexes, schema, auth) are a follow-up PR | DV-261, accepted (owner, 2026-10-03) |
+| A3 | `snapshot_import`'s `member_id` is null | bunvex's import rows have no member (STUDY-42). **Not done yet** | DV-262, accepted (owner, 2026-10-03) |
 
 The events of features bunvex lacks wait for those features (ledger, "Waiting on a dependency").
