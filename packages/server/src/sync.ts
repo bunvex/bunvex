@@ -196,10 +196,10 @@ export type SyncDeps = {
   fromWire: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
-  /** Query rerun retries; defaults to `retryOptions()`. */
-  retry?: Partial<RetryOptions>;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
   verifyToken: (token: string) => Promise<VerifiedIdentity>;
+  /** Query rerun retries; defaults to `retryOptions()`. */
+  retry?: Partial<RetryOptions>;
   /**
    * An `Admin` token's caller (STUDY-34): the key checked, acting as `impersonating` when given; throws
    * `BadAdminKeyError` for a bad key, `HeaderParseError` for an identity that is not one. Absent: admin
@@ -283,17 +283,17 @@ export class SyncHub {
   readonly sessions = new Set<SyncSession>();
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
   private generation = 0;
+  readonly retry: RetryOptions;
   stats = { executions: 0, reused: 0, transitions: 0, splayed: 0, retries: 0 };
   readonly splay: SplayOptions;
-  readonly retry: RetryOptions;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
 
   constructor(readonly deps: SyncDeps) {
     this.splay = deps.splay ?? splayOptions();
-    this.retry = retryOptions(deps.retry);
     deps.engine.committer.onCommit((entries) => this.onCommit(entries));
+    this.retry = retryOptions(deps.retry);
     this.heartbeat = setInterval(() => {
       const now = performance.now();
       for (const s of this.sessions) s.pingIfIdle(now);
