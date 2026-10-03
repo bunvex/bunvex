@@ -23,6 +23,7 @@ export const PACKAGES = [
   "server",
   "client",
   "react",
+  "nextjs",
   "cli",
 ];
 

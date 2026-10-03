@@ -22,6 +22,19 @@ export type PaginationResult<T> = {
 
 export type PaginationStatus = "LoadingFirstPage" | "CanLoadMore" | "LoadingMore" | "Exhausted";
 
+/**
+ * Ask for `numItems` more items. Whether it started: `false` while the last page is still loading or once the
+ * query is exhausted.
+ */
+export type LoadMoreOfPaginatedQuery = (numItems: number) => boolean;
+
+/** A paginated query's loaded pages as one list, as the paginated clients report it. */
+export type PaginatedQueryResult<T> = {
+  results: T[];
+  status: PaginationStatus;
+  loadMore: LoadMoreOfPaginatedQuery;
+};
+
 /** A page query's result, checked. */
 export function asPaginationResult(value: Value): PaginationResult<Value> {
   const v = value as Partial<PaginationResult<Value>> | null;

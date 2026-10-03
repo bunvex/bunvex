@@ -15,9 +15,11 @@ export {
   BunvexReactClient,
   type BunvexReactClientOptions,
   type MutationOptions,
+  type PaginatedWatch,
   type ReactAction,
   type ReactMutation,
   type Watch,
+  type WatchPaginatedQueryOptions,
   type WatchQueryOptions,
 } from "./client.ts";
 export { BunvexProvider, useBunvex } from "./context.ts";
@@ -45,4 +47,9 @@ export {
   type UsePaginatedQueryResult,
   usePaginatedQuery,
 } from "./use-paginated-query.ts";
+export {
+  type UsePaginatedQueryObjectReturnType,
+  type UsePaginatedQueryOptions,
+  usePaginatedQuery_experimental,
+} from "./use-paginated-query2.ts";
 export { useSubscription } from "./use-subscription.ts";
