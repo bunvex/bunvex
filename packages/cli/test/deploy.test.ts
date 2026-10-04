@@ -111,7 +111,7 @@ describe("bunvex deploy", () => {
     const r = io(app);
     expect(await main(["deploy"], r.it)).toBe(0);
     expect(r.out).toEqual([`✔ Deployed functions to ${d.url}`]);
-    expect(r.err).toContain("  [+] index messages.by_author");
+    expect(r.err).toContain("✔ Added table indexes:\n  [+] messages.by_author   author");
     expect(r.err).toContain("  [+] cron tick");
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["HI"]);
@@ -166,6 +166,42 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8")).toBe(before);
     expect(await main(["deploy", "--codegen=sometimes", ...flags], io(app).it)).toBe(2);
   }, 120_000);
+
+  test("the index diff, as Convex's printDiff: added, staged, enabled, staged again, deleted; a dry run says would", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const env = { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY };
+    const withSchema = (indexes: string) =>
+      write(app, {
+        "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(VALUES)};
+export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(), t: v.string() })${indexes} });`,
+      });
+    const deploy = async (...flags: string[]) => {
+      const r = io(app, env);
+      expect(await main(["deploy", "--typecheck=disable", "--codegen=disable", ...flags], r.it)).toBe(0);
+      return r.err.filter((l) => l.startsWith("✔ ") && l.includes("\n"));
+    };
+    withSchema(
+      '.index("by_a", ["a"]).index("by_ab", { fields: ["a", "b"], staged: true }).searchIndex("search_t", { searchField: "t", filterFields: ["a"] })',
+    );
+    expect(await deploy("--dry-run")).toEqual([
+      "✔ Would add table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Would add staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    expect(await deploy()).toEqual([
+      "✔ Added table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Added staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    // by_ab enabled, by_a staged again, search_t deleted.
+    withSchema('.index("by_a", { fields: ["a"], staged: true }).index("by_ab", ["a", "b"])');
+    expect(await deploy()).toEqual([
+      "✔ Deleted table indexes:\n  [-] notes.search_t (text)   t, filter on a",
+      "✔ These indexes are now enabled:\n  [*] notes.by_ab   a, b",
+      "✔ These indexes are now staged:\n  [*] notes.by_a   a  (staged)",
+    ]);
+    expect(await deploy()).toEqual([]);
+  });
 
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();

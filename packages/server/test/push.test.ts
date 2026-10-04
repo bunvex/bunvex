@@ -287,10 +287,17 @@ describe("deploy2 over HTTP", () => {
       "send",
     ]);
     expect(r.start.body.analysis[""].schema.tables[0].tableName).toBe("messages");
-    expect(r.start.body.schemaChange.indexDiffs[""].added_indexes).toEqual(["messages.by_author"]);
+    // Convex's `SerializedIndexDiff`: each index a named `DeveloperIndexConfig`.
+    expect(r.start.body.schemaChange.indexDiffs[""]).toEqual({
+      added_indexes: [{ name: "messages.by_author", type: "database", fields: ["author"], staged: false }],
+      removed_indexes: [],
+      enabled_indexes: [],
+      disabled_indexes: [],
+    });
     expect(r.wait).toEqual({ type: "complete" });
     expect(r.finish!.status).toBe(200);
     expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({ added: ["messages.js", "other.js"], removed: [] });
+    expect(r.finish!.body.componentDiffs[""].indexDiff).toEqual(r.start.body.schemaChange.indexDiffs[""]);
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["hi v1"]);
     // The schema's validator holds.

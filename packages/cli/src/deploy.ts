@@ -16,7 +16,9 @@ import {
   checkLargeIndexDeletion,
   checkSlowSchemaValidation,
   defaultDeployMessage,
+  type IndexDiff,
   PushCanceled,
+  printIndexDiff,
   type SchemaEvaluation,
 } from "./index-checks.ts";
 import type { Io } from "./io.ts";
@@ -320,7 +322,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
+    // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
+    const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {
+      if (startDiff) printIndexDiff(io, startDiff, true);
       const fns = Object.values(
         (start.analysis as Record<string, { functions: Record<string, { functions: unknown[] }> }>)[""]!.functions,
       );
@@ -355,15 +360,15 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         {
           moduleDiff: { added: string[]; removed: string[] };
           cronDiff: { added: string[]; updated: string[]; deleted: string[] };
-          indexDiff: { added_indexes: string[]; removed_indexes: string[] };
+          indexDiff: IndexDiff;
         }
       >;
     };
     void post("/api/deploy2/report_push_completed", { spans: [] }).catch(() => {});
     const d = diff.componentDiffs[""];
+    const indexDiff = startDiff ?? d?.indexDiff;
+    if (indexDiff) printIndexDiff(io, indexDiff, false);
     if (d) {
-      for (const i of d.indexDiff.added_indexes) io.err(`  [+] index ${i}`);
-      for (const i of d.indexDiff.removed_indexes) io.err(`  [-] index ${i}`);
       for (const c of d.cronDiff.added) io.err(`  [+] cron ${c}`);
       for (const c of d.cronDiff.deleted) io.err(`  [-] cron ${c}`);
     }
