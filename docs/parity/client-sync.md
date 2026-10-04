@@ -189,7 +189,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | done (STUDY-26) | `BunvexReactClient` (R1); the paginated client since STUDY-26 §8.4; `setAuth` since STUDY-27; `baseClient` injection included. |
+| `ConvexReactClient(url, options)`: lazily creates the base + paginated client; `watchQuery`, `query`, `mutation`, `action`, `prewarmQuery({extendSubscriptionFor})`, `connectionState`, `close`, `setAuth`, `clearAuth`, `url`, `logger` | `react/client.ts` | done (STUDY-26) | `BunvexReactClient` (R1); the paginated client since STUDY-26 §8.4; `setAuth` since STUDY-27; `baseClient` injection included. `logger` is a `Logger` built from the option, as Convex's, and the paginated hooks warn through it (STUDY-65 F5, DV-322 pending). |
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
