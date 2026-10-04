@@ -213,7 +213,7 @@ bunvex's `@bunvex/cli` is an empty stub; ARCHITECTURE marks dev, codegen and dep
 | `dataModel.d.ts`: `Doc<T>`, `Id<T>`, `TableNames`, `DataModel` | `codegen_templates/dataModel.ts` | done (STUDY-36) | Dynamic mode, from `typeof schema`; `AnyDataModel` and `Doc = any` when there is no schema. Static mode is missing. |
 | `server.d.ts` / `server.js`: typed `query`, `mutation`, `action`, `internal*`, `httpAction`, ctx types | `codegen_templates/server.ts` | done (STUDY-36) | The `*Generic` builders typed with `DataModel`; `QueryCtx` … `DatabaseWriter`. `env` is untyped (DV-176). |
 | `component.ts` (ComponentApi) and component-level codegen | `codegen_templates/component_api.ts` | missing | |
-| `convex.json` codegen options (`staticApi`, `staticDataModel`, `fileType`, `generateCommonJSApi`, `legacyComponentApi`) | `cli/lib/config.ts`; `schemas/convex.schema.json` | partial (STUDY-36) | `bunvex.json`'s `codegen.fileType` (`"ts"` or `"js/dts"`); the others are missing. |
+| `convex.json` codegen options (`staticApi`, `staticDataModel`, `fileType`, `generateCommonJSApi`, `legacyComponentApi`) | `cli/lib/config.ts`; `schemas/convex.schema.json` | partial (STUDY-36) | `bunvex.json`'s `codegen.fileType` (`"ts"` or `"js/dts"`); the others are missing. The keys bunvex reads (`functions`, `codegen`, `codegen.fileType`) are checked with Convex's messages: a file that is not an object, a wrong type, JSON that does not parse (STUDY-65 G-L2). Unknown keys are kept, without Convex's warning. |
 | Other `convex.json` keys: `functions` dir, `node.externalPackages`, `node.nodeVersion`, `bundler.includeSourcesContent`, `typescriptCompiler` | same | missing | |
 
 ### 14. Deploy / push flow
