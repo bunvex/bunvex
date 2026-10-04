@@ -7,7 +7,7 @@ import { BunvexQueryClient, bunvexAction, bunvexQuery } from "@bunvex/react-quer
 import { ConvexQueryClient, convexQuery } from "@convex-dev/react-query";
 import { dehydrate, hashKey, QueryClient } from "@tanstack/react-query";
 import { anyApi as oracleApi } from "convex/server";
-import { startServer } from "./harness.ts";
+import { renameFormat, startServer } from "./harness.ts";
 
 const api = anyApi;
 const cleanup: (() => unknown)[] = [];
@@ -19,7 +19,7 @@ async function setup(options: { dangerouslyUseInconsistentQueriesDuringSSR?: boo
   const h = await startServer();
   cleanup.push(h.stop);
   const paths: string[] = [];
-  const realFetch = globalThis.fetch;
+  const realFetch = renameFormat(globalThis.fetch); // Convex's clients run here too (DV-307)
   const spy = spyOn(globalThis, "fetch").mockImplementation(((url: string, init: RequestInit) => {
     paths.push(new URL(String(url)).pathname);
     return realFetch(url, init);

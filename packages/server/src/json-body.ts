@@ -55,6 +55,8 @@ export const UDF_POST_WITH_COMPONENT: BodyShape = {
   ],
 };
 
+export const QUERY_BATCH: BodyShape = { name: "QueryBatchArgs", fields: [["queries", { seqOf: UDF_POST }]] };
+
 export const UDF_POST_ARGS_ONLY: BodyShape = {
   name: "UdfPostRequestArgsOnly",
   fields: [

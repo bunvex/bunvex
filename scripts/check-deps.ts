@@ -8,7 +8,8 @@
 //   5. no "convex" in the packages' shipped code (packages/*/src) outside comments: not in identifiers,
 //      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
 //      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
-//      comparing benchmarks) may name Convex descriptively.
+//      comparing benchmarks) may name Convex descriptively. No exceptions, wire names included: a `format`
+//      value, a metric or an error code is bunvex's (owner, 2026-10-03: DV-307, DV-308, DV-312).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -116,18 +117,6 @@ function withoutComments(text: string): string {
   return out;
 }
 
-/**
- * Rule 5's exceptions (owner, 2026-10-03): wire names Convex clients and connectors send or read, matched as
- * exact string literals. Each needs the decision that allows it; messages and API names never qualify.
- */
-const WIRE_NAMES: Record<string, string> = {
-  convex_encoded_json: "DV-307: streaming export and HTTP function API `format`",
-  convex_json: "DV-307: streaming export `format` (legacy alias)",
-  convex_clean_json: "DV-307: streaming export `format` (legacy alias)",
-  actionComputeConvexGbHours: "DV-308: usage limit metric",
-};
-const wireNameRe = new RegExp(`(["'\`])(?:${Object.keys(WIRE_NAMES).join("|")})\\1`, "g");
-
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
@@ -162,7 +151,7 @@ for (const [name, dir] of dirOfName) {
     if (/^packages\/[^/]+\/src\//.test(rel)) {
       const code = withoutComments(text).split("\n");
       code.forEach((line, n) => {
-        if (/convex/i.test(line.replace(wireNameRe, "")))
+        if (/convex/i.test(line))
           errors.push(
             `${rel}:${n + 1}: "convex" in shipped code outside a comment — use bunvex's own names and messages (rule 5)`,
           );
