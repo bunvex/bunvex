@@ -15,6 +15,7 @@ import {
   notRunningMessage,
   OccError,
   observeTime,
+  opaqueToInspect,
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -1755,3 +1756,6 @@ class MutationAbortedError extends Error {
     super("The mutation was stopped: its time limit passed");
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Functions);
