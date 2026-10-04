@@ -223,6 +223,31 @@ export interface GenericDatabaseReader<DataModel extends GenericDataModel> exten
   system: BaseDatabaseReader<SystemDataModel>;
 }
 
+/** Convex's `BaseDatabaseReaderWithTable`: the database scoped to a table at a time (STUDY-66 §2). */
+export interface BaseDatabaseReaderWithTable<DataModel extends GenericDataModel> {
+  /** Scope the database to one table. */
+  table<TableName extends TableNamesInDataModel<DataModel>>(
+    tableName: TableName,
+  ): BaseTableReader<DataModel, TableName>;
+}
+
+/** Convex's `BaseTableReader`: `db.table(name)` in a query. */
+export interface BaseTableReader<
+  DataModel extends GenericDataModel,
+  TableName extends TableNamesInDataModel<DataModel>,
+> {
+  /** The document of this table with id `id`, or null. */
+  get(id: GenericId<TableName>): Promise<DocumentByName<DataModel, TableName> | null>;
+  /** Begin a query of this table. */
+  query(): QueryInitializer<NamedTableInfo<DataModel, TableName>>;
+}
+
+/** Convex's `GenericDatabaseReaderWithTable`: a query's `ctx.db` as the table-scoped API types it. */
+export interface GenericDatabaseReaderWithTable<DataModel extends GenericDataModel>
+  extends BaseDatabaseReaderWithTable<DataModel> {
+  system: BaseDatabaseReaderWithTable<SystemDataModel>;
+}
+
 /** A patch: some fields of a document's, `undefined` to remove one (system fields cannot be patched). */
 export type PatchValue<Document> = Expand<{
   [K in keyof WithoutSystemFieldsLoose<Document>]?: WithoutSystemFieldsLoose<Document>[K] | undefined;
@@ -262,6 +287,27 @@ export interface GenericDatabaseWriter<DataModel extends GenericDataModel> exten
   ): Promise<void>;
   delete(id: GenericId<TableNamesInDataModel<DataModel>>): Promise<void>;
   delete<TableName extends TableNamesInDataModel<DataModel>>(table: TableName, id: GenericId<TableName>): Promise<void>;
+}
+
+/** Convex's `GenericDatabaseWriterWithTable`: a mutation's `ctx.db` as the table-scoped API types it. */
+export interface GenericDatabaseWriterWithTable<DataModel extends GenericDataModel>
+  extends GenericDatabaseReaderWithTable<DataModel> {
+  /** Scope the database to one table. */
+  table<TableName extends TableNamesInDataModel<DataModel>>(
+    tableName: TableName,
+  ): BaseTableWriter<DataModel, TableName>;
+}
+
+/** Convex's `BaseTableWriter`: `db.table(name)` in a mutation. */
+export interface BaseTableWriter<DataModel extends GenericDataModel, TableName extends TableNamesInDataModel<DataModel>>
+  extends BaseTableReader<DataModel, TableName> {
+  insert(value: WithoutSystemFields<DocumentByName<DataModel, TableName>>): Promise<GenericId<TableName>>;
+  patch(id: GenericId<TableName>, value: PatchValue<DocumentByName<DataModel, TableName>>): Promise<void>;
+  replace(
+    id: GenericId<TableName>,
+    value: WithOptionalSystemFields<DocumentByName<DataModel, TableName>>,
+  ): Promise<void>;
+  delete(id: GenericId<TableName>): Promise<void>;
 }
 
 /** The system tables' names, for `Id` in `_generated/dataModel`. */

@@ -48,7 +48,7 @@ describe("functions with args / returns validators (STUDY-13)", () => {
       "ArgumentValidationError: Object contains extra field `extra` that is not in the validator.",
     );
     await expect(fns.runQuery("m:greet", [1] as never)).rejects.toThrow(
-      "ArgumentValidationError: Arguments must be an object",
+      "ArgumentValidationError: Expected to receive an object as the function's argument. Instead received: [1.0]\n",
     );
   });
 

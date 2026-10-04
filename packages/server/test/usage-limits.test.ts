@@ -46,7 +46,7 @@ describe("the meter", () => {
       memoryMb: 64,
       databaseIoBytes: 0,
     });
-    expect([m.usage("actionComputeConvexGbHours", "day"), m.usage("actionComputeCpuGbHours", "day")]).toEqual([
+    expect([m.usage("actionComputeIsolateGbHours", "day"), m.usage("actionComputeCpuGbHours", "day")]).toEqual([
       0.0625, 0.03125,
     ]);
   });
@@ -79,7 +79,13 @@ async function setup() {
   stops.push(() => s.stop());
   const api = `http://127.0.0.1:${s.server.port}/api`;
   const call = async (kind: string, path: string, args: object = {}) =>
-    (await (await fetch(`${api}/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) })).json()) as {
+    (await (
+      await fetch(`${api}/${kind}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args }),
+      })
+    ).json()) as {
       status: string;
       value?: any;
       errorMessage?: string;
@@ -107,8 +113,8 @@ test("get_current_usage: every metric with its unit, this process's day and mont
   const u = (await t.req("get_current_usage")).body;
   expect(u.seedStatus).toBe("pending");
   expect(Object.keys(u.metrics)).toEqual([
-    "actionComputeConvexGbHours",
     "actionComputeCpuGbHours",
+    "actionComputeIsolateGbHours",
     "actionComputeNodeJsGbHours",
     "aiGatewayCostDollars",
     "dataEgressGb",
@@ -145,6 +151,11 @@ test("create, list, update, delete: Convex's shapes, checks, errors and audit ev
     message: "Usage limits must have a positive limit.",
   });
   expect((await t.req("create_usage_limit", { ...limit, metric: "nope" })).body.code).toBe("BadJsonBody");
+  // The isolate compute metric is bunvex's name; Convex's is not a metric here (DV-308).
+  expect((await t.req("create_usage_limit", { ...limit, metric: "actionComputeConvexGbHours" })).body).toEqual({
+    code: "BadJsonBody",
+    message: "metric: unknown variant `actionComputeConvexGbHours`",
+  });
   expect((await t.req("create_usage_limit", limit, READ_ONLY)).body.code).toBe("OperationNotPermitted");
   // Below the usage so far (enabled only).
   await t.call("mutation", "m:add");

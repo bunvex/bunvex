@@ -43,6 +43,7 @@ export {
   USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 export {
+  CommitListenerError,
   Committer,
   CommitterStoppedError,
   type Conflict,
@@ -92,11 +93,16 @@ export type {
 } from "./data-model.ts";
 export type {
   BaseDatabaseReader,
+  BaseDatabaseReaderWithTable,
+  BaseTableReader,
+  BaseTableWriter,
   ExpressionOrValueOf,
   FieldTypeFromFieldPath,
   FilterBuilder,
   GenericDatabaseReader,
+  GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
   IndexRange,
   IndexRangeBuilder,
   LowerBoundIndexRangeBuilder,
@@ -119,6 +125,7 @@ export {
   installDeterminismIn,
   newUserTimer,
   observeTime,
+  outsideExecution,
   PersistenceReadError,
   pausingUserTime,
   runImportPhase,
@@ -193,6 +200,7 @@ export {
   UnsureCommitError,
 } from "./persistence/index.ts";
 export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
@@ -216,8 +224,10 @@ export {
   checkIdentifier,
   type DeclaredTable,
   type Doc,
+  type DocValidator,
   defineSchema,
   defineTable,
+  docValidator,
   type Expand,
   type FieldValue,
   type GenericSchema,
@@ -229,7 +239,9 @@ export {
   MAX_SEARCH_FILTER_FIELDS,
   referencedTables,
   type SchemaDefinition,
+  type SchemaValidators,
   type SearchIndexDef,
+  type SystemFieldValidators,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
@@ -259,12 +271,15 @@ export {
   UnionBuilder,
 } from "./shapes.ts";
 export { SystemReader } from "./system-reader.ts";
+export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
   formatBytes,
   ImportIdError,
+  isQueryObject,
   type PaginationOptions,
   type PaginationResult,
+  QueryCursorError,
   type Savepoint,
   Tx,
   type TxLimits,

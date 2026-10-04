@@ -77,7 +77,13 @@ async function setup() {
   stops.push(server.stop);
   const api = `http://127.0.0.1:${server.server!.port}`;
   const call = async (kind: string, path: string, args: object = {}) =>
-    (await fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) })).json() as any;
+    (
+      await fetch(`${api}/api/${kind}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args }),
+      })
+    ).json() as any;
   const stream = async (route: string, query: string, headers: Record<string, string> = {}) => {
     const r = await fetch(`${api}${route}?${query}`, { headers: { authorization: `Bunvex ${KEY}`, ...headers } });
     return { status: r.status, body: (await r.json()) as any };

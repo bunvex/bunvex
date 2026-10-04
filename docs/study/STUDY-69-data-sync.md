@@ -1,8 +1,9 @@
 # STUDY-69 — Data sync (`/api/v1/data/sync`), the current Fivetran connector's API
 
 - **Status:** implemented. Owner decisions (2026-10-03): Convex's cursor format; per-document revision
-  timestamps from a new driver method (PERSIST-01 C16, the PR before this one); `Convex-Client` accepted
-  by rule 5's wire-name exception.
+  timestamps from a new driver method (PERSIST-01 C16, the PR before this one); `Convex-Client` first
+  accepted by rule 5's wire-name exception, then superseded by DV-312 (no exceptions): the header is
+  `Bunvex-Client`.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:** [STUDY-60](STUDY-60-streaming-export.md) (the legacy routes), PERSIST-01 C12 (the document log)
   and C16 (document versions), STUDY-33 (retention), [STUDY-52](STUDY-52-shape-inference.md) (table counts)
@@ -35,7 +36,7 @@ Sources: `crates/streaming_export`, `crates/table_iteration/src/data_sync.rs`,
   - `InvalidDataSyncCursor`: an unreadable cursor, or one ahead of the deployment.
   - `InvalidDataSyncSelection`.
   - `DataSyncCursorExpired`: a cursor outside retention.
-  - `InvalidClientVersion`: a malformed `Convex-Client` header.
+  - `InvalidClientVersion`: a malformed `Bunvex-Client` header (Convex's `Convex-Client`).
 
 ### 1.2 The cursor
 
@@ -89,7 +90,7 @@ What a connector sees:
 - every answer and error;
 - pages and their limits;
 - truncates and statuses;
-- the sync id's `fivetran-` / `airbyte-` prefix from the `Convex-Client` header;
+- the sync id's `fivetran-` / `airbyte-` prefix from the `Bunvex-Client` header;
 - progress.
 
 ## 3. How bunvex does it
@@ -104,8 +105,9 @@ What a connector sees:
 - **Log pages** read `readDocumentLog` (C12) whole commits at a time. The captured documents of a commit are
   read with one `getVersions` per table.
 - **Position comparisons** use `by_id`'s order: the id strings. That is the same order as the internal ids'.
-- **`Convex-Client`.** The header name is listed in `WIRE_NAMES` (rule 5's wire-name exception);
-  `Bunvex-Client` works too.
+- **`Bunvex-Client`.** Convex's `Convex-Client`, renamed: rule 5 has no exceptions since DV-312 (owner,
+  2026-10-03), so a connector written for Convex must send `Bunvex-Client`, as it must ask for `encoded_json`
+  (DV-307).
 - **Components.** bunvex has none, so `component` is always `""`.
 - **Cost.** These routes do not touch the function path. Measured on the in-memory store: a 16 384-document
   by-id page takes about 70 ms, and a log page of 5 000 documents about 100 ms.
@@ -132,7 +134,7 @@ None.
   - A log page when behind the freshness bound: the timestamp advances, and a commit is taken whole.
   - A walked document's later delete comes as a tombstone from the log.
   - Every document is seen exactly once, and the sync completes.
-- **`Convex-Client`.** It sets the prefix; a malformed header is refused.
+- **`Bunvex-Client`.** It sets the prefix; a malformed header is refused.
 - **Progress.**
   - The row and its `create_data_sync` event.
   - `sync/{id}` and `list_active_syncs`, with their errors.

@@ -391,7 +391,7 @@ export class LogManager {
       for (const e of entries)
         for (const w of e.writes) if (w.index === auditIndex && w.id !== null) inserted.add(w.id);
       if (inserted.size > 0) this.streamAuditEvents([...inserted]);
-    });
+    }, "log streams");
     this.timer = setInterval(() => this.flush(), this.options.aggregationMs);
     this.timer.unref?.();
     this.wake();

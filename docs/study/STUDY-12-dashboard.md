@@ -684,7 +684,7 @@ line-chart`), validated colours (dataviz), a keyboard crosshair and a table view
 | M1 | The top-k measures are one method, `topFunctions(measure, window, k)`, not three | the same shape three times; a server maps it to its three routes | **decided** (30 Sep 2026): the owner asked for metrics in Convex's shape; the shapes are kept, only the method count differs |
 | M4 | A table's metrics open in the side panel (`?panel=metrics`), like Schema and Indexes; Convex opens them in a tool popup | the side panel is where every table tool lives here | **decided** (30 Sep 2026): the panel is bunvex's place for table tools (UI-01 §12.3) |
 | M2 | ~~Failure and cache hit rate show lines only~~ — built 2 Oct 2026 (UI-01 §18.4): a line chart / heatmap switch on both, as Convex's `CategoricalHeatmap.tsx` (failure rate opens as a chart, cache hit rate as a heatmap, the choice kept in the browser; rows worst first; an empty bucket is not zero) | — | done |
-| M5 | The heatmap's colours are five steps of one blue, faint → dark (the darker, the worse: more failures, fewer cache hits), in the design system's tokens; Convex uses a 10-stop viridis ramp | a sequential encoding is one hue, light → dark; the ramp was validated as ordinal in both themes (monotone, ΔL ≥ 0.06, the faintest ≥ 2:1 on the surface) | agent's call (2 Oct 2026), the owner can veto |
+| M5 | The heatmap's colours are five steps of one blue, faint → dark (the darker, the worse: more failures, fewer cache hits), in the design system's tokens; Convex uses a 10-stop viridis ramp | a sequential encoding is one hue, light → dark; the ramp was validated as ordinal in both themes (monotone, ΔL ≥ 0.06, the faintest ≥ 2:1 on the surface) | **decided** (owner, 2026-10-03): option A, keep the single-hue blue ramp |
 | M3 | A function keeps its colour across the charts and over refreshes (its slot comes from its name); Convex colours by rank | colour should follow the entity, not its rank (a refresh would repaint a line) | **decided** (30 Sep 2026): a better default, nothing an app observes |
 
 ## 13. Authentication and snapshots in Settings (added 30 Sep 2026)
@@ -967,7 +967,11 @@ an injected data source):
   (`check_admin_key`, then a real data source) is a follow-up.
 - Server operation names map to the dashboard's (`capabilitiesOf`), empty = all, as Convex.
 - Prefill from `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY`, as Convex's `NEXT_PUBLIC_*`.
-- Embedding: the same request/credentials messages, also without an origin check, as Convex (LG3).
+- Embedding: the same request/credentials messages as Convex, but only with the parent origins the operator
+  allowed (LG3, decided 3 Oct 2026): `VITE_BUNVEX_EMBED_ORIGINS` at build, written into index.html's
+  `<meta name="bunvex-embed-origins">` (editable in a built dashboard). The request is addressed to each allowed
+  origin (never `*`); an answer counts only from the parent window at one of them. No list: embedded sign-in is
+  off (nothing asked, every answer ignored).
 - The key is kept **in memory only** and a reload asks again — what users observe in Convex.
 - The header's account entry shows the deployment's name (from the key's `<name>|` prefix, as Convex's keys
   are named) and URL, and "Sign out".
@@ -977,8 +981,8 @@ an injected data source):
 | ID | Difference | Why | Status |
 |---|---|---|---|
 | LG1 | **Use the demo data** on the sign-in page: the screens on the mock, kept for the tab (`sessionStorage`), "Leave the demo" in the header | a bunvex addition: explore the dashboard without a deployment; it is also how development and the e2e tests open it (`?demo=1`) | addition, as the owner asked (2 Oct 2026) |
-| LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | pending (DV-210) |
-| LG3 | Embedded credentials accepted from any origin, as Convex | match Convex; an allow-list of parent origins would be safer | matches Convex (no divergence); a question for the owner in the PR |
+| LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | **decided** (owner, 2026-10-03): accepted (DV-210) |
+| LG3 | Embedded credentials accepted only from an allow-list of parent origins set by the operator (`VITE_BUNVEX_EMBED_ORIGINS` / `<meta name="bunvex-embed-origins">`), the request sent only to those origins; none allowed by default (fail closed). Convex accepts them from any origin and asks with target `*` (`_app.tsx`, `useEmbeddedDashboardCredentials`) | the message carries an admin key: any page that frames the dashboard could otherwise sign it in to a deployment of its choosing, and a `*` request tells any parent that a dashboard is waiting | **decided** (owner, 2026-10-03): option A, an allow-list (DV-319) |
 | LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |
 
 ## 20. The command palette (a bunvex addition, added 2 Oct 2026)
@@ -1054,8 +1058,8 @@ observe the policy, if a future server refuses an unsupported SDK, as Convex's d
 |---|---|---|---|
 | C1 | Client identification and an optional app registry | the owner's idea; Convex sends only `Convex-Client: npm-<version>` | **decided** (owner, 2 Oct 2026): a bunvex addition, mock-only for now |
 | C2 | The SDK policy has Convex's two thresholds per platform (upgrade required, unsupported) | the same states as `ClientVersionState` | my call, matches Convex |
-| C3 | Reading who the clients are needs `viewMetrics`; registering apps `writeData` | no dedicated operation, as for Topology (T5) | my call, the owner can veto |
-| C4 | Group links in the diagram are labelled only while lit | many groups × followers would bury the canvas in labels | my call, the owner can veto |
-| C5 | The setup snippet shows an API that does not exist yet (`new BunvexClient(url, { app })`, `bunvex-swift`, `bunvex-kotlin`), marked "Planned API" | the owner asked for a per-platform snippet; the SDK study will fix the real names | my call, the owner can veto; to revisit with the SDK study |
-| C6 | Choosing a platform or app version in Logs leaves out lines no client made (crons, scheduled runs) | a facet keeps only what matches, as the function facet does | my call, the owner can veto |
-| C7 | Flag rules can target `platform` and `appVersion`, which the client says itself | targeting, not security: a client can claim anything, as a user agent can | my call, the owner can veto |
+| C3 | Reading who the clients are needs `viewMetrics`; registering apps `writeData` | no dedicated operation, as for Topology (T5) | **confirmed** (owner, 2026-10-03): kept as is |
+| C4 | Group links in the diagram are labelled only while lit | many groups × followers would bury the canvas in labels | **confirmed** (owner, 2026-10-03): kept as is |
+| C5 | The setup snippet shows an API that does not exist yet (`new BunvexClient(url, { app })`, `bunvex-swift`, `bunvex-kotlin`), marked "Planned API" | the owner asked for a per-platform snippet; the SDK study will fix the real names | **confirmed** (owner, 2026-10-03): kept as is; to revisit with the SDK study |
+| C6 | Choosing a platform or app version in Logs leaves out lines no client made (crons, scheduled runs) | a facet keeps only what matches, as the function facet does | **confirmed** (owner, 2026-10-03): kept as is |
+| C7 | Flag rules can target `platform` and `appVersion`, which the client says itself | targeting, not security: a client can claim anything, as a user agent can | **confirmed** (owner, 2026-10-03): kept as is |

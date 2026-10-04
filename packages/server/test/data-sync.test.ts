@@ -49,6 +49,7 @@ async function setup() {
       (await (
         await fetch(`${api}/mutation`, {
           method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ path, args: toJsonValue(args as never) }),
         })
       ).json()) as { value: any }
@@ -205,12 +206,12 @@ test("limits: by-id pages of `pageSize`; a log page never splits a commit; catch
   expect(tombstones).toEqual([first[0]]);
 });
 
-test("Convex-Client: the sync id's prefix; a malformed header is a 400", async () => {
+test("Bunvex-Client: the sync id's prefix; a malformed header is a 400", async () => {
   const t = await setup();
-  const r = await t.sync({}, { "convex-client": "fivetran-export-1.2.3" });
+  const r = await t.sync({}, { "bunvex-client": "fivetran-export-1.2.3" });
   expect(r.body.syncId).toMatch(/^fivetran-[0-9a-f-]{36}$/);
-  expect((await t.sync({}, { "convex-client": "airbyte-export-0.1.0" })).body.syncId).toMatch(/^airbyte-/);
-  expect((await t.sync({}, { "convex-client": "x" })).body.code).toBe("InvalidClientVersion");
+  expect((await t.sync({}, { "bunvex-client": "airbyte-export-0.1.0" })).body.syncId).toMatch(/^airbyte-/);
+  expect((await t.sync({}, { "bunvex-client": "x" })).body.code).toBe("InvalidClientVersion");
 });
 
 test("progress: a row with create_data_sync; get_sync and list_active_syncs; their errors", async () => {
@@ -246,7 +247,7 @@ test("data_sync_cursor_from_deltas: continue a document_deltas sync from its cur
   const at = /"snapshot":(\d+)/.exec(snap.text)![1]!;
   await t.call("m:put", { table: "a", n: 1, doc: { k: 9n } });
   const conv = await t.req("data_sync_cursor_from_deltas", `{"cursor":${at}}`, {
-    "convex-client": "fivetran-export-1.0.0",
+    "bunvex-client": "fivetran-export-1.0.0",
   });
   expect(conv.status).toBe(200);
   const page = await t.sync({ cursor: conv.body.cursor });

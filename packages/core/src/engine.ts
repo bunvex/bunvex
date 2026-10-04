@@ -73,6 +73,7 @@ import {
   outsideExecution,
   preciseClock,
   runDeterministic,
+  settled,
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
@@ -298,7 +299,7 @@ export class Engine {
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
-    this.committer.onCommit((entries) => this.backendState.observe(entries));
+    this.committer.onCommit((entries) => this.backendState.observe(entries), "backend state");
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
@@ -1497,7 +1498,7 @@ export class Engine {
       tx.pendingValidators = this.pendingValidators;
     }
     const observed: Observed = { time: false };
-    const value = await runDeterministic(kind, now, () => body(tx), observed);
+    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
     return { tx, value, observed, now };
   }
 
@@ -1691,7 +1692,8 @@ export class Engine {
       identityObserved: tx.identityObserved,
     });
     try {
-      const value = await runDeterministic("query", now, () => body(tx));
+      const observed: Observed = { time: false };
+      const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };

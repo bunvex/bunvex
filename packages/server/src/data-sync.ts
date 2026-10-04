@@ -249,11 +249,12 @@ export function openCursor(engine: Engine, hex: string): DataSyncCursor {
 
 /**
  * The sync id's prefix from the client header (Convex's `DataSyncClient`): `fivetran-` for the Fivetran
- * connector (`fivetran-export-x.y.z` / `fivetran-import-…`), `airbyte-` for Airbyte's, none otherwise. Convex's
- * header name is allowed by rule 5's wire-name exception (STUDY-69); bunvex's own works too.
+ * connector (`fivetran-export-x.y.z` / `fivetran-import-…`), `airbyte-` for Airbyte's, none otherwise. The
+ * header is bunvex's (Convex's `Convex-Client`): rule 5 has no exceptions, and a connector talking to bunvex
+ * sends bunvex's header (DV-312, STUDY-69).
  */
 export function clientPrefix(req: Request): string {
-  const header = req.headers.get("convex-client") ?? req.headers.get("bunvex-client");
+  const header = req.headers.get("bunvex-client");
   if (header === null) return "";
   const parts = header.split("-");
   if (parts.length < 2) throw bad("InvalidClientVersion", `Invalid client version: ${header}`);

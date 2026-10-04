@@ -37,13 +37,16 @@ const bad = (code: string, message: string) => new StreamingExportError(400, cod
 
 // ---------------------------------------------------------------- encodings
 
-/** Convex's `ValueFormat`: `json` (clean), `convex_encoded_json`, `export_json`. */
+/** Convex's `ValueFormat` (`json` clean, `convex_encoded_json`, `export_json`), with bunvex's names (DV-307). */
 export type Format = "clean" | "encoded" | "export";
 
-/** The `format` argument, Convex's names (rule 5's wire-name exception, DV-307). */
+/**
+ * The `format` argument: `json` or `clean_json`, `encoded_json`, `export_json` (DV-307: Convex's
+ * `convex_encoded_json` / `convex_clean_json` renamed, its legacy `convex_json` alias dropped).
+ */
 export function parseFormat(s: string | null | undefined): Format {
-  if (s === undefined || s === null || s === "json" || s === "convex_clean_json") return "clean";
-  if (s === "convex_encoded_json" || s === "convex_json") return "encoded";
+  if (s === undefined || s === null || s === "json" || s === "clean_json") return "clean";
+  if (s === "encoded_json") return "encoded";
   if (s === "export_json") return "export";
   throw bad("BadFormat", `format param must be one of [\`json\`]. Got ${s}`);
 }

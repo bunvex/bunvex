@@ -19,8 +19,8 @@ import type { Functions } from "./functions.ts";
 
 // ---------------------------------------------------------------- metrics
 
-/** The isolate actions' compute metric: Convex's wire name (rule 5's wire-name exception, DV-308). */
-const ACTION_COMPUTE_ISOLATE = "actionComputeConvexGbHours";
+/** The isolate actions' compute metric: Convex's `actionComputeConvexGbHours`, renamed (DV-308). */
+const ACTION_COMPUTE_ISOLATE = "actionComputeIsolateGbHours";
 
 /** Convex's `UsageLimitMetric`, by wire name, its display unit and how a limit converts to raw units. */
 export const USAGE_METRICS = {

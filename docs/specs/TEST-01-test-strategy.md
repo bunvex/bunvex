@@ -3,6 +3,8 @@
 > **v1, 3 Oct 2026.** What bunvex tests, at which layer, and how a regression in the parts an app relies
 > on most is caught before it merges. Written with the test-hardening track: property tests (#255),
 > the index-range fix they found (#256, DV-310), the coverage gaps (#259) and the coverage floors (§4).
+>
+> **v1.1, 3 Oct 2026.** The root run isolates test files (§1, `--isolate`).
 
 ## 1. Layers
 
@@ -21,6 +23,13 @@ Property tests scale with `BUNVEX_PROPERTY_MULTIPLIER` (an integer, default 1): 
 (`BUNVEX_PROPERTY_MULTIPLIER=100 bun test packages/values packages/core`). A failure prints
 `seed` and `path`; replay it with `fc.assert(..., { seed, path })` in the failing test, then keep the
 counterexample as a plain regression case.
+
+The root run (`bun run test`, `bun run coverage`) passes `--isolate`: each test file gets a fresh global
+object, so what one file leaves behind cannot break another. On macOS, without it, `dev.test.ts`'s watching
+test (a server that loads two code pushes into `node:vm` contexts, in the test process) made later `bun`
+subprocesses of `local-deployment.test.ts` fail at random — `posix_spawn` ENOENT for an executable that
+exists, a child SIGKILLed — though each file passes alone. The time cost is nil (121 s and 123 s for the
+whole run). `bunfig.toml` has no setting for it, hence the flag.
 
 Every behaviour change still comes with a **sabotage check** (CLAUDE.md): break the fix, watch the test
 fail. A property that survives a sabotage is either weak or the mutant is equivalent; the PR says which.

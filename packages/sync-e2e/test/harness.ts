@@ -66,7 +66,11 @@ export async function startServer() {
     }),
   });
   let port = 0;
-  let current = createServer({ engine, functions, port: 0, redactLogsToClient: false });
+  // No site port (HTTP actions; no sync test calls one): createServer puts it on the API's port + 1 when the
+  // port is given, as a restart gives it, and that port is not the harness' to take (harness.test.ts)
+  const serve = (on: number) =>
+    createServer({ engine, functions, port: on, sitePort: null, redactLogsToClient: false });
+  let current = serve(0);
   port = current.server.port!;
   return {
     engine,
@@ -89,7 +93,7 @@ export async function startServer() {
     /** Drop every connection now (clients see an abnormal close), and serve again on the same port. */
     restart() {
       current.stop();
-      current = createServer({ engine, functions, port, redactLogsToClient: false });
+      current = serve(port);
     },
     stop: () => current.stop(),
   };
@@ -102,4 +106,19 @@ export async function until<T>(f: () => T | undefined | false, what = "condition
     await Bun.sleep(5);
   }
   throw new Error(`timed out waiting for ${what}`);
+}
+
+/**
+ * Convex's HTTP clients ask for `format: "convex_encoded_json"`, which bunvex refuses with `BadFormat`: its
+ * name is `encoded_json` (DV-307). The oracle tests send their requests through this `fetch`, which renames
+ * that one field, so everything else Convex's clients do is still compared with bunvex's.
+ */
+export function renameFormat(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+  return ((url: string, init?: RequestInit) =>
+    fetch(
+      url,
+      typeof init?.body === "string"
+        ? { ...init, body: init.body.replace('"format":"convex_encoded_json"', '"format":"encoded_json"') }
+        : init,
+    )) as typeof globalThis.fetch;
 }

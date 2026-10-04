@@ -81,7 +81,9 @@ async function setup(schema: SchemaDefinition = defineSchema({})) {
     engine.query(async (db) => (await db.query(table).collect()) as unknown as Doc[]) as Promise<Doc[]>;
   const queryImport = async (importId: string) =>
     (
-      (await (await post("/api/query", { path: "_system/cli/queryImport", args: { importId } })).json()) as {
+      (await (
+        await post("/api/query", { path: "_system/cli/queryImport", args: { importId }, format: "encoded_json" })
+      ).json()) as {
         value: Record<string, unknown> & { state: Record<string, unknown> };
       }
     ).value;
@@ -603,7 +605,13 @@ describe("round trip", () => {
     for (let i = 0; i < 400 && latest?.state !== "completed"; i++) {
       await Bun.sleep(25);
       latest = (
-        (await (await src.post("/api/query", { path: "_system/cli/exports:getLatest", args: {} })).json()) as {
+        (await (
+          await src.post("/api/query", {
+            path: "_system/cli/exports:getLatest",
+            args: {},
+            format: "encoded_json",
+          })
+        ).json()) as {
           value: Record<string, unknown> | null;
         }
       ).value;
