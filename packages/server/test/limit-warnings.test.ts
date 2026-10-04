@@ -57,6 +57,10 @@ async function setup() {
       void ctx.runQuery("m:read" as never, {});
       void ctx.runQuery("m:read" as never, {});
       void fetch("http://127.0.0.1:1/").catch(() => null);
+      // Busy for 1 ms, so its duration is past the test ratio's threshold (1800 s × 1e-7 = 0.18 ms) however
+      // fast the machine; a wait would let the calls above settle.
+      const end = Bun.nanoseconds() + 1e6;
+      while (Bun.nanoseconds() < end) {}
       return "done";
     }),
     nodeAction,
