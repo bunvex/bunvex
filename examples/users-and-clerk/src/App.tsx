@@ -31,8 +31,8 @@ function Chat() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    await send({ body });
     setBody("");
+    await send({ body });
   }
 
   return (

@@ -12,8 +12,8 @@ function Chat() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    await send({ body, author: NAME });
     setBody("");
+    await send({ body, author: NAME });
   }
 
   if (messages === undefined) return <p>Loading…</p>;

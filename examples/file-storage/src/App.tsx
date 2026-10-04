@@ -37,8 +37,8 @@ export function App() {
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          await sendMessage({ body, author: "me" });
           setBody("");
+          await sendMessage({ body, author: "me" });
         }}
       >
         <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" />

@@ -9,9 +9,17 @@ It needs an OpenAI API key, in the deployment's `OPENAI_API_KEY` variable:
 
 ```sh
 bun install
-bunx bunvex env set OPENAI_API_KEY <your key>
-bun run dev
+bun run dev                                  # starts the local deployment, pushes the functions, opens the page
 ```
+
+Then, in another terminal in this directory (the deployment exists once `bun run dev` has started it):
+
+```sh
+bunx bunvex env set OPENAI_API_KEY <your key>
+```
+
+The variable takes effect at the next call, with no restart. Until it is set, the page shows "OPENAI_API_KEY is not
+set" with this command.
 
 The functions read it as `process.env.OPENAI_API_KEY`; typed declarations of a deployment's variables come with
 `defineApp`. The action calls OpenAI's HTTP API with `fetch` (no SDK). `OPENAI_BASE_URL` (default

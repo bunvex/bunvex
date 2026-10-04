@@ -3,7 +3,7 @@
 // `bunvex deploy` in the example, as a self-hosted user would; `build(dir)` typechecks and builds its front
 // end. Every step goes through the CLI and the public client, never the server's internals.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BunvexClient, BunvexHttpClient } from "bunvex/browser";
@@ -113,8 +113,11 @@ export async function deploy(dir: string, options: { env?: Record<string, string
         state,
       )
     ).trim();
-    const env = { BUNVEX_SELF_HOSTED_URL: url, BUNVEX_SELF_HOSTED_ADMIN_KEY: adminKey };
-    const cli = (...args: string[]) => run([process.execPath, CLI, ...args], dir, env);
+    // The deployment through `--env-file` alone, so the example's own `.env.local` (a `bun run dev` leaves
+    // `BUNVEX_DEPLOYMENT` there) and the shell's variables never pick another one.
+    const envFile = join(state, "deployment.env");
+    writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
+    const cli = (...args: string[]) => run([process.execPath, CLI, ...args, "--env-file", envFile], dir);
     // The deployment's variables before its first push: `auth.config.ts` reads them when the push analyzes it.
     for (const [k, value] of Object.entries(options.env ?? {})) await cli("env", "set", k, value);
     const generated = join(dir, "bunvex/_generated");

@@ -54,6 +54,16 @@ test("a failing Giphy call fails the action, and posts nothing", async () => {
   await d.cli("env", "set", "GIPHY_KEY", "test-key", "--force");
 });
 
+test("without GIPHY_KEY, the action says how to set it, and calls nothing", async () => {
+  const calls = asked.length;
+  await d.cli("env", "remove", "GIPHY_KEY");
+  await expect(d.http.action(api.messages.sendGif, { queryString: "dog", author: "Ada" })).rejects.toThrow(
+    "GIPHY_KEY is not set: run `bunx bunvex env set GIPHY_KEY <value>` in this example's directory.",
+  );
+  expect(asked).toHaveLength(calls);
+  await d.cli("env", "set", "GIPHY_KEY", "test-key", "--force");
+});
+
 test("the GIF mutation is internal: a client cannot call it", async () => {
   await expect(
     d.http.mutation("messages:sendGifMessage" as never, { body: "x", author: "Mallory" } as never),

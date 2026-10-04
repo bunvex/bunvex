@@ -11,8 +11,8 @@ export function App() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    await send({ body, author: NAME });
     setBody("");
+    await send({ body, author: NAME });
   }
 
   return (

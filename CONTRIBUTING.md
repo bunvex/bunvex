@@ -28,6 +28,10 @@ word messages, as bunvex. There are no exceptions: wire names (a `format` value,
 are bunvex's too, since the clients that talk to bunvex are bunvex's (owner, 2026-10-03: DV-307, DV-308,
 DV-312).
 
+The example apps in [`examples/`](examples/README.md) use the public packages only. `bun run example <name>`
+runs one against this checkout's backend (an example's own `bun run dev` uses the latest released one), and
+`bun run test:examples` runs their end-to-end tests.
+
 Design decisions are recorded in [`docs/specs/`](docs/specs/). A change to the engine's guarantees, the
 persistence contract or the package layout starts with a spec (or an amendment to one).
 
