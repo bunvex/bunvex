@@ -19,6 +19,7 @@ import {
   setUserStopState,
   stringifyValue,
   TableSummariesUnavailableError,
+  TooManyWritesError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -520,7 +521,8 @@ export function createServer(opts: ServerOptions) {
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
-    if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
+    // So is the write throughput limit (STUDY-78), once its retries are spent.
+    if (!r.ok && (r.error instanceof TooManyConcurrentRequestsError || r.error instanceof TooManyWritesError))
       return requestError(429, r.error.code, r.error.message);
     // An access check (an admin's operation, a key where one is required) is the request's error (403).
     if (!r.ok) {

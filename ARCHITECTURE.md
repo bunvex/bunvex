@@ -42,6 +42,7 @@ bunvex/
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
 │   │   │                            filter M · paginate M · limit + 256-operator cap (query-ops, STUDY-66) ✅
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
+│   │   ├── write-throughput         the 4 MiB/s write throughput limit (STUDY-78)                ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅

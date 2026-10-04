@@ -18,6 +18,7 @@ import {
   ImportIdError,
   insertAuditLogEvents,
   OccError,
+  occBackoffMs,
   referencedTables,
   SNAPSHOT_IMPORTS_TABLE,
   SYSTEM_ACTOR,
@@ -868,6 +869,10 @@ export class ImportService {
     const ids = docs.map((d) => d._id).filter((id) => id !== undefined);
     if (new Set(ids).size < ids.length)
       throw new ImportError("DuplicateId", `Objects in table "${def.name}" have duplicate _id fields`);
+    // As Convex's `execute_with_overloaded_and_ratelimited_retries` (STUDY-78): an import waits for the write
+    // throughput limit, as long as it takes, with backoff from 10 ms to 30 s.
+    for (let failures = 0; !this.engine.writeThroughput.allowsNow(); failures++)
+      await Bun.sleep(occBackoffMs(failures, 10, 30_000));
     await this.engine.mutation(
       (db) =>
         db.asSystem(async () => {

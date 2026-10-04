@@ -145,6 +145,7 @@ export {
   Engine,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,
+  type MutationOptions,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,
   OCC_MAX_RETRIES,
@@ -288,3 +289,12 @@ export {
   type TxLimits,
   type TxQuery,
 } from "./tx.ts";
+export {
+  formatByteCount,
+  formatWindow,
+  MAX_BYTES_WRITTEN_PER_SECOND,
+  TooManyWritesError,
+  WRITE_THROUGHPUT_WINDOW_MS,
+  WriteThroughputLimiter,
+  type WriteThroughputOptions,
+} from "./write-throughput.ts";

@@ -109,6 +109,13 @@ const registryKey = (name: string) => {
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
 };
 
+/**
+ * How a mutation run by the function runner commits (STUDY-78): it checks the write throughput limit first,
+ * as each of Convex's `run_mutation_no_udf_log` attempts does. Mutations a function calls inside its own
+ * transaction do not: they are part of it.
+ */
+export const THROTTLED = { throttled: true } as const;
+
 /** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
 export const MAX_NESTED_CALL_DEPTH = 8;
 
@@ -1552,6 +1559,7 @@ export class Functions {
         untilAborted(this.systemMutationBody(name, args, fromClient, caller), deadline),
         name,
         caller,
+        THROTTLED,
       );
     return this.logged(
       "Mutation",
@@ -1562,6 +1570,7 @@ export class Functions {
           this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline),
           name,
           caller,
+          THROTTLED,
         ),
       (r) => returned(r.value),
       undefined,
@@ -1590,6 +1599,7 @@ export class Functions {
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
         (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
         caller,
+        THROTTLED,
       );
     // A replayed request did not run: nothing to log.
     return this.logged(

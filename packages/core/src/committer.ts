@@ -19,6 +19,7 @@ import { outsideExecution, wallClockUs } from "./determinism.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
+import type { WriteThroughputLimiter } from "./write-throughput.ts";
 
 export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
 /**
@@ -281,6 +282,8 @@ type PendingCommit = {
   /** The search indexes' versions this commit writes, and the searches it read, for OCC. */
   searchDocs?: SearchDoc[];
   searchReads?: SearchRead[];
+  /** Its `commitWriteBytes`, once its write batch is sized: what the write throughput limit records. */
+  bytes?: number;
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
@@ -327,6 +330,8 @@ export class Committer {
   private purgedTs = 0;
   /** Set once persistence has failed; the committer accepts nothing afterwards. */
   stopped: CommitterStoppedError | null = null;
+  /** Told each published commit's bytes (STUDY-78), as Convex's snapshot manager tells its limiter. */
+  writeThroughput: WriteThroughputLimiter | null = null;
 
   constructor(
     private persistence: Persistence,
@@ -574,7 +579,8 @@ export class Committer {
     while (to < accepted.length && (to === from || (docs < maxDocuments && bytes < maxBytes))) {
       const [p] = accepted[to++];
       docs += p.docs.length;
-      bytes += commitWriteBytes(p.docs, p.idx);
+      p.bytes = commitWriteBytes(p.docs, p.idx);
+      bytes += p.bytes;
     }
     return to;
   }
@@ -620,6 +626,9 @@ export class Committer {
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
+    // Published: its bytes count against the write throughput limit (Convex's `SnapshotManager::push`).
+    const wt = this.writeThroughput;
+    if (wt) for (const [p, e] of batch) wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx));
     // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and
     // visible, so its commits are answered as committed, but the committer stops (fail-stop) and says which.
     let i = -1; // -1: the commits' `onVisible` hooks, else the listener at i

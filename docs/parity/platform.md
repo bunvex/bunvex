@@ -403,7 +403,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Nested runQuery/runMutation depth | 8 (`MAX_REACTOR_CALL_DEPTH`) | missing | |
 | Concurrency | queries 16, mutations 16, V8 actions 64, Node actions 64, uploads 4 (`APPLICATION_MAX_CONCURRENT_*`) | partial (STUDY-68) | Convex's limiters and knobs: a query or mutation run (each attempt) waits up to 5 s, an action up to 10 s, then `TooManyConcurrentRequests` (429; the sync protocol closes with "try again"); scheduled and cron actions wait as long as it takes; a cached query and a call in another function's transaction take no permit; HTTP actions share the action limit; `"use node"` actions have their own. Their gauges as Convex's. Not yet: the upload limit (4). |
 | Isolate heap | 64 MiB + 32 MiB, ArrayBuffers 64 MiB | missing | Tied to sandbox decision #3. |
-| Write throughput | 4 MiB/s (`MAX_BYTES_WRITTEN_PER_SECOND`) | missing | |
+| Write throughput | 4 MiB/s (`MAX_BYTES_WRITTEN_PER_SECOND`) | done (STUDY-78) | Every commit counts; each attempt of a mutation the function runner runs checks it, retried within the OCC budget, then `TooManyWrites` (429; sync close 1013); scheduled mutations and crons wait; imports wait. Convex's knobs (`MAX_BYTES_WRITTEN_PER_SECOND`, `WRITE_THROUGHPUT_WINDOW`). |
 | HTTP server | timeout 300 s, 1024 concurrent requests | missing | bunvex uses `idleTimeout` 120 s and a 16 MiB WebSocket payload limit (Convex's frame cap, STUDY-64). |
 | Log lines | 256 per function, 32 KiB each | missing | |
 | Scheduling / env vars / search / vector limits | see sections 4, 6, 7, 10 | missing | |
