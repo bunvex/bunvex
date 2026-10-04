@@ -26,6 +26,7 @@ import { v1 } from "@bunvex/protocol";
 import { decodeId, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
+import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
 import {
   ADMIN_KEY_PURPOSE,
   AdminKeys,
@@ -162,6 +163,13 @@ export type ServerOptions = {
    * Default: `BUNVEX_HTTP_PROXY`, else none (null: none, whatever the environment says).
    */
   httpProxy?: string | null;
+  /**
+   * Without `httpProxy`, the addresses bunvex itself refuses those requests (STUDY-80 P1, DV-325 pending;
+   * beyond Convex): `metadata` (link-local and the cloud metadata endpoints), `private` (also loopback,
+   * RFC 1918, CGNAT, unique-local, …) or `none` (Convex's behaviour). Default: `BUNVEX_DENY_ADDRESSES`,
+   * else `metadata`.
+   */
+  denyAddresses?: AddressScreen;
   /**
    * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
@@ -318,7 +326,12 @@ export function createServer(opts: ServerOptions) {
   const proxyUrl = httpProxyUrl(
     opts.httpProxy === null ? undefined : (opts.httpProxy ?? process.env.BUNVEX_HTTP_PROXY),
   );
-  const httpProxy: HttpProxy | null = proxyUrl ? { url: proxyUrl, clientId: engine.instanceName } : null;
+  // Without one, bunvex's own screen (STUDY-80 P1, DV-325 pending; beyond Convex): the same path, through a
+  // proxy in the process that refuses the denied ranges.
+  const screen = addressScreen(opts.denyAddresses ?? process.env.BUNVEX_DENY_ADDRESSES);
+  const builtinScreen = !proxyUrl && screen !== "none" ? startAddressScreen(screen) : null;
+  const screenUrl = proxyUrl ?? builtinScreen?.url;
+  const httpProxy: HttpProxy | null = screenUrl ? { url: screenUrl, clientId: engine.instanceName } : null;
   functions.httpProxy = httpProxy;
   // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
   const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), httpProxy, ...opts.logSinks });
@@ -1807,6 +1820,7 @@ export function createServer(opts: ServerOptions) {
     /** Storage usage gauges (STUDY-73). */
     usageGauges,
     stop: () => {
+      builtinScreen?.stop();
       functionLog.close();
       usageGauges.stop();
       logManager.stop();
@@ -1833,6 +1847,7 @@ export function createServer(opts: ServerOptions) {
       site?.stop(true);
       server?.stop(true);
       stopFileSweeps();
+      builtinScreen?.stop();
       await engine.close();
     },
   };

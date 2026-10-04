@@ -7,6 +7,7 @@
 import { defineSchema, Engine, setFetchSender } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { isolateFetch } from "../src/action-fetch.ts";
+import { startAddressScreen } from "../src/address-screen.ts";
 import type { FunctionLog } from "../src/function-log.ts";
 import { action, Functions } from "../src/functions.ts";
 import { proxiedFetch } from "../src/http-proxy.ts";
@@ -46,7 +47,12 @@ async function e2e(label: string) {
   await functions.runAction("m:fetches", { n: N });
   console.log(`${label.padEnd(48)} ${(((performance.now() - t) * 1000) / N).toFixed(2)} µs/fetch`);
 }
-await e2e("action fetch to a local server, as served");
+functions.httpProxy = null;
+await e2e("action fetch to a local server, no screen");
+const screen = startAddressScreen("metadata");
+functions.httpProxy = { url: screen.url, clientId: "bench" };
+await e2e("action fetch through bunvex's screen (DV-325)");
+screen.stop();
 const proxy = await startScreeningProxy(() => false);
 functions.httpProxy = { url: proxy.url, clientId: "bench" };
 await e2e("action fetch through a local proxy");

@@ -14,11 +14,13 @@
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
-//   discovery and JWKS, and the log sinks go through; without it, Convex's warning at start.
+//   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
+//   STUDY-80 P1, DV-325 pending: `metadata` by default), and Convex's warning at start when that is `none`.
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence } from "@bunvex/core";
 import { blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
+import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence } from "./persistence.ts";
@@ -53,6 +55,8 @@ Options:
       --do-not-require-ssl   allow an unencrypted database connection
       --redact-logs-to-client  do not send log lines and errors' details to clients
       --http-proxy <url>     send actions' fetch requests through this proxy, to screen them for SSRF
+      --deny-addresses <set> without --http-proxy, refuse them to: metadata (default; link-local and cloud
+                             metadata), private (also loopback and private networks) or none
   -V, --version              print the version
   -h, --help                 print this help`;
 
@@ -75,6 +79,7 @@ export type LocalBackendFlags = {
   doNotRequireSsl: boolean;
   redact: boolean;
   httpProxy?: string;
+  denyAddresses?: AddressScreen;
 };
 
 const VALUED: Record<string, string> = {
@@ -91,6 +96,7 @@ const VALUED: Record<string, string> = {
   "--instance-secret": "--instance-secret",
   "--local-storage": "--local-storage",
   "--http-proxy": "--http-proxy",
+  "--deny-addresses": "--deny-addresses",
 };
 
 /** Convex's instance secret check: 32 bytes, hex-encoded. */
@@ -154,6 +160,10 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
         if (!/^https?:$/.test(new URL(v).protocol))
           return `invalid value '${v}' for '--http-proxy <HTTP_PROXY>': the proxy's scheme must be http or https`;
         f.httpProxy = v;
+      } else if (name === "--deny-addresses") {
+        if (!(ADDRESS_SCREENS as readonly string[]).includes(v))
+          return `invalid value '${v}' for '--deny-addresses <DENY_ADDRESSES>': possible values: ${ADDRESS_SCREENS.join(", ")}`;
+        f.denyAddresses = v as AddressScreen;
       } else {
         f.localStorage = v;
         localStorageGiven = true;
@@ -214,6 +224,7 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     ...(f.redact ? { redactLogsToClient: true } : {}),
     // A flag only, as Convex's: not BUNVEX_HTTP_PROXY.
     httpProxy: f.httpProxy ?? null,
+    denyAddresses: f.denyAddresses ?? DEFAULT_ADDRESS_SCREEN,
     fileStorage: storage("files"),
     moduleStorage: storage("modules"),
     exportStorage: storage("exports"),
@@ -287,7 +298,7 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
   io.err(`bunvex-local-backend ${version}: instance ${flags.instanceName}, ${flags.db}`);
   io.err(`the API at ${running.url}${running.siteUrl ? `, HTTP actions at ${running.siteUrl}` : ""}`);
   // Convex warns the same way (a release build without `--convex-http-proxy`).
-  if (!flags.httpProxy) io.err(NO_PROXY_WARNING);
+  if (!flags.httpProxy && (flags.denyAddresses ?? DEFAULT_ADDRESS_SCREEN) === "none") io.err(NO_PROXY_WARNING);
   await new Promise<void>((done) => {
     for (const signal of ["SIGINT", "SIGTERM"] as const)
       process.once(signal, () => {

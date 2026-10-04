@@ -247,7 +247,7 @@ test("log sinks: the webhook and providers go through the proxy, Sentry's does n
   expect(via("ingest.example.io")).toEqual([null]);
 });
 
-test("bunvex-local-backend --http-proxy: checked as clap checks a URL; without it, Convex's warning", async () => {
+test("bunvex-local-backend --http-proxy: checked as clap checks a URL; without any screen, Convex's warning", async () => {
   const flags = (extra: string[]) => parseLocalBackendFlags(["--instance-secret", SECRET, ...extra]);
   expect(flags(["--http-proxy", "http://proxy:4750"])).toMatchObject({ httpProxy: "http://proxy:4750" });
   expect(flags(["--http-proxy", "notaurl"])).toBe(
@@ -255,8 +255,12 @@ test("bunvex-local-backend --http-proxy: checked as clap checks a URL; without i
   );
   expect(flags(["--http-proxy", "socks5://p:1"])).toContain("the proxy's scheme must be http or https");
   expect(flags([])).not.toHaveProperty("httpProxy");
-  // Running: the warning without a proxy, none with one.
-  for (const proxy of [[], ["--http-proxy", "http://127.0.0.1:9"]]) {
+  expect(flags(["--deny-addresses", "private"])).toMatchObject({ denyAddresses: "private" });
+  expect(flags(["--deny-addresses", "all"])).toBe(
+    "invalid value 'all' for '--deny-addresses <DENY_ADDRESSES>': possible values: none, metadata, private",
+  );
+  // Running: the warning without a proxy and without bunvex's screen (DV-325), none otherwise.
+  for (const proxy of [["--deny-addresses", "none"], [], ["--http-proxy", "http://127.0.0.1:9"]]) {
     const cwd = mkdtempSync(join(tmpdir(), "bunvex-proxy-lb-"));
     stops.push(() => rmSync(cwd, { recursive: true, force: true }));
     const err: string[] = [];
@@ -268,7 +272,7 @@ test("bunvex-local-backend --http-proxy: checked as clap checks a URL; without i
     );
     for (let i = 0; i < 500 && err.length < 2; i++) await Bun.sleep(10);
     await Bun.sleep(20);
-    expect(err.includes(NO_PROXY_WARNING)).toBe(proxy.length === 0);
+    expect(err.includes(NO_PROXY_WARNING)).toBe(proxy[1] === "none");
     process.emit("SIGTERM");
     expect(await exit).toBe(0);
   }

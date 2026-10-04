@@ -1,7 +1,7 @@
 # STUDY-80 — Outbound requests: what an action's `fetch` may reach, and the SSRF proxy
 
-- **Status:** PR 1 (schemes and Bun's options, #377) and PR 2 (the proxy) implemented, as Convex. P1
-  (screening without a proxy, beyond Convex) pending (owner).
+- **Status:** PR 1 (schemes and Bun's options, #377) and PR 2 (the proxy, #379) implemented, as Convex. P1
+  (screening without a proxy, beyond Convex; DV-325) pending (owner), built in a draft PR (§4.1).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04. Oracle: Convex's
   `convex-local-backend` (a local build, `--disable-beacon`) with a screening proxy and local targets
   (§1.4).
@@ -178,7 +178,49 @@ action's fetch to a local server is 58–63 µs as served and unchecked alike. T
 |---|---|---|---|
 | — | `--http-proxy` for Convex's `--convex-http-proxy`; `BUNVEX_HTTP_PROXY` for embedded servers | rule 5 (DV-197) | as DV-197 |
 | — | Only `http:` / `https:` proxies (Convex's `reqwest` also takes `socks5:`) | Bun's `fetch` has no SOCKS proxy | a platform limit, refused at start with a message |
-| P1 | Screening without a proxy: refuse private, loopback, link-local and metadata addresses when no proxy is set (beyond Convex, which only warns) | self-hosted operators rarely run a proxy | **pending (owner)**: draft PR |
+| P1 | Screening without a proxy (DV-325): bunvex's own screen refuses denied addresses when no proxy is set; `metadata` by default (beyond Convex, which only warns) | self-hosted operators rarely run a proxy; the metadata endpoint hands out credentials | **pending (owner)**: draft PR, §4.1 |
+
+### 4.1 P1: screening without a proxy (DV-325, pending)
+
+**The question.** Convex screens nothing itself (§1.3); without `--convex-http-proxy` an action can reach
+loopback, the private network and the cloud metadata endpoint (`169.254.169.254`, which hands out the
+host's IAM credentials on AWS, GCP, Azure). Convex's own cloud always runs Smokescreen; its self-hosted
+image ships none. Should bunvex screen when no proxy is set, and what by default?
+
+**What is built (the draft), so any answer is a default to flip:**
+
+- `--deny-addresses none|metadata|private` (`createServer({ denyAddresses })`, `BUNVEX_DENY_ADDRESSES`),
+  used only when no `--http-proxy` is given (the operator's proxy owns screening then).
+- The screen is a proxy in the process (`packages/server/src/address-screen.ts`) that takes the place of
+  `--http-proxy`, so the same requests go through it (§3.2) and are refused the same way (the 407 path:
+  `Request to <url> forbidden`). It resolves the name, refuses if **any** address is denied (as Smokescreen),
+  and connects to the address it checked — a second, different DNS answer (rebinding) never reaches the
+  connection. Redirects are new requests through it, each checked. IP spellings (`2852039166`,
+  `0xA9FEA9FE`, `[::ffff:a9fe:a9fe]`) are normalized by the URL parser or checked as their IPv4.
+- `metadata`: 169.254.0.0/16, fe80::/10, fd00:ec2::254, 100.100.100.200. `private`: those plus 0/8, 10/8,
+  100.64/10, 127/8, 172.16/12, 192.0.0/24, the documentation ranges, 192.168/16, 198.18/15, 224/4, 240/4,
+  ::, ::1, fc00::/7, ff00::/8, 2001:db8::/32, with IPv4-mapped and NAT64 forms checked as IPv4.
+- Cost (`bench/action-fetch.ts`, `probe`): an `https:` target is a `CONNECT` tunnel that Bun reuses (11
+  requests to example.com: 1 upstream connection, 57.5 ms per request vs 58.0 ms direct). An `http:` target
+  is forwarded once per connection, so it loses keep-alive: ~+0.24 ms per request to a local server (60 →
+  ~300 µs).
+
+**Options.**
+
+| | Default without a proxy | For | Against |
+|---|---|---|---|
+| A | `none` (Convex: warn only) | parity; nothing changes for anyone | the metadata endpoint open on every self-hosted cloud VM; operators rarely configure a proxy |
+| B | `none`, `metadata` / `private` opt-in | parity by default; one flag to screen | the same default exposure as A |
+| C | **`metadata`**, `private` opt-in, `none` to opt out | closes the one SSRF target that turns into credentials, which app code virtually never needs; loopback (local dev, `bunvex dev`) and private networks (other containers in a compose network) keep working | an app that reads instance metadata from a function breaks (opt out with `none`); `http:` requests lose keep-alive (~0.24 ms each locally) |
+| D | `private`, opt-outs | secure by default | breaks local dev against `localhost` services and compose networks (common), which then need `none` |
+
+**Recommendation: C.** It takes the highest-impact SSRF target off the table at no cost to the cases that
+make D painful, keeps `https:` traffic as fast as direct, and leaves Convex's behaviour one flag away. The
+startup warning stays for `none`.
+
+Smaller points under the same decision: the screen applies to exactly the proxy's list (not Sentry's sink,
+not `"use node"` actions, as §1.2); a name that does not resolve is refused by the screen (a 407) rather
+than failing with a DNS error.
 
 ## 5. Tests
 
@@ -194,7 +236,12 @@ action's fetch to a local server is 58–63 µs as served and unchecked alike. T
   the flag's checks.
 - **Sabotage:** the proxy ignored (5 tests fail), the 407 check removed (5), Sentry proxied (1), the hop not
   named (1).
+- `packages/server/test/address-screen.test.ts` (P1 draft): the denied ranges per setting (IPv4-mapped and
+  NAT64 included), names checked by every address, the metadata endpoint refused in four spellings and
+  behind a redirect, loopback allowed under `metadata` and refused under `private`, bodies and streamed
+  bodies forwarded, 20 requests in a row, `none` starting nothing, an operator's proxy replacing the screen.
+  Sabotage: the deny check off → 4 of 6 fail.
 
 ## 6. Open questions
 
-- P1 (§4).
+- P1 (§4.1, DV-325): whether bunvex screens without a proxy, and its default.
