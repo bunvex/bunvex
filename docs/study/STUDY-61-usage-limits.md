@@ -114,7 +114,7 @@ with and without the meter, within the noise. A first version that formatted dat
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-308 | ~~The metric renamed `actionComputeIsolateGbHours`~~ — resolved: Convex's name, by an explicit rule-5 exception for wire names (`WIRE_NAMES`). The stop message stays reworded (rule 5). | — | owner, 2026-10-03 |
+| DV-308 | The metric `actionComputeConvexGbHours` is `actionComputeIsolateGbHours`; Convex's name is not a metric (`BadJsonBody`). The stop message is reworded ("in the deployment settings"). | Rule 5 with no exceptions (as DV-312). | owner, 2026-10-03, revisited: B (as DV-312); first resolved the same day to Convex's name by a wire-name exception, now removed |
 | DV-309 | Usage is metered from the function log. Database I/O uses its byte counts (DV-251: JSON lengths, no index key bytes). Search, fetch and action-storage bytes are not counted, nor system-function bandwidth. Action CPU equals action time (DV-252). | Ainda não fizemos: those counters are not measured. | accepted (owner, 2026-10-03) |
 
 ## 5. Tests

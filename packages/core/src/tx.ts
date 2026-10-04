@@ -18,6 +18,7 @@ import {
   type GenericValidator,
   isCommitTsPlaceholder,
   isSimpleObject,
+  keyBytesLength,
   MAX_COMMIT_TS,
   toJsonValue,
   type Value,
@@ -40,6 +41,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
   DanglingReferenceError,
@@ -54,14 +56,17 @@ import {
   type Doc,
   type IndexDef,
   indexKey,
+  indexKeySize,
   indexKeyValues,
+  isReservedIndex,
   maintainedIndexes,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
+import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
 
@@ -174,7 +179,7 @@ export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
 export function formatBytes(n: number): string {
-  const units = ["B", "KiB", "MiB", "GiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let i = 0;
   let x = n;
   while (x >= 1024 && i < units.length - 1) {
@@ -367,6 +372,96 @@ export class Tx {
   /** Functions scheduled by this transaction and their arguments' bytes (`scheduled-jobs.ts`). */
   scheduledCount = 0;
   scheduledBytes = 0;
+  /** The index key bytes the user's reads were metered (STUDY-71), beside their documents' `bytesRead`. */
+  private keyBytesRead = 0;
+  /** The bytes this transaction's text searches were charged (STUDY-71). */
+  private textQueryBytes = 0;
+
+  /**
+   * One document handed out of a `get`, an index range or a search, as Convex's
+   * `ReadSet::record_read_document` (STUDY-71): a user table's document counts its size and one row toward
+   * the read limits (checked here, the count growing even when it throws) and the metered egress, plus its
+   * index key's bytes when a user-defined index returned it. A system table's is kept apart and never
+   * limited (Convex's `system_tx_size`).
+   */
+  private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
+    if (t.name.startsWith("_")) return;
+    this.docsRead++;
+    this.bytesRead += valueSize(doc as unknown as Value);
+    if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
+    if (this.systemTx) return;
+    if (this.docsRead > this.limits.documentsRead)
+      throw new Error(
+        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
+      );
+    if (this.bytesRead > this.limits.bytesRead)
+      throw new Error(
+        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
+      );
+  }
+
+  /**
+   * The database I/O Convex meters for this transaction (STUDY-71): what it read, and — once it committed —
+   * what it wrote, as Convex's `Committer::track_commit`: per written document of a user table one row, the
+   * index entries it changed (a delete's too), and the bytes of its new version and of each user-defined
+   * index entry it adds (`IndexKey::size`). A delete adds no bytes.
+   */
+  io(committed: boolean): {
+    readBytes: number;
+    readDocuments: number;
+    writeBytes: number;
+    writeDocuments: number;
+    writeIndexRows: number;
+    textQueryBytes: number;
+    textWriteBytes: number;
+    vectorWriteBytes: number;
+    vectorWriteQueryBytes: number;
+  } {
+    let writeBytes = 0;
+    let textWriteBytes = 0;
+    let vectorWriteBytes = 0;
+    let vectorWriteQueryBytes = 0;
+    let writeDocuments = 0;
+    let writeIndexRows = 0;
+    if (committed)
+      for (const { table: t, old, next } of this.writes.values()) {
+        if (t.name.startsWith("_") || (!old && !next)) continue;
+        writeDocuments++;
+        for (const ix of maintainedIndexes(t)) {
+          const oldKey = old && indexKey(ix, old);
+          const newKey = next && indexKey(ix, next);
+          writeIndexRows +=
+            oldKey && newKey && compareKeys(oldKey, newKey) === 0 ? 1 : (oldKey ? 1 : 0) + (newKey ? 1 : 0);
+          if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
+        }
+        if (!next) continue;
+        const size = valueSize(next as unknown as Value);
+        writeBytes += size;
+        // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
+        // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
+        // then the document's size once.
+        for (const e of this.searchIndexes?.forTablet(t.id) ?? []) textWriteBytes += indexedDocBytes(e.def, next);
+        let vectors = 0;
+        for (const e of this.vectorIndexes?.forTablet(t.id) ?? [])
+          if (inVectorIndex(e.def, next)) vectors += e.def.dimensions * 4 + 33;
+        if (vectors > 0) {
+          vectorWriteQueryBytes += vectors;
+          vectorWriteBytes += size;
+        }
+      }
+    return {
+      readBytes: this.bytesRead + this.keyBytesRead,
+      readDocuments: this.docsRead,
+      writeBytes,
+      writeDocuments,
+      writeIndexRows,
+      textQueryBytes: this.textQueryBytes,
+      textWriteBytes,
+      vectorWriteBytes,
+      vectorWriteQueryBytes,
+    };
+  }
+
   /** What has been read, written and scheduled so far, against the limits. */
   get usage(): TxLimits {
     return {
@@ -632,21 +727,6 @@ export class Tx {
     this.uncountedReads++;
   }
 
-  /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */
-  private recordDoc(json: string) {
-    this.docsRead++;
-    this.bytesRead += json.length;
-    if (this.systemTx) return;
-    if (this.docsRead > this.limits.documentsRead)
-      throw new Error(
-        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
-      );
-    if (this.bytesRead > this.limits.bytesRead)
-      throw new Error(
-        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
-      );
-  }
-
   /**
    * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
    * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
@@ -712,14 +792,19 @@ export class Tx {
     this.countRowsRead(t.name, 1);
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
-    if (w) return w.next && structuredClone(w.next);
+    if (w) {
+      if (w.next) this.countEgress(t, w.next, null);
+      return w.next && structuredClone(w.next);
+    }
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
-    if (json) this.recordDoc(json);
-    return json ? decodeDoc(json) : null;
+    if (!json) return null;
+    const doc = decodeDoc(json);
+    this.countEgress(t, doc, null);
+    return doc;
   }
 
   /**
@@ -872,7 +957,6 @@ export class Tx {
           throw e;
         }
       });
-      for (const j of rows) this.recordDoc(j);
       this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
     }
@@ -882,7 +966,6 @@ export class Tx {
       const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
       // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
       if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
-      this.recordDoc(json);
       out.push(decodeDoc(json));
     }
     this.countRowsRead(t.name, out.length);
@@ -913,7 +996,10 @@ export class Tx {
     let n = 64;
     for (;;) {
       const docs = await this.page(st, lo, hi, n);
-      for (const d of docs) yield d;
+      for (const d of docs) {
+        this.countEgress(st.t!, d, st.ix!);
+        yield d;
+      }
       if (docs.length < n) return;
       const last = indexKey(st.ix!, docs[docs.length - 1]);
       if (st.desc) hi = last;
@@ -1083,6 +1169,7 @@ export class Tx {
       // Only limits: the smallest is the page size.
       const limit = Math.min(pipe.onlyLimits, cap);
       const docs = await this.page(st, st.range.lo, st.range.hi, limit);
+      for (const d of docs) this.countEgress(st.t, d, st.ix);
       // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
       // one ran out of the range.
       if (docs.length < limit) reads.exhausted();
@@ -1399,6 +1486,8 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
+  vectorIndexes: VectorIndexes | null = null;
   /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
   tableCount: ((tablet: number) => number) | null = null;
 
@@ -1484,6 +1573,9 @@ export class Tx {
     else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
     const pending = new Map<string, Doc | null>();
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
+    // Convex charges a search its whole index's bytes (DV-317: bunvex's indexed bytes for its segments');
+    // an empty search string, nothing.
+    if (text !== "" && !t.name.startsWith("_")) this.textQueryBytes += e.index.indexedBytes;
     const hits = this.searchIndexes!.search(e, { tokens, prefixLast: true, filters: eqs }, this.snapshot, pending);
     return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
   }
@@ -1859,3 +1951,6 @@ class QueryImpl implements TxQuery {
     return this.tx.iterate(this.st);
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Tx, QueryImpl, ScanReads);

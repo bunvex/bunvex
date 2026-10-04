@@ -55,6 +55,7 @@ import {
   type LogCommit,
   type LogRow,
   type OpenOptions,
+  opaqueToInspect,
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
@@ -548,6 +549,24 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return r ? r.j : null;
   }
 
+  async getVersions(table: number, ids: string[], ts: number) {
+    const found = new Map<string, { json: string | null; ts: number }>();
+    const unique = [...new Set(ids)];
+    for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
+      const rows = await this.read(() =>
+        this.docs
+          .aggregate<{ _id: string; ts: number; j: string | null }>([
+            { $match: { t: table, i: { $in: unique.slice(i, i + VERSIONS_CHUNK) }, ts: { $lte: ts } } },
+            { $sort: { i: 1, ts: -1 } },
+            { $group: { _id: "$i", ts: { $first: "$ts" }, j: { $first: "$j" } } },
+          ])
+          .toArray(),
+      );
+      for (const r of rows) found.set(r._id, { json: r.j, ts: Number(r.ts) });
+    }
+    return versionsInOrder(ids, found);
+  }
+
   async scanDocs(
     table: number,
     index: number,
@@ -753,3 +772,17 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     await this.call(() => this.client.close());
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(MongoPersistence);
+
+/** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
+function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {
+  return ids.map((id) => {
+    const v = found.get(id);
+    return v && v.json !== null ? { json: v.json, ts: v.ts } : null;
+  });
+}
+
+/** Ids per `getVersions` statement: one round trip each, within every store's parameter limits. */
+const VERSIONS_CHUNK = 1000;

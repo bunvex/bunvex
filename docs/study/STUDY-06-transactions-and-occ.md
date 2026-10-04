@@ -544,10 +544,10 @@ index on append and trim. Memory driver 124–128k commits/s after vs 129k befor
     value is encoded at once instead.
 - **Pagination** already recorded `[start, last key]` (STUDY-17); its end now uses the same
   `readEndAfter`.
-- **Not changed:** a scan's prefetch (pages of 64, growing to 1 024) still counts every fetched document
-  toward the 32 000-document read limit, where Convex counts the rows returned (`record_read_document` in
-  `start_next`). It only matters near the limit, with a filter or a `for await` that stops early; noted
-  here for a follow-up, not decided.
+- **Not changed then:** a scan's prefetch (pages of 64, growing to 1 024) still counted every fetched
+  document toward the 32 000-document read limit, where Convex counts the rows returned
+  (`record_read_document` in `start_next`). Fixed with STUDY-71: only the documents handed out count, by
+  their sizes, and system tables' reads apart.
 
 Tests (`packages/core/test/read-set-prefix.test.ts`, `read-set-serializable.test.ts`,
 `packages/server/test/sync.test.ts`):
@@ -676,6 +676,20 @@ write.
 - **A failure** stops the committer as before. Batches already flushed stay acknowledged (they are durable);
   the failing batch and the rest of the group are refused. A committer stopped from outside (a lost lease)
   between two batches writes nothing more.
+- **A commit listener that throws** (`onCommit`, or a commit's `onVisible` hook) is an internal error, not a
+  persistence failure, but it is fail-stop too (owner, 2026-10-03): a sync layer left half-notified would
+  leave clients silently stale. Convex has no listener to throw: its committer publishes to the write log and
+  snapshot manager in process, and any other error of `Committer::go` — "a persistence write fails or …
+  unrecoverable logic errors" — goes to the shutdown signal with its own message
+  (`crates/database/src/committer.rs` L335-341); a panic aborts the process (`panic = "abort"`, Cargo.toml).
+  So bunvex says what happened: the committer stops with a `CommitterStoppedError` whose cause is a
+  `CommitListenerError` naming the listener (each is named at registration: `sync`, `scheduler`,
+  `cron executor`, `log streams`, `file storage sweeps`, `environment variables`, `backend state`) and holding
+  the original error, and whose message reads "the committer stopped after an internal error in commit
+  listener "sync": …" instead of "… after a persistence failure: …" (`persistenceFailure` tells them apart).
+  The batch is durable and visible, so its commits are acknowledged; the listeners after the failing one are
+  not called, later batches and queued commits are refused, and `onFatal` runs once. Before, the batch's
+  callers hung and the server reported a persistence failure.
 - **Statements.** Postgres sends at most 1 024 rows per statement (the fence CTE carries the first chunk);
   MySQL fills each `INSERT` up to 10 MiB of SQL text (an upper bound of the escaped row: 3 bytes per string
   character, 2 per key byte); both as Convex, inside the batch's one transaction (`chunkRows`,

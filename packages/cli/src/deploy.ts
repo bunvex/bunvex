@@ -43,27 +43,60 @@ ${TARGET_OPTIONS}
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
-type ProjectConfig = { functions?: unknown; codegen?: { fileType?: unknown } };
+export type ProjectConfig = { functions?: string; codegen?: { fileType?: "ts" | "js/dts" } };
 
-function readProjectConfig(cwd: string): ProjectConfig {
+/** How Convex's schema validator (zod) names a value's type in "Expected …, received …". */
+function receivedType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number" && Number.isNaN(v)) return "nan";
+  return typeof v;
+}
+
+/**
+ * Read and check `bunvex.json`, as Convex's `readProjectConfig` / `parseProjectConfig` (cli/lib/config.ts) check
+ * `convex.json`: JSON that does not parse is `Parsing "<path>" failed` with the parse error; anything but an
+ * object is "Expected `bunvex.json` to contain an object"; a field of the wrong type names its path, as zod's
+ * first issue does. Only the keys bunvex reads are checked; the others are left alone.
+ */
+export function readProjectConfig(cwd: string): ProjectConfig {
   const configPath = join(cwd, "bunvex.json");
-  return existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf8")) as ProjectConfig) : {};
+  if (!existsSync(configPath)) return {};
+  let config: unknown;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch (e) {
+    throw new Error(`Parsing "bunvex.json" failed\n${String(e)}`);
+  }
+  if (typeof config !== "object" || config === null || Array.isArray(config))
+    throw new Error("Expected `bunvex.json` to contain an object");
+  const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
+  const { functions, codegen } = config as Record<string, unknown>;
+  if (functions !== undefined && typeof functions !== "string")
+    throw issue("functions", `Expected string, received ${receivedType(functions)}`);
+  if (codegen !== undefined) {
+    if (typeof codegen !== "object" || codegen === null || Array.isArray(codegen))
+      throw issue("codegen", `Expected object, received ${receivedType(codegen)}`);
+    const { fileType } = codegen as Record<string, unknown>;
+    if (fileType !== undefined && fileType !== "ts" && fileType !== "js/dts")
+      throw issue(
+        "codegen.fileType",
+        typeof fileType === "string"
+          ? `Invalid enum value. Expected 'ts' | 'js/dts', received '${fileType}'`
+          : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
+      );
+  }
+  return config as ProjectConfig;
 }
 
 export function functionsDir(cwd: string): string {
-  const config = readProjectConfig(cwd);
-  if (config.functions !== undefined) {
-    if (typeof config.functions !== "string") throw new Error(`bunvex.json: "functions" must be a string`);
-    return resolve(cwd, config.functions);
-  }
-  return resolve(cwd, "bunvex");
+  const { functions } = readProjectConfig(cwd);
+  return resolve(cwd, functions ?? "bunvex");
 }
 
 /** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
 export function codegenConfig(cwd: string): CodegenConfig {
   const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
-  if (fileType !== "ts" && fileType !== "js/dts")
-    throw new Error(`bunvex.json: "codegen.fileType" must be "ts" or "js/dts"`);
   return { fileType, packages: packagesOf(cwd) };
 }
 
