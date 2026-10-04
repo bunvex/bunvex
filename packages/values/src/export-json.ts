@@ -7,10 +7,11 @@
 // - object keys in byte order (Convex's objects are BTreeMaps).
 // Decoding (`fromExportJson`) reads the same: an integer literal is int64, a number with a point or an
 // exponent float64, an object whose first key starts with `$` the internal form.
+import { compareUtf8, toBase64 } from "./bytes.ts";
 import type { Value } from "./value.ts";
 import { fromJsonValue, type JSONValue } from "./value.ts";
 
-const b64 = (bytes: Uint8Array) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
+const b64 = toBase64;
 
 /** A finite float64 as serde_json writes it (ryu's `format64`): shortest round-trip digits, always a float. */
 export function formatExportFloat(n: number): string {
@@ -32,7 +33,7 @@ export function formatExportFloat(n: number): string {
   return sign + out;
 }
 
-const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+const byteOrder = compareUtf8;
 
 function write(v: Value): string {
   if (v === null) return "null";

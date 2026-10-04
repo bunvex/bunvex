@@ -2,6 +2,7 @@
 // uses for index keys (`crates/value/src/sorting.rs`, after FoundationDB's tuple layer). Comparing two keys
 // byte-wise compares the values in Convex's order; a tuple is the concatenation of its values' keys.
 
+import { utf8Length } from "./bytes.ts";
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { isBytes, type Value } from "./value.ts";
 
@@ -116,7 +117,7 @@ export function valuesToKey(values: (Value | undefined)[]): Uint8Array {
 
 /** A string's escaped length: its UTF-8 bytes, one escape per 0x00 (only U+0000 encodes one), a terminator. */
 function escapedLength(s: string): number {
-  let n = Buffer.byteLength(s, "utf8") + 1;
+  let n = utf8Length(s) + 1;
   for (let i = s.indexOf("\0"); i !== -1; i = s.indexOf("\0", i + 1)) n++;
   return n;
 }
