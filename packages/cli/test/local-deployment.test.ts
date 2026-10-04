@@ -11,7 +11,11 @@ import { type Io, main } from "../src/index.ts";
 import {
   acquireTarget,
   assetName,
+  changedEnvVarFile,
+  changesToGitIgnore,
   EXE,
+  forgetLatestVersion,
+  latestVersion,
   readLocalConfig,
   startLocalDeployment,
   unzipOne,
@@ -109,7 +113,8 @@ describe("bunvex dev with a local deployment", () => {
     expect(readFileSync(join(dir, ".bunvex/.gitignore"), "utf8")).toBe("/*\n");
     expect(existsSync(join(dir, ".bunvex/local/default/bunvex_local_backend.sqlite3"))).toBe(true);
     expect(readFileSync(join(dir, ".env.local"), "utf8")).toBe(
-      `# Deployment used by \`bunvex dev\`\nBUNVEX_DEPLOYMENT=local:${name}\nVITE_BUNVEX_URL=http://127.0.0.1:${cloud}\nVITE_BUNVEX_SITE_URL=http://127.0.0.1:${config.ports.site}\n`,
+      // As Convex's: each variable added after a blank line.
+      `# Deployment used by \`bunvex dev\`\nBUNVEX_DEPLOYMENT=local:${name}\n\nVITE_BUNVEX_URL=http://127.0.0.1:${cloud}\n\nVITE_BUNVEX_SITE_URL=http://127.0.0.1:${config.ports.site}\n`,
     );
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe(".env.local\n");
     // The backend stopped with dev.
@@ -162,6 +167,8 @@ describe("the executable: download, cache, upgrade", () => {
       zips[v] = new Uint8Array(readFileSync(z));
     }
     let latest = "precompiled-2026-10-01-aaaaaaa";
+    // Each run below stands for a new CLI process, which looks the latest version up again.
+    forgetLatestVersion();
     const downloads: string[] = [];
     const server = Bun.serve({
       port: 0,
@@ -189,6 +196,7 @@ describe("the executable: download, cache, upgrade", () => {
     expect(downloads).toEqual(["precompiled-2026-10-01-aaaaaaa"]); // cached
     // A newer release: declining keeps the old one, accepting upgrades.
     latest = "precompiled-2026-10-02-bbbbbbb";
+    forgetLatestVersion();
     const asked: string[] = [];
     const no = io(dir, env);
     no.it.prompt = (q) => {
@@ -209,6 +217,33 @@ describe("the executable: download, cache, upgrade", () => {
     ).rejects.toThrow(/^File not found at http/);
   }, 60_000);
 
+  test("the latest version: each failure reported as Convex's findLatestVersionWithBinary reports it (G-L6)", async () => {
+    let answer: () => Response = () => Response.json({ tag_name: "precompiled-2026-10-01-aaaaaaa" });
+    const server = Bun.serve({ port: 0, fetch: () => answer() });
+    stops.push(() => server.stop(true));
+    const env = { BUNVEX_RELEASES_URL: `http://127.0.0.1:${server.port}` };
+    const lookup = () => {
+      forgetLatestVersion();
+      return latestVersion(env);
+    };
+    expect(await lookup()).toEqual({ version: "precompiled-2026-10-01-aaaaaaa" });
+    answer = () => new Response("Internal Server Error", { status: 500 });
+    expect(await lookup()).toEqual({ error: `127.0.0.1:${server.port} returned 500: Internal Server Error` });
+    answer = () => Response.json({});
+    expect(await lookup()).toEqual({ error: "Invalid response missing version field" });
+    const closed = freePort();
+    forgetLatestVersion();
+    expect(await latestVersion({ BUNVEX_RELEASES_URL: `http://127.0.0.1:${closed}` })).toEqual({
+      error: "Failed to fetch latest backend version",
+    });
+    // A version found is kept for the process, as Convex's: the next lookup does not ask again.
+    answer = () => Response.json({ tag_name: "precompiled-2026-10-02-bbbbbbb" });
+    expect(await lookup()).toEqual({ version: "precompiled-2026-10-02-bbbbbbb" });
+    answer = () => new Response("down", { status: 503 });
+    expect(await latestVersion(env)).toEqual({ version: "precompiled-2026-10-02-bbbbbbb" });
+    forgetLatestVersion();
+  });
+
   test("unzip: deflated and stored entries", () => {
     const d = tmp();
     writeFileSync(join(d, "f.txt"), "hello ".repeat(200));
@@ -224,6 +259,48 @@ describe("the executable: download, cache, upgrade", () => {
 });
 
 describe(".env.local", () => {
+  // Convex's `cli/lib/deployment.test.ts` cases, with bunvex's variable and comment.
+  test("a variable written as Convex's changedEnvVarFile writes it", () => {
+    const set = (existing: string | null) =>
+      changedEnvVarFile(existing, "BUNVEX_DEPLOYMENT", "local:tall-bar", "# Deployment used by `bunvex dev`");
+    expect(set(null)).toBe("# Deployment used by `bunvex dev`\nBUNVEX_DEPLOYMENT=local:tall-bar\n");
+    expect(set("BUNVEX_DEPLOYMENT=")).toBe("BUNVEX_DEPLOYMENT=local:tall-bar");
+    expect(set("BUNVEX_DEPLOYMENT=foo")).toBe("BUNVEX_DEPLOYMENT=local:tall-bar");
+    expect(set("RAD_DEPLOYMENT=foo")).toBe(
+      "RAD_DEPLOYMENT=foo\n\n# Deployment used by `bunvex dev`\nBUNVEX_DEPLOYMENT=local:tall-bar\n",
+    );
+    expect(set("RAD_DEPLOYMENT=foo\nBUNVEX_DEPLOYMENT=foo")).toBe(
+      "RAD_DEPLOYMENT=foo\nBUNVEX_DEPLOYMENT=local:tall-bar",
+    );
+    expect(set("BUNVEX_DEPLOYMENT=\nRAD_DEPLOYMENT=foo")).toBe("BUNVEX_DEPLOYMENT=local:tall-bar\nRAD_DEPLOYMENT=foo");
+    // Unchanged: nothing to write. An `export` line is read as set, and left as it is (Convex's regex).
+    expect(set("BUNVEX_DEPLOYMENT=local:tall-bar\n")).toBeNull();
+    expect(set("export BUNVEX_DEPLOYMENT=other\n")).toBe("export BUNVEX_DEPLOYMENT=other\n");
+  });
+
+  test(".gitignore as Convex's changesToGitIgnore", () => {
+    expect(changesToGitIgnore(null)).toBe(".env.local\n");
+    expect(changesToGitIgnore("")).toBe("\n.env.local\n");
+    expect(changesToGitIgnore(".env")).toBe(".env\n.env.local\n");
+    expect(changesToGitIgnore("# .env.local")).toBe("# .env.local\n.env.local\n");
+    for (const covered of [
+      ".env.local",
+      ".env.*",
+      ".env*",
+      ".env*.local",
+      "*.local",
+      "# bunvex env\n.env.local",
+      ".env.local\r",
+      "foo\r\n.env.local",
+      "foo\r\n.env.local\r\n",
+      "foo\r\n.env.local\r\nbar",
+      " .env.local ",
+    ])
+      expect(changesToGitIgnore(covered)).toBeNull();
+    // Negated: added anyway, to show the problem.
+    expect(changesToGitIgnore("!.env.local")).toBe("!.env.local\n.env.local\n");
+  });
+
   test("variables by framework, lines replaced, .gitignore left alone when it covers .env.local", () => {
     const dir = tmp();
     expect(urlVariables(dir)).toEqual({ url: "BUNVEX_URL", site: "BUNVEX_SITE_URL" });
@@ -242,7 +319,7 @@ describe(".env.local", () => {
     writeFileSync(join(dir, ".gitignore"), "node_modules\n.env*.local\n");
     writeEnvLocal(dir, "local-x", 3210, 3211);
     expect(readFileSync(join(dir, ".env.local"), "utf8")).toBe(
-      "OTHER=1\nBUNVEX_URL=http://127.0.0.1:3210\n# Deployment used by `bunvex dev`\nBUNVEX_DEPLOYMENT=local:local-x\nBUNVEX_SITE_URL=http://127.0.0.1:3211\n",
+      "OTHER=1\nBUNVEX_URL=http://127.0.0.1:3210\n\n# Deployment used by `bunvex dev`\nBUNVEX_DEPLOYMENT=local:local-x\n\nBUNVEX_SITE_URL=http://127.0.0.1:3211\n",
     );
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules\n.env*.local\n");
   });

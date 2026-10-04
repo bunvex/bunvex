@@ -232,7 +232,8 @@ describe("a push's schema change", () => {
     // ...and a push meanwhile that wants another index: the start's backfill ending must not finish with
     // the old schema (which would drop the push's index).
     const p = await b.startSchemaPush(
-      defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]).index("by_n2", ["n"]) }),
+      // Not the same fields as by_n: Convex refuses two indexes on the same fields.
+      defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]).index("by_n2", ["n", "m"]) }),
     );
     await until(async () => (await b.schemaPushStatus(p.schemaId)).type === "complete");
     await Bun.sleep(100);

@@ -39,7 +39,7 @@ import {
 import { type AnalyzedModule, CodeVersion, InvalidModulesError, type ModuleSource } from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
-import { authAuditDiff, indexAuditDiff } from "./push-audit.ts";
+import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
 export class PushError extends Error {
@@ -72,7 +72,6 @@ type Pending = {
   schema: SchemaDefinition;
   auth: unknown[] | null;
   schemaId: string;
-  addedIndexes: string[];
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
@@ -255,8 +254,10 @@ export class PushService {
     const env = await this.deps.deploymentEnv();
     const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
     const analysis: Record<string, AnalyzedModule> = version.analysis;
-    if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, addedIndexes: [] });
-    const { schemaId, addedIndexes } = await this.deps.engine.startSchemaPush(schema);
+    // As Convex's `start_push`: what the push does to the indexes, against the active schema (dry run too).
+    const indexDiff = indexDiffJson(indexAuditDiff(this.deps.engine.schema, schema));
+    if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff });
+    const { schemaId } = await this.deps.engine.startSchemaPush(schema);
     this.pending.set(schemaId, {
       version,
       modules,
@@ -265,9 +266,8 @@ export class PushService {
       schema,
       auth,
       schemaId,
-      addedIndexes,
     });
-    return this.response(version, schema, auth, analysis, { schemaId, addedIndexes });
+    return this.response(version, schema, auth, analysis, { schemaId, indexDiff });
   }
 
   private response(
@@ -275,7 +275,7 @@ export class PushService {
     schema: SchemaDefinition,
     auth: unknown[] | null,
     analysis: Record<string, AnalyzedModule>,
-    change: { schemaId: string | null; addedIndexes: string[] },
+    change: { schemaId: string | null; indexDiff: ReturnType<typeof indexDiffJson> },
   ) {
     return {
       environmentVariables: {},
@@ -294,7 +294,7 @@ export class PushService {
       schemaChange: {
         allocatedComponentIds: {},
         schemaIds: change.schemaId ? { "": change.schemaId } : {},
-        indexDiffs: { "": { added_indexes: change.addedIndexes, removed_indexes: [] } },
+        indexDiffs: { "": change.indexDiff },
       },
     };
   }
@@ -335,7 +335,8 @@ export class PushService {
     const schemaId = req.startPush?.schemaChange?.schemaIds?.[""];
     const p = schemaId ? this.pending.get(schemaId) : undefined;
     if (!p) throw new PushError("RaceDetected", "Schema was overwritten by another push.");
-    if (req.dryRun) return this.diff(p, [], { enabled: [], disabled: [], dropped: [] }, emptyCronDiff());
+    if (req.dryRun)
+      return this.diff([], indexDiffJson(indexAuditDiff(this.deps.engine.schema, p.schema)), emptyCronDiff());
     // As Convex: the push was evaluated with variables that must still be the deployment's.
     if (fingerprint(await this.deps.deploymentEnv()) !== p.env)
       throw new PushError("RaceDetected", "Environment variables have changed during push");
@@ -357,6 +358,8 @@ export class PushService {
     const previousSchema = schemaRows.find((r) => r.state === "active")?.schema ?? null;
     const nextSchema = schemaRows.find((r) => r._id === p.schemaId)?.schema ?? null;
     const activeSchema = this.deps.engine.schema;
+    // Convex's index diff of the push: in its audit event, and in the answer (as `SerializedIndexDiff`).
+    const indexDiff = indexAuditDiff(activeSchema, p.schema);
     const authDiff = authAuditDiff(this.deps.currentAuth?.() ?? null, p.auth);
     const pkg = await writePackage(this.deps.modulesStore, p.authModule ? [...p.modules, p.authModule] : p.modules);
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
@@ -377,7 +380,7 @@ export class PushService {
               create: !stored,
               moduleDiff,
               cronDiff: crons,
-              indexDiff: indexAuditDiff(activeSchema, p.schema),
+              indexDiff,
               schemaDiff:
                 previousSchema === nextSchema ? null : { previous_schema: previousSchema, next_schema: nextSchema },
               message,
@@ -401,13 +404,12 @@ export class PushService {
     await this.deps.install(p.version, p.auth, p.authModule);
     this.deps.cronExecutor.refresh();
     for (const old of committed.value.unused) await this.deps.modulesStore.delete(old.storageKey).catch(() => {});
-    return this.diff(p, moduleDiff, committed.indexDiff, committed.value.crons);
+    return this.diff(moduleDiff, indexDiffJson(indexDiff), committed.value.crons);
   }
 
   private diff(
-    p: Pending,
     moduleDiff: { added: string[]; removed: string[] } | [],
-    index: { enabled: string[]; disabled: string[]; dropped: string[] },
+    indexDiff: ReturnType<typeof indexDiffJson>,
     crons: CronDiff,
   ) {
     return {
@@ -419,12 +421,7 @@ export class PushService {
           moduleDiff: Array.isArray(moduleDiff) ? { added: [], removed: [] } : moduleDiff,
           udfConfigDiff: null,
           cronDiff: crons,
-          indexDiff: {
-            added_indexes: p.addedIndexes,
-            removed_indexes: index.dropped,
-            enabled_indexes: index.enabled,
-            disabled_indexes: index.disabled,
-          },
+          indexDiff,
           schemaDiff: null,
         },
       },
