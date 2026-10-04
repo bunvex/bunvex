@@ -107,7 +107,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `browser/query_options.test.ts` | — | n/a: `convexQueryOptions` missing (client-sync §11); types only |
 | `browser/simple_client.test.ts` | deduplicated subscriptions (`client/pieces.test.ts`) | partial: the optimistic callback's synchrony is not asserted |
 | `browser/sync/client.test.ts` | — | G-C20 `localQueryResult` of a never-subscribed optimistic query; the legacy-config warning is n/a |
-| `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; **G-C23 backoff reset only after a real resync** (3 cases) |
+| `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; G-C23 backoff reset only after a real resync (3 cases): covered by `client/test/reconnect-backoff.test.ts` (#PR) |
 | `browser/sync/local_state.test.ts` | creation | **G-C24** outstanding-after-restart until every query is answered; reset by unsubscribe, `markAuthCompletion`, `clearAuth` |
 | `browser/sync/optimistic_query_set.test.ts` | server results, errors, apply / replay / drop (`client/pieces.test.ts`) | **G-C25** only changed queries notified; stacked updates dropped in order; set to `undefined` |
 | `browser/sync/paginated_query_client.test.ts` | subscribe, loadMore, split (`e2e/paginated-client.test.ts`) | partial: a split driven by optimistic updates alone |
@@ -175,7 +175,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 3 | F3 `auth.config` after an env update with a canonical URL | sign-in breaks after an unrelated change | `server/src/server.ts` | S | #279 |
 | 4 | F2 repeated names in an env batch | the dashboard's rename and swap fail | `core/src/environment-variables.ts` | S | #278 |
 | 5 | G-C8, G-C24, G-C25, G-C26: pause/resume of the query set, outstanding state after a restart, optimistic stacking, incomplete requests | a duplicate Add or an Add+Remove is a base-version mismatch, a fatal client error; wrong rollback order is wrong UI | `client/src/{local-state,optimistic-updates,request-manager}.ts` | S | #282 |
-| 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | |
+| 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | #PR (tests only: bunvex already matched) |
 | 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
 | 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
 | 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | |
