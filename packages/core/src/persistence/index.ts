@@ -5,6 +5,8 @@
 
 /** One document version. `json === null` is a delete. */
 export type DocWrite = { table: number; id: string; json: string | null };
+/** A document version as `getVersions` returns it (PERSIST-01 C16): its JSON and the ts it was written at. */
+export type DocVersion = { json: string; ts: number } | null;
 /** One index entry version. `id === null` means the entry was removed. `key` is opaque (keyenc bytes). */
 export type IndexWrite = { index: number; key: Uint8Array; id: string | null };
 /**
@@ -31,6 +33,13 @@ export interface Persistence {
   ): string[] | Promise<string[]>;
   /** The document version visible at `ts` (JSON), or null. */
   get(table: number, id: string, ts: number): string | null | Promise<string | null>;
+  /**
+   * PERSIST-01 C16, document versions: for each id, the version of `(table, id)` visible at `ts` and the ts
+   * it was written at, or null (missing, or deleted at `ts`); one answer per id, in order, duplicates
+   * included. One round trip on a remote store. Optional for third-party drivers; every first-party driver
+   * has it (streaming export's per-document timestamps, STUDY-69).
+   */
+  getVersions?(table: number, ids: string[], ts: number): DocVersion[] | Promise<DocVersion[]>;
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): number | Promise<number>;
   /**
@@ -194,6 +203,7 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export { opaqueToInspect } from "../inspect.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export {
   checkLayoutVersion,
