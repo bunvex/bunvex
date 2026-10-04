@@ -183,6 +183,19 @@ function toCallerError(e: unknown, timer: UserTimer): Error {
   return new Error(describeUncaught(e).message);
 }
 
+/**
+ * A nested call's error for its caller, with the frames of the caller's call (`site`) instead of the server's
+ * own, as Convex's: the error is the caller's, raised where it called (STUDY-95). A system error stays as it
+ * is (it ends the request).
+ */
+function atCallSite(e: unknown, site: Error): unknown {
+  if (!(e instanceof Error) || isSystemError(e as unknown)) return e;
+  const err = e as Error;
+  const frames = (site.stack ?? "").split("\n").filter((l) => /^\s+at /.test(l));
+  err.stack = [err.message ? `${err.name}: ${err.message}` : err.name, ...frames].join("\n");
+  return err;
+}
+
 /** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
 export type StorageReader = ReturnType<FileStorage["reader"]>;
 export type StorageWriter = ReturnType<FileStorage["writer"]>;
@@ -1363,7 +1376,13 @@ export class Functions {
     const call = (kind: "query" | "mutation", ref: FunctionRef, args: unknown, opts?: NestedOptions) => {
       if (opts?.useStaleSnapshot && callerKind === "query")
         throw new Error("`useStaleSnapshot` is only supported in mutations, not queries.");
-      const run = queue.then(() => pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth)));
+      // Where the caller called: its error's frames (Convex raises it at the call, in the caller's code).
+      const site = new Error();
+      const run = queue
+        .then(() => pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth)))
+        .catch((e) => {
+          throw atCallSite(e, site);
+        });
       queue = run.catch(() => {});
       return run;
     };

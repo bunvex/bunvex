@@ -350,7 +350,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     codegen = codegenConfig(io.cwd);
     // Convex's initial codegen: what modules importing `_generated/` need to bundle.
     if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
-    bundled = await bundleFunctions(dir);
+    bundled = await bundleFunctions(dir, io.cwd);
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
     return { code: 1 };

@@ -31,6 +31,18 @@ const SEMICOLON = 59;
 
 /** The tokens of a source map's `mappings` (version 3), in generated order; null if it does not parse. */
 export function decodeMappings(mappings: string): Tokens | null {
+  return decode(mappings, 4);
+}
+
+/**
+ * As `decodeMappings`, each token followed by its source's index in the map's `sources` (stride 5): what an
+ * error's frames need to name the original file.
+ */
+export function decodeMappingsWithSources(mappings: string): Tokens | null {
+  return decode(mappings, 5);
+}
+
+function decode(mappings: string, stride: 4 | 5): Tokens | null {
   let out = new Int32Array(1024);
   let n = 0;
   let sorted = true;
@@ -54,16 +66,17 @@ export function decodeMappings(mappings: string): Tokens | null {
           srcIndex += fields[1]!;
           srcLine += fields[2]!;
           srcCol += fields[3]!;
-          if (n + 4 > out.length) {
+          if (n + stride > out.length) {
             const bigger = new Int32Array(out.length * 2);
             bigger.set(out);
             out = bigger;
           }
-          if (n > 0 && out[n - 4] === line && out[n - 3]! > col) sorted = false;
+          if (n > 0 && out[n - stride] === line && out[n - stride + 1]! > col) sorted = false;
           out[n++] = line;
           out[n++] = col;
           out[n++] = srcLine;
           out[n++] = srcCol;
+          if (stride === 5) out[n++] = srcIndex;
         }
         genCol = col;
         count = 0;
@@ -83,34 +96,37 @@ export function decodeMappings(mappings: string): Tokens | null {
     value = 0;
     shift = 0;
   }
-  void srcIndex;
   out = out.slice(0, n);
   if (sorted) return out;
   // Not in generated order within a line (the format allows it): sort the tokens.
-  const order = Array.from({ length: n / 4 }, (_, k) => k).sort(
-    (a, b) => out[a * 4]! - out[b * 4]! || out[a * 4 + 1]! - out[b * 4 + 1]!,
+  const order = Array.from({ length: n / stride }, (_, k) => k).sort(
+    (a, b) => out[a * stride]! - out[b * stride]! || out[a * stride + 1]! - out[b * stride + 1]!,
   );
   const sortedOut = new Int32Array(n);
-  for (const [j, k] of order.entries()) sortedOut.set(out.subarray(k * 4, k * 4 + 4), j * 4);
+  for (const [j, k] of order.entries()) sortedOut.set(out.subarray(k * stride, k * stride + stride), j * stride);
   return sortedOut;
 }
 
 /** The token at or before (`line`, `col`), 0-based, in generated order: the source map lookup Convex uses. */
 export function lookupToken(tokens: Tokens, line: number, col: number): Token | null {
+  const k = lookupIndex(tokens, line, col, 4);
+  return k === -1 ? null : [tokens[k]!, tokens[k + 1]!, tokens[k + 2]!, tokens[k + 3]!];
+}
+
+/** The offset of the token at or before (`line`, `col`) in `tokens` of `stride` numbers each, or -1. */
+function lookupIndex(tokens: Tokens, line: number, col: number, stride: 4 | 5): number {
   let lo = 0;
-  let hi = tokens.length / 4 - 1;
+  let hi = tokens.length / stride - 1;
   let found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    const l = tokens[mid * 4]!;
-    if (l < line || (l === line && tokens[mid * 4 + 1]! <= col)) {
+    const l = tokens[mid * stride]!;
+    if (l < line || (l === line && tokens[mid * stride + 1]! <= col)) {
       found = mid;
       lo = mid + 1;
     } else hi = mid - 1;
   }
-  if (found === -1) return null;
-  const k = found * 4;
-  return [tokens[k]!, tokens[k + 1]!, tokens[k + 2]!, tokens[k + 3]!];
+  return found === -1 ? -1 : found * stride;
 }
 
 /** Where V8 says a function starts, as an offset into its source text. */
@@ -163,7 +179,45 @@ export function handlerOffset(source: string, fn: Function, exported: string | n
 /** A source map's tokens, decoded once per module. */
 export class SourceMapTokens {
   private cache = new Map<string, Tokens | null>();
+  private withSources = new Map<string, { tokens: Tokens; sources: string[] } | null>();
   constructor(private readonly maps: (path: string) => string | undefined) {}
+
+  /**
+   * The original file, 1-based line and 1-based column of an error frame's 1-based position (`line`, `col`)
+   * in module `path`: the token at or before it. Convex (common/src/errors.rs `JsError::from_frames`) passes the
+   * frame's 1-based position to a 0-based lookup and prints the token's 0-based position, which on esbuild's
+   * one-statement-per-line output mostly shows the right line; on Bun's output it would not, so the position
+   * is mapped as the map defines it (STUDY-95 S2). Null when the module has no usable map, or no token is at
+   * or before the position.
+   */
+  original(path: string, line: number, col: number): { source: string | null; line: number; col: number } | null {
+    if (!this.withSources.has(path)) {
+      const raw = this.maps(path);
+      let entry: { tokens: Tokens; sources: string[] } | null = null;
+      // Only `mappings` and `sources` are read (not `sourcesContent`), as `tokens` does.
+      const mappings = raw === undefined ? null : /\x22mappings\x22\s*:\s*\x22([^\x22\\]*)\x22/.exec(raw);
+      const sources = raw === undefined ? null : /\x22sources\x22\s*:\s*(\[[^\]]*\])/.exec(raw);
+      if (mappings && /"version"\s*:\s*3\b/.test(raw!)) {
+        const tokens = decodeMappingsWithSources(mappings[1]!);
+        let names: unknown = [];
+        try {
+          names = sources ? JSON.parse(sources[1]!) : [];
+        } catch {}
+        if (tokens) entry = { tokens, sources: Array.isArray(names) ? (names as string[]) : [] };
+      }
+      this.withSources.set(path, entry);
+    }
+    const entry = this.withSources.get(path);
+    if (!entry) return null;
+    const k = lookupIndex(entry.tokens, line - 1, col - 1, 5);
+    if (k === -1) return null;
+    const source = entry.sources[entry.tokens[k + 4]!];
+    return {
+      source: typeof source === "string" ? source : null,
+      line: entry.tokens[k + 2]! + 1,
+      col: entry.tokens[k + 3]! + 1,
+    };
+  }
 
   tokens(path: string): Tokens | null {
     if (!this.cache.has(path)) {

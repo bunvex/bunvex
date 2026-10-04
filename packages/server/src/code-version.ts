@@ -24,6 +24,9 @@ import { describeUncaught } from "./errors.ts";
 import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
+import { moduleUrl, registerModules } from "./stack-map.ts";
+
+const FRAME_MAPS = Symbol("bunvex.frameMaps");
 
 /** A pushed module, as Convex's `ModuleConfig`: its path in the functions directory, e.g. `dir/file.js`. */
 export type ModuleSource = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
@@ -58,12 +61,10 @@ export class InvalidModulesError extends Error {
 
 /**
  * An error thrown by a module, as Convex reports an analyze failure: `Uncaught <Name>: <message>` and the
- * frames in the pushed code only (the server's own frames are not the app's).
+ * frames in the pushed code only, mapped to its sources (`describeUncaught`, STUDY-95).
  */
-function uncaught(e: unknown, paths: Set<string>): string {
-  const [head, ...frames] = describeUncaught(e).message.trimEnd().split("\n");
-  const mine = frames.filter((f) => [...paths].some((p) => f.includes(`${p}:`)));
-  return [head, ...mine].join("\n");
+function uncaught(e: unknown): string {
+  return describeUncaught(e).message.trimEnd();
 }
 
 /** Convex's limits (crates/common/src/knobs.rs). */
@@ -169,6 +170,8 @@ export class CodeVersion {
     readonly analysis: Record<string, AnalyzedModule>,
     readonly router: HttpRouter | undefined,
     readonly crons: Crons | undefined,
+    /** The modules' source maps, which map this version's error frames (`stack-map.ts`) while it lives. */
+    readonly frameMaps: SourceMapTokens,
   ) {}
 
   /**
@@ -188,12 +191,18 @@ export class CodeVersion {
       throw new Error(
         `Too many dependencies modules! Dependencies: ${sources.length - users.length}, Total modules: ${sources.length}`,
       );
+    // Its frames, named by `moduleUrl`, map through these maps (STUDY-95).
+    const byPath = new Map(sources.map((m) => [m.path, m]));
+    const frameMaps = new SourceMapTokens((path) => byPath.get(path)?.sourceMap);
+    const versionId = registerModules(frameMaps);
     const env = opts.env ?? {};
     const contexts = {
       isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv)),
       node: vm.createContext(contextGlobals(true, env)),
     };
     for (const c of Object.values(contexts)) {
+      // The maps live as long as the code that throws: its context (`stack-map.ts` holds them weakly).
+      Object.defineProperty(c, FRAME_MAPS, { value: frameMaps });
       const g = vm.runInContext("({ Date, Math })", c) as { Date: DateConstructor; Math: Math };
       installDeterminismIn(g);
       // The replaced Date goes back in as the context's global.
@@ -206,7 +215,10 @@ export class CodeVersion {
       const context = contexts[m.environment];
       let module: vm.SourceTextModule;
       try {
-        module = new vm.SourceTextModule(`${m.source}\n//# sourceURL=${m.path}`, { context, identifier: m.path });
+        module = new vm.SourceTextModule(`${m.source}\n//# sourceURL=${moduleUrl(versionId, m.path)}`, {
+          context,
+          identifier: m.path,
+        });
       } catch (e) {
         throw new InvalidModulesError(`Failed to analyze ${m.path}: ${describeUncaught(e).message.trimEnd()}`);
       }
@@ -263,7 +275,7 @@ export class CodeVersion {
         await l.module.link(linker);
       } catch (e) {
         if (e instanceof InvalidModulesError) throw e;
-        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e, new Set(modules.keys()))}`);
+        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e)}`);
       }
     }
     for (const [path, l] of modules) {
@@ -271,20 +283,19 @@ export class CodeVersion {
       try {
         await runImportPhase(opts.seed, opts.timestamp, () => l.module.evaluate({ timeout }));
       } catch (e) {
-        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e, new Set(modules.keys()))}`);
+        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e)}`);
       }
     }
-    return CodeVersion.analyze(modules);
+    return CodeVersion.analyze(modules, frameMaps);
   }
 
   /** Convex's `udf_analyze` / `http_analyze` / `cron_analyze`, over the evaluated modules. */
-  private static analyze(modules: Map<string, Loaded>): CodeVersion {
+  private static analyze(modules: Map<string, Loaded>, maps: SourceMapTokens): CodeVersion {
     const functions = new Map<string, FunctionDef>();
     const moduleHashes = new Map<string, string>();
     const analysis: Record<string, AnalyzedModule> = {};
     let router: HttpRouter | undefined;
     let crons: Crons | undefined;
-    const maps = new SourceMapTokens((path) => modules.get(path)?.source.sourceMap);
     for (const [path, l] of modules) {
       if (isDeps(path)) continue;
       const name = moduleName(path);
@@ -345,7 +356,7 @@ export class CodeVersion {
       }
       analysis[path] = a;
     }
-    const version = new CodeVersion(modules, functions, moduleHashes, analysis, router, crons);
+    const version = new CodeVersion(modules, functions, moduleHashes, analysis, router, crons, maps);
     if (crons) {
       // Convex's `validate_cron_jobs`: every target exists and is a mutation or an action.
       const specs = cronSpecs(crons, (id, fn) => version.cronTarget(id, fn));
