@@ -154,6 +154,17 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   and there is no total cap counting `_deps` (`server/src/code-version.ts`).
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
+  - *Convex.* `crates/application/src/lib.rs` `get_file` / `get_file_range` (the HTTP storage route,
+    `local_backend/src/storage.rs`): the file stream charges `track_storage_egress` per chunk as it is yielded
+    (`file_storage/src/core.rs` `track_stream_usage`), and `add_on_complete` sends one
+    `StorageApiBandwidth { storage_id: <document id>, egress_bytes }` once the stream ends or is dropped
+    (`log_streaming.rs`, V2 JSON `{timestamp, topic: "storage_api_bandwidth", storage_id, egress_bytes}`;
+    PostHog Logs names it `storage_bandwidth`). Its test reads a file fully, partly, and by range.
+  - *bunvex (draft, DV-324 pending).* Metering the bytes sent matches DV-309, which the owner already decided.
+    But in Bun any counting wrapper drops `content-length` from the response (chunked), and it halves the
+    throughput of large downloads. `storage.ts` `meteredDownload` counts as the client pulls. The usage meter
+    charges each chunk, and `done` sends the event once. A HEAD request is not wrapped: it keeps its header and
+    sends a 0-byte event.
 - **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",

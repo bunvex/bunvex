@@ -676,16 +676,22 @@ export function createServer(opts: ServerOptions) {
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     try {
-      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      // Each one a call for usage limits, a download's bytes egress as they are sent (Convex's `StorageCall`,
+      // `StorageBandwidth`), and once it ends a `storage_api_bandwidth` event (Convex's `get_file`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
         return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
-        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)), {
+          chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
+          done: (storageId, egressBytes) =>
+            logManager.send([
+              { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
+            ]),
+        });
         usageMeter.record("functionCalls", 1);
-        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
         return r;
       }
       return new Response(null, { status: 405 });
