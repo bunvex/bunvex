@@ -65,6 +65,7 @@ bunvex/
 │   ├── server/                      @bunvex/server
 │   │   ├── functions (runtime)      query/mutation/action, registry, internal fns ✅ ·
 │   │   │                            validation N · determinism ✅ (in core) · sandbox D
+│   │   │                            action timeout, 1800 s / Node 600 s (STUDY-77) ✅
 │   │   ├── server (transports)      HTTP API ✅ · WebSocket subscriptions ✅ · advance together N ·
 │   │   │                            errors, errorData, redaction (STUDY-20) ✅ ·
 │   │   │                            one connection's mutations in order (STUDY-22) ✅ ·

@@ -16,6 +16,7 @@
 // against the read intervals by binary search.
 
 import { outsideExecution, wallClockUs } from "./determinism.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
@@ -745,3 +746,6 @@ export class Committer {
     for (const l of this.fatalListeners) l(this.stopped);
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Committer);

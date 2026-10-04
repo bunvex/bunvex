@@ -596,6 +596,9 @@ export function createServer(opts: ServerOptions) {
     } catch (e) {
       return bad(`args: ${(e as Error).message}`);
     }
+    // As `public_query_get`: the path is parsed before authentication (`parse_export_path`, STUDY-67 H7).
+    const badPath = badFunctionPath(path);
+    if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
     const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
     const caller = await callerOfRequest(req);
     if (caller instanceof Response) return caller;
@@ -678,16 +681,22 @@ export function createServer(opts: ServerOptions) {
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     try {
-      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      // Each one a call for usage limits, a download's bytes egress as they are sent (Convex's `StorageCall`,
+      // `StorageBandwidth`), and once it ends a `storage_api_bandwidth` event (Convex's `get_file`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
         return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
-        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)), {
+          chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
+          done: (storageId, egressBytes) =>
+            logManager.send([
+              { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
+            ]),
+        });
         usageMeter.record("functionCalls", 1);
-        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
         return r;
       }
       return new Response(null, { status: 405 });
@@ -1762,7 +1771,9 @@ export function createServer(opts: ServerOptions) {
         );
       const r = accessError(e);
       if (r) return r;
-      throw e;
+      // Anything else is a system error, as Convex answers one: 500, its generic message; the cause is logged.
+      console.error("bunvex: a push failed:", e);
+      return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
     }
   };
 
