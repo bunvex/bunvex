@@ -5,7 +5,11 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./src/isomorphic.ts"
+    }
   },
   "dependencies": {
     "@bunvex/auth": "workspace:*",
