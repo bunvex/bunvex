@@ -124,6 +124,27 @@ const REFUSED = "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0
 const BAD = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 const HOP_BY_HOP = /\r\n(proxy-authorization|proxy-connection|connection|keep-alive): [^\r\n]*/gi;
 
+/**
+ * Forward an `http:` target's response, its head saying `Connection: close`: the proxy serves one request per
+ * connection, so a client that kept the connection alive would send its next request into a closing socket
+ * (ECONNRESET). The rest of the response is piped as is.
+ */
+function closingResponse(up: net.Socket, sock: net.Socket) {
+  let head = Buffer.alloc(0);
+  const onData = (chunk: Buffer) => {
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf("\r\n\r\n");
+    if (end < 0) return;
+    up.off("data", onData);
+    const lines = head.subarray(0, end).toString("latin1").replace(HOP_BY_HOP, "");
+    sock.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
+    const body = head.subarray(end + 4);
+    if (body.length > 0) sock.write(body);
+    up.pipe(sock);
+  };
+  up.on("data", onData);
+}
+
 /** Start the screening proxy (bound at once); its URL goes where `--http-proxy`'s would. */
 export function startAddressScreen(screen: AddressScreen) {
   const server = net.createServer((sock) => {
@@ -170,7 +191,8 @@ export function startAddressScreen(screen: AddressScreen) {
           up.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
         }
         if (rest.length > 0) up.write(rest);
-        up.pipe(sock);
+        if (method === "CONNECT") up.pipe(sock);
+        else closingResponse(up, sock);
         sock.pipe(up);
         sock.resume();
       });

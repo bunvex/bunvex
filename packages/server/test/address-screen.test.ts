@@ -2,10 +2,12 @@
 // ranges, and an action's `fetch` through the in-process screening proxy — refused with the same error as
 // an operator's proxy, each redirect hop checked, bodies forwarded, and nothing started when `none` or when
 // `--http-proxy` is given.
+
 import { afterEach, expect, test } from "bun:test";
+import net from "node:net";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { type AddressScreen, checkedAddress, isDenied } from "../src/address-screen.ts";
+import { type AddressScreen, checkedAddress, isDenied, startAddressScreen } from "../src/address-screen.ts";
 import { action, Functions, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
@@ -159,4 +161,28 @@ test("createServer refuses an unknown screen", async () => {
   expect(() =>
     createServer({ engine, functions: new Functions(engine), port: 0, denyAddresses: "all" as AddressScreen }),
   ).toThrow("possible values: none, metadata, private");
+});
+
+test("an http: response through the screen says Connection: close, so the client never reuses the socket", async () => {
+  const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+  const screen = startAddressScreen("metadata");
+  stops.push(() => target.stop(true), screen.stop);
+  const proxy = new URL(screen.url);
+  const head = await new Promise<string>((resolve, reject) => {
+    let got = "";
+    const sock = net.connect(Number(proxy.port), proxy.hostname, () =>
+      sock.write(
+        `GET http://127.0.0.1:${target.port}/ HTTP/1.1\r\nHost: 127.0.0.1:${target.port}\r\nConnection: keep-alive\r\n\r\n`,
+      ),
+    );
+    sock.on("data", (d) => {
+      got += d.toString("latin1");
+    });
+    sock.on("close", () => resolve(got));
+    sock.on("error", reject);
+  });
+  const lines = head.slice(0, head.indexOf("\r\n\r\n")).split("\r\n");
+  expect(lines[0]).toBe("HTTP/1.1 200 OK");
+  expect(lines.filter((l) => /^(connection|keep-alive):/i.test(l))).toEqual(["Connection: close"]);
+  expect(head.endsWith("ok")).toBe(true);
 });
