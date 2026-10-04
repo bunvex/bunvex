@@ -335,8 +335,9 @@ export function installDeterminism() {
     (...args: Parameters<typeof fetch>) => {
       const e = executions.getStore();
       if (e) return Promise.reject(notAllowed("fetch()", e.kind));
+      const send = fetchSender?.() ?? realFetch;
       const meter = fetchMeter?.();
-      return meter ? meteredFetch(meter, ...args) : realFetch(...args);
+      return meter ? meteredFetch(send, meter, ...args) : send(...args);
     },
     { preconnect: realFetch.preconnect },
   ) as typeof fetch;
@@ -513,6 +514,18 @@ export function setFetchMeter(m: typeof fetchMeter) {
   fetchMeter = m;
 }
 
+/**
+ * How a `fetch` outside a query or mutation is sent (set by the server): for the running action, the function
+ * that checks and sends its request (STUDY-80); null, or no running action, sends it as is.
+ */
+let fetchSender: (() => typeof fetch | null) | null = null;
+export function setFetchSender(s: typeof fetchSender) {
+  fetchSender = s;
+}
+
+/** The process's own `fetch`, never refused nor metered: what a fetch sender sends with. */
+export const directFetch: typeof fetch = realFetch;
+
 /** A body's bytes when they can be known without reading it; null for a stream or form data. */
 function knownBodySize(body: unknown): number | null {
   if (body === null || body === undefined) return 0;
@@ -527,7 +540,11 @@ function knownBodySize(body: unknown): number | null {
  * A metered fetch, as Convex's (`track_fetch_egress`): the request body's bytes — not its headers or URL,
  * nor the response — charged once the request went out without failing.
  */
-async function meteredFetch(charge: (bytes: number) => void, ...args: Parameters<typeof fetch>): Promise<Response> {
+async function meteredFetch(
+  send: typeof fetch,
+  charge: (bytes: number) => void,
+  ...args: Parameters<typeof fetch>
+): Promise<Response> {
   const [input, init] = args;
   let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
   if (size === null) {
@@ -536,11 +553,11 @@ async function meteredFetch(charge: (bytes: number) => void, ...args: Parameters
         ? new Request(input.toString(), init)
         : new Request(input, init);
     size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
-    const res = await realFetch(req);
+    const res = await send(req);
     charge(size);
     return res;
   }
-  const res = await realFetch(...args);
+  const res = await send(...args);
   charge(size);
   return res;
 }

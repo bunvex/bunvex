@@ -119,6 +119,7 @@ export type {
 } from "./database-types.ts";
 export {
   checkUserTime,
+  directFetch,
   type ExecutionKind,
   failExecution,
   formatDuration,
@@ -131,6 +132,7 @@ export {
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
   setFetchMeter,
+  setFetchSender,
   type UserTimer,
   userTimeMs,
   wallClock,

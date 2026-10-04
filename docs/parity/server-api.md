@@ -152,6 +152,8 @@ Key bunvex facts behind the statuses:
 | `fetch`, timers and `crypto.getRandomValues` throw in queries and mutations ("NoXInQueriesOrMutations") | isolate/src/environment/udf/mod.rs (`not_allowed_in_udf`) | done (STUDY-66) | As Convex's isolate: `fetch()` rejects and timers return then fail the function (uncatchable), with Convex's "Can't use … in queries and mutations. Please consider using an action." (no docs link); `crypto.getRandomValues` / `randomUUID` are **allowed**, from a stream fixed per execution (AES-CTR, as strong as Convex's ChaCha12); `crypto.subtle`'s randomness (`generateKey`, RSA-OAEP `encrypt`, RSA-PSS / ECDSA `sign`) is refused. Not a sandbox: captured globals escape. |
 | `Date` / `Math.random` at module import time | udf/phase.rs | done (STUDY-35) | Convex's import phase: `Math.random` seeded and `Date.now()` fixed by the deployment, `performance.now()` 0; fetch and timers fail with Convex's "… unsupported at import time" (a timer after it returns), `crypto.getRandomValues` / `randomUUID` draw from a stream keyed by the deployment, and `crypto.subtle`'s randomness fails with "Cannot use cryptographic randomness at import time" (STUDY-66 §4). |
 | Actions run with the real globals (`fetch`, timers) | isolate/src/environment/action | done | |
+| An action's `fetch` takes `http:` / `https:` only ("Unsupported URL scheme -- http and https are supported (scheme was …)") and the web's `RequestInit` | udf-runtime/src/23_request.ts (`validateURL`), 26_fetch.ts | done (STUDY-80) | Bun's `fetch` also reads `file:` and `s3:` and takes `unix` / `proxy` / `tls` / `s3`: an action gets none of them (Convex's `TypeError`; the options dropped). A `"use node"` action as Node's `fetch` (`data:` too). The host's own `fetch` is untouched. ~0.12 µs per call. A `new Request("file:…")` still builds (Convex's constructor throws). |
+| A failed action `fetch` is `TypeError: fetch to <url> failed: <cause>` (query string dropped); default `User-Agent: Convex/1.0` | udf-runtime/src/26_fetch.ts; common/src/http/fetch.rs | missing | Bun's own error and `User-Agent` (STUDY-80 §3.3). |
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | partial (STUDY-35) | Deployed code runs in one `vm` context per code version (DV-164): its own globals and deterministic `Date`/`Math`, imports limited to `bunvex/*` and the bundle (Node builtins only in `"use node"`), freed when superseded. Not a security boundary; no heap cap. Module state lasts the version (DV-165). |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | done (STUDY-37) | Pushed code reads the deployment's variables, each read in the read set; see [platform §env](platform.md). Managed over HTTP; the CLI's `bunvex env` comes next. |
 | `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Cached query results carry no lines (STUDY-20 D2). |
@@ -356,7 +358,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 213 |
+| done | 214 |
 | partial | 9 |
-| missing | 18 |
-| **total** | **240** |
+| missing | 19 |
+| **total** | **242** |

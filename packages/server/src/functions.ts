@@ -19,6 +19,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
   setFetchMeter,
+  setFetchSender,
   stringifyValue,
   TableReader,
   type Tx,
@@ -44,6 +45,7 @@ import {
   v,
   valueSize,
 } from "@bunvex/values";
+import { isolateFetch, nodeFetch } from "./action-fetch.ts";
 import {
   ActionPermits,
   type ConcurrencyLimiter,
@@ -408,6 +410,14 @@ const storageMeter: StorageMeter = ({ read, written }) => {
   r.io.storageReadBytes += read ?? 0;
   r.io.storageWriteBytes += written ?? 0;
 };
+
+// An action's `fetch` reaches what Convex's runtime lets it reach (STUDY-80): http(s) only, without Bun's options.
+const isolateSender = isolateFetch();
+const nodeSender = nodeFetch();
+setFetchSender(() => {
+  const r = meteredAction();
+  return r ? (r.environment === "isolate" ? isolateSender : nodeSender) : null;
+});
 
 // Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
 // counter, 0 when self-hosted (STUDY-71 U2).
