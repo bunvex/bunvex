@@ -280,7 +280,7 @@ value `format` (D4), and return-value validation before commit (D5).
   a nested query (the reader-view Proxy), an action and an HTTP action: no line holds the catalog, the
   store, its commits or another transaction's write; the same over the sync protocol and in the function
   log stream (`/api/stream_function_logs`, which feeds the dashboard, `bunvex logs` and the log sinks).
-  App values still print as Convex's: a class instance opened, a cycle, depth 5, a huge array cut at 32 KiB.
+  App values still print as Convex's: a class instance opened, a cycle, depth 5, a ~120 KB array cut at 32 KiB.
 - `packages/core/test/opaque-inspect.test.ts`: `Bun.inspect` / `util.inspect` of the engine, its store, a
   transaction, a query, `db.system`, a table scope; a Proxy's traps never run; and a scan of the files an
   app's objects come from fails on any new class that is not opaque.

@@ -193,7 +193,7 @@ test("app values print as Convex prints them: class instances opened, cycles, de
       cycle.self = cycle;
       console.log(cycle);
       console.log({ l1: { l2: { l3: { l4: { l5: { l6: 1 } } } } } });
-      console.log(Array.from({ length: 50_000 }, (_, i) => ({ i })));
+      console.log(Array.from({ length: 1_000 }, (_, i) => ({ i, s: "x".repeat(100) }))); // ~120 KB rendered
       return null;
     }),
   });
