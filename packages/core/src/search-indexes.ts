@@ -51,6 +51,11 @@ export type SearchIndexEntry = {
   def: SearchIndexDef;
   staged: boolean;
   ready: boolean;
+  /**
+   * Being rebuilt after the process started (STUDY-79): it existed before, so a search meanwhile is Convex's
+   * `SearchIndexesUnavailable`, not a new index's `IndexBackfillingError`.
+   */
+  bootstrapping: boolean;
   index: TextIndex;
   /** Changes applied after the backfill began, oldest first: what each document was before. */
   log: { ts: number; id: string; before: IndexedDoc | null }[];
@@ -107,7 +112,12 @@ export class SearchIndexes {
    * Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill.
    * An index keeps its contents while its table, field and filters stay the same.
    */
-  reconcile(wanted: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean }[], visibleTs: number) {
+  reconcile(
+    wanted: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean }[],
+    visibleTs: number,
+    /** The first reconcile after the process started: every index is rebuilt, not new (STUDY-79). */
+    bootstrapping = false,
+  ) {
     const next = new Map<string, SearchIndexEntry>();
     const added: SearchIndexEntry[] = [];
     for (const w of wanted) {
@@ -130,6 +140,7 @@ export class SearchIndexes {
         def: w.def,
         staged: w.staged,
         ready: false,
+        bootstrapping,
         index: new TextIndex(),
         log: [],
         retainedFrom: visibleTs,

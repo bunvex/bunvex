@@ -6,13 +6,13 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 206 | 10 | 23 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 136 | 10 | 14 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 136 | 49 | 61 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 218 | 8 | 13 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 155 | 5 | 5 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 179 | 40 | 31 |
 
-These counts were taken on 2026-10-03 (main at #245; server-api.md rechecked against the code) from each row's status column: a row counts as done,
-partial or missing by the word its status starts with. A few rows have no single status and are not
-counted.
+These counts were recounted on 2026-10-04 (main at #369) from each row's status column: a row counts as done,
+partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
+are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
 
 ## How to use it
 
@@ -128,4 +128,80 @@ containers up, deploy functions, see them work) before the remaining platform it
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (7 done, 2 partial, 2 missing, §20);
 - streaming export;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
-  it needs the server's admin API and admin-key login.
+  the server's admin API and the admin-key sign-in exist; a data source that calls the server does not.
+
+## Gaps by impact
+
+From the parity sweep of 2026-10-04: every `missing` and `partial` row of [platform](platform.md),
+[server-api](server-api.md) and [client-sync](client-sync.md) was checked against the code, and stale rows
+were corrected. This ranks what is left by what an app written for Convex would notice. Decided
+divergences and cloud-only items are not gaps.
+
+**High: an app that uses it does not run**
+
+1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md)):
+   `convex.config.ts`, `defineApp` / `defineComponent`, table and function namespaces, `components.*`
+   references and their codegen, component HTTP mounts and env. Any app on `@convex-dev/*` components
+   (rate limiter, aggregate, workpool, auth, …) cannot run.
+
+**Medium: an app hits it in normal use of a feature**
+
+2. **Action timeout:** none (Convex: 1800 s for V8 actions, 600 s for Node). A hung action runs forever and
+   holds one of the 64 action permits.
+3. **Search and vector indexes after a restart:** while they rebuild (DV-227, DV-270), their queries now get
+   Convex's bootstrapping answer and sync skips and retries them (STUDY-79). What is left is the window's
+   length: the whole table (about 20 µs a document) where Convex replays only the writes since its last
+   segment. **Planned (owner, 2026-10-04, STUDY-79 §6):** option D, a snapshot of the in-memory indexes at a
+   clean shutdown, loaded at start with the log replayed since; then persisted segments (E).
+4. **Bundling `server-only` (and wasm):** shared code importing `server-only`, common in Next.js apps,
+   fails to bundle (platform §14).
+5. **Auth helpers:** no Convex Auth (`@convex-dev/auth`) or WorkOS AuthKit equivalent (platform §1).
+6. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
+7. **The `log` export (`log.audit`, `log.vars`):** an app importing it fails at import (server-api).
+8. **Write throughput (4 MiB/s):** Convex rejects bulk writers past it; bunvex accepts them, so an app can
+   work on bunvex and fail on Convex (platform §24).
+9. **`deploy --cmd`:** frontend build pipelines that use it (platform §12).
+
+**Low: rare, ops-only, or a missing nicety**
+
+- Client:
+  - `convexQueryOptions`;
+  - `BunvexHttpClient.function()`;
+  - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
+  - close 1000 with a reason for NotFound and Forbidden;
+  - large-transition warnings;
+  - arguments-size metrics.
+- Server API:
+  - `getDocumentSize`, `Base64`, the `getConvexSize` name;
+  - runtime `filterApi`;
+  - `exportArgs` / `exportReturns`;
+  - `.staged(validator)`;
+  - `.count()` on the query builder;
+  - typed limit error codes.
+- Limits and checks:
+  - identical database indexes;
+  - the 10 000-table cap;
+  - nesting 64 for arguments and results;
+  - `check_index_references` at push;
+  - the 1024-concurrent-request and upload-concurrency (4) limits.
+- Operations:
+  - missing audit events (`build_indexes`, `clear_tables`, `change_deployment_state`, …);
+  - `/api/delete_scheduled_functions_table`;
+  - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
+  - `/instance_version`, `/`, `/echo`;
+  - OpenAPI;
+  - an SSRF proxy;
+  - Prometheus `/metrics`;
+  - `_index_worker_metadata`, `_auth`, `_db`;
+  - an upgrade guide.
+- CLI:
+  - `codegen` flags;
+  - `run --component` / `--inline-query`;
+  - `typecheck`, `mcp`, `usage-limits` commands;
+  - `dev` waiting on an env var or a table.
+- An HTTP action's response-size warning (DV-323, #369).
+- The dashboard on a real deployment:
+  - the largest single piece of work, but not something an app hits;
+  - the server side of every screen now exists (admin API, function and audit logs, scheduler, env vars,
+    file functions);
+  - what is missing is a data source that calls it.
