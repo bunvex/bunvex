@@ -4,7 +4,7 @@
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/convex/package.json`,
   `src/server/index.ts`, `src/server/impl/syscall.ts`, `src/server/components/index.ts`)
 - **Related:** [STUDY-90](STUDY-90-examples.md) (the first example found it), [STUDY-36](STUDY-36-codegen.md)
-  (`_generated/`), [STUDY-66](STUDY-66-registration.md) §7 (`assertNotBrowser`).
+  (`_generated/`), [STUDY-66](STUDY-66-server-api-gaps.md) §7 (`assertNotBrowser`).
 
 ## 1. How Convex does it
 
