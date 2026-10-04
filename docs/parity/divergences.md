@@ -338,6 +338,7 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |
 |---|---|---|---|---|---|---|
+| DV-340 | `bunvex dev` appends the local backend's stdout and stderr to `.bunvex/local/default/backend.log` (a marked line per run; started over past 10 MiB); an early exit's error names the log and shows its last 20 lines; a push the deployment fails on its own side ("Your request couldn't be completed") points to it | the local backend's output is discarded (`stdio: "ignore"`, `lib/localDeployment/run.ts`); its errors go to Convex's Sentry | yes (a file, more output) | a failing local push could not be investigated; bunvex has no Sentry | add it (a bunvex addition) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).

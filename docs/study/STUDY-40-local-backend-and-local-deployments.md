@@ -147,6 +147,7 @@ Until npm answers, two ways in, with one documented at a time:
 | L5 | `BUNVEX_LOCAL_BACKEND_BINARY` uses a given executable instead of downloading one | tests, offline work, and running this repository's own build | accepted (owner, 2026-10-02) |
 | L6 | No local dashboard until item 12 | as STUDY-38 K3 | accepted (owner, 2026-10-02) |
 | L7 | Reserve `bunvex` on npm now with a placeholder `0.0.1`; publish the real package later as its own item. The CLI runs on Bun (`bunx bunvex`); Convex's runs on Node (`npx convex`) | the server inside the CLI is a Bun program | accepted (owner, 2026-10-02) |
+| L8 | `bunvex dev` keeps the local backend's output in `.bunvex/local/default/backend.log` (appended, a marked line per run, started over past 10 MiB); an early exit's error shows the log's end, and an internal push failure points to it. Convex discards the output (`stdio: "ignore"`, `lib/localDeployment/run.ts:176`) and sends the backend's errors to its Sentry | found when a local push failed once with "Your request couldn't be completed" and nothing could say why; bunvex has no Sentry | **pending** (owner): DV-340 |
 
 ## 5. Tests
 

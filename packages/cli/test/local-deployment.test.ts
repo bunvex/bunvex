@@ -11,6 +11,7 @@ import { type Io, main } from "../src/index.ts";
 import {
   acquireTarget,
   assetName,
+  backendLogPath,
   changedEnvVarFile,
   changesToGitIgnore,
   EXE,
@@ -152,6 +153,38 @@ describe("bunvex dev with a local deployment", () => {
     expect(await devCommand(["--once", "--local-cloud-port", "4000"], selfHosted.it)).toBe(2);
     expect(selfHosted.err[0]).toBe("bunvex dev: the --local-* options are only for a local deployment");
   }, 60_000);
+});
+
+describe("the local backend's log (DV-340)", () => {
+  test("its output is appended to .bunvex/local/default/backend.log, one marked run after another", async () => {
+    const dir = app();
+    const env = { BUNVEX_LOCAL_BACKEND_BINARY: shim(tmp()), HOME: tmp() };
+    for (let run = 0; run < 2; run++) {
+      const running = await startLocalDeployment(io(dir, env).it, { cloudPort: run === 0 ? freePort() : undefined });
+      await running.stop();
+    }
+    const log = readFileSync(backendLogPath(dir), "utf8");
+    expect(backendLogPath(dir)).toBe(join(dir, ".bunvex/local/default/backend.log"));
+    expect(log.match(/^--- \S+ bunvex-local-backend test-1 ---$/gm)).toHaveLength(2);
+    // The backend's own startup line, which `bunvex dev` used to discard.
+    expect(log).toContain(`instance ${readLocalConfig(dir)!.deploymentName}`);
+  }, 60_000);
+
+  test("a backend that exits before it is ready: the error names the log and shows its end", async () => {
+    const dir = app();
+    const bin = join(tmp(), EXE);
+    writeFileSync(
+      bin,
+      `#!/bin/sh\n[ "$1" = --version ] && echo "bunvex-local-backend test-1" && exit 0\n[ "$1" = keygen ] && echo "k|x" && exit 0\necho "starting"\necho "error: the store is locked" >&2\nexit 3\n`,
+    );
+    chmodSync(bin, 0o755);
+    const env = { BUNVEX_LOCAL_BACKEND_BINARY: bin, HOME: tmp() };
+    const err = (await startLocalDeployment(io(dir, env).it, { cloudPort: freePort() }).catch((e) => e)) as Error;
+    expect(err.message).toBe(
+      `the local backend exited before it was ready (exit code 3); its log, ${backendLogPath(dir)}, ends with:\n` +
+        `${readFileSync(backendLogPath(dir), "utf8").split("\n")[0]}\nstarting\nerror: the store is locked`,
+    );
+  }, 30_000);
 });
 
 describe("the executable: download, cache, upgrade", () => {

@@ -300,8 +300,11 @@ export type DeployOptions = {
   largeIndexBackfillCheck?: CheckMode;
   warnOnSlowSchemaValidation?: boolean;
 };
-/** The exit code, and whether a failure is worth retrying (`bunvex dev`'s backoff). */
-export type DeployResult = { code: number; transient?: boolean };
+/**
+ * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); and whether the deployment
+ * failed on its own side (its log may say why).
+ */
+export type DeployResult = { code: number; transient?: boolean; internal?: boolean };
 
 /** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
 /**
@@ -468,6 +471,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     const message = (e as Error).message;
     io.err(`bunvex deploy: ${message}`);
     // As Convex's CLI: an unreachable deployment and a push race are worth retrying.
-    return { code: 1, transient: /^could not reach |changed during push|overwritten by another push/.test(message) };
+    return {
+      code: 1,
+      transient: /^could not reach |changed during push|overwritten by another push/.test(message),
+      internal: /couldn't be completed|Internal Server Error/.test(message),
+    };
   }
 }

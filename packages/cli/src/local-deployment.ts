@@ -13,7 +13,19 @@
 // - its admin key from the executable's `keygen admin-key`, its secret 32 random bytes;
 // - `.env.local` names it (`BUNVEX_DEPLOYMENT=local:<name>`) and gives the client its URL.
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -32,6 +44,27 @@ export type LocalConfig = {
 };
 
 export const stateDir = (cwd: string) => join(cwd, ".bunvex", "local", "default");
+
+/**
+ * The local backend's output (stdout and stderr), appended run after run (DV-340: Convex's CLI discards it and
+ * sends the backend's errors to its own Sentry; bunvex keeps them where the user can read them).
+ */
+export const backendLogPath = (cwd: string) => join(stateDir(cwd), "backend.log");
+/** Past this size, the log starts over at the next run. */
+const BACKEND_LOG_LIMIT = 10 * 1024 * 1024;
+
+/** The log opened for appending a new run, a line marking where it starts. */
+function openBackendLog(path: string, version: string): number {
+  if (existsSync(path) && statSync(path).size > BACKEND_LOG_LIMIT) writeFileSync(path, "");
+  appendFileSync(path, `--- ${new Date().toISOString()} bunvex-local-backend ${version} ---\n`);
+  return openSync(path, "a");
+}
+
+/** The log's last lines (for an error message). */
+function logTail(path: string, lines = 20): string {
+  if (!existsSync(path)) return "";
+  return readFileSync(path, "utf8").trimEnd().split("\n").slice(-lines).join("\n");
+}
 
 export function readLocalConfig(cwd: string): LocalConfig | null {
   const p = join(stateDir(cwd), "config.json");
@@ -269,6 +302,8 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
   }
   const dir = stateDir(io.cwd);
   mkdirSync(dir, { recursive: true });
+  const logPath = backendLogPath(io.cwd);
+  const log = openBackendLog(logPath, version);
   const child = Bun.spawn(
     [
       bin,
@@ -284,8 +319,9 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
       join(dir, "bunvex_local_storage"),
       join(dir, "bunvex_local_backend.sqlite3"),
     ],
-    { cwd: dir, stdout: "ignore", stderr: "ignore" },
+    { cwd: dir, stdout: log, stderr: log },
   );
+  closeSync(log); // the child holds its own copy
   const stop = async () => {
     child.kill("SIGTERM");
     await child.exited;
@@ -301,11 +337,14 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
       throw new Error(`A different local backend ${answer} is running on selected port ${cloud}`);
     }
     if (await Promise.race([exitedEarly, Bun.sleep(500).then(() => false)])) {
-      throw new Error(`the local backend exited before it was ready (exit code ${child.exitCode})`);
+      const tail = logTail(logPath);
+      throw new Error(
+        `the local backend exited before it was ready (exit code ${child.exitCode}); its log, ${logPath}, ends with:\n${tail}`,
+      );
     }
     if (Date.now() > deadline) {
       await stop();
-      throw new Error(`the local backend did not start in ${timeoutMs / 1000}s`);
+      throw new Error(`the local backend did not start in ${timeoutMs / 1000}s; see its log: ${logPath}`);
     }
   }
   const config: LocalConfig = {
