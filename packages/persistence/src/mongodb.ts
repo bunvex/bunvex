@@ -55,6 +55,7 @@ import {
   type LogCommit,
   type LogRow,
   type OpenOptions,
+  opaqueToInspect,
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
@@ -753,3 +754,6 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     await this.call(() => this.client.close());
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(MongoPersistence);

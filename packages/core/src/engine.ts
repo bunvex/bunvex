@@ -77,6 +77,7 @@ import {
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
   hasLease,
@@ -1971,3 +1972,6 @@ export type IndexPrediction = {
 export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
 export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
 export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Engine);

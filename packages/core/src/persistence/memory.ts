@@ -12,6 +12,7 @@
 import { closeSync, existsSync, fdatasyncSync, openSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { BTree } from "../btree.ts";
+import { opaqueToInspect } from "../inspect.ts";
 import { compareKeys } from "../keyenc.ts";
 import type {
   DocLogRow,
@@ -480,3 +481,6 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lock = null;
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(MemoryPersistence);

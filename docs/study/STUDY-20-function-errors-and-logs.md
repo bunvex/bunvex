@@ -107,6 +107,23 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
 - The query cache stores an execution's lines with its result and returns them on a hit
   (`crates/application/src/cache/mod.rs`).
 
+### 1.6 What `console.log` prints of an object the function holds
+
+- object-inspect with `customInspect: true` and its defaults otherwise: depth 5 (deeper objects print as
+  `[Object]` / `[Array]`), cycles as `[Circular]`, own enumerable keys (getters run), a class instance as
+  `Name { … }` with its fields, an `Error` as `[Error: msg]` plus its own keys, `Map` / `Set` with their
+  entries. `toJSON` is never called. An object with an `inspect()` method prints what it returns.
+  object-inspect's `util.inspect.custom` hook is inert there: the isolate has no `util`
+  (object-inspect's `browser` field maps `./util.inspect.js` to nothing).
+- The cost is bounded by the line, not by the value: the whole value is rendered, then the backend cuts the
+  line at 32 KiB (§1.5).
+- What a function holds of the engine is a thin JS shell over syscalls
+  (`npm-packages/convex/src/server/impl/database_impl.ts`, `query_impl.ts`): `ctx.db` is an object literal
+  of closures (`{ get: [Function: get], query: [Function: query], … }`), `db.table(t)` a
+  `TableReader { tableName, isSystem }`, a query a `QueryInitializerImpl { tableName }` or a
+  `QueryImpl { state }` holding its own serialized description. The engine itself is in Rust, out of the
+  isolate's reach: **nothing a function can log holds the database's state**.
+
 ## 2. What an app can observe
 
 1. `throw new ConvexError(data)` reaches the caller with `data` intact: HTTP `errorData`, WebSocket
@@ -116,7 +133,8 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
 3. With redaction on, the message is only `[Request ID: …] Server Error`, `logLines` disappear, and
    `errorData` stays.
 4. `console.*` output comes back as `logLines`, rendered by object-inspect, limited to 256 lines of
-   32 KiB each.
+   32 KiB each. Logging `ctx`, `ctx.db` or a query shows its methods or its own description, never other
+   data than the function's.
 5. Request errors answer `{code, message}` with 4xx; system failures answer 500 with the fixed message.
 
 ## 3. How bunvex does it
@@ -157,6 +175,16 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
   - `withoutLogs` detaches subscription runs. A re-run is triggered by some mutation's commit, inside
     that mutation's async context, and its lines must not land in that mutation's `logLines`.
   - Captured lines are still printed to the server's console, as before.
+- **Engine objects print by name** (`packages/core/src/inspect.ts`, §4.2). bunvex's `ctx.db` *is* the
+  transaction (`Tx`), and a query holds it: opened by object-inspect, `console.log(ctx.db)` printed the
+  catalog, the store's state and other transactions' writes, ~32 KB a line, to the caller, the function log
+  and the log streams. Every engine class an app can reach (`Tx`, `QueryImpl`, `SystemReader`,
+  `ProjectedQuery`, `TableReader`/`TableWriter`, `Pipeline`, `ScanReads`) and the big ones behind them
+  (`Engine`, `Catalog`, `Committer`, `QueryCache`, every `Persistence`, `Functions`, `FileStorage`) defines
+  the `util.inspect.custom` hook, which object-inspect, `util.inspect` and `Bun.inspect` all honour, and
+  prints `Name {…}`, the form DV-316 gives a non-plain object in an error message. The name is read from the
+  prototype, so a Proxy over the transaction (a nested query's reader view) prints the same and runs no
+  trap. App values — class instances, cycles, `Error`s, `Map`s — print exactly as before, which is Convex's.
 
 ## 4. Divergences
 
@@ -169,6 +197,7 @@ Convex's cloud redacts production deployments. So self-hosted Convex shows detai
 | D5 | Captured lines are also printed to the server's stdout; Convex's backend sends them to log streams only | bunvex has no log streaming or dashboard log view yet; stdout is where developers see them today | later, once log streaming exists (owner, 2026-09-30; DV-77) |
 | D6 | A system error during a WebSocket mutation is sent as that mutation's error, with the fixed internal message; Convex fails the sync worker and the connection closes | bunvex's default `onFatal` exits the process anyway; revisit with protocol v1's `FatalError` | resolved with protocol v1: close 1011 (#50; DV-78) |
 | D7 | `REDACT_LOGS_TO_CLIENT=false` or `0` leaves redaction off; Convex's Docker script enables it for any non-empty value | Avoids a surprising reading of `false` | resolved: any non-empty value, as Convex (owner, 2026-09-30; DV-79) |
+| D9 | `console.log` of an engine object prints `Tx {…}`, `QueryImpl {…}`, `SystemReader {…}`, `TableReader {…}`; Convex prints its shells' closures and own fields (`{ get: [Function: get], … }`, `QueryInitializerImpl { tableName: 'items' }`) | The engine's objects are the ones the function holds; opened they print the database's state (a leak, §4.2). Same rule as an error message's `Name {…}` (DV-316) | per DV-316 (owner, 2026-10-03); DV-321 |
 | D8 | Only `CommitterStoppedError` is classified as a system error. Other internal failures (e.g. a driver error during a read) surface as function errors with their message | Convex tells them apart with `ErrorMetadata`; bunvex has no such tagging yet. The jepsen harness (#262) showed the cost: a resend whose record lookup failed was told "failed", and the first attempt then committed | **decided (owner, 2026-10-03): match Convex now** — see §4.1 (DV-80) |
 
 ### 4.1 D8 built: store failures are system errors
@@ -208,6 +237,26 @@ already system errors.
 Not changed here, and left to the functions rewrite: the "function not found" wording (STUDY-11 D6), the
 value `format` (D4), and return-value validation before commit (D5).
 
+### 4.2 D9: engine objects in log lines
+
+- **The leak.** On main, `console.log(ctx.db)` in a query answered a 32 KB line (cut at the limit) holding
+  the catalog with every table and index, the memory store's state and its commits, the documents another
+  transaction wrote. Same for `ctx`, any query object (`query`, `withIndex`, `filter`, `order`,
+  `fullTableScan`), `ctx.db.system` and a system query; in a mutation, an HTTP action's nested calls, the
+  sync protocol and the function log alike. `ctx.auth`, `ctx.storage`, `ctx.scheduler` and an action's
+  `ctx` were already plain objects of closures (and stay as Convex's).
+- **Why a hook and not a thin `ctx.db`.** Wrapping the transaction in a Convex-like object of closures
+  would print Convex's exact text, but it adds an allocation and an indirection to every database call
+  for a log line's sake; the hook costs nothing outside `console.log` (it is a prototype property set once at
+  load). The text of a logged engine object is not something an app can depend on in Convex either (it
+  names Convex's internal classes).
+- **Kept as Convex.** `IndexRangeBuilder` and `SearchFilterBuilder` (the `q` of `withIndex` /
+  `withSearchIndex`) hold only the app's own arguments and print them, as Convex's builders do; errors print
+  as object-inspect prints them.
+- **Not a divergence.** object-inspect's `util.inspect.custom` path is live on Bun (it resolves `util`), dead
+  in Convex's isolate; an app object that defines the hook prints what its hook returns on bunvex and its
+  fields on Convex. Pre-existing, unchanged here; noted for completeness.
+
 ## 5. Tests
 
 - `packages/values/test/errors.test.ts`: the class, the message derived from the data, recognition by
@@ -225,6 +274,19 @@ value `format` (D4), and return-value validation before commit (D5).
   - WebSocket frames;
   - the 500 system error;
   - `{code, message}` request errors and array `args`.
+- `packages/server/test/console-engine-leak.test.ts` (D9): `ctx`, `ctx.db`, `ctx.db.system`, a system
+  query, `db.table()`, queries at every stage, a filter's `q`, `ctx.auth`, `ctx.storage`, `ctx.meta`,
+  `ctx.scheduler`, an engine object nested in an object, a `Map` and an `Error`, in a query, a mutation,
+  a nested query (the reader-view Proxy), an action and an HTTP action: no line holds the catalog, the
+  store, its commits or another transaction's write; the same over the sync protocol and in the function
+  log stream (`/api/stream_function_logs`, which feeds the dashboard, `bunvex logs` and the log sinks).
+  App values still print as Convex's: a class instance opened, a cycle, depth 5, a huge array cut at 32 KiB.
+- `packages/core/test/opaque-inspect.test.ts`: `Bun.inspect` / `util.inspect` of the engine, its store, a
+  transaction, a query, `db.system`, a table scope; a Proxy's traps never run; and a scan of the files an
+  app's objects come from fails on any new class that is not opaque.
+- Sabotage (D9): making `opaqueToInspect` a no-op fails three server tests (the transaction's JSON is back in
+  the lines); dropping only `QueryImpl` from it fails them too; adding an unmarked class to
+  `system-reader.ts` fails the scan.
 - Sabotage: disabling the per-attempt reset, the subscription detach, redaction, `errorData` or the
   overflow cap each fails its test.
 

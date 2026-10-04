@@ -194,6 +194,7 @@ export interface ScanDocs {
   ): Promise<string[]>;
 }
 
+export { opaqueToInspect } from "../inspect.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export {
   checkLayoutVersion,

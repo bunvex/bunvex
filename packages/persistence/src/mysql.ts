@@ -50,6 +50,7 @@ import {
   type LogCommit,
   MYSQL_MAX_CHUNK_BYTES,
   type OpenOptions,
+  opaqueToInspect,
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
@@ -830,3 +831,6 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     await withTimeout("MySQL", this.timeoutMs, () => this.pool.end());
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(MysqlPersistence);
