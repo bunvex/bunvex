@@ -232,7 +232,12 @@ export class CronJobExecutor {
       try {
         if (job.state.type === "inProgress") return await this.finishCutShort(job);
         const target = this.functions.scheduledKind(job.cronSpec.udfPath);
-        if ("error" in target) throw new Error(`Cron trying to execute missing function: ${target.error}`);
+        if ("error" in target) {
+          // As Convex's `run_function`: the job is checked before the function. A push that deleted the cron
+          // with its function leaves nothing to run; only a cron that still exists is a (retried) system error.
+          if (!(await this.engine.query((db) => this.unchanged(db, job)))) return;
+          throw new Error(`Cron trying to execute missing function: ${target.error}`);
+        }
         if (target.kind === "mutation") return await this.runMutation(job);
         return await this.runAction(job);
       } catch (e) {

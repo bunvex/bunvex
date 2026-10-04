@@ -42,8 +42,14 @@ const minBytesWalk = (io: Io) => intFromEnv(io, "BUNVEX_MIN_BYTES_FOR_SCHEMA_WAL
 const filterFields = (f: string[] = []) =>
   f.length === 0 ? "" : `, filter${f.length === 1 ? "" : "s"} on ${f.join(", ")}`;
 
+/** An index as a push describes it (Convex's `DeveloperIndexConfig`). */
+export type IndexConfig = Pick<
+  IndexPrediction,
+  "name" | "type" | "fields" | "searchField" | "vectorField" | "dimensions" | "filterFields"
+> & { staged?: boolean };
+
 /** An index as Convex's `formatIndex`: `table.index`, its fields, `(staged)`. */
-export function formatIndex(i: IndexPrediction): string {
+export function formatIndex(i: IndexConfig): string {
   const fields =
     i.type === "database"
       ? `  ${(i.fields ?? []).join(", ")}`
@@ -207,4 +213,36 @@ export function defaultDeployMessage(env: Record<string, string | undefined>): s
   if (!p) return null;
   const sha = env[p.sha];
   return sha ? `Deployed from ${p.name} • ${sha.slice(0, 7)}` : `Deployed from ${p.name}`;
+}
+
+export type IndexDiff = {
+  added_indexes: IndexConfig[];
+  removed_indexes: IndexConfig[];
+  enabled_indexes?: IndexConfig[];
+  disabled_indexes?: IndexConfig[];
+};
+
+/**
+ * What a push did to the indexes, as Convex's `printDiff` (cli/lib/components.ts) prints the root's: deleted,
+ * added, added staged, enabled and staged again, each a finished step listing its indexes with `formatIndex`.
+ * Convex follows each staged index with a link to its dashboard's progress page; bunvex's CLI knows no
+ * dashboard, so there is none (as DV-04 drops links to Convex's sites).
+ */
+export function printIndexDiff(io: Io, diff: IndexDiff, dryRun: boolean) {
+  const step = (title: string, mark: string, list: IndexConfig[]) => {
+    if (list.length > 0) io.err(`✔ ${title}\n${list.map((i) => `  [${mark}] ${formatIndex(i)}`).join("\n")}`);
+  };
+  step(`${dryRun ? "Would delete" : "Deleted"} table indexes:`, "-", diff.removed_indexes);
+  step(
+    `${dryRun ? "Would add" : "Added"} table indexes:`,
+    "+",
+    diff.added_indexes.filter((i) => !i.staged),
+  );
+  step(
+    `${dryRun ? "Would add" : "Added"} staged table indexes:`,
+    "+",
+    diff.added_indexes.filter((i) => i.staged),
+  );
+  step(dryRun ? "These indexes would be enabled:" : "These indexes are now enabled:", "*", diff.enabled_indexes ?? []);
+  step(dryRun ? "These indexes would be staged:" : "These indexes are now staged:", "*", diff.disabled_indexes ?? []);
 }
