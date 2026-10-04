@@ -12,7 +12,9 @@
 //   executable never generates a secret — the Docker scripts and `bunvex dev` do;
 // - files and pushed code under `--local-storage` (default `bunvex_local_storage`), or S3 (`--s3-storage`,
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
-// - `--do-not-require-ssl`, `--redact-logs-to-client`.
+// - `--do-not-require-ssl`, `--redact-logs-to-client`;
+// - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
+//   discovery and JWKS, and the log sinks go through; without it, Convex's warning at start.
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence } from "@bunvex/core";
@@ -50,8 +52,13 @@ Options:
       --s3-storage           keep them in S3 instead (S3_STORAGE_FILES_BUCKET, S3_STORAGE_MODULES_BUCKET, AWS_*)
       --do-not-require-ssl   allow an unencrypted database connection
       --redact-logs-to-client  do not send log lines and errors' details to clients
+      --http-proxy <url>     send actions' fetch requests through this proxy, to screen them for SSRF
   -V, --version              print the version
   -h, --help                 print this help`;
+
+/** Convex's warning at start without a proxy, in bunvex's words. */
+export const NO_PROXY_WARNING =
+  "Running without a proxy -- actions' `fetch` requests are unrestricted! (--http-proxy screens them)";
 
 export type LocalBackendFlags = {
   dbSpec: string;
@@ -67,6 +74,7 @@ export type LocalBackendFlags = {
   s3: boolean;
   doNotRequireSsl: boolean;
   redact: boolean;
+  httpProxy?: string;
 };
 
 const VALUED: Record<string, string> = {
@@ -82,6 +90,7 @@ const VALUED: Record<string, string> = {
   "--instance-name": "--instance-name",
   "--instance-secret": "--instance-secret",
   "--local-storage": "--local-storage",
+  "--http-proxy": "--http-proxy",
 };
 
 /** Convex's instance secret check: 32 bytes, hex-encoded. */
@@ -138,7 +147,14 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
         f.instanceName = v;
         named = true;
       } else if (name === "--instance-secret") f.instanceSecret = v;
-      else {
+      else if (name === "--http-proxy") {
+        // As clap parses Convex's `Url`: a value that is not an absolute URL is refused here.
+        if (!URL.canParse(v))
+          return `invalid value '${v}' for '--http-proxy <HTTP_PROXY>': ${/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v) ? "invalid URL" : "relative URL without a base"}`;
+        if (!/^https?:$/.test(new URL(v).protocol))
+          return `invalid value '${v}' for '--http-proxy <HTTP_PROXY>': the proxy's scheme must be http or https`;
+        f.httpProxy = v;
+      } else {
         f.localStorage = v;
         localStorageGiven = true;
       }
@@ -196,6 +212,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     hostname: f.hostname,
     ...(f.cloudOrigin ? { cloudOrigin: f.cloudOrigin, siteOrigin: f.siteOrigin } : {}),
     ...(f.redact ? { redactLogsToClient: true } : {}),
+    // A flag only, as Convex's: not BUNVEX_HTTP_PROXY.
+    httpProxy: f.httpProxy ?? null,
     fileStorage: storage("files"),
     moduleStorage: storage("modules"),
     exportStorage: storage("exports"),
@@ -268,6 +286,8 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
   }
   io.err(`bunvex-local-backend ${version}: instance ${flags.instanceName}, ${flags.db}`);
   io.err(`the API at ${running.url}${running.siteUrl ? `, HTTP actions at ${running.siteUrl}` : ""}`);
+  // Convex warns the same way (a release build without `--convex-http-proxy`).
+  if (!flags.httpProxy) io.err(NO_PROXY_WARNING);
   await new Promise<void>((done) => {
     for (const signal of ["SIGINT", "SIGTERM"] as const)
       process.once(signal, () => {

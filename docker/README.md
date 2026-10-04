@@ -56,6 +56,14 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
 
+**Screening outbound requests (SSRF).** An action's `fetch` can reach any address the container can,
+including private ones and cloud metadata. As Convex's `--convex-http-proxy`, `--http-proxy <url>` sends
+actions' `fetch`, auth providers' discovery and JWKS, and log streams (but Sentry's) through a screening
+proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuses private addresses with a
+407; each request carries the instance name as `Proxy-Authorization`. Add it to the service's `command:`
+(the entry script passes its arguments on). Without it the backend warns at start and filters nothing
+([STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
+
 ## Without Docker: the executable
 
 Each release on GitHub has `bunvex-local-backend-<target>.zip` for macOS (arm64, x64), Linux (arm64, x64) and

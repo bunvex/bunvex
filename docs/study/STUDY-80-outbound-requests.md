@@ -1,7 +1,7 @@
 # STUDY-80 — Outbound requests: what an action's `fetch` may reach, and the SSRF proxy
 
-- **Status:** PR 1 (schemes and Bun's options) implemented, as Convex. PR 2 (the proxy, §3.2) in its own PR.
-  P1 (screening without a proxy, beyond Convex) pending (owner).
+- **Status:** PR 1 (schemes and Bun's options, #377) and PR 2 (the proxy) implemented, as Convex. P1
+  (screening without a proxy, beyond Convex) pending (owner).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04. Oracle: Convex's
   `convex-local-backend` (a local build, `--disable-beacon`) with a screening proxy and local targets
   (§1.4).
@@ -134,9 +134,11 @@ within noise.
 ### 3.2 PR 2: the proxy
 
 - **The option.** `bunvex-local-backend --http-proxy <url>` (Convex's `--convex-http-proxy`; rule 5, as
-  DV-197's other flags); `createServer({ httpProxy })`, default `BUNVEX_HTTP_PROXY` (as `localLogSink` /
-  `BUNVEX_LOCAL_LOG_SINK`), for embedded servers and `bunvex start`. The Docker entry script passes the
-  arguments it is given, as Convex's.
+  DV-197's other flags), a flag only, as Convex's; checked at start as clap checks a `Url` ("invalid value
+  'x' for '--http-proxy <HTTP_PROXY>': relative URL without a base"), and only `http:` / `https:` (Bun's
+  `fetch` has no SOCKS proxy, which `reqwest` has). `createServer({ httpProxy })`, default
+  `BUNVEX_HTTP_PROXY` (as `localLogSink` / `BUNVEX_LOCAL_LOG_SINK`), for embedded servers. The Docker entry
+  script passes the arguments it is given, as Convex's.
 - **What goes through it** — exactly Convex's list (§1.2): isolate and HTTP actions' `fetch`; OIDC discovery
   and JWKS; the webhook, Datadog, Axiom and both PostHog sinks. Not the Sentry sink, not a `"use node"`
   action.
@@ -150,7 +152,16 @@ within noise.
   without the URL's query string, as Convex's `26_fetch.ts`.
 - **Without a proxy.** Bun's `fetch` honours `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` as `reqwest` does,
   without `Proxy-Authorization`; an explicit `proxy` replaces them. At start, without a proxy, the backend
-  logs Convex's warning in its own words.
+  logs Convex's warning in its own words: "Running without a proxy -- actions' `fetch` requests are
+  unrestricted! (--http-proxy screens them)".
+- **Where.** `packages/server/src/http-proxy.ts` (`proxiedFetch`); `Functions.httpProxy` gives each isolate
+  action's run (`Running.send`) its deployment's sender, so two servers in one process keep their own proxy
+  and name; the auth verifier and the log manager wrap their own `fetch`.
+
+**Cost** (`packages/server/bench/action-fetch.ts`, 3 runs): the scheme check and the 407 check together are
+~0.25 µs per call (290 vs 40 ns around a `fetch` that answers at once; ~310 ns with the proxy's init); an
+action's fetch to a local server is 58–63 µs as served and unchecked alike. Through the test's local proxy
+(a new connection per request) it is ~270 µs: the hop is the operator's choice.
 
 ### 3.3 Left as they are (separate gaps)
 
@@ -166,6 +177,7 @@ within noise.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | — | `--http-proxy` for Convex's `--convex-http-proxy`; `BUNVEX_HTTP_PROXY` for embedded servers | rule 5 (DV-197) | as DV-197 |
+| — | Only `http:` / `https:` proxies (Convex's `reqwest` also takes `socks5:`) | Bun's `fetch` has no SOCKS proxy | a platform limit, refused at start with a message |
 | P1 | Screening without a proxy: refuse private, loopback, link-local and metadata addresses when no proxy is set (beyond Convex, which only warns) | self-hosted operators rarely run a proxy | **pending (owner)**: draft PR |
 
 ## 5. Tests
@@ -173,9 +185,15 @@ within noise.
 - `packages/server/test/action-fetch.test.ts` (PR 1): every scheme Convex refuses, a `Request` naming one, an
   HTTP action, a Node action (Node's errors), Bun's options ignored (`unix` against a real Unix socket server,
   `proxy` to a closed port, `tls`), and the host's own `fetch` untouched.
-- PR 2: a local screening proxy (absolute-form and `CONNECT`, 407 for refused hosts) and local targets; the
-  cases of §1.4, the instance name on every request, the auth and sink paths, Sentry and Node actions not
-  proxied.
+- `packages/server/test/http-proxy.test.ts` (PR 2), against a local screening proxy
+  (`test/screening-proxy.ts`: absolute-form and `CONNECT`, 407 for refused hosts) and local targets: the
+  cases of §1.4 with the oracle's messages (allowed, refused with its query dropped, a refused `CONNECT`, a
+  redirect to a refused host naming the hop, `redirect: "manual"`, an HTTP action, a 407 without a proxy);
+  `Proxy-Authorization: <instance name>` on each; a `"use node"` action not proxied; OIDC discovery and JWKS
+  through the proxy, and refused with Convex's messages; the webhook and Datadog sinks proxied, Sentry's not;
+  the flag's checks.
+- **Sabotage:** the proxy ignored (5 tests fail), the 407 check removed (5), Sentry proxied (1), the hop not
+  named (1).
 
 ## 6. Open questions
 

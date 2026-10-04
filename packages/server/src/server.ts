@@ -7,6 +7,7 @@ import {
   type Caller,
   checkIdentifier,
   DEPLOYMENT_AUDIT_LOG_TABLE,
+  directFetch,
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
@@ -68,6 +69,7 @@ import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId 
 import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
+import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import {
@@ -153,6 +155,13 @@ export type ServerOptions = {
   auth?: AuthConfig;
   /** `fetch` for OIDC discovery and JWKS (tests point it at an in-process issuer). */
   authFetch?: typeof fetch;
+  /**
+   * The proxy that requests made on the app's behalf go through (STUDY-80 §3.2; Convex's
+   * `--convex-http-proxy`), to screen them for SSRF: an action's `fetch`, OIDC discovery and JWKS, and the
+   * log stream sinks but Sentry's. Each carries `Proxy-Authorization: <instance name>`; a 407 refuses it.
+   * Default: `BUNVEX_HTTP_PROXY`, else none (null: none, whatever the environment says).
+   */
+  httpProxy?: string | null;
   /**
    * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
@@ -304,8 +313,15 @@ export function createServer(opts: ServerOptions) {
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
   functions.functionLog = functionLog;
+  // The operator's proxy (STUDY-80 §3.2, Convex's `--convex-http-proxy`): actions' `fetch`, OIDC discovery and
+  // JWKS, and the log stream sinks but Sentry's go through it, named by the instance.
+  const proxyUrl = httpProxyUrl(
+    opts.httpProxy === null ? undefined : (opts.httpProxy ?? process.env.BUNVEX_HTTP_PROXY),
+  );
+  const httpProxy: HttpProxy | null = proxyUrl ? { url: proxyUrl, clientId: engine.instanceName } : null;
+  functions.httpProxy = httpProxy;
   // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
-  const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), ...opts.logSinks });
+  const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), httpProxy, ...opts.logSinks });
   functions.logManager = logManager;
   logManager.watchConcurrency(() => functions.concurrency());
   const logSinksReady = logManager.start(opts.localLogSink ?? (process.env.BUNVEX_LOCAL_LOG_SINK || undefined));
@@ -338,7 +354,7 @@ export function createServer(opts: ServerOptions) {
   const makeVerifier = (auth: AuthConfig | undefined) =>
     new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
       redactErrors: redact,
-      ...(opts.authFetch ? { fetch: opts.authFetch } : {}),
+      fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
   let verifier = makeVerifier(opts.auth);

@@ -6,8 +6,9 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
-import { DEPLOYMENT_AUDIT_LOG_TABLE, type Engine, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
+import { DEPLOYMENT_AUDIT_LOG_TABLE, directFetch, type Engine, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
+import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { eventJsonV2, type LogEvent, type LogTopic } from "./log-events.ts";
 import { backoff, EgressFailure, passes, SINK_USER_AGENT, type Sink, statusText } from "./log-sink-http.ts";
 import {
@@ -150,6 +151,11 @@ export type LogSinkOptions = {
   providerBackoffMs: [initial: number, max: number];
   /** The HTTP client of the provider sinks (tests redirect Datadog's and Axiom's fixed hosts). */
   fetch: typeof fetch;
+  /**
+   * The operator's proxy (STUDY-80 §3.2): the webhook, Datadog, Axiom and PostHog sinks go through it, as
+   * Convex's fetch client; Sentry's does not (Convex's uses the `sentry` crate's own transport).
+   */
+  httpProxy: HttpProxy | null;
   /** The version sent where Convex sends its package's (`sdk.version`, `$lib_version`): "unknown", its fallback. */
   version: string;
 };
@@ -163,7 +169,8 @@ export const defaultLogSinkOptions = (): LogSinkOptions => ({
   requestTimeoutMs: 30_000,
   random: Math.random,
   providerBackoffMs: [500, 60_000],
-  fetch: ((input, init) => fetch(input, init)) as typeof fetch,
+  fetch: ((input, init) => directFetch(input, init)) as typeof fetch,
+  httpProxy: null,
   version: "unknown",
 });
 
@@ -219,7 +226,7 @@ export class WebhookSink implements Sink {
       if (n > 0) await backoff(this.o, this.o.webhookBackoffMs, n - 1, () => this.stopped);
       if (this.stopped) throw new EgressFailure("the log stream stopped", false);
       try {
-        const r = await fetch(this.config.url, {
+        const r = await this.o.fetch(this.config.url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -497,15 +504,21 @@ export class LogManager {
   private async startSink(r: SinkRow, verify: boolean): Promise<SinkState> {
     let sink: Sink;
     const c = r.config;
-    if (c.type === "webhook") sink = new WebhookSink(c, this.metadata, this.options);
+    // Through the operator's proxy, as Convex's fetch client; Sentry's transport is its own (STUDY-80).
+    const proxied = { ...this.options, fetch: proxiedFetch(this.options.fetch, this.options.httpProxy) };
+    if (c.type === "webhook")
+      sink = new WebhookSink(c, this.metadata, {
+        ...this.options,
+        fetch: proxiedFetch(directFetch, this.options.httpProxy),
+      });
     else if (c.type === "local") sink = new LocalSink(c.path, this.options);
     else if (c.type === "s3Export") sink = new DrainingSink();
-    else if (c.type === "datadog") sink = new DatadogSink(c as unknown as DatadogConfig, this.options, this.metadata);
-    else if (c.type === "axiom") sink = new AxiomSink(c as unknown as AxiomConfig, this.options, this.metadata);
+    else if (c.type === "datadog") sink = new DatadogSink(c as unknown as DatadogConfig, proxied, this.metadata);
+    else if (c.type === "axiom") sink = new AxiomSink(c as unknown as AxiomConfig, proxied, this.metadata);
     else if (c.type === "sentry") sink = new SentrySink(c as unknown as SentryConfig, this.options, this.metadata);
     else if (c.type === "postHogLogs")
-      sink = new PostHogLogsSink(c as unknown as PostHogLogsConfig, this.options, this.metadata);
-    else sink = new PostHogErrorTrackingSink(c as unknown as PostHogErrorTrackingConfig, this.options, this.metadata);
+      sink = new PostHogLogsSink(c as unknown as PostHogLogsConfig, proxied, this.metadata);
+    else sink = new PostHogErrorTrackingSink(c as unknown as PostHogErrorTrackingConfig, proxied, this.metadata);
     if (verify) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

@@ -145,6 +145,8 @@ export class Running implements LogOwner {
   tokenIdentifier: string | null = null;
   ip: string | null = null;
   tx: unknown = null;
+  /** How an action's `fetch` goes out (STUDY-80): checked, and through the deployment's proxy. */
+  send: typeof fetch | null = null;
   /**
    * What the log streams' `function_execution` carries beside the function log (STUDY-74, DV-305): why it ran
    * (a sync query's rerun reason; else from the caller), the scheduled job it runs, its arguments' JSON

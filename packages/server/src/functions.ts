@@ -7,6 +7,7 @@ import {
   type Caller,
   type CallRequest,
   checkEnvVarName,
+  directFetch,
   type Engine,
   failExecution,
   formatBytes,
@@ -74,6 +75,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
@@ -411,13 +413,10 @@ const storageMeter: StorageMeter = ({ read, written }) => {
   r.io.storageWriteBytes += written ?? 0;
 };
 
-// An action's `fetch` reaches what Convex's runtime lets it reach (STUDY-80): http(s) only, without Bun's options.
-const isolateSender = isolateFetch();
+// An action's `fetch` reaches what Convex's runtime lets it reach (STUDY-80): http(s) only, without Bun's
+// options, and an isolate action's through its deployment's proxy (`Functions.httpProxy`).
 const nodeSender = nodeFetch();
-setFetchSender(() => {
-  const r = meteredAction();
-  return r ? (r.environment === "isolate" ? isolateSender : nodeSender) : null;
-});
+setFetchSender(() => meteredAction()?.send ?? null);
 
 // Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
 // counter, 0 when self-hosted (STUDY-71 U2).
@@ -648,6 +647,7 @@ export class Functions {
     r.runReason = sourced?.runReason ?? null;
     r.mutationQueueLength = sourced?.mutationQueueLength ?? null;
     r.retries = sourced?.retries ?? { n: 0 };
+    r.send = r.environment === "isolate" ? this.isolateSender : nodeSender;
     if (sourced?.source === "Scheduler") r.schedulerJobId = caller?.request?.scheduledFunctionId ?? null;
     if (udfType !== "HttpAction") {
       try {
@@ -782,6 +782,17 @@ export class Functions {
 
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
+  /** An isolate action's `fetch`: through the operator's proxy when there is one (STUDY-80 §3.2). */
+  private isolateSender = isolateFetch(proxiedFetch(directFetch, null, true));
+  private proxy: HttpProxy | null = null;
+  /** The proxy an isolate action's `fetch` goes through (Convex's `--convex-http-proxy`); null for none. */
+  get httpProxy(): HttpProxy | null {
+    return this.proxy;
+  }
+  set httpProxy(p: HttpProxy | null) {
+    this.proxy = p;
+    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p, true));
+  }
 
   /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */
   private meterCompletion(r: Running, c: Completion, tracked: boolean) {

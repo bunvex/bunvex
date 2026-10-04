@@ -7,7 +7,10 @@
 //   Convex's `TypeError`, and those options are dropped, as Convex ignores them.
 // - A `"use node"` action runs on Node in Convex, whose `fetch` takes `http:`, `https:` and `data:`; another
 //   scheme fails as Node's does (`TypeError: fetch failed`, with Node's cause).
+// - An isolate action's request goes through the operator's proxy, if any (`http-proxy.ts`); a refusal is
+//   Convex's `TypeError`. A Node action's does not, as Convex's local Node executor's.
 import { directFetch } from "@bunvex/core";
+import { RefusedRequest, refusedInAction } from "./http-proxy.ts";
 
 /** `RequestInit` options only Bun's `fetch` reads; an action's request goes out without them. */
 const BUN_ONLY_OPTIONS = ["unix", "proxy", "tls", "s3"] as const;
@@ -41,7 +44,9 @@ export function isolateFetch(send: typeof fetch = directFetch): typeof fetch {
     const url = urlOf(input);
     if (url && url.protocol !== "http:" && url.protocol !== "https:")
       return Promise.reject(unsupportedScheme(url.protocol));
-    return send(input, webInit(init));
+    return send(input, webInit(init)).catch((e) => {
+      throw e instanceof RefusedRequest ? refusedInAction(e) : e;
+    });
   }) as typeof fetch;
 }
 
