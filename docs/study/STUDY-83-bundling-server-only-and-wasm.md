@@ -1,4 +1,4 @@
-# STUDY-80 — Bundling `server-only` and `.wasm` imports
+# STUDY-83 — Bundling `server-only` and `.wasm` imports
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

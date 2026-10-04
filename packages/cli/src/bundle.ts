@@ -12,7 +12,7 @@
 // - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`);
 // - `import "server-only"` (Next.js's guard) is an empty module, and `import m from "./x.wasm"` is a compiled
 //   `WebAssembly.Module` with the file's bytes inlined, as Convex's `serverOnlyPlugin` and `wasmPlugin`
-//   (STUDY-80).
+//   (STUDY-83).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { BunPlugin } from "bun";
@@ -33,7 +33,7 @@ export class BundleError extends Error {
 const posix = (p: string) => p.split(sep).join("/");
 
 /**
- * Convex's `serverOnlyPlugin` (STUDY-80): `server-only` resolves to an empty module, whether the package is
+ * Convex's `serverOnlyPlugin` (STUDY-83): `server-only` resolves to an empty module, whether the package is
  * installed or not (its real entry throws outside React server components), so shared code guarded by it
  * bundles and runs.
  */
@@ -46,7 +46,7 @@ const serverOnly: BunPlugin = {
 };
 
 /**
- * Convex's `wasmPlugin` (STUDY-80): a `.wasm` import's default export is a `WebAssembly.Module` compiled from
+ * Convex's `wasmPlugin` (STUDY-83): a `.wasm` import's default export is a `WebAssembly.Module` compiled from
  * the file's bytes, which the bundle carries (esbuild's binary loader there; inlined as base64 here).
  */
 const wasm: BunPlugin = {

@@ -249,7 +249,7 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
   });
 
-  test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-80)', async () => {
+  test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-83)', async () => {
     const d = await deployment();
     const app = tmp();
     // The real package throws outside React server components: the stub must win over it.
