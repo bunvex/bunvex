@@ -12,6 +12,7 @@ import {
   BackendIsNotRunningError,
   type Engine,
   isStopped,
+  opaqueToInspect,
   readBackendState,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
@@ -455,3 +456,6 @@ export function startFileSweeps(engine: Engine, files: FileStorage): () => void 
     clearInterval(orphans);
   };
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(FileStorage);

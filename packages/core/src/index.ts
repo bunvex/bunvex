@@ -173,6 +173,7 @@ export {
   orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
+export { opaqueToInspect } from "./inspect.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
