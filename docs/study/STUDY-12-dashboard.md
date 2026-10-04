@@ -967,7 +967,11 @@ an injected data source):
   (`check_admin_key`, then a real data source) is a follow-up.
 - Server operation names map to the dashboard's (`capabilitiesOf`), empty = all, as Convex.
 - Prefill from `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY`, as Convex's `NEXT_PUBLIC_*`.
-- Embedding: the same request/credentials messages, also without an origin check, as Convex (LG3).
+- Embedding: the same request/credentials messages as Convex, but only with the parent origins the operator
+  allowed (LG3, decided 3 Oct 2026): `VITE_BUNVEX_EMBED_ORIGINS` at build, written into index.html's
+  `<meta name="bunvex-embed-origins">` (editable in a built dashboard). The request is addressed to each allowed
+  origin (never `*`); an answer counts only from the parent window at one of them. No list: embedded sign-in is
+  off (nothing asked, every answer ignored).
 - The key is kept **in memory only** and a reload asks again — what users observe in Convex.
 - The header's account entry shows the deployment's name (from the key's `<name>|` prefix, as Convex's keys
   are named) and URL, and "Sign out".
@@ -978,7 +982,7 @@ an injected data source):
 |---|---|---|---|
 | LG1 | **Use the demo data** on the sign-in page: the screens on the mock, kept for the tab (`sessionStorage`), "Leave the demo" in the header | a bunvex addition: explore the dashboard without a deployment; it is also how development and the e2e tests open it (`?demo=1`) | addition, as the owner asked (2 Oct 2026) |
 | LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | **decided** (owner, 2026-10-03): accepted (DV-210) |
-| LG3 | Embedded credentials accepted from any origin, as Convex | match Convex; an allow-list of parent origins would be safer | matches Convex (no divergence); a question for the owner in the PR |
+| LG3 | Embedded credentials accepted only from an allow-list of parent origins set by the operator (`VITE_BUNVEX_EMBED_ORIGINS` / `<meta name="bunvex-embed-origins">`), the request sent only to those origins; none allowed by default (fail closed). Convex accepts them from any origin and asks with target `*` (`_app.tsx`, `useEmbeddedDashboardCredentials`) | the message carries an admin key: any page that frames the dashboard could otherwise sign it in to a deployment of its choosing, and a `*` request tells any parent that a dashboard is waiting | **decided** (owner, 2026-10-03): option A, an allow-list (DV-319) |
 | LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |
 
 ## 20. The command palette (a bunvex addition, added 2 Oct 2026)
