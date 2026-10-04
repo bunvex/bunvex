@@ -51,7 +51,7 @@ test("any kind, by module path and name; clean JSON by default, whatever the cli
   const { run } = await setup();
   expect(await run("m/ok")).toEqual({ status: 200, body: { status: "success", value: { n: "5", s: "x" } } });
   expect((await run("m/ok", { args: {} }, { "bunvex-client": "npm-1.0.0" })).body.value).toEqual({ n: "5", s: "x" });
-  expect((await run("m/ok", { args: {}, format: "convex_encoded_json" })).body.value).toEqual({
+  expect((await run("m/ok", { args: {}, format: "encoded_json" })).body.value).toEqual({
     n: { $integer: "BQAAAAAAAAA=" },
     s: "x",
   });
