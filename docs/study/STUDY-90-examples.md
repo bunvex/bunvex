@@ -58,6 +58,10 @@ unit tests (`bun run test:examples`); the root `bun test` ignores `examples/**`.
 | Demo | bunvex | |
 |---|---|---|
 | `tutorial`, `pagination`, `search`, `file-storage`, `scheduling`, `cron-jobs`, `nextjs-app-router`, `react-query` | **first batch** (this study) | every piece is on main |
+| `pagination` | **built** (`examples/pagination`) | `usePaginatedQuery`; the test follows `onPaginatedUpdate_experimental` through `loadMore` and a live insert, an index with an argument, a reshaped page |
+| `search` | **built** (`examples/search`) | a `searchIndex`; the test checks relevance and a new match joining the results live |
+| `file-storage` | **built** (`examples/file-storage`) | upload URL → POST → `sendImage`; the test reads the same bytes and content type back from `getUrl`'s URL |
+| `react-query` | **built** (`examples/react-query`) | `@bunvex/react-query`; the test prefetches and dehydrates on the server path, and follows the list live |
 | `typescript`, `args-validation`, `custom-errors`, `relational-data-modeling`, `system-tables`, `vector-search`, `file-storage-with-http`, `http`, `prewarming`, `nextjs-pages-router`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
 | `node` | waits | Node actions (`"use node"`) |
 | `python-quickstart` | waits | a Python client |
