@@ -40,7 +40,7 @@ test("path, args as JSON, format: answered as POST /api/query", async () => {
     status: 200,
     body: { status: "success", value: { n: "5", x: 3 } },
   });
-  expect((await get(`path=m:typed&args=${args({ x: 3 })}&format=convex_encoded_json`)).body.value).toEqual({
+  expect((await get(`path=m:typed&args=${args({ x: 3 })}&format=encoded_json`)).body.value).toEqual({
     n: { $integer: "BQAAAAAAAAA=" },
     x: 3,
   });

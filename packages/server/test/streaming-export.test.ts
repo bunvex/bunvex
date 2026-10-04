@@ -16,7 +16,7 @@ const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SEC
 const READ_ONLY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET), readOnly: true });
 
 describe("the encodings", () => {
-  test("json (clean), convex_encoded_json and export_json, as Convex's export.rs", () => {
+  test("json (clean), encoded_json and export_json, as Convex's export.rs", () => {
     const doc = { i: 33n, f: 1, nan: Number.NaN, inf: -Infinity, z: -0, b: new Uint8Array([1, 2]).buffer, s: "x" };
     expect(writeValue(doc, "clean")).toBe(
       '{"b":"AQI=","f":1.0,"i":"33","inf":"-Infinity","nan":"NaN","s":"x","z":-0.0}',
@@ -117,7 +117,7 @@ test("list_snapshot: one table per page, by tablet then id, at one snapshot; the
   await t.call("m:put", { table: "b", n: 1, doc: { k: 2n } });
   await t.call("m:patch", { id: a1, doc: { k: 3n } });
   await t.call("m:del", { id: a1 });
-  const d = await t.get("document_deltas", { cursor: snapshot, format: "convex_encoded_json" });
+  const d = await t.get("document_deltas", { cursor: snapshot, format: "encoded_json" });
   expect(d.body.hasMore).toBe(false);
   expect(d.body.values.map((x: any) => [x._table, x._deleted, x.k ?? null])).toEqual([
     ["b", false, null],
@@ -211,9 +211,14 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
     code: "BadFormat",
     message: "format param must be one of [`json`]. Got xml",
   });
-  // Convex's legacy names for the clean and encoded forms (DV-307).
-  expect((await t.get("list_snapshot", { format: "convex_clean_json" })).status).toBe(200);
-  expect((await t.get("list_snapshot", { format: "convex_json" })).status).toBe(200);
+  // bunvex's names; Convex's are a BadFormat (DV-307).
+  for (const format of ["json", "clean_json", "encoded_json", "export_json"])
+    expect((await t.get("list_snapshot", { format })).status).toBe(200);
+  for (const format of ["convex_encoded_json", "convex_json", "convex_clean_json"])
+    expect((await t.get("list_snapshot", { format })).body).toEqual({
+      code: "BadFormat",
+      message: `format param must be one of [\`json\`]. Got ${format}`,
+    });
   expect((await t.get("list_snapshot", { cursor: "nope" })).body.code).toBe("InvalidListSnapshotCursor");
   const future = (BigInt(Date.now()) * 1_000_000n + 10n ** 15n).toString();
   expect((await t.get("list_snapshot", { snapshot: future })).body).toEqual({

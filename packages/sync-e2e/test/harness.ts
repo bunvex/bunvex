@@ -103,3 +103,18 @@ export async function until<T>(f: () => T | undefined | false, what = "condition
   }
   throw new Error(`timed out waiting for ${what}`);
 }
+
+/**
+ * Convex's HTTP clients ask for `format: "convex_encoded_json"`, which bunvex refuses with `BadFormat`: its
+ * name is `encoded_json` (DV-307). The oracle tests send their requests through this `fetch`, which renames
+ * that one field, so everything else Convex's clients do is still compared with bunvex's.
+ */
+export function renameFormat(fetch: typeof globalThis.fetch): typeof globalThis.fetch {
+  return ((url: string, init?: RequestInit) =>
+    fetch(
+      url,
+      typeof init?.body === "string"
+        ? { ...init, body: init.body.replace('"format":"convex_encoded_json"', '"format":"encoded_json"') }
+        : init,
+    )) as typeof globalThis.fetch;
+}

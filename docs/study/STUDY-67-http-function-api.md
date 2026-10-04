@@ -170,7 +170,7 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 |---|---|---|---|
 | H1 | The API answers 200, not 560, for a function error | Convex's backend answers 200 too; 560 is the hosted service's | DV-58 (already decided): nothing to do |
 | H2 | No CORS on `/api/*` | gap | fix to match (#292) |
-| H3 | `format` ignored; encoded JSON always | gap | fix to match (#293) |
+| H3 | `format` ignored; encoded JSON always | gap | fixed (#293); the format names are bunvex's (`encoded_json`, `clean_json`; Convex's `convex_*` are `BadFormat`): DV-307, owner, 2026-10-03, revisited: B (as DV-312) |
 | H4 | Content-Type not required; `args` optional; body error messages | gap | fix to match (#295) |
 | H5 | `/api/function` open to non-admins; `componentPath` ignored; 404 for a wrong method | gap | fix to match (#295) |
 | H6 | Argument errors rendered as an uncaught JS error, other messages, extra args accepted | gap | fix to match (#298) |
