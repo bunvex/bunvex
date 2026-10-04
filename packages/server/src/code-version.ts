@@ -23,6 +23,7 @@ import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts
 import { describeUncaught } from "./errors.ts";
 import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
+import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 
 /** A pushed module, as Convex's `ModuleConfig`: its path in the functions directory, e.g. `dir/file.js`. */
 export type ModuleSource = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
@@ -30,6 +31,8 @@ export type ModuleSource = { path: string; source: string; sourceMap?: string; e
 /** Convex's `AnalyzedFunction` (crates/model/src/modules/module_versions.rs), as the push reports it. */
 export type AnalyzedFunction = {
   name: string;
+  /** Where its handler is in the app's source, from the module's source map (STUDY-65 M5); null if unknown. */
+  pos: SourcePosition | null;
   udfType: "Query" | "Mutation" | "Action";
   visibility: { kind: "public" | "internal" };
   /** The validator JSON of `args` / `returns` (Convex's `exportArgs()` / `exportReturns()`). */
@@ -38,7 +41,8 @@ export type AnalyzedFunction = {
 };
 export type AnalyzedModule = {
   functions: AnalyzedFunction[];
-  httpRoutes: { path: string; method: string }[] | null;
+  /** Convex's `AnalyzedHttpRoute`: the route and its handler's position. */
+  httpRoutes: { route: { path: string; method: string }; pos: SourcePosition | null }[] | null;
   cronSpecs: Record<string, CronSpec> | null;
 };
 
@@ -271,6 +275,7 @@ export class CodeVersion {
     const analysis: Record<string, AnalyzedModule> = {};
     let router: HttpRouter | undefined;
     let crons: Crons | undefined;
+    const maps = new SourceMapTokens((path) => modules.get(path)?.source.sourceMap);
     for (const [path, l] of modules) {
       if (isDeps(path)) continue;
       const name = moduleName(path);
@@ -287,13 +292,15 @@ export class CodeVersion {
         if (l.source.environment === "node") NODE_FUNCTIONS.add(value);
         fns.push({
           name: exported,
+          pos: maps.position(path, l.source.source, value.handler, exported),
           udfType: value.kind === "query" ? "Query" : value.kind === "mutation" ? "Mutation" : "Action",
           visibility: { kind: value.visibility },
           args: JSON.stringify(value.args?.json ?? { type: "any" }),
           returns: JSON.stringify(value.returns?.json ?? { type: "any" }),
         });
       }
-      const a: AnalyzedModule = { functions: fns, httpRoutes: null, cronSpecs: null };
+      // Convex sorts them by position, those without one first.
+      const a: AnalyzedModule = { functions: byPosition(fns), httpRoutes: null, cronSpecs: null };
       if (path === "http.js") {
         if (l.source.environment === "node")
           throw new InvalidModulesError(`Failed to analyze ${path}: \`http.js\` may not be a "use node" file`);
@@ -307,7 +314,12 @@ export class CodeVersion {
             `Failed to analyze ${path}: The default export of \`http.js\` is not a Router.`,
           );
         router = checkRouter(r);
-        a.httpRoutes = router.getRoutes().map(([p, m]) => ({ path: p, method: m }));
+        a.httpRoutes = byPosition(
+          router.getRoutes().map(([p, m, h]) => ({
+            route: { path: p, method: m },
+            pos: maps.position(path, l.source.source, (h as { _handler?: unknown })._handler, null),
+          })),
+        );
       }
       if (path === "crons.js") {
         if (l.source.environment === "node")

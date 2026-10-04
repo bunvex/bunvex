@@ -155,7 +155,29 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
 - **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
-- **M5.** No `pos` in the push analysis.
+- **M5.** No `pos` in the push analysis. *Done (this PR).*
+  - *Convex.* `crates/isolate/src/environment/analyze.rs` (`udf_analyze`, `http_analyze`): the handler's
+    (`_handler`, else the function) V8 start (`get_script_line_number` / `get_script_column_number`, 0-based;
+    an arrow starts at its first character, other functions at their `(`) gets `+ 1` on both, believing the
+    lookup 1-based, and goes to `sourcemap::SourceMap::lookup_token`, which is 0-based and returns the token at
+    or before. `pos = { path, start_lineno, start_col }` (`module_versions.rs` `AnalyzedSourcePosition`,
+    serialized with snake_case fields) is that token's original 0-based line and column. In practice, for a
+    handler whose body spans lines, `start_lineno` is the handler's 1-based line. No `pos` without a source
+    map, without a token, or when the handler is in another module (a `_deps` chunk). Functions and HTTP routes
+    are sorted by `pos`, those without one first. Routes serialize as `{ route: { path, method }, pos }`.
+    The dashboard reads it through `_system/frontend/modules.ts` (`lineno = pos.start_lineno`) to order a
+    file's functions. Test: `tests/analyze.rs` `test_analyze_with_source_map`.
+  - *bunvex.* `server/src/source-position.ts`, used by `CodeVersion.analyze`: the same lookup on the module's
+    pushed source map. JavaScriptCore does not report where a function starts, so the handler is found by
+    its exact text (`Function.prototype.toString`) in the module; when the text occurs more than once, the
+    occurrence after the exported binding's declaration; when that cannot be told, no `pos`. Text not in the
+    module (a shared chunk) gives no `pos`, as Convex. The push answer and the `_modules` rows carry it; routes
+    now have Convex's `{ route, pos }` shape.
+  - *Fixed with it.* The CLI drops Bun's `// @bun` first line from each module but kept it in the source map:
+    every mapping was one line off. The map now loses that line too (`cli/src/bundle.ts` `withoutFirstLine`).
+  - *Not done.* bunvex has no `_system/frontend/modules:list`; its dashboard lists functions its own way.
+  - *Measured.* `CodeVersion.load` of 300 modules / 3000 functions with ~1 MB of source maps: 12–13 ms
+    without positions, ~21 ms with (only the maps' `mappings` are read, decoded into a flat array).
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
   "Deleted table indexes:", "Added staged table indexes:", "These indexes are now enabled:" with
   `formatIndex`. The server sends names only (`server/src/push.ts`), not the index configs.
