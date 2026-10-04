@@ -111,6 +111,13 @@ export {
   type RunningLocalBackend,
   startLocalBackend,
 } from "./local-backend.ts";
+export {
+  type AuditLogBody,
+  AuditLogLimitError,
+  type AuditLogValue,
+  type LogVar,
+  log,
+} from "./log-audit.ts";
 export type {
   ActionMeta,
   DeploymentMetadata,

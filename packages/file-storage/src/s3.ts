@@ -24,7 +24,10 @@ export type S3Options = {
  * The S3 settings from Convex's variables, or null when the use case's bucket is not configured: one bucket
  * per use case, `S3_STORAGE_<USE CASE>_BUCKET` (`FILES`, `MODULES`), as Convex's `aws_s3`.
  */
-export function s3OptionsFromEnv(env = process.env, useCase = "files"): Omit<S3Options, "prefix"> | null {
+export function s3OptionsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+  useCase = "files",
+): Omit<S3Options, "prefix"> | null {
   const bucket = env[`S3_STORAGE_${useCase.toUpperCase()}_BUCKET`];
   if (!bucket) return null;
   return {

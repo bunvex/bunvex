@@ -335,6 +335,11 @@ export function installDeterminism() {
     (...args: Parameters<typeof fetch>) => {
       const e = executions.getStore();
       if (e) return Promise.reject(notAllowed("fetch()", e.kind));
+      const signal = fetchSignal?.();
+      if (signal) {
+        if (signal.aborted) return Promise.reject(signal.reason);
+        args = withSignal(signal, args);
+      }
       const send = fetchSender?.() ?? realFetch;
       const meter = fetchMeter?.();
       return meter ? meteredFetch(send, meter, ...args) : send(...args);
@@ -509,7 +514,7 @@ export function installDeterminismIn(g: { Date: DateConstructor; Math: Math }) {
  * Who a `fetch` outside a query or mutation is charged to (STUDY-71): set by the server, it returns the
  * running action's counter, or null when nothing meters this call.
  */
-let fetchMeter: (() => ((bytes: number) => void) | null) | null = null;
+let fetchMeter: (() => ((bytes: number | null) => void) | null) | null = null;
 export function setFetchMeter(m: typeof fetchMeter) {
   fetchMeter = m;
 }
@@ -525,6 +530,21 @@ export function setFetchSender(s: typeof fetchSender) {
 
 /** The process's own `fetch`, never refused nor metered: what a fetch sender sends with. */
 export const directFetch: typeof fetch = realFetch;
+
+/**
+ * The signal a `fetch` outside a query or mutation ends with (STUDY-77): set by the server, it returns the
+ * running action's, aborted once the action timed out; null when no action runs.
+ */
+let fetchSignal: (() => AbortSignal | null) | null = null;
+export function setFetchSignal(s: typeof fetchSignal) {
+  fetchSignal = s;
+}
+
+/** `fetch`'s arguments with `signal` added to the request's own, if any. */
+function withSignal(signal: AbortSignal, [input, init]: Parameters<typeof fetch>): Parameters<typeof fetch> {
+  const own = init?.signal ?? (input instanceof Request ? input.signal : null);
+  return [input, { ...init, signal: own ? AbortSignal.any([own, signal]) : signal }];
+}
 
 /** A body's bytes when they can be known without reading it; null for a stream or form data. */
 function knownBodySize(body: unknown): number | null {
@@ -542,24 +562,28 @@ function knownBodySize(body: unknown): number | null {
  */
 async function meteredFetch(
   send: typeof fetch,
-  charge: (bytes: number) => void,
+  charge: (bytes: number | null) => void,
   ...args: Parameters<typeof fetch>
 ): Promise<Response> {
-  const [input, init] = args;
-  let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
-  if (size === null) {
-    const req =
-      typeof input === "string" || input instanceof URL
-        ? new Request(input.toString(), init)
-        : new Request(input, init);
-    size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
-    const res = await send(req);
-    charge(size);
+  // `charge` hears once that the request settled: its body's bytes when it went out, null when it failed.
+  let charged: number | null = null;
+  try {
+    const [input, init] = args;
+    let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
+    let res: Response;
+    if (size === null) {
+      const req =
+        typeof input === "string" || input instanceof URL
+          ? new Request(input.toString(), init)
+          : new Request(input, init);
+      size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
+      res = await send(req);
+    } else res = await send(...args);
+    charged = size;
     return res;
+  } finally {
+    charge(charged);
   }
-  const res = await send(...args);
-  charge(size);
-  return res;
 }
 
 export function outsideExecution<T>(fn: () => T): T {
