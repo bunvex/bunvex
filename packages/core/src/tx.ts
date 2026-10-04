@@ -699,8 +699,6 @@ export class Tx {
     this.uncountedReads++;
   }
 
-
-
   /**
    * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
    * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
