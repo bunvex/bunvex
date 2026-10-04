@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
-import { Committer, CommitterStoppedError } from "../src/committer.ts";
+import { CommitListenerError, Committer, CommitterStoppedError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
@@ -124,4 +124,66 @@ test("changedBetween: whether a commit in (from, to] wrote into the reads, and t
   expect(await c.commit({ snapshot: 3, reads: [], docs: [], idx: idx(4) })).toBe(12);
   expect(c.changedBetween(reads(5, 9), 0, 12)).toBe(true);
   expect(c.changedBetween(reads(5, 9), 1, 12)).toBe(false);
+});
+
+describe("a commit listener that throws (an internal error, not a persistence failure)", () => {
+  test("the committer stops once, with an error naming the listener and the original as its cause", async () => {
+    const { e, fatal } = await setup();
+    const boom = new Error("boom");
+    let armed = false;
+    e.committer.onCommit(() => {
+      if (armed) throw boom;
+    }, "test listener");
+    let after = 0;
+    e.committer.onCommit(() => {
+      if (armed) after++;
+    }, "after");
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    armed = true;
+    // The commit is durable and visible: its caller is answered (it does not hang), as committed.
+    const settled = await Promise.race([
+      e
+        .mutation((db) => db.insert("items", { n: 2 }))
+        .then(
+          () => "committed",
+          (err) => `refused: ${err}`,
+        ),
+      Bun.sleep(1000).then(() => "stuck"),
+    ]);
+    expect(settled).toBe("committed");
+    expect(fatal).toHaveLength(1);
+    const stopped = fatal[0];
+    expect(stopped).toBeInstanceOf(CommitterStoppedError);
+    expect(stopped.message).toBe(
+      'the committer stopped after an internal error in commit listener "test listener": boom',
+    );
+    expect(stopped.message).not.toContain("persistence");
+    expect((stopped as CommitterStoppedError).persistenceFailure).toBe(false);
+    expect(stopped.cause).toBeInstanceOf(CommitListenerError);
+    expect((stopped.cause as CommitListenerError).listener).toBe("test listener");
+    expect((stopped.cause as CommitListenerError).cause).toBe(boom);
+    // Fail-stop: the listeners after it are not called, every later commit is refused, the fatal path ran once.
+    expect(after).toBe(0);
+    await expect(e.mutation((db) => db.insert("items", { n: 3 }))).rejects.toBeInstanceOf(CommitterStoppedError);
+    expect(fatal).toHaveLength(1);
+    expect(await count(e)).toBe(2);
+  });
+
+  test("an unnamed listener is still told apart from a persistence failure", async () => {
+    const { e, fatal } = await setup();
+    e.committer.onCommit(() => {
+      throw new Error("boom");
+    });
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0].message).toBe("the committer stopped after an internal error in a commit listener: boom");
+  });
+
+  test("a persistence failure still says so", async () => {
+    const { e, f, fatal } = await setup();
+    f.failFlush = true;
+    await expect(e.mutation((db) => db.insert("items", { n: 1 }))).rejects.toThrow();
+    expect(fatal[0].message).toStartWith("the committer stopped after a persistence failure: ");
+    expect((fatal[0] as CommitterStoppedError).persistenceFailure).toBe(true);
+  });
 });

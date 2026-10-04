@@ -32,6 +32,9 @@ export type Nemesis = {
   expected?(error: string): boolean;
   /** Called once the server is up; returns the URL clients should use (a proxy, for network faults). */
   setup?(ctx: NemesisContext): Promise<string | undefined> | string | undefined;
+  /** Restart the server if it exited on its own (fail-stop), as a supervisor would; called while the starting
+   *  state is written (act() does it while the workload runs). */
+  recover?(ctx: NemesisContext): Promise<void>;
   /** Called repeatedly while the workload runs. */
   act(ctx: NemesisContext, r: Rng): Promise<void>;
   /** Heal everything (reconnect, restart) so the run can quiesce. */
@@ -60,6 +63,10 @@ const READS = new Set(["reg:read", "bank:all", "set:all", "log:all"]);
 const ACCOUNTS = ["a0", "a1", "a2", "a3", "a4"];
 const EACH = 100;
 const TOTAL = EACH * ACCOUNTS.length;
+/** How long the starting state, and then the final reads, may take before the run reports a wedge (they take
+ *  milliseconds, faults and restarts included: a wedge would otherwise wait for the test's timeout, seedless). */
+const SETUP_MS = 20_000;
+const FINAL_MS = 10_000;
 
 export async function run(opts: RunOptions): Promise<RunResult> {
   const r = rng(opts.seed);
@@ -91,10 +98,10 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     const open = () =>
       new BunvexClient(url, { logger: false, webSocket: { defaultInitialBackoffMs: 20, maxBackoffMs: 200 } });
 
-    // the starting state, once
+    // the starting state, once (bank:init does nothing the second time)
     const admin = open();
     clients.push(admin);
-    await admin.mutation("bank:init", { names: ACCOUNTS, each: EACH });
+    await setUp(() => admin.mutation("bank:init", { names: ACCOUNTS, each: EACH }), ctx, opts.nemesis);
 
     const deadline = performance.now() + duration;
     const workers: Promise<void>[] = [];
@@ -122,10 +129,11 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     const reader = new BunvexClient(`http://127.0.0.1:${server.port}`, { logger: false });
     clients.push(reader);
     const nonce = 1e9;
+    const finalBy = performance.now() + FINAL_MS;
     // a final read that fails is itself a finding (e.g. a register stored twice), not the end of the check
     const final = async <T>(name: string, args: Record<string, unknown>, fallback: T): Promise<T> => {
       try {
-        return (await reader.query(name, { ...args, nonce })) as T;
+        return (await within(finalBy, reader.query(name, { ...args, nonce }), server)) as T;
       } catch (e) {
         violations.push(
           `final: ${name} ${JSON.stringify(args)} failed: ${(e instanceof Error ? e.message : String(e)).split("\n").slice(0, 2).join(" ")}`,
@@ -192,6 +200,51 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     await opts.nemesis?.teardown?.();
     await server.stop();
     rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Write the starting state with the nemesis' supervisor running: a store fault can end the server before the
+ * workload starts (a fatal flush; a read error in the crons' push at its start), and the nemesis' own loop,
+ * which restarts it, has not started yet. An injected store error fails the mutation: write it again.
+ */
+async function setUp(write: () => Promise<unknown>, ctx: NemesisContext, nemesis: Nemesis | undefined) {
+  const by = performance.now() + SETUP_MS;
+  let done = false;
+  const supervisor = (async () => {
+    while (!done) {
+      await nemesis?.recover?.(ctx);
+      await Bun.sleep(20);
+    }
+  })();
+  try {
+    for (;;) {
+      try {
+        await within(by, write(), ctx.server, `seed ${ctx.seed}: the starting state`);
+        return;
+      } catch (e) {
+        if (!nemesis?.expected?.(e instanceof Error ? e.message : String(e))) throw e;
+      }
+    }
+  } finally {
+    done = true;
+    await supervisor;
+  }
+}
+
+/** `p`, or an error once `by` (performance.now()) has passed: a wait on the server that never ends is a wedge. */
+async function within<T>(by: number, p: Promise<T>, server: ServerProcess, what = "the call"): Promise<T> {
+  let timer: Timer | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${what} had no answer in time (the server ${server.alive ? "runs" : "has exited"})`)),
+      Math.max(0, by - performance.now()),
+    );
+  });
+  try {
+    return await Promise.race([p, late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
