@@ -228,6 +228,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-322 | `@bunvex/client` exports `instantiateDefaultLogger` and `instantiateNoopLogger` (marked `@internal`), so `BunvexReactClient` builds its `Logger` as Convex's React client does | the factories are internal to the one `convex` package (`browser/logging.ts`, imported by `react/client.ts`); no public entry point exports them | yes (two extra exports; apps written for Convex never import them) | bunvex's React client is a separate package and needs them to honour `logger: false` / a custom logger in the paginated hooks (STUDY-65 F5). Alternatives: a subpath (`@bunvex/client/internal`), or a copy of the default logger inside `@bunvex/react` | owner, 2026-10-04 (#340): option (a), export them marked `@internal` | [STUDY-65 F5](../study/STUDY-65-convex-tests-application-client-cli.md#1-bugs-found) |
 | DV-325 | Without `--http-proxy`, bunvex screens the same requests itself (STUDY-80 P1): a proxy in the process resolves each target, refuses it with the proxy's 407 (`Request to <url> forbidden`) when an address is denied, and connects to the address it checked (DNS-rebinding safe). `--deny-addresses metadata` (the default: link-local and the cloud metadata endpoints), `private` (also loopback, RFC 1918, CGNAT, ULA, …) or `none` | nothing of its own: with no proxy every address is reachable (`crates/local_backend/src/lib.rs` only warns, "UDF `fetch` requests are unrestricted!") | yes: an action's `fetch` to `169.254.169.254` (and, with `private`, to loopback or a private network) fails | Self-hosted operators rarely run a proxy, and a cloud metadata endpoint hands out the host's credentials; loopback and private networks stay open by default for local services and other containers | owner, 2026-10-04 (#381): C | [STUDY-80 P1](../study/STUDY-80-outbound-requests.md#4-divergences) |
 | DV-310 | An index range ends a complete value at `key + [0xFF]`: `eq(f, "")` selects only `""`, `gt(f, "")` includes `"\0…"` | `End::after_prefix` / `BinaryKey::increment` (crates/common/src/query.rs `IndexRange::compile`, interval/bounds.rs): `eq(f, "")` also returns `"\0…"`, `{}` also `{"": x}`, empty bytes also `[0x00…]`; `gt(f, "")`, `lte`, `gt` skip or add them the same way | yes, rarely (values that begin with another value then a NUL / an empty field name) | An index range must select what the same comparison selects; found by a property test (TEST-01, `core/test/index-range.property.test.ts`, counterexample `[["\0", null], "", "eq"]`) | owner, 2026-10-03 (#256): fix | [TEST-01 §5](../specs/TEST-01-test-strategy.md#5-bugs-the-property-tests-found) |
+| DV-340 | `bunvex dev` appends the local backend's stdout and stderr to `.bunvex/local/default/backend.log` (a marked line per run; started over past 10 MiB); an early exit's error names the log and shows its last 20 lines; a push the deployment fails on its own side ("Your request couldn't be completed") points to it | the local backend's output is discarded (`stdio: "ignore"`, `lib/localDeployment/run.ts`); its errors go to Convex's Sentry | yes (a file, more output) | a failing local push could not be investigated; bunvex has no Sentry | owner, 2026-10-04 (as recommended; whether bunvex reports errors to a service of its own, as Convex's Sentry, is open: STUDY-40 L8) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -336,10 +337,6 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
-|---|---|---|---|---|---|---|
-| DV-340 | `bunvex dev` appends the local backend's stdout and stderr to `.bunvex/local/default/backend.log` (a marked line per run; started over past 10 MiB); an early exit's error names the log and shows its last 20 lines; a push the deployment fails on its own side ("Your request couldn't be completed") points to it | the local backend's output is discarded (`stdio: "ignore"`, `lib/localDeployment/run.ts`); its errors go to Convex's Sentry | yes (a file, more output) | a failing local push could not be investigated; bunvex has no Sentry | add it (a bunvex addition) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
-
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).
 
@@ -393,6 +390,8 @@ DV-315 was decided by the owner (2026-10-03, #300: option A, validate the client
 DV-316 was decided by the owner (2026-10-03, #308: option 1, name a non-plain object without opening it) and is in [Decided divergences](#decided-divergences).
 DV-321 was accepted as recommended (owner, 2026-10-04, #332: an engine object logs as its name only, as DV-316) and is in [Decided divergences](#decided-divergences).
 DV-322 was decided by the owner (2026-10-04, #340: option (a), the logger factories exported from `@bunvex/client` marked `@internal`) and is in [Decided divergences](#decided-divergences).
+
+DV-340 (STUDY-40 L8) was accepted as recommended (owner, 2026-10-04) and is in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
