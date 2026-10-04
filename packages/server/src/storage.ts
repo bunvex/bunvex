@@ -18,7 +18,7 @@ import {
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
-import { decodeId } from "@bunvex/values";
+import { decodeId, type GenericId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -273,7 +273,8 @@ export class FileStorage {
         meter?.({ read: bytes.byteLength });
         return new Blob([bytes], row.contentType ? { type: row.contentType } : {});
       },
-      store: async (blob: Blob, opts?: { sha256?: string }): Promise<string> => {
+      // The new file's id, typed as Convex's `Id<"_storage">`: it passes to a `v.id("_storage")` argument as is.
+      store: async (blob: Blob, opts?: { sha256?: string }): Promise<GenericId<"_storage">> => {
         if (!(blob instanceof Blob))
           throw new Error(
             "store() expects a Blob. If you are trying to store a Request, `await request.blob()` will give you the correct input.",
@@ -281,7 +282,7 @@ export class FileStorage {
         await this.ensureRunning();
         const id = await this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256);
         meter?.({ written: blob.size });
-        return id;
+        return id as GenericId<"_storage">;
       },
     };
   }
