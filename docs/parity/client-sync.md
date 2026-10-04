@@ -156,7 +156,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Warning when an optimistic update returns a Promise | `browser/sync/client.ts` | done (STUDY-26) |  |
 | `localQueryResult(name, args)` also returns optimistic-only values | `browser/sync/client.ts` | done (STUDY-26) |  |
 | React: `useMutation(f).withOptimisticUpdate(fn)` (only one per mutation; the function is stable across renders) | `react/client.ts` (`createMutation`) | done (STUDY-26) | `ReactMutation.withOptimisticUpdate`, one per mutation, stable across renders. |
-| Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | done (STUDY-26) |  |
+| Paginated helpers: `optimisticallyUpdateValueInPaginatedQuery`, `insertAtTop`, `insertAtBottomIfLoaded`, `insertAtPosition` | `react/use_paginated_query.ts` | done (STUDY-26) | Convex's cases, and a differential run against the official package's helpers on random page layouts (`sync-e2e/react/insert-at.test.ts`, STUDY-65 G-C16, G-C17). `insertAtPosition` matches `argsToMatch` with `===`, as Convex (STUDY-65 Q2). |
 
 ### 9. Pagination on the client (and its server contract)
 
