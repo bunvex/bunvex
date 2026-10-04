@@ -20,6 +20,7 @@ import {
 } from "@bunvex/client";
 import { compareValues, toJsonValue, type Value } from "@bunvex/values";
 import { useMemo, useState } from "react";
+import { useRequiredClient } from "./context.ts";
 import { useQueries } from "./hooks.ts";
 import type { RequestForQueries } from "./queries-observer.ts";
 
@@ -149,6 +150,8 @@ export function usePaginatedQuery<Q extends PaginatedQueryReference>(
     setState(current);
   }
 
+  // As Convex: the reset warning goes to the client's logger (silent with `logger: false`).
+  const logger = useRequiredClient("usePaginatedQuery").logger;
   const resultsObject = useQueries(current.queries as unknown as RequestForQueries);
 
   const [results, lastResult] = useMemo((): [Value[], PaginationResult<Value> | undefined] => {
@@ -164,7 +167,7 @@ export function usePaginatedQuery<Q extends PaginatedQueryReference>(
           raw.message.includes("InvalidCursor") ||
           (typeof data === "object" && data?.isBunvexSystemError === true && data.paginationError === "InvalidCursor")
         ) {
-          console.warn(`usePaginatedQuery hit error, resetting pagination state: ${raw.message}`);
+          logger.warn(`usePaginatedQuery hit error, resetting pagination state: ${raw.message}`);
           setState(createInitialState);
           return [[], undefined];
         }
@@ -188,7 +191,7 @@ export function usePaginatedQuery<Q extends PaginatedQueryReference>(
       items.push(...result.page);
     }
     return [items, result];
-  }, [resultsObject, current.pageKeys, current.ongoingSplits, options.initialNumItems, createInitialState]);
+  }, [resultsObject, current.pageKeys, current.ongoingSplits, options.initialNumItems, createInitialState, logger]);
 
   const status = useMemo(() => {
     const noop = (_numItems: number) => {};
