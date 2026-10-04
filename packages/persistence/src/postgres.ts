@@ -587,6 +587,22 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
+  async getVersions(table: number, ids: string[], ts: number) {
+    const found = new Map<string, { json: string | null; ts: number }>();
+    const unique = [...new Set(ids)];
+    for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
+      const rows = await this.read((sql) =>
+        sql.unsafe(
+          `select distinct on (id) id, ts, json_value, deleted from documents
+           where table_id = $1 and id = any($2::text[]) and ts <= $3 order by id, ts desc`,
+          [table, unique.slice(i, i + VERSIONS_CHUNK), ts] as any,
+        ),
+      );
+      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: Number(r.ts) });
+    }
+    return versionsInOrder(ids, found);
+  }
+
   async scanDocs(
     table: number,
     index: number,
@@ -806,3 +822,14 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     await Promise.all([this.sql.end(t), ...this.retired]);
   }
 }
+
+/** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
+function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {
+  return ids.map((id) => {
+    const v = found.get(id);
+    return v && v.json !== null ? { json: v.json, ts: v.ts } : null;
+  });
+}
+
+/** Ids per `getVersions` statement: one round trip each, within every store's parameter limits. */
+const VERSIONS_CHUNK = 1000;

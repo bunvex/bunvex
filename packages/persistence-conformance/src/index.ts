@@ -46,6 +46,7 @@ import { logChecks } from "./log.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
 import { retentionChecks } from "./retention.ts";
+import { versionChecks } from "./versions.ts";
 import {
   allOfTenant,
   counter,
@@ -105,7 +106,8 @@ export type Check =
   | "K25"
   | "K26"
   | "K27"
-  | "K30";
+  | "K30"
+  | "K32";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -125,6 +127,8 @@ export type ConformanceOptions = {
   requireReadLog?: boolean;
   /** The driver claims PERSIST-01 C12–C14 (retention): missing methods are a failure, not a skip. */
   requireRetention?: boolean;
+  /** The driver claims PERSIST-01 C16 (document versions): a missing `getVersions` is a failure, not a skip. */
+  requireVersions?: boolean;
 };
 
 /** The lease TTL the suite gives its child processes, so a reopen after killing one waits little. */
@@ -1310,6 +1314,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K27"))
     await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K27–K29 threw: ${e}`));
   if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30–K31 threw: ${e}`));
+  if (want("K32"))
+    await versionChecks(mod, check, log, !!opts.requireVersions).catch((e) => check(false, `K32 threw: ${e}`));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K26"))
