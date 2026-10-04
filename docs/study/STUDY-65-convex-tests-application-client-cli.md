@@ -160,7 +160,7 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
     `StorageApiBandwidth { storage_id: <document id>, egress_bytes }` once the stream ends or is dropped
     (`log_streaming.rs`, V2 JSON `{timestamp, topic: "storage_api_bandwidth", storage_id, egress_bytes}`;
     PostHog Logs names it `storage_bandwidth`). Its test reads a file fully, partly, and by range.
-  - *bunvex (draft, DV-324 pending).* Metering the bytes sent matches DV-309, which the owner already decided.
+  - *bunvex (DV-324, decided by the owner 2026-10-04 (#373): option (a)).* Metering the bytes sent matches DV-309, which the owner already decided.
     But in Bun any counting wrapper drops `content-length` from the response (chunked), and it halves the
     throughput of large downloads. `storage.ts` `meteredDownload` counts as the client pulls. The usage meter
     charges each chunk, and `done` sends the event once. A HEAD request is not wrapped: it keeps its header and
@@ -169,7 +169,8 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
     still sends it chunked. The same holds for every wrapper measured: pull with or without
     `highWaterMark: 0`, `type: "bytes"`, `TransformStream`, `type: "direct"`, an async generator. Convex sends
     the header with its streamed body (`local_backend/src/storage.rs`), so (a) is a header divergence and (b)
-    a metering one. Measurements are in #373.
+    a metering one. Measurements are in #373. The owner chose (a): the missing `content-length` stays a
+    recorded divergence, to revisit when Bun keeps it on a stream (a test pins it).
 - **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",

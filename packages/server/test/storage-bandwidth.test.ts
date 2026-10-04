@@ -148,3 +148,14 @@ test("a HEAD request: an event with 0 bytes, nothing metered, the length header 
   expect([e.storage_id, e.egress_bytes]).toEqual([f.storageId, 0]);
   expect(t.egress()).toBe(0);
 });
+
+// DV-324 pin: Bun 1.4.2 drops `content-length` from a wrapped (metered) stream, which Convex sends. When this
+// fails, Bun keeps it: remove the divergence from DV-324 and assert the header here instead.
+test("DV-324: a metered GET or Range download has no content-length (Bun drops it from a wrapped stream)", async () => {
+  const t = await setup(new MemoryBlobStore());
+  const f = await t.upload(300_000);
+  const full = await fetch(f.url);
+  const range = await fetch(f.url, { headers: { range: "bytes=0-99999" } });
+  expect([full.headers.get("content-length"), range.headers.get("content-length")]).toEqual([null, null]);
+  expect([(await full.arrayBuffer()).byteLength, (await range.arrayBuffer()).byteLength]).toEqual([300_000, 100_000]);
+});
