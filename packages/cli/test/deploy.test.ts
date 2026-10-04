@@ -271,6 +271,60 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(r.unchangedModuleHashes).toEqual([{ path: "a.js", environment: "isolate", sha256: hash(a) }]);
   });
 
+  test("Convex's partitionModulesByChanges cases: source maps, deletions, all of it at once", () => {
+    const m = (path: string, source: string, environment: "isolate" | "node" = "isolate", sourceMap?: string) => ({
+      path,
+      source,
+      environment,
+      ...(sourceMap === undefined ? {} : { sourceMap }),
+    });
+    // Convex's `hash`: the source, then the source map.
+    const hash = (x: { source: string; sourceMap?: string }) =>
+      new Bun.CryptoHasher("sha256")
+        .update(x.source)
+        .update(x.sourceMap ?? "")
+        .digest("hex");
+    const remote = (mods: ReturnType<typeof m>[]) =>
+      mods.map((x) => ({ path: x.path, hash: hash(x), environment: x.environment }));
+    const paths = (r: ReturnType<typeof partitionModules>) => ({
+      changed: r.changedModules.map((x) => x.path).sort(),
+      unchanged: r.unchangedModuleHashes.map((x) => x.path),
+    });
+    // A different source map is a change.
+    expect(
+      paths(
+        partitionModules([m("f.js", "same", "isolate", "new-map")], remote([m("f.js", "same", "isolate", "old-map")])),
+      ),
+    ).toEqual({ changed: ["f.js"], unchanged: [] });
+    // Deleted modules are in neither list (the push leaves them out).
+    expect(
+      paths(
+        partitionModules(
+          [m("a.js", "same1"), m("c.js", "same3")],
+          remote([m("a.js", "same1"), m("b.js", "gone"), m("c.js", "same3")]),
+        ),
+      ),
+    ).toEqual({ changed: [], unchanged: ["a.js", "c.js"] });
+    expect(paths(partitionModules([], remote([m("a.js", "x"), m("b.js", "y")])))).toEqual({
+      changed: [],
+      unchanged: [],
+    });
+    // New, changed, unchanged and deleted together.
+    expect(
+      paths(
+        partitionModules(
+          [m("unchanged.js", "u"), m("changed.js", "new"), m("new.js", "n")],
+          remote([m("unchanged.js", "u"), m("changed.js", "old"), m("deleted.js", "d")]),
+        ),
+      ),
+    ).toEqual({ changed: ["changed.js", "new.js"], unchanged: ["unchanged.js"] });
+    // Nothing deployed yet: every module is sent.
+    expect(paths(partitionModules([m("a.js", "x"), m("b.js", "y")], []))).toEqual({
+      changed: ["a.js", "b.js"],
+      unchanged: [],
+    });
+  });
+
   test(".env files: KEY=value, quotes, comments, export", () => {
     expect(parseEnvFile(`# c\nA=1\nexport B="two words"\nC='3' # trailing\nD = four # note\nbad line`)).toEqual({
       A: "1",
