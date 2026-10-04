@@ -36,6 +36,11 @@ export {
   setFetch,
 } from "./http-client.ts";
 export type { Logger } from "./logging.ts";
+/**
+ * @internal The logger factories, for `@bunvex/react`: Convex's React client builds its logger with them, and
+ * they live in the same package there (`browser/logging.ts`). Not part of Convex's public API.
+ */
+export { instantiateDefaultLogger, instantiateNoopLogger } from "./logging.ts";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./optimistic-updates.ts";
 export {
   type ExtendedTransition,
