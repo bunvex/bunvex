@@ -39,31 +39,47 @@ export type UsageStats = {
   memoryUsedMb: number;
 };
 
-export const usageStats = (
-  read: { bytes: number; documents: number },
-  written: { bytes: number; documents: number },
-): UsageStats => ({
-  databaseReadBytes: read.bytes,
-  databaseWriteBytes: written.bytes,
-  // bunvex does not meter the store's own I/O apart from what the transaction read and wrote (DV-251).
-  databaseIoReadBytes: read.bytes,
-  databaseIoWriteBytes: written.bytes,
-  databaseReadDocuments: read.documents,
-  databaseWriteDocuments: written.documents,
-  databaseWriteIndexRows: 0,
+/**
+ * A run's usage from its transaction's metered I/O (STUDY-71): Convex's v1 and v2 database counters are
+ * equal for a function, so both carry the same bytes.
+ */
+export const usageStats = (io: {
+  readBytes: number;
+  readDocuments: number;
+  writeBytes: number;
+  writeDocuments: number;
+  writeIndexRows: number;
+  textQueryBytes?: number;
+  textWriteBytes?: number;
+  vectorWriteBytes?: number;
+  vectorWriteQueryBytes?: number;
+}): UsageStats => ({
+  databaseReadBytes: io.readBytes,
+  databaseWriteBytes: io.writeBytes,
+  databaseIoReadBytes: io.readBytes,
+  databaseIoWriteBytes: io.writeBytes,
+  databaseReadDocuments: io.readDocuments,
+  databaseWriteDocuments: io.writeDocuments,
+  databaseWriteIndexRows: io.writeIndexRows,
   storageReadBytes: 0,
   storageWriteBytes: 0,
   vectorIndexReadBytes: 0,
-  vectorIndexWriteBytes: 0,
-  textIndexQueryBytes: 0,
-  textIndexWriteQueryBytes: 0,
+  vectorIndexWriteBytes: io.vectorWriteBytes ?? 0,
+  textIndexQueryBytes: io.textQueryBytes ?? 0,
+  textIndexWriteQueryBytes: io.textWriteBytes ?? 0,
   vectorIndexReadQueryBytes: 0,
-  vectorIndexWriteQueryBytes: 0,
+  vectorIndexWriteQueryBytes: io.vectorWriteQueryBytes ?? 0,
   networkEgressBytes: 0,
   memoryUsedMb: 0,
 });
 
-export const NO_USAGE: UsageStats = usageStats({ bytes: 0, documents: 0 }, { bytes: 0, documents: 0 });
+export const NO_USAGE: UsageStats = usageStats({
+  readBytes: 0,
+  readDocuments: 0,
+  writeBytes: 0,
+  writeDocuments: 0,
+  writeIndexRows: 0,
+});
 
 /** Convex's `OccInfoJson`. */
 export type OccInfo = {
@@ -125,7 +141,36 @@ export class Running implements LogOwner {
   cached = false;
   /** Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path. */
   metricsName = "";
+  /** The caller's `tokenIdentifier` and IP, for log streams' exception events (STUDY-70). */
+  tokenIdentifier: string | null = null;
+  ip: string | null = null;
   tx: unknown = null;
+  /**
+   * What the log streams' `function_execution` carries beside the function log (STUDY-74, DV-305): why it ran
+   * (a sync query's rerun reason; else from the caller), the scheduled job it runs, its arguments' JSON
+   * bytes, a WebSocket mutation's queue length, and a mutation's failed attempts before this one.
+   */
+  runReason: string | null = null;
+  schedulerJobId: string | null = null;
+  argsBytes: number | null = null;
+  mutationQueueLength: number | null = null;
+  /** A mutation's failed attempts so far, shared by the runs of one scheduled or cron job's loop. */
+  retries = { n: 0 };
+  /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
+  timer: unknown = null;
+  /**
+   * An action's metered calls (STUDY-71), as Convex's function usage tracker: its `fetch` request bodies,
+   * and its file storage calls with the bytes they read and wrote.
+   */
+  readonly io = {
+    networkEgressBytes: 0,
+    storageCalls: 0,
+    storageReadBytes: 0,
+    storageWriteBytes: 0,
+    /** Its vector searches' `bytes_searched`, and their results' bytes. */
+    vectorQueryBytes: 0,
+    vectorReadBytes: 0,
+  };
   constructor(
     readonly executionId: string,
     readonly requestId: string,

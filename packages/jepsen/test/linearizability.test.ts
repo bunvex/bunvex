@@ -96,9 +96,20 @@ describe("register linearizability", () => {
         if (o.result) state = a.to!;
       }
     }
-    const t = performance.now();
     expect(checkRegisters(ops).ok).toBe(true);
-    expect(performance.now() - t).toBeLessThan(2000);
+    // "fast" as work, not wall time (a time bound fails on a slow runner, such as the coverage job): the
+    // search takes ~211 000 model steps for these 2000 operations; without its memo of visited states it
+    // takes ~36 million
+    let steps = 0;
+    const counting = {
+      ...registerModel,
+      step: (state: number | null, o: Op) => {
+        steps++;
+        return registerModel.step(state, o);
+      },
+    };
+    expect(isLinearizable(ops, counting)).toBe(true);
+    expect(steps).toBeLessThan(1_000_000);
   });
 
   test("a violation is shrunk to the operations that show it", () => {
