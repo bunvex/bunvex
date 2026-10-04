@@ -78,7 +78,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `storage.rs` `test_storage_get_url`, `test_storage_generate_upload_url` | user `getUrl` (query, action) and `generateUploadUrl` (mutation, action) follow the canonical cloud URL | only a system mutation is tested (`audit-log.test.ts`) | gap (G-A4) |
 | `storage.rs` `test_storage_api_bandwidth_log_events` | one bandwidth event per download, with the bytes actually streamed | the event is never emitted; egress counts `content-length` | n/a (DV-309 covers metering) — M3 |
 | `returns_validation.rs` `test_action_bad_output`, `test_mutation_extra_fields` | an action's bad return, an extra field in a returned object | `server/src/functions.ts` `checkReturns` | gap (G-A10) |
-| `http_action.rs` disconnect before head / while streaming / continues after | the action finishes and its writes commit; the log records the disconnect | the signal is tested, not the commit nor the log line | gap (G-A11), M4 |
+| `http_action.rs` disconnect before head / while streaming / continues after | the action finishes and its writes commit; the log records the disconnect | `server/test/http-action-disconnect.test.ts`: continues after, writes commit, and before the head the Completion fails with "Client disconnected" (#PR). While streaming (an `[INFO] Client disconnected` line, the Completion after the body) is not done: bunvex logs the Completion when the handler returns | partial (G-A11), M4 |
 | `push.rs` `test_max_size_push` | 4096 modules + 4096 `_deps`, pushed twice | the limit exists; the message differs (M2) | gap (G-A9) |
 | `analyze.rs` `test_analyze_with_source_map` | each function's source line | `AnalyzedFunction` has no `pos` | gap, M5 (dashboard only) |
 | components.rs `test_component_status_skips_staged_index` | the schema status counts no staged index | `core/src/engine.ts` | gap (G-A5), cosmetic |
@@ -154,7 +154,8 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   and there is no total cap counting `_deps` (`server/src/code-version.ts`).
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
-- **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
+- **M4. HTTP action disconnect** is not in the function log ("Client disconnected"). Before the head: fixed in
+  #PR. While streaming: open; it needs the Completion logged once the body is sent, as Convex's.
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
   "Deleted table indexes:", "Added staged table indexes:", "These indexes are now enabled:" with

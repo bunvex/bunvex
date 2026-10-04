@@ -485,9 +485,21 @@ function identityTypeOf(caller: Caller | undefined): IdentityType {
   return caller?.identity ? "user" : "unknown";
 }
 
+/**
+ * An HTTP action's client went away before the response head could be sent: Convex's
+ * `ErrorMetadata::client_disconnect` ("Client disconnected"), which its function log records as the result.
+ */
+class ClientDisconnectedError extends Error {
+  constructor() {
+    super("Client disconnected");
+  }
+}
+
 /** An error as the log shows it: a function's as Convex's `JsError` display, the server's own as its message. */
 const errorText = (e: unknown) =>
-  e instanceof OccError || isSystemError(e) ? (e as Error).message : describeUncaught(e).message;
+  e instanceof OccError || isSystemError(e) || e instanceof ClientDisconnectedError
+    ? (e as Error).message
+    : describeUncaught(e).message;
 
 /** Convex's vector filter builder: `q.eq(field, value)` and `q.or(...)`, as the expression JSON it sends. */
 const VECTOR_FILTER_BUILDER = {
@@ -1719,7 +1731,14 @@ export class Functions {
           this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
         );
       },
-      (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
+      // The handler ran to the end, but its client left before the head could be sent: as Convex, the
+      // execution is logged as failed with "Client disconnected" (its writes stay).
+      (r) =>
+        request.signal.aborted
+          ? { error: new ClientDisconnectedError() }
+          : r instanceof Response
+            ? { success: { status: String(r.status) } }
+            : {},
       routePath ?? new URL(request.url).pathname,
     );
   }
