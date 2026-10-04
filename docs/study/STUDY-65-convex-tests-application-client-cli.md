@@ -97,7 +97,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 |---|---|---|
 | `react/ConvexAuthState.test.tsx` | loading → authenticated (`e2e-react/auth.test.tsx`); refetch at exp − iat − leeway (`e2e/client-auth.test.ts`) | G-C1: a non-JWT token logs and schedules nothing |
 | `react/auth_helpers.test.tsx` | `<Authenticated>` etc. (`e2e-react/auth.test.tsx`) | — |
-| `react/auth_websocket.test.tsx` | valid token, refused cached token, always refused, null token, `expectAuth: true` (`e2e/client-auth.test.ts`) | G-C2 cache failure then fresh token; G-C3 a stale AuthError after a second `setAuth`; G-C4 a non-auth AuthError while awaiting a fresh token; G-C5 a refetch during a reauth; G-C6 a fresh token refused once, then accepted; G-C7 Authenticate before an Add made during the fetch; **G-C8 pause/resume of the query set** (no duplicate Add, Add+Remove cancel out, refcounts, a Remove queued while paused) |
+| `react/auth_websocket.test.tsx` | valid token, refused cached token, always refused, null token, `expectAuth: true` (`e2e/client-auth.test.ts`) | G-C2 cache failure then fresh token; G-C3 a stale AuthError after a second `setAuth`; G-C4 a non-auth AuthError while awaiting a fresh token; G-C5 a refetch during a reauth; G-C6 a fresh token refused once, then accepted; G-C7 Authenticate before an Add made during the fetch: G-C2–G-C7 covered by `e2e/client-auth-races.test.ts` (#PR, differential against the official base client); **G-C8 pause/resume of the query set** (no duplicate Add, Add+Remove cancel out, refcounts, a Remove queued while paused) |
 | `react/client.test.tsx` | construct; optimistic updates and "Already specified…" (`e2e-react/react.test.tsx`) | G-C9 a SyntheticEvent passed to a mutation; G-C10 the async-optimistic-update warning; G-C11 `BunvexReactClient.query()` from an optimistic or local value |
 | `react/queries_observer.test.ts`, `react/use_queries.test.ts` | — | **G-C12**: `QueriesObserver` / `useQueries` swap, unsubscribe, destroy, local results on first render, journals carried to a new client |
 | `react/react_node.test.ts` | — | G-C13: no callback after `close()` |
@@ -179,7 +179,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
 | 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
 | 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | |
-| 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
+| 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | #PR (tests; bunvex matched the official client in all 9 scenarios) |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
 | 12 | F5 the React client's `logger` | `logger: false` not honoured | `react/src/client.ts`, the paginated hooks | S | |
 | 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | |
