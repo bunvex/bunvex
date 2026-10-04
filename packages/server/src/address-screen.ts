@@ -1,4 +1,4 @@
-// Screening without an operator's proxy (STUDY-80 P1, DV-325 — pending, beyond Convex): a small proxy in the
+// Screening without an operator's proxy (STUDY-80 P1, DV-325, owner 2026-10-04: C — beyond Convex): a small proxy in the
 // process, on 127.0.0.1, that does what Smokescreen does for Convex's cloud. It resolves the target's name,
 // refuses it with a 407 when an address is in a denied range, and otherwise connects to the address it
 // checked — so a name that resolves differently the second time (DNS rebinding) cannot get around it.
@@ -18,7 +18,7 @@ export type AddressScreen = "none" | "metadata" | "private";
 
 export const ADDRESS_SCREENS: readonly AddressScreen[] = ["none", "metadata", "private"];
 
-/** The default without an operator's proxy (the recommendation under DV-325, pending). */
+/** The default without an operator's proxy (DV-325, owner 2026-10-04: C). */
 export const DEFAULT_ADDRESS_SCREEN: AddressScreen = "metadata";
 
 /** `denyAddresses` / `BUNVEX_DENY_ADDRESSES` / `--deny-addresses`, checked; the default when unset. */

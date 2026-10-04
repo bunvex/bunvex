@@ -164,7 +164,7 @@ export type ServerOptions = {
    */
   httpProxy?: string | null;
   /**
-   * Without `httpProxy`, the addresses bunvex itself refuses those requests (STUDY-80 P1, DV-325 pending;
+   * Without `httpProxy`, the addresses bunvex itself refuses those requests (STUDY-80 P1, DV-325;
    * beyond Convex): `metadata` (link-local and the cloud metadata endpoints), `private` (also loopback,
    * RFC 1918, CGNAT, unique-local, …) or `none` (Convex's behaviour). Default: `BUNVEX_DENY_ADDRESSES`,
    * else `metadata`.
@@ -326,7 +326,7 @@ export function createServer(opts: ServerOptions) {
   const proxyUrl = httpProxyUrl(
     opts.httpProxy === null ? undefined : (opts.httpProxy ?? process.env.BUNVEX_HTTP_PROXY),
   );
-  // Without one, bunvex's own screen (STUDY-80 P1, DV-325 pending; beyond Convex): the same path, through a
+  // Without one, bunvex's own screen (STUDY-80 P1, DV-325; beyond Convex): the same path, through a
   // proxy in the process that refuses the denied ranges.
   const screen = addressScreen(opts.denyAddresses ?? process.env.BUNVEX_DENY_ADDRESSES);
   const builtinScreen = !proxyUrl && screen !== "none" ? startAddressScreen(screen) : null;

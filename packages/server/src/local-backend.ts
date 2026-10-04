@@ -15,7 +15,7 @@
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
 //   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
-//   STUDY-80 P1, DV-325 pending: `metadata` by default), and Convex's warning at start when that is `none`.
+//   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`.
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence } from "@bunvex/core";

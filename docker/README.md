@@ -63,7 +63,7 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 407; each request carries the instance name as `Proxy-Authorization`. Add it to the service's `command:`
 (the entry script passes its arguments on). Without it, bunvex screens those requests itself
 (`--deny-addresses`: `metadata` by default refuses link-local and cloud metadata addresses, `private` also
-loopback and private networks, `none` nothing, as Convex — a pending decision, DV-325;
+loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
 
 ## Without Docker: the executable

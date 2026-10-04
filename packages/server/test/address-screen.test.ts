@@ -1,4 +1,4 @@
-// bunvex's own screen without an operator's proxy (STUDY-80 P1, DV-325 pending; beyond Convex): the denied
+// bunvex's own screen without an operator's proxy (STUDY-80 P1, DV-325; beyond Convex): the denied
 // ranges, and an action's `fetch` through the in-process screening proxy — refused with the same error as
 // an operator's proxy, each redirect hop checked, bodies forwarded, and nothing started when `none` or when
 // `--http-proxy` is given.
