@@ -107,6 +107,7 @@ to a spec.
 | [STUDY-73](STUDY-73-storage-usage-gauges.md) | Storage usage gauges: the hourly `current_storage_usage` event, the 1 TiB export limit on files | implemented; G1 accepted as recommended (owner, 2026-10-03), DV-317 extended |
 | [STUDY-74](STUDY-74-function-execution-fields.md) | The `function_execution` fields DV-305 left out: `run_reason` of sync reruns, `scheduler_info`, arguments' bytes, retry counts, the mutation queue | implemented; F1 accepted as recommended (owner, 2026-10-03), DV-320 |
 | [STUDY-76](STUDY-76-limit-warnings.md) | Approaching-limit warnings: WARN system lines past 80 % of a limit, for queries, mutations, actions, HTTP actions and system functions | implemented; DV-323 resolved in the next PR (owner, 2026-10-04) |
+| [STUDY-75](STUDY-75-sync-cache-hit-logs.md) | A sync query served from another session's run logs a cache hit, as Convex's query cache | implemented, no divergence |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
