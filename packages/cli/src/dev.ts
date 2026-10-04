@@ -238,7 +238,13 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
   const cleanup: (() => unknown)[] = [];
   let exitCode = 0;
   try {
-    let target = resolveTarget(taken.flags, io);
+    let target: Target | null;
+    try {
+      target = resolveTarget(taken.flags, io);
+    } catch (e) {
+      io.err(`bunvex dev: ${(e as Error).message}`);
+      return 1;
+    }
     const localFlags =
       flags.local.backendVersion !== undefined ||
       flags.local.forceUpgrade ||
@@ -249,7 +255,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       return 2;
     }
     if (!target) {
-      const configured = configuredDeployment(io);
+      const configured = configuredDeployment(io, taken.flags);
       if (configured && configured.type !== "local") {
         io.err(`bunvex dev: BUNVEX_DEPLOYMENT=${configured.type}:${configured.name} is not a deployment bunvex knows`);
         return 1;
