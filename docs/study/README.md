@@ -110,7 +110,7 @@ to a spec.
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
 | [STUDY-55](STUDY-55-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
-| [STUDY-79](STUDY-79-search-index-bootstrapping.md) | Search and vector indexes while they are rebuilt after a start: Convex's bootstrapping answer, the sync skip and retry; options for the window | implemented; window options for the owner (§6) |
+| [STUDY-79](STUDY-79-search-index-bootstrapping.md) | Search and vector indexes while they are rebuilt after a start: Convex's bootstrapping answer, the sync skip and retry; options for the window | implemented; window decided (owner, 2026-10-04: A now, D planned) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

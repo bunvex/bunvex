@@ -1,7 +1,7 @@
 # STUDY-79 — Search and vector indexes while they are rebuilt after a start
 
-- **Status:** implemented (the Convex answer and the sync skip); the rebuild window's length is DV-227 /
-  DV-270's (owner-decided), with options in §6
+- **Status:** implemented (the Convex answer and the sync skip); the rebuild window decided by the owner
+  (2026-10-04, §6): A now, D planned
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04; the removed tests at
   bea52bde0
 - **Related:** [STUDY-45](STUDY-45-text-search.md) S1 (DV-227), [STUDY-51](STUDY-51-vector-search.md) V2–V3
@@ -119,7 +119,7 @@ Convex's bootstrapping does.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| B1 | The rebuild window lasts as long as the tables take to index (§3), not the writes since a segment | DV-227 / DV-270: in memory, no segments | owner (DV-227, DV-270); options in §6 |
+| B1 | The rebuild window lasts as long as the tables take to index (§3), not the writes since a segment | DV-227 / DV-270: in memory, no segments | owner, 2026-10-04: A now, D planned (§6; DV-227) |
 | B2 | A scheduled mutation that hits it stops the scheduler's loop for its backoff (bunvex's handling of every system failure), rather than retrying that one job | Existing executor behaviour for system failures | not new (scheduler) |
 
 DV-271 (STUDY-51 V3) is resolved: bunvex now answers at once with `VectorIndexesUnavailable`, which is what
@@ -174,3 +174,8 @@ Convex does.
 
 **Recommendation:** A now (this PR). Then D when apps with large searchable tables appear, as a cheap step
 towards E. Not B or C.
+
+**Decision (owner, 2026-10-04):** as recommended. A now: the indexes stay in memory, and this study makes the
+window behave as Convex's bootstrapping. D is planned as the step towards E: snapshot the in-memory search and
+vector indexes at a clean shutdown, then load the snapshot and replay the log at start. D is not built here.
+It is recorded in DV-227 and in platform §6 and §7.
