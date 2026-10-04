@@ -110,7 +110,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; **G-C23 backoff reset only after a real resync** (3 cases) |
 | `browser/sync/local_state.test.ts` | creation | **G-C24** outstanding-after-restart until every query is answered; reset by unsubscribe, `markAuthCompletion`, `clearAuth` |
 | `browser/sync/optimistic_query_set.test.ts` | server results, errors, apply / replay / drop (`client/pieces.test.ts`) | **G-C25** only changed queries notified; stacked updates dropped in order; set to `undefined` |
-| `browser/sync/paginated_query_client.test.ts` | subscribe, loadMore, split (`e2e/paginated-client.test.ts`) | covered: a split driven by optimistic updates alone, Convex's values (`client/paginated-optimistic-split.test.ts`, #PR) |
+| `browser/sync/paginated_query_client.test.ts` | subscribe, loadMore, split (`e2e/paginated-client.test.ts`) | covered: a split driven by optimistic updates alone, Convex's values (`client/paginated-optimistic-split.test.ts`, #365) |
 | `browser/sync/protocol.test.ts` | u64 round trip (`protocol/test/v1.test.ts`) | — |
 | `browser/sync/request_manager.test.ts` | retries (STUDY-57) | G-C26 `hasIncompleteRequests`, dirty notifications |
 | `nextjs/nextjs.test.tsx` | the URL variable, preloaded first render (`e2e/nextjs.test.ts`, `e2e-react/preloaded.test.tsx`) | G-C27 a live `null` replaces the preloaded value |
