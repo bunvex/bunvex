@@ -165,7 +165,7 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
 - **M8. `bunvex.json` validation** (G-L2 above).
 - **M9. A `null` journal after a client swap.** `QueriesObserver.setCreateWatch` (and `useQueries`' `createWatch`) pass
   `{ journal: null }` on when a query's journal is `null`; Convex passes a journal only when it is truthy, so its `Add`
-  carries none. The server reads both the same. Fixed in #PRM9.
+  carries none. The server reads both the same. Fixed in #339.
 
 ## 6. Prioritized gap list
 
