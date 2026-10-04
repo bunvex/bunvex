@@ -105,7 +105,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `react/use_query.test.ts` | types | n/a |
 | `browser/http_client.test.ts` | the mutation queue and `skipQueue` (`e2e/http-client.test.ts`) | G-C18 a failed mutation does not block the queue; G-C19 `fetch` override precedence |
 | `browser/query_options.test.ts` | — | n/a: `convexQueryOptions` missing (client-sync §11); types only |
-| `browser/simple_client.test.ts` | deduplicated subscriptions (`client/pieces.test.ts`) | partial: the optimistic callback's synchrony is not asserted |
+| `browser/simple_client.test.ts` | deduplicated subscriptions (`client/pieces.test.ts`) | covered: the optimistic update, its local result and the subscriber's callback, at once (`e2e/simple-client-optimistic.test.ts`, #PR, differential) |
 | `browser/sync/client.test.ts` | — | G-C20 `localQueryResult` of a never-subscribed optimistic query; the legacy-config warning is n/a |
 | `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; **G-C23 backoff reset only after a real resync** (3 cases) |
 | `browser/sync/local_state.test.ts` | creation | **G-C24** outstanding-after-restart until every query is answered; reset by unsubscribe, `markAuthCompletion`, `clearAuth` |
