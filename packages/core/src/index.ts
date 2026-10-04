@@ -29,6 +29,7 @@ export {
   EXPORTS_TABLE,
   FUNCTION_HANDLES_TABLE,
   IndexBackfillingError,
+  IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
   LOG_SINKS_TABLE,
@@ -39,8 +40,10 @@ export {
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  searchIndexesUnavailable,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  vectorIndexesUnavailable,
 } from "./catalog.ts";
 export {
   CommitListenerError,

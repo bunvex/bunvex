@@ -8,7 +8,13 @@
 // A `BunvexError`'s data always goes to the client (`errorData`), redacted or not: it is the app's own
 // answer, not an internal detail.
 import { randomBytes } from "node:crypto";
-import { CommitterStoppedError, OutOfRetentionError, PersistenceReadError, QueryCursorError } from "@bunvex/core";
+import {
+  CommitterStoppedError,
+  IndexesUnavailableError,
+  OutOfRetentionError,
+  PersistenceReadError,
+  QueryCursorError,
+} from "@bunvex/core";
 import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 
 /** The message a client gets for a failure that is not the function's (Convex's INTERNAL_SERVER_ERROR_MSG). */
@@ -26,14 +32,15 @@ export const isSystemError = (e: unknown) =>
   e instanceof CommitterStoppedError ||
   e instanceof OutOfRetentionError ||
   e instanceof PersistenceReadError ||
-  e instanceof QueryCursorError;
+  e instanceof QueryCursorError ||
+  e instanceof IndexesUnavailableError;
 
 /**
  * A system failure the client should simply retry: Convex's `ErrorCode::OutOfRetention` answers HTTP 503 and
  * closes a WebSocket with 1013 ("try again later"), where other internal errors are 500 / 1011
  * (crates/errors/src/lib.rs `http_status_code`, `close_frame`).
  */
-export const isTryAgainError = (e: unknown) => e instanceof OutOfRetentionError;
+export const isTryAgainError = (e: unknown) => e instanceof OutOfRetentionError || e instanceof IndexesUnavailableError;
 
 /** The error as the function's runtime reports it, before redaction: message line, then frames. */
 export type UncaughtError = { message: string; data?: JSONValue };

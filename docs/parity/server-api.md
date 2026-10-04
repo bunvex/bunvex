@@ -140,7 +140,7 @@ Key bunvex facts behind the statuses:
 | `ctx.meta.getDeploymentMetadata()` | server/meta.ts | done (STUDY-44) | As self-hosted Convex: the instance name, `region: null`, `class: "s16"`. |
 | `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | done (STUDY-44) | Mutations and actions (HTTP actions too), not queries; `ip` the first `x-forwarded-for` entry else the connection's address, over HTTP and the sync protocol; a new request id per call, shared with the functions it calls; a scheduled function's id down its call tree; the user's raw token (null for an admin key). |
 | `ctx.meta.getSnapshotTs()` (bigint, on the same clock as commitTs) | server/meta.ts; isolate syscall.rs | done (STUDY-44) | The snapshot in nanoseconds, synchronous, shared with nested calls; it makes a query time-dependent, as `Date.now()`. `commitTs` is STUDY-53. |
-| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); no bootstrap retries (DV-271). |
+| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); `VectorIndexesUnavailable` while rebuilt after a start, as Convex (STUDY-79; DV-271 resolved). |
 
 ### 7. Deterministic runtime and execution environment
 

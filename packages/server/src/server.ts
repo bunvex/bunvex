@@ -10,6 +10,7 @@ import {
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
+  IndexesUnavailableError,
   insertAuditLogEvents,
   OccError,
   orderEnvVarChanges,
@@ -519,6 +520,8 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // An index still being rebuilt after a start (STUDY-79): Convex's 503 with the feature's code and message.
+    if (!r.ok && r.error instanceof IndexesUnavailableError) return requestError(503, r.error.code, r.error.message);
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
     if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
       return requestError(429, r.error.code, r.error.message);

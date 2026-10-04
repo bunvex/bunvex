@@ -20,6 +20,7 @@ import {
   dueJobs,
   type Engine,
   getJob,
+  IndexesUnavailableError,
   insertJob,
   isJobId,
   isStopped,
@@ -477,5 +478,6 @@ export class ScheduledJobExecutor {
 
 /** A failure of the system rather than of the function: the job is retried later, not failed. */
 function isSystemFailure(e: unknown) {
-  return e instanceof CommitterStoppedError;
+  // An index still being rebuilt after a start (STUDY-79) is the system's too: the job runs later.
+  return e instanceof CommitterStoppedError || e instanceof IndexesUnavailableError;
 }

@@ -34,6 +34,7 @@ import {
   type IndexMeta,
   IndexStagedError,
   planCatalog,
+  searchIndexesUnavailable,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
@@ -1534,8 +1535,21 @@ export class Tx {
         throw new Error(`Index ${label} is not a search index`);
       throw new Error(`Index ${label} not found.`);
     }
+    // An empty search string finds nothing, whatever the index's state (Convex's `Search::is_empty`, checked
+    // before the index is): no read, no charge.
+    const searchFilter = spec.filters.find((f) => f.type === "Search");
+    if (searchFilter?.value === "") return { hits: [], full: false };
     if (e.staged) throw new IndexStagedError(label);
-    if (!e.ready) throw new IndexBackfillingError(label);
+    if (!e.ready) {
+      if (!e.bootstrapping) throw new IndexBackfillingError(label);
+      // Rebuilding after a start (STUDY-79): a search with no terms still finds nothing (Convex skips empty
+      // compiled queries before its bootstrapping check); any other is Convex's system error, which the
+      // function cannot catch.
+      if (searchFilter && tokenize(searchFilter.value).length === 0) return { hits: [], full: false };
+      const unavailable = searchIndexesUnavailable();
+      failExecution(unavailable);
+      throw unavailable;
+    }
     let text: string | undefined;
     const eqs: [string, string][] = [];
     for (const f of spec.filters) {

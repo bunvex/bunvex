@@ -54,6 +54,7 @@ import {
   type TableMeta,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  vectorIndexesUnavailable,
 } from "./catalog.ts";
 import {
   Committer,
@@ -263,7 +264,7 @@ export class Engine {
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
       cacheClock?: () => number;
-      /** Awaited before each page a search index's backfill reads (tests hold the backfill with it). */
+      /** Awaited before each page a search or vector index's backfill reads (tests hold the backfill with it). */
       beforeSearchBackfillPage?: () => Promise<void>;
       /** Retries after an OCC conflict (default: Convex's 4). */
       maxRetries?: number;
@@ -350,8 +351,10 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
-    this.reconcileSearch();
-    this.reconcileVector();
+    // The search and vector indexes of the schema the process starts on existed before it: they are rebuilt
+    // in memory (DV-227, DV-270), and searches meanwhile are Convex's bootstrapping answer (STUDY-79).
+    this.reconcileSearch(true);
+    this.reconcileVector(true);
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -698,7 +701,7 @@ export class Engine {
    * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
    * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
    */
-  private reconcileSearch() {
+  private reconcileSearch(bootstrapping = false) {
     const wanted = [];
     for (const [name, declared] of this.schema.tables) {
       const t = this.catalog.tables.get(name);
@@ -707,7 +710,7 @@ export class Engine {
       for (const [index, def] of Object.entries(declared.searchIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
     }
-    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs)) {
+    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs, bootstrapping)) {
       const p = this.backfillSearch(e).catch((err) => {
         if (!this.closed) console.error(`bunvex: search index ${e.table}.${e.name} failed to build: ${err.message}`);
       });
@@ -717,7 +720,7 @@ export class Engine {
   }
 
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
-  private reconcileVector() {
+  private reconcileVector(bootstrapping = false) {
     const wanted = [];
     for (const [name, declared] of this.schema.tables) {
       const t = this.catalog.tables.get(name);
@@ -726,7 +729,7 @@ export class Engine {
       for (const [index, def] of Object.entries(declared.vectorIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
     }
-    for (const e of this.vectorIndexes.reconcile(wanted)) {
+    for (const e of this.vectorIndexes.reconcile(wanted, bootstrapping)) {
       const p = this.backfillVector(e).catch((err) => {
         if (!this.closed) console.error(`bunvex: vector index ${e.table}.${e.name} failed to build: ${err.message}`);
       });
@@ -741,6 +744,7 @@ export class Engine {
     const at = this.committer.visibleTs;
     let last: string | null = null;
     for (;;) {
+      await this.opts.beforeSearchBackfillPage?.();
       if (this.closed) return;
       const page = (await this.query(
         (db) =>
@@ -787,7 +791,7 @@ export class Engine {
       throw new Error(`Index ${name} not found.`);
     }
     if (e.staged) throw new IndexStagedError(name);
-    if (!e.ready) throw new IndexBackfillingError(name);
+    if (!e.ready) throw e.bootstrapping ? vectorIndexesUnavailable() : new IndexBackfillingError(name);
     const v = query.vector;
     const limit = query.limit ?? DEFAULT_VECTOR_LIMIT;
     if (!Number.isInteger(limit) || limit < 0)

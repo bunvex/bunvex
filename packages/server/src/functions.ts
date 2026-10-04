@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  IndexesUnavailableError,
   isQueryObject,
   newUserTimer,
   notRunningMessage,
@@ -108,6 +109,16 @@ const registryKey = (name: string) => {
   const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
 };
+
+/**
+ * An index still being rebuilt after a start (STUDY-79), as an action sees it: Convex rejects the action's
+ * syscall promise with a plain `Error` carrying the message, which the action may catch.
+ */
+const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
+const unavailableAsError = <T>(p: Promise<T>): Promise<T> =>
+  p.catch((e) => {
+    throw unavailableToAction(e);
+  });
 
 /** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
 export const MAX_NESTED_CALL_DEPTH = 8;
@@ -1654,9 +1665,9 @@ export class Functions {
         },
       },
       runQuery: async (n: FunctionRef, a?: unknown) =>
-        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        unavailableAsError(this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runMutation: async (n: FunctionRef, a?: unknown) =>
-        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        unavailableAsError(this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runAction: async (n: FunctionRef, a?: unknown) =>
         this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
@@ -1676,18 +1687,23 @@ export class Functions {
           throw new Error("`vector` must be a non-empty Array in vectorSearch");
         const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
         const r = meteredAction();
-        const results = this.engine.vectorSearch(
-          tableName,
-          indexName,
-          {
-            vector: query.vector,
-            ...(query.limit === undefined ? {} : { limit: query.limit }),
-            ...(filter === undefined ? {} : { filter }),
-          },
-          (bytes) => {
-            if (r) r.io.vectorQueryBytes += bytes;
-          },
-        );
+        let results: { _id: string; _score: number }[];
+        try {
+          results = this.engine.vectorSearch(
+            tableName,
+            indexName,
+            {
+              vector: query.vector,
+              ...(query.limit === undefined ? {} : { limit: query.limit }),
+              ...(filter === undefined ? {} : { filter }),
+            },
+            (bytes) => {
+              if (r) r.io.vectorQueryBytes += bytes;
+            },
+          );
+        } catch (e) {
+          throw unavailableToAction(e);
+        }
         // Each result is Convex's vector egress: its id's 33 bytes and its 4-byte score.
         if (r) r.io.vectorReadBytes += results.length * 37;
         return results;

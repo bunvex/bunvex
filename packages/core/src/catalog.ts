@@ -144,6 +144,32 @@ export class IndexBackfillingError extends Error {
   }
 }
 
+/**
+ * A search or vector index still being rebuilt after the process started (STUDY-79): Convex's
+ * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
+ * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
+ * hitting it is skipped and retried later.
+ */
+export class IndexesUnavailableError extends Error {
+  constructor(
+    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "IndexesUnavailableError";
+  }
+}
+
+/** Convex's message while its text indexes bootstrap. */
+export const searchIndexesUnavailable = () =>
+  new IndexesUnavailableError("SearchIndexesUnavailable", "Search indexes bootstrapping and not yet available for use");
+/** Convex's message while its vector indexes bootstrap. */
+export const vectorIndexesUnavailable = () =>
+  new IndexesUnavailableError(
+    "VectorIndexesUnavailable",
+    "Vector indexes are bootstrapping and not yet available for use",
+  );
+
 /** A query on a staged index (Convex's `IndexStagedError`, a bad request). */
 export class IndexStagedError extends Error {
   readonly code = "IndexStagedError";
