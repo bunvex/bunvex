@@ -103,7 +103,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `react/react_node.test.ts` | — | G-C13: no callback after `close()` |
 | `react/use_paginated_query.test.tsx` | skip, first page, loadMore, a page updating, a page split, `insertAtTop` (`e2e-react/pagination.test.tsx`, `paginated-experimental.test.tsx`) | G-C14 `initialNumItems` refused for the classic hook (4 inputs); G-C15 restart on a new name or args, not on equal args; G-C16 `insertAtTop` edge cases; **G-C17 `insertAtPosition`** (10 cases); F5 |
 | `react/use_query.test.ts` | types | n/a |
-| `browser/http_client.test.ts` | the mutation queue and `skipQueue` (`e2e/http-client.test.ts`) | G-C18 a failed mutation does not block the queue; G-C19 `fetch` override precedence |
+| `browser/http_client.test.ts` | the mutation queue and `skipQueue` (`e2e/http-client.test.ts`) | G-C18 a failed mutation does not block the queue and G-C19 `fetch` override precedence: covered by `e2e/http-client-queue.test.ts` (#PR, differential) |
 | `browser/query_options.test.ts` | — | n/a: `convexQueryOptions` missing (client-sync §11); types only |
 | `browser/simple_client.test.ts` | deduplicated subscriptions (`client/pieces.test.ts`) | partial: the optimistic callback's synchrony is not asserted |
 | `browser/sync/client.test.ts` | — | G-C20 `localQueryResult` of a never-subscribed optimistic query; the legacy-config warning is n/a |

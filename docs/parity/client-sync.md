@@ -226,7 +226,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `Authorization: Bearer <jwt>` (user) / `Convex <admin key>` (admin) | `browser/http_client.ts` | done (STUDY-26, STUDY-34) | Sent as `Bearer <jwt>` / `Bunvex <admin key>` (H2); the server verifies both. |
 | `setAuth(token)`, `setAdminAuth(token, actingAs)`, `clearAuth()`, constructor `{auth, fetch, logger, skipConvexDeploymentUrlCheck}` | `browser/http_client.ts` | done (STUDY-26) | Option `skipDeploymentUrlCheck` (C1). |
 | Mutation queue: HTTP mutations from one client run one at a time in call order unless `{skipQueue: true}` | `browser/http_client.ts` (`enqueueMutation`, `processMutationQueue`) | done (STUDY-26) |  |
-| `setDebug` (print server log lines), `setFetchOptions({cache})`, custom `fetch` / global `setFetch` | `browser/http_client.ts` | done (STUDY-26) |  |
+| `setDebug` (print server log lines), `setFetchOptions({cache})`, custom `fetch` / global `setFetch` | `browser/http_client.ts` | done (STUDY-26) | The client's `fetch` wins over `setFetch`, which wins over the global one; a failed mutation does not block the queue (`sync-e2e/test/http-client-queue.test.ts`, differential, STUDY-65 G-C18, G-C19). Convex's `setFetch` is module-internal (not exported by `convex/browser`); bunvex exports it. |
 | `url` getter / deprecated `backendUrl()` | `browser/http_client.ts` | done (STUDY-26) |  |
 
 ### 14. Next.js / SSR
