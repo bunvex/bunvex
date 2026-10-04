@@ -71,16 +71,32 @@ function releaseUrls(env: Io["env"]) {
   };
 }
 
-/** The latest release's version (a `precompiled-*` tag), or null when it cannot be reached. */
-export async function latestVersion(env: Io["env"]): Promise<string | null> {
+let cachedLatestVersion: string | null = null;
+
+/**
+ * The latest release's version (a `precompiled-*` tag), or why it could not be found, as Convex's
+ * `findLatestVersionWithBinary` (cli/lib/localDeployment/download.ts) reports it: the host's status and
+ * answer, a response without a version, or a failed fetch. A version found is kept for the process, as Convex.
+ */
+export async function latestVersion(env: Io["env"]): Promise<{ version: string } | { error: string }> {
+  if (cachedLatestVersion !== null) return { version: cachedLatestVersion };
+  const url = releaseUrls(env).latest;
   try {
-    const r = await fetch(releaseUrls(env).latest, { headers: { accept: "application/vnd.github+json" } });
-    if (!r.ok) return null;
-    const tag = ((await r.json()) as { tag_name?: string }).tag_name;
-    return tag?.startsWith("precompiled-") ? tag : null;
+    const r = await fetch(url, { headers: { accept: "application/vnd.github+json" } });
+    if (!r.ok) return { error: `${new URL(url).host} returned ${r.status}: ${await r.text()}` };
+    const tag = ((await r.json()) as { tag_name?: unknown }).tag_name;
+    if (typeof tag !== "string" || !tag.startsWith("precompiled-"))
+      return { error: "Invalid response missing version field" };
+    cachedLatestVersion = tag;
+    return { version: tag };
   } catch {
-    return null;
+    return { error: "Failed to fetch latest backend version" };
   }
+}
+
+/** Forget the latest version found (tests). */
+export function forgetLatestVersion() {
+  cachedLatestVersion = null;
 }
 
 /** One file of a zip archive (stored or deflated), as the release zips are made (`zip -j`). */
@@ -205,11 +221,17 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
     bin = io.env.BUNVEX_LOCAL_BACKEND_BINARY;
     version = await customVersion(bin);
   } else {
-    let chosen = opts.backendVersion ?? (await latestVersion(io.env));
-    if (!chosen) {
-      if (!existing) throw new Error("could not find the latest bunvex local backend (is GitHub reachable?)");
-      io.err(`Failed to get the latest version, using the downloaded version ${existing.backendVersion}`);
-      chosen = existing.backendVersion;
+    let chosen = opts.backendVersion;
+    if (chosen === undefined) {
+      const latest = await latestVersion(io.env);
+      if ("version" in latest) chosen = latest.version;
+      else {
+        // As Convex: without a downloaded version this stops; with one, the reason and a warning, and it is used.
+        if (!existing) throw new Error(latest.error);
+        io.err(latest.error);
+        io.err(`Failed to get latest version from GitHub, using downloaded version ${existing.backendVersion}`);
+        chosen = existing.backendVersion;
+      }
     }
     if (existing && existing.backendVersion !== chosen && !opts.backendVersion) {
       const upgrade =
@@ -334,34 +356,59 @@ export function urlVariables(cwd: string): { url: string; site: string } {
 }
 
 /**
+ * A dotenv file with `name` set to `value`, as Convex's `changedEnvVarFile` (cli/lib/envvars.ts), or null when
+ * it already says so: a new file is the comment and the line; a variable already there (as dotenv reads the
+ * file) has its line replaced, Convex's way (the first line starting with the name); otherwise the line goes at
+ * the end after a blank line, below the comment.
+ */
+export function changedEnvVarFile(
+  existing: string | null,
+  name: string,
+  value: string,
+  commentOnPreviousLine: string | null,
+): string | null {
+  const line = `${name}=${value}`;
+  const comment = commentOnPreviousLine === null ? "" : `${commentOnPreviousLine}\n`;
+  if (existing === null) return `${comment}${line}\n`;
+  const current = parseEnvFile(existing)[name];
+  if (current === value) return null;
+  if (current !== undefined) return existing.replace(new RegExp(`^${name}.*$`, "m"), line);
+  return `${existing}${existing.endsWith("\n") ? "\n" : "\n\n"}${comment}${line}\n`;
+}
+
+/**
+ * `.gitignore` with `.env.local` added, as Convex's `changesToGitIgnore` (cli/lib/deployment.ts), or null when
+ * a line already covers it: `.env.local`, `.env.*`, `.env*`, `.env*.local` or any line ending in `.local`
+ * (comments and negations do not count; trailing whitespace and `\r` are ignored).
+ */
+export function changesToGitIgnore(existing: string | null): string | null {
+  if (existing === null) return ".env.local\n";
+  const covers = [/^\.env\.local$/, /^\.env\.\*$/, /^\.env\*$/, /^.*\.local$/, /^\.env\*\.local$/];
+  const ignored = existing
+    .split("\n")
+    .some((l) => !l.startsWith("#") && !l.startsWith("!") && covers.some((p) => p.test(l.trimEnd())));
+  return ignored ? null : `${existing}\n.env.local\n`;
+}
+
+/**
  * Write the deployment into `.env.local` (Convex's `writeDeploymentEnvVar` and `writeUrlsToEnvFile`): each
- * variable's line replaced, or added; `.env.local` added to `.gitignore` unless something there covers it.
+ * variable through `changedEnvVarFile`, then `.env.local` added to `.gitignore` unless a line there covers it.
  */
 export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number, site: number) {
   const path = join(cwd, ".env.local");
-  let text = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const set = (name: string, value: string, comment?: string) => {
-    const line = `${name}=${value}`;
-    const re = new RegExp(`^${name}=.*$`, "m");
-    if (re.test(text)) text = text.replace(re, line);
-    else text = `${text}${text && !text.endsWith("\n") ? "\n" : ""}${comment ? `${comment}\n` : ""}${line}\n`;
+  const before = existsSync(path) ? readFileSync(path, "utf8") : null;
+  let text = before;
+  const set = (name: string, value: string, comment: string | null = null) => {
+    text = changedEnvVarFile(text, name, value, comment) ?? text;
   };
   set("BUNVEX_DEPLOYMENT", `local:${deploymentName}`, "# Deployment used by `bunvex dev`");
   const vars = urlVariables(cwd);
   set(vars.url, `http://127.0.0.1:${cloud}`);
   set(vars.site, `http://127.0.0.1:${site}`);
-  writeFileSync(path, text);
+  if (text !== null && text !== before) writeFileSync(path, text);
   const gitignore = join(cwd, ".gitignore");
-  const ignored = existsSync(gitignore)
-    ? readFileSync(gitignore, "utf8")
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-    : [];
-  if (![".env.local", ".env.*", ".env*", "*.local", ".env*.local"].some((p) => ignored.includes(p)))
-    writeFileSync(
-      gitignore,
-      `${existsSync(gitignore) ? readFileSync(gitignore, "utf8").replace(/\n?$/, "\n") : ""}.env.local\n`,
-    );
+  const ignore = changesToGitIgnore(existsSync(gitignore) ? readFileSync(gitignore, "utf8") : null);
+  if (ignore !== null) writeFileSync(gitignore, ignore);
 }
 
 /** Forget the local deployment's state directory (tests; there is no command, as in Convex). */

@@ -357,6 +357,7 @@
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "convex": "^1.46.0",
+        "fast-check": "4.10.2",
         "jose": "6.2.12",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
