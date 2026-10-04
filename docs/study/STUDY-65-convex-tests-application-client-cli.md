@@ -165,6 +165,11 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
     throughput of large downloads. `storage.ts` `meteredDownload` counts as the client pulls. The usage meter
     charges each chunk, and `done` sends the event once. A HEAD request is not wrapped: it keeps its header and
     sends a 0-byte event.
+  - *Option (c), tried.* Setting `content-length` explicitly on the wrapped body does not help: Bun 1.4.2
+    still sends it chunked. The same holds for every wrapper measured: pull with or without
+    `highWaterMark: 0`, `type: "bytes"`, `TransformStream`, `type: "direct"`, an async generator. Convex sends
+    the header with its streamed body (`local_backend/src/storage.rs`), so (a) is a header divergence and (b)
+    a metering one. Measurements are in #373.
 - **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
