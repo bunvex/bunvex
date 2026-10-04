@@ -34,6 +34,7 @@ a sabotage check, and its parity or study rows.
 | F3 | `application/tests/auth_config.rs` `test_evaluate_auth_config_has_custom_system_env_var` | an environment-variable update re-evaluated `auth.config` with the raw built-ins, without the canonical URL overrides that a push, a restart and a canonical-URL change apply | with a canonical site URL and `domain: process.env.BUNVEX_SITE_URL`, changing **any** variable reinstalled the provider with the raw origin, and the issuer's tokens were refused until the next push or restart | #279 |
 | F4 | `application/tests/scheduled_jobs.rs` `test_cancel_recursively_scheduled_job` | "born canceled" only looked at the job of the function that scheduled; the mutations and actions a scheduled action calls (`ctx.runMutation`, `ctx.runAction`) ran without it. Convex propagates `parent_scheduled_job` down the call tree | the common "action → runMutation(schedule the next step)" loop kept running after the job was canceled | #281 |
 | F5 | `react/use_paginated_query.test.tsx` (the reset path), `ConvexReactClient.logger` | `BunvexReactClient.logger` returned the raw option (`Logger \| boolean \| undefined`), and the paginated hooks warned with `console.warn` | `logger: false` did not silence the pagination reset warning, and a custom logger never got it | open (§6 #12): Convex builds the `Logger` in the React client with `instantiateDefaultLogger` / `instantiateNoopLogger`, which `@bunvex/client` does not export; the fix needs that export or another way in |
+| F9 | `components.rs` `test_component_status_skips_staged_index`, read against `deploy_config.rs` `load_component_schema_status` | `schemaPushStatus` counted the pending schema's indexes by name, so an index whose fields a push changes looked complete through its old, enabled version | `wait_for_schema` answered `complete` while the new version still backfilled, and `finish_push` then refused ("The schema's indexes are still backfilling"): a push that changes an index on a table too large to backfill at once failed | #PR |
 
 ## 2. `crates/application/src/tests`
 
@@ -81,7 +82,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `http_action.rs` disconnect before head / while streaming / continues after | the action finishes and its writes commit; the log records the disconnect | the signal is tested, not the commit nor the log line | gap (G-A11), M4 |
 | `push.rs` `test_max_size_push` | 4096 modules + 4096 `_deps`, pushed twice | the limit exists; the message differs (M2) | gap (G-A9) |
 | `analyze.rs` `test_analyze_with_source_map` | each function's source line | `AnalyzedFunction` has no `pos` | gap, M5 (dashboard only) |
-| components.rs `test_component_status_skips_staged_index` | the schema status counts no staged index | `core/src/engine.ts` | gap (G-A5), cosmetic |
+| components.rs `test_component_status_skips_staged_index` | the schema status counts no staged index | `core/test/schema-push.test.ts` (#PR); writing it found **bug F9** | covered (G-A5) |
 
 ## 3. React, browser and Next.js client tests
 
