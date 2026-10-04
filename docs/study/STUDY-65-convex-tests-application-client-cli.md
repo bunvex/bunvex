@@ -72,7 +72,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `auth_config.rs` `test_evaluate_auth_config_has_system_env_var` | `auth.config` sees the built-in site URL | — | gap (closed by #279's test) |
 | `auth_config.rs` `test_evaluate_auth_config_has_custom_system_env_var` | the canonical URL overrides the built-in in `auth.config` | only push and restart applied it | **bug F3** (#279) |
 | `scheduled_jobs.rs` `test_cancel_recursively_scheduled_job` | what a canceled job's callees schedule is born canceled | only the job's own `ctx.scheduler` | **bug F4** (#281) |
-| `scheduled_jobs.rs` `test_scheduled_jobs_race_condition`, `cron_jobs.rs` `test_cron_jobs_race_condition` | a job canceled (a cron deleted) after the executor picked it is not run | `unchanged()` in `server/src/scheduler.ts` and `cron-executor.ts` | gap (G-A6) |
+| `scheduled_jobs.rs` `test_scheduled_jobs_race_condition`, `cron_jobs.rs` `test_cron_jobs_race_condition` | a job canceled (a cron deleted) after the executor picked it is not run | `unchanged()` in `server/src/scheduler.ts` and `cron-executor.ts`; also a cancel or delete while the mutation runs | covered (G-A6): `server/test/executor-races.test.ts` (#PR) |
 | `scheduled_jobs.rs` `test_disable_scheduled_jobs`, `cron_jobs.rs` `test_disable_cron_jobs` | a *disabled* backend runs no jobs or crons, then resumes | `isStopped` (`core/src/backend-state.ts`); only *paused* is tested | gap (G-A7) |
 | `cron_jobs.rs` `test_cron_occ_gets_logged`, `scheduled_jobs.rs` OCC logging | a lost OCC attempt of a cron or scheduled mutation is in the function log | tested for a client mutation only (`function-log.test.ts`) | gap (G-A8) |
 | `storage.rs` `test_storage_get_url`, `test_storage_generate_upload_url` | user `getUrl` (query, action) and `generateUploadUrl` (mutation, action) follow the canonical cloud URL | only a system mutation is tested (`audit-log.test.ts`) | gap (G-A4) |
@@ -177,7 +177,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 5 | G-C8, G-C24, G-C25, G-C26: pause/resume of the query set, outstanding state after a restart, optimistic stacking, incomplete requests | a duplicate Add or an Add+Remove is a base-version mismatch, a fatal client error; wrong rollback order is wrong UI | `client/src/{local-state,optimistic-updates,request-manager}.ts` | S | #282 |
 | 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | |
 | 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
-| 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
+| 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | #PR (tests; bunvex matched) |
 | 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | |
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
