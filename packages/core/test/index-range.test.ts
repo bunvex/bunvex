@@ -117,16 +117,52 @@ describe("withIndex ranges follow Convex's rules", () => {
     expect(got).toHaveLength(1);
   });
 
-  test("index fields follow Convex's rules", () => {
-    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["_creationTime"]) })).toThrow("reserved field");
-    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["_id"]) })).toThrow("reserved field");
-    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["a._secret"]) })).toThrow("reserved field");
-    expect(() => defineSchema({ t: defineTable(v.any()).index("by_x", ["a", "a"]) })).toThrow("duplicate fields");
-    expect(() =>
-      defineTable(v.any()).index(
-        "by_x",
-        Array.from({ length: 17 }, (_, i) => `f${i}`),
-      ),
-    ).toThrow("16");
+  test("index definitions fail with Convex's codes' messages (STUDY-65 M1; Convex: tests/schema.rs, testing/schema.rs)", () => {
+    const err = (t: ReturnType<typeof defineTable>, table = "t") => {
+      try {
+        defineSchema({ [table]: t });
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return "no error";
+    };
+    const fields = (n: number) => Array.from({ length: n }, (_, i) => `f${i}`);
+    // IndexFieldsContainId, IndexFieldsContainCreationTime, IndexFieldNameReserved.
+    expect(err(defineTable(v.any()).index("by_x", ["_id"]))).toBe(
+      'In table "t": In index "by_x": `_id` is not a valid index field. To load documents by ID, use `db.get(id)`.',
+    );
+    expect(err(defineTable(v.any()).index("by_x", ["a", "_creationTime"]))).toBe(
+      "`_creationTime` is automatically added to the end of each index. It should not be added explicitly in the index definition.",
+    );
+    expect(err(defineTable(v.any()).index("by_x", ["_secret"]))).toBe(
+      "Reserved fields (starting with `_`) are not allowed in indexes.",
+    );
+    expect(err(defineTable(v.any()).index("by_x", ["a._secret"]))).toBe(
+      "Reserved fields (starting with `_`) are not allowed in indexes.",
+    );
+    // FieldsNotUniqueWithinIndex: Convex's test checks the whole string.
+    expect(err(defineTable(v.any()).index("by_email", ["email", "email"]), "test")).toBe(
+      'In table "test": In index "by_email": Duplicate field "email". Index fields must be unique within an index.',
+    );
+    // IndexTooManyFields: more than 16 when parsed; and 16 too, once `_creationTime` is appended.
+    expect(err(defineTable(v.any()).index("by_x", fields(17)))).toBe(
+      'In table "t": In index "by_x": Indexes may have up to 16 fields.',
+    );
+    expect(err(defineTable(v.any()).index("by_x", fields(16)))).toBe("Indexes may have up to 16 fields.");
+    expect(err(defineTable(v.any()).index("by_x", fields(15)))).toBe("no error");
+    // EmptyIndex, IndexNotUnique, IndexNameReserved, IndexNamesNotUnique.
+    expect(err(defineTable(v.any()).index("by_x", []))).toBe('In table "t" index "by_x" must have at least one field.');
+    expect(err(defineTable(v.any()).index("by_x", { fields: [], staged: true }))).toBe(
+      'In table "t" staged index "by_x" must have at least one field.',
+    );
+    expect(err(defineTable(v.any()).index("by_email", ["email"]).index("by_email2", ["email"]), "test")).toBe(
+      'In table "test" index "by_email2" and index "by_email" have the same fields. Indexes must be unique within a table.',
+    );
+    expect(err(defineTable(v.any()).index("by_id", ["x"]))).toBe(
+      'In table "t" cannot name an index "by_id" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".',
+    );
+    expect(err(defineTable(v.any()).index("by_a", ["a"]).index("by_a", ["b"]))).toBe(
+      'Table "t" has two or more definitions of index "by_a".',
+    );
   });
 });
