@@ -172,9 +172,18 @@ export class CodeVersion {
    * does not resolve, throws at import, takes too long, or exports what its file may not.
    */
   static async load(sources: ModuleSource[], opts: LoadOptions): Promise<CodeVersion> {
+    // Convex's `analyze_modules` checks (application/src/lib.rs), its docs link left out (DV-04).
     const users = sources.filter((m) => !isDeps(m.path));
     if (users.length > MAX_USER_MODULES)
-      throw new InvalidModulesError(`Too many modules: ${users.length} > maximum ${MAX_USER_MODULES}`);
+      throw new InvalidModulesError(
+        `Too many function files (${users.length} > maximum ${MAX_USER_MODULES}) in "bunvex/".`,
+      );
+    // Dependencies are not the developer's, so they do not count above; but no more of them than that. A
+    // system error in Convex (an internal error to the client), not an InvalidModules one.
+    if (sources.length > 2 * MAX_USER_MODULES)
+      throw new Error(
+        `Too many dependencies modules! Dependencies: ${sources.length - users.length}, Total modules: ${sources.length}`,
+      );
     const env = opts.env ?? {};
     const contexts = {
       isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv)),
