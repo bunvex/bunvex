@@ -29,6 +29,7 @@ import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,
   checkValue,
+  copyValue,
   displayValue,
   type GenericValidator,
   hasCommitTs,
@@ -41,6 +42,15 @@ import {
   v,
   valueSize,
 } from "@bunvex/values";
+
+/**
+ * A nested call's result as its caller gets it: Convex's crosses a JSON boundary (`runUdf` and the action
+ * calls return `jsonToConvex` of the callee's `convexToJson(result === undefined ? null : result)`), so it is
+ * a copy, `undefined` is `null`, `undefined` fields are gone and object fields come sorted (`copyValue`: the
+ * same as that round trip, without building the JSON).
+ */
+const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
+
 import {
   ActionPermits,
   type ConcurrencyLimiter,
@@ -1128,7 +1138,7 @@ export class Functions {
       } catch (e) {
         throw this.nestedError(e, timer);
       }
-      return this.checkReturns(f, value);
+      return acrossCall(this.checkReturns(f, value));
     }
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
@@ -1141,7 +1151,7 @@ export class Functions {
       if (sp) db.rollback(sp);
       throw this.nestedError(e, timer);
     }
-    return this.checkReturns(f, value);
+    return acrossCall(this.checkReturns(f, value));
   }
 
   /**
@@ -1472,11 +1482,11 @@ export class Functions {
         },
       },
       runQuery: async (n: FunctionRef, a?: unknown) =>
-        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        acrossCall(await this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runMutation: async (n: FunctionRef, a?: unknown) =>
-        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        acrossCall(await this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
+        acrossCall(await this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true })),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: makeScheduler(this, {
         engine: this.engine,
