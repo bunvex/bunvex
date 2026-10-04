@@ -1,15 +1,35 @@
 // Table summaries (STUDY-52 PR 2), as Convex's `TableSummary` (crates/database/src/table_summary.rs): per
 // table, its number of documents, their total size and their counted shape. Kept up to date by every commit
 // as it becomes visible (each written document's old version removed, its new one added), so counts, sizes
-// and shapes are those of the latest visible state. Convex checkpoints them into a persistence global and
-// replays the log on start; bunvex rebuilds them on start from the documents at one snapshot (A3), the commits
-// meanwhile applied once the scan is done. Counts and sizes move with each commit; shapes are folded in when
+// and shapes are those of the latest visible state. As Convex, they are checkpointed into a persistence global
+// and restored on start from it and the document log (STUDY-72, table-summary-checkpoint.ts), else rebuilt
+// from the documents at one snapshot; the commits meanwhile applied once that is done. Counts and sizes move with each commit; shapes are folded in when
 // asked or in the background, so a commit costs little more than Convex's.
 import { type Value, valueSize } from "@bunvex/values";
 import type { Doc } from "./schema.ts";
-import { NEVER, removeValue, type Shape, ShapeRemovalError, shapeOf, union } from "./shapes.ts";
+import {
+  NEVER,
+  removeValue,
+  type Shape,
+  type ShapeJson,
+  ShapeRemovalError,
+  shapeFromJson,
+  shapeOf,
+  shapeToJson,
+  union,
+} from "./shapes.ts";
 
 export type TableSummary = { count: number; size: number; shape: Shape };
+
+/**
+ * A checkpoint of every table's summary at one ts (STUDY-72), as Convex's `TableSummarySnapshot` JSON in the
+ * `table_summary_v2` persistence global: per tablet its total size (a decimal string, as Convex's
+ * `JsonInteger`) and its counted shape, whose count is the table's; and the ts.
+ */
+export type SummaryCheckpoint = {
+  ts: string;
+  tables: Record<string, { totalSize: string; inferredTypeWithOptionalFields: ShapeJson }>;
+};
 
 /** Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, a 503: retry). */
 export class TableSummariesUnavailableError extends Error {
@@ -37,6 +57,10 @@ export class TableSummaries {
   private queued: { ts: number; writes: Write[] }[] | null = [];
   /** The snapshot the build read (commits at or before it are in the scan). */
   private builtAt: number | null = null;
+  /** The ts the summaries are at: the last commit applied, or the build's snapshot. */
+  private at = 0;
+  /** Commits applied since the build (Convex's `write_commits_since_load`), for checkpoint pacing. */
+  commits = 0;
 
   get ready() {
     return this.queued === null;
@@ -62,6 +86,8 @@ export class TableSummaries {
       return;
     }
     for (const w of writes) this.applyOne(w);
+    this.at = ts;
+    this.commits++;
     if (this.pendingShapes.length >= FOLD_AFTER && !this.folding) {
       this.folding = true;
       setImmediate(() => {
@@ -109,9 +135,49 @@ export class TableSummaries {
     for (const [tablet, s] of this.tables) if (s.count === 0) this.tables.delete(tablet);
   }
 
+  /**
+   * The build from a checkpoint (STUDY-72): its summaries for the tablets that still exist, as of the build's
+   * snapshot `at`; `replace` then moves each document the log changed since the checkpoint.
+   */
+  restore(at: number, checkpoint: SummaryCheckpoint, tablets: Set<number>) {
+    const tables = new Map<number, { count: number; size: number; shape: Shape }>();
+    for (const [key, t] of Object.entries(checkpoint.tables)) {
+      const tablet = Number(key);
+      const size = Number(t.totalSize);
+      const shape = shapeFromJson(t.inferredTypeWithOptionalFields);
+      if (!Number.isSafeInteger(tablet) || !Number.isSafeInteger(size)) throw new Error("not a summary checkpoint");
+      if (tablets.has(tablet) && shape.n > 0) tables.set(tablet, { count: shape.n, size, shape });
+    }
+    this.tables = tables;
+    this.builtAt = at;
+    this.at = at;
+  }
+
+  /** A document's version at the checkpoint (`old`) replaced by its version at the build's snapshot. */
+  replace(tablet: number, old: Doc | null, next: Doc | null) {
+    if (old || next) this.applyOne({ tablet, old, next });
+  }
+
+  /** Forget a failed restore's summaries before a scan. */
+  reset() {
+    this.tables = new Map();
+    this.pendingShapes = [];
+  }
+
+  /** A checkpoint of the summaries as they are now (their shapes folded in). */
+  checkpoint(): SummaryCheckpoint {
+    if (!this.ready) throw new TableSummariesUnavailableError();
+    this.fold();
+    const tables: SummaryCheckpoint["tables"] = {};
+    for (const [tablet, t] of this.tables)
+      tables[tablet] = { totalSize: String(t.size), inferredTypeWithOptionalFields: shapeToJson(t.shape) };
+    return { ts: String(this.at), tables };
+  }
+
   /** The build: every document of a tablet as of the build's snapshot `at`. */
   build(at: number, tablet: number, docs: Iterable<Doc>) {
     this.builtAt = at;
+    this.at = at;
     for (const d of docs) this.applyOne({ tablet, old: null, next: d });
     this.fold();
   }
@@ -121,6 +187,10 @@ export class TableSummaries {
     const queued = this.queued ?? [];
     this.queued = null;
     for (const c of queued)
-      if (this.builtAt === null || c.ts > this.builtAt) for (const w of c.writes) this.applyOne(w);
+      if (this.builtAt === null || c.ts > this.builtAt) {
+        for (const w of c.writes) this.applyOne(w);
+        this.at = c.ts;
+        this.commits++;
+      }
   }
 }

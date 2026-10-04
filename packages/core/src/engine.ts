@@ -24,6 +24,7 @@ import {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DATA_SYNC_PROGRESS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -111,7 +112,13 @@ import {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 import { TableSummaries, TableSummariesUnavailableError } from "./table-summaries.ts";
-import { Tx } from "./tx.ts";
+import {
+  canCheckpoint,
+  restoreSummaries,
+  SummaryCheckpointer,
+  type SummaryCheckpointOptions,
+} from "./table-summary-checkpoint.ts";
+import { decodeDoc, Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
   MAX_VECTOR_FILTER_CONDITIONS,
@@ -280,6 +287,8 @@ export class Engine {
       storedSchema?: boolean;
       /** Retention's knobs (Convex's INDEX_RETENTION_DELAY, DOCUMENT_RETENTION_DELAY, …; STUDY-33). */
       retention?: RetentionOptions;
+      /** Table summary checkpoints' knobs (STUDY-72); `false`: none, the summaries scanned on every start. */
+      summaryCheckpoints?: SummaryCheckpointOptions | false;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -298,7 +307,7 @@ export class Engine {
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
-    this.committer.onCommit((entries) => this.backendState.observe(entries));
+    this.committer.onCommit((entries) => this.backendState.observe(entries), "backend state");
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
@@ -429,6 +438,7 @@ export class Engine {
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
+    await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
     if (this.lease) {
@@ -565,6 +575,14 @@ export class Engine {
         document: v.any(),
       },
       { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
+      {
+        name: DATA_SYNC_PROGRESS_TABLE,
+        indexes: {
+          by_sync_id: ["syncId", "_creationTime"],
+          by_last_updated: ["lastUpdatedMs", "_creationTime"],
+        },
+        document: v.any(),
+      },
       {
         name: USAGE_LIMITS_TABLE,
         indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },
@@ -822,12 +840,42 @@ export class Engine {
   }
 
   /**
-   * Build the table summaries from every table's documents (active, hidden and being deleted) at one
-   * snapshot, page by page; commits meanwhile are queued and applied after (STUDY-52 PR 2).
+   * Build the table summaries at one snapshot: from the last checkpoint and the document log since (STUDY-72),
+   * else from every table's documents (active, hidden and being deleted), page by page. Commits meanwhile
+   * are queued and applied after (STUDY-52 PR 2). Then checkpoints are written as Convex's worker does.
    */
   private async buildSummaries() {
     const at = this.committer.visibleTs;
     const defs = [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()];
+    const p = this.persistence;
+    const checkpoints = this.opts.summaryCheckpoints !== false && canCheckpoint(p);
+    const restored =
+      checkpoints &&
+      (await restoreSummaries(p, this.tableSummaries, at, new Set(defs.map((t) => t.id)), decodeDoc).catch((e) => {
+        console.error(`bunvex: the table summary checkpoint could not be loaded, scanning: ${(e as Error).message}`);
+        return false;
+      }));
+    this.summariesRestored = restored;
+    if (!restored) await this.scanSummaries(at, defs);
+    if (this.closed) return;
+    this.tableSummaries.finish();
+    if (checkpoints) {
+      this.summaryCheckpointer = new SummaryCheckpointer(
+        p,
+        this.tableSummaries,
+        this.opts.summaryCheckpoints || undefined,
+      );
+      this.summaryCheckpointer.start();
+    }
+  }
+
+  /** Whether the summaries came from a checkpoint (tests, STUDY-72). */
+  summariesRestored = false;
+  /** @internal The checkpoint worker, once the summaries are built. */
+  summaryCheckpointer: SummaryCheckpointer | null = null;
+
+  private async scanSummaries(at: number, defs: TableDef[]) {
+    this.tableSummaries.reset();
     for (const t of defs) {
       let last: string | null = null;
       for (;;) {
@@ -851,7 +899,6 @@ export class Engine {
         await new Promise((r) => setImmediate(r));
       }
     }
-    this.tableSummaries.finish();
   }
 
   private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);

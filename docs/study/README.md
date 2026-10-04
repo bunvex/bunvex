@@ -101,6 +101,8 @@ to a spec.
 | [STUDY-66](STUDY-66-server-api-gaps.md) | Small server-API gaps: `.limit(n)` and the 256-operator cap, `db.table()`, returned queries, `fetch` / timers / randomness in queries and mutations, bad tokens in nested actions, `schema.doc` / `schema.id` / `docValidator`, registration guards | draft; no divergence needing the owner |
 | [STUDY-67](STUDY-67-http-function-api.md) | The HTTP function API: routes, status codes, `format`, request errors, CORS (audited against Convex's local backend) | studied; H7, H10–H12 pending (owner) |
 | [STUDY-68](STUDY-68-function-limits.md) | Concurrency limits per function kind (queries, mutations, actions, Node actions) | implemented; closes DV-302 |
+| [STUDY-69](STUDY-69-data-sync.md) | Data sync: `/api/v1/data/sync` and its routes, Convex's cursor, by-id then log pages, progress | implemented; owner decisions 2026-10-03 |
+| [STUDY-72](STUDY-72-table-summary-checkpoints.md) | Table summary checkpoints: the `table_summary_v2` global, Convex's worker pacing, a restore from the document log (DV-300) | implemented; C1 accepted as recommended (owner, 2026-10-03), DV-318 |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |

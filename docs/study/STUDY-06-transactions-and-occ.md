@@ -676,6 +676,20 @@ write.
 - **A failure** stops the committer as before. Batches already flushed stay acknowledged (they are durable);
   the failing batch and the rest of the group are refused. A committer stopped from outside (a lost lease)
   between two batches writes nothing more.
+- **A commit listener that throws** (`onCommit`, or a commit's `onVisible` hook) is an internal error, not a
+  persistence failure, but it is fail-stop too (owner, 2026-10-03): a sync layer left half-notified would
+  leave clients silently stale. Convex has no listener to throw: its committer publishes to the write log and
+  snapshot manager in process, and any other error of `Committer::go` — "a persistence write fails or …
+  unrecoverable logic errors" — goes to the shutdown signal with its own message
+  (`crates/database/src/committer.rs` L335-341); a panic aborts the process (`panic = "abort"`, Cargo.toml).
+  So bunvex says what happened: the committer stops with a `CommitterStoppedError` whose cause is a
+  `CommitListenerError` naming the listener (each is named at registration: `sync`, `scheduler`,
+  `cron executor`, `log streams`, `file storage sweeps`, `environment variables`, `backend state`) and holding
+  the original error, and whose message reads "the committer stopped after an internal error in commit
+  listener "sync": …" instead of "… after a persistence failure: …" (`persistenceFailure` tells them apart).
+  The batch is durable and visible, so its commits are acknowledged; the listeners after the failing one are
+  not called, later batches and queued commits are refused, and `onFatal` runs once. Before, the batch's
+  callers hung and the server reported a persistence failure.
 - **Statements.** Postgres sends at most 1 024 rows per statement (the fence CTE carries the first chunk);
   MySQL fills each `INSERT` up to 10 MiB of SQL text (an upper bound of the escaped row: 3 bytes per string
   character, 2 per key byte); both as Convex, inside the batch's one transaction (`chunkRows`,
