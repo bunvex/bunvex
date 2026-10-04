@@ -31,7 +31,7 @@ export type LogLine = { level: LogLevel; messages: string[]; isTruncated: boolea
  * execution starts its own. `onLine` sees each line as it is logged (an action's lines stream out as
  * they come); `cached` is set when a cached query result answered it; `tx` is the transaction it ran in.
  */
-export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown };
+export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown; timer?: unknown };
 
 /**
  * The lines of one execution. A mutation re-run after a conflict replaces its previous attempt's lines (an
@@ -134,10 +134,11 @@ export const cachedQueryLogs = {
       capture: () => (own ? capped(allLines(own)) : []),
     };
   },
-  replay(extra: unknown) {
+  /** A cached run's lines into the current invocation; `hit`: it is served from the cache (the default). */
+  replay(extra: unknown, hit = true) {
     const parent = current.getStore();
     if (!parent) return;
-    if (parent.owner) parent.owner.cached = true;
+    if (parent.owner && hit) parent.owner.cached = true;
     if (Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as LogLine[]));
   },
 };

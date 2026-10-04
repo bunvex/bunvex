@@ -113,3 +113,52 @@ export function valuesToKey(values: (Value | undefined)[]): Uint8Array {
   for (const v of values) write(w, v);
   return w.done();
 }
+
+/** A string's escaped length: its UTF-8 bytes, one escape per 0x00 (only U+0000 encodes one), a terminator. */
+function escapedLength(s: string): number {
+  let n = Buffer.byteLength(s, "utf8") + 1;
+  for (let i = s.indexOf("\0"); i !== -1; i = s.indexOf("\0", i + 1)) n++;
+  return n;
+}
+
+function keyLength(v: Value | undefined): number {
+  if (isCommitTsPlaceholder(v)) v = MAX_COMMIT_TS;
+  if (v === undefined || v === null) return 1;
+  switch (typeof v) {
+    case "bigint":
+      if (v === 0n) return 1;
+      return (
+        1 + (v >= -128n && v <= 127n ? 1 : v >= -32768n && v <= 32767n ? 2 : v >= -(2n ** 31n) && v < 2n ** 31n ? 4 : 8)
+      );
+    case "number":
+      return 9;
+    case "boolean":
+      return 1;
+    case "string":
+      return 1 + escapedLength(v);
+  }
+  if (isBytes(v)) {
+    const b = new Uint8Array(v);
+    let n = 2 + b.length;
+    for (const x of b) if (x === TERMINATOR) n++;
+    return n;
+  }
+  let n = 2;
+  if (Array.isArray(v)) {
+    for (const e of v) n += keyLength(e);
+    return n;
+  }
+  for (const k of Object.keys(v)) {
+    const e = (v as Record<string, Value>)[k];
+    if (e === undefined) continue;
+    n += escapedLength(k) + (k === "" ? 1 : 0) + keyLength(e);
+  }
+  return n;
+}
+
+/** `valuesToKey(values).length`, without encoding: what Convex meters for an index key read (STUDY-71). */
+export function keyBytesLength(values: (Value | undefined)[]): number {
+  let n = 0;
+  for (const v of values) n += keyLength(v);
+  return n;
+}

@@ -5,6 +5,7 @@
 //
 // `_tables` and `_index` themselves have FIXED ids — that is how startup finds everything else (Convex
 // keeps their ids in persistence globals instead).
+import { opaqueToInspect } from "./inspect.ts";
 import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 
 export const TABLES_TABLE = "_tables";
@@ -40,6 +41,8 @@ export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 export const LOG_SINKS_TABLE = "_log_sinks";
 /** Usage limits (STUDY-61), as Convex's `_usage_limits`: `{metric, window, limitType, limit, enabled}`. */
 export const USAGE_LIMITS_TABLE = "_usage_limits";
+/** Data sync progress (STUDY-69), as Convex's `_data_sync_progress`: one row per sync, its state. */
+export const DATA_SYNC_PROGRESS_TABLE = "_data_sync_progress";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
 export const FUNCTION_HANDLES_TABLE = "_function_handles";
 /** The deployment's run state (STUDY-63), as Convex's `_backend_state`: `{system, usage_limit, user}`. */
@@ -85,6 +88,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _canonical_urls: 546,
   _backend_state: 536,
   _cron_next_run: 547,
+  _data_sync_progress: 553,
   _usage_limits: 552,
   _index_backfills: 548,
   // bunvex's own.
@@ -447,3 +451,6 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
     );
   return c;
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Catalog);

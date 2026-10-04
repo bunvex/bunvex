@@ -12,6 +12,7 @@
 import { closeSync, existsSync, fdatasyncSync, openSync, readSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
 import { BTree } from "../btree.ts";
+import { opaqueToInspect } from "../inspect.ts";
 import { compareKeys } from "../keyenc.ts";
 import type {
   DocLogRow,
@@ -474,9 +475,19 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return visible(this.docs.get(`${table}:${id}`), ts)?.v ?? null;
   }
 
+  getVersions(table: number, ids: string[], ts: number) {
+    return ids.map((id) => {
+      const v = visible(this.docs.get(`${table}:${id}`), ts);
+      return v && v.v !== null ? { json: v.v, ts: v.ts } : null;
+    });
+  }
+
   async close() {
     await this.fh?.close();
     this.lock?.release();
     this.lock = null;
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(MemoryPersistence);

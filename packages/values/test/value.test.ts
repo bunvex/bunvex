@@ -141,7 +141,7 @@ describe("JSON form (toJsonValue / fromJsonValue)", () => {
     class Point {
       x = 1;
     }
-    expect(() => toJsonValue(new Point() as never)).toThrow('Point {"x":1} is not a supported value type.');
+    expect(() => toJsonValue(new Point() as never)).toThrow("Point {…} is not a supported value type."); // named, not opened
     expect(() => toJsonValue({ $x: 1 })).toThrow("Field name $x starts with a '$', which is reserved.");
     expect(() => toJsonValue({ é: 1 })).toThrow("Field names can only contain non-control ASCII characters");
     expect(() => toJsonValue(2n ** 63n)).toThrow("does not fit into a 64-bit signed integer");
