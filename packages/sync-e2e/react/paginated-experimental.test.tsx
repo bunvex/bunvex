@@ -110,9 +110,11 @@ describe("usePaginatedQuery_experimental, positional form", () => {
   test("a cursor the query no longer accepts (InvalidCursor) restarts the pagination from the first page", async () => {
     const { client, mount } = await setup(6);
     const { box, Pages } = positional(api.messages.flippable, {}, 2);
-    const warn = console.warn;
+    // The warning goes to the client's logger (here `logger: false`, so nowhere), as Convex's (STUDY-65 F5).
+    const logger = client.logger as { warn: (...a: unknown[]) => void };
+    const warn = logger.warn;
     const warnings: string[] = [];
-    console.warn = (m: string) => warnings.push(m);
+    logger.warn = (...a: unknown[]) => warnings.push(a.join(" "));
     try {
       mount(<Pages />);
       await waitFor(() => expect(box.r?.status).toBe("CanLoadMore"));
@@ -124,7 +126,7 @@ describe("usePaginatedQuery_experimental, positional form", () => {
       expect(box.r?.status).toBe("CanLoadMore");
       expect(warnings.join("\n")).toContain("resetting pagination state: ");
     } finally {
-      console.warn = warn;
+      logger.warn = warn;
     }
   });
 

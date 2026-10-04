@@ -51,6 +51,7 @@ import {
   type LogCommit,
   MAX_KEY_PREFIX_LEN,
   type OpenOptions,
+  opaqueToInspect,
   type Persistence,
   POSTGRES_ROWS_PER_STATEMENT,
   ReadOnlyError,
@@ -822,6 +823,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     await Promise.all([this.sql.end(t), ...this.retired]);
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(PostgresPersistence);
 
 /** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
 function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {

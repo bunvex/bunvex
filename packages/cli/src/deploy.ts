@@ -5,6 +5,7 @@
 // `{ "functions": "…" }`; the deployment is `--url` / `--admin-key`, else BUNVEX_SELF_HOSTED_URL /
 // BUNVEX_SELF_HOSTED_ADMIN_KEY, read from the environment, then `.env.local`, then `.env` (as Convex's CLI
 // reads CONVEX_SELF_HOSTED_*).
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -16,11 +17,13 @@ import {
   checkLargeIndexDeletion,
   checkSlowSchemaValidation,
   defaultDeployMessage,
+  type IndexDiff,
   PushCanceled,
+  printIndexDiff,
   type SchemaEvaluation,
 } from "./index-checks.ts";
 import type { Io } from "./io.ts";
-import { acquireTarget } from "./local-deployment.ts";
+import { acquireTarget, urlVariables } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
 
 export { parseEnvFile } from "./target.ts";
@@ -40,30 +43,68 @@ ${TARGET_OPTIONS}
                        staging it instead so it backfills in the background)
   --codegen <mode>     enable (default) or disable: regenerate _generated/
   --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
+  --cmd <command>      a command to run first, as part of deploying your app (e.g. \`vite build\`), with the
+                       deployment's URL in an environment variable (see --cmd-url-env-var-name)
+  --cmd-url-env-var-name <name>
+                       the variable that gets the deployment's URL when using --cmd (e.g. VITE_BUNVEX_URL;
+                       default: the one your framework reads)
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
-type ProjectConfig = { functions?: unknown; codegen?: { fileType?: unknown } };
+export type ProjectConfig = { functions?: string; codegen?: { fileType?: "ts" | "js/dts" } };
 
-function readProjectConfig(cwd: string): ProjectConfig {
+/** How Convex's schema validator (zod) names a value's type in "Expected …, received …". */
+function receivedType(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  if (typeof v === "number" && Number.isNaN(v)) return "nan";
+  return typeof v;
+}
+
+/**
+ * Read and check `bunvex.json`, as Convex's `readProjectConfig` / `parseProjectConfig` (cli/lib/config.ts) check
+ * `convex.json`: JSON that does not parse is `Parsing "<path>" failed` with the parse error; anything but an
+ * object is "Expected `bunvex.json` to contain an object"; a field of the wrong type names its path, as zod's
+ * first issue does. Only the keys bunvex reads are checked; the others are left alone.
+ */
+export function readProjectConfig(cwd: string): ProjectConfig {
   const configPath = join(cwd, "bunvex.json");
-  return existsSync(configPath) ? (JSON.parse(readFileSync(configPath, "utf8")) as ProjectConfig) : {};
+  if (!existsSync(configPath)) return {};
+  let config: unknown;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch (e) {
+    throw new Error(`Parsing "bunvex.json" failed\n${String(e)}`);
+  }
+  if (typeof config !== "object" || config === null || Array.isArray(config))
+    throw new Error("Expected `bunvex.json` to contain an object");
+  const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
+  const { functions, codegen } = config as Record<string, unknown>;
+  if (functions !== undefined && typeof functions !== "string")
+    throw issue("functions", `Expected string, received ${receivedType(functions)}`);
+  if (codegen !== undefined) {
+    if (typeof codegen !== "object" || codegen === null || Array.isArray(codegen))
+      throw issue("codegen", `Expected object, received ${receivedType(codegen)}`);
+    const { fileType } = codegen as Record<string, unknown>;
+    if (fileType !== undefined && fileType !== "ts" && fileType !== "js/dts")
+      throw issue(
+        "codegen.fileType",
+        typeof fileType === "string"
+          ? `Invalid enum value. Expected 'ts' | 'js/dts', received '${fileType}'`
+          : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
+      );
+  }
+  return config as ProjectConfig;
 }
 
 export function functionsDir(cwd: string): string {
-  const config = readProjectConfig(cwd);
-  if (config.functions !== undefined) {
-    if (typeof config.functions !== "string") throw new Error(`bunvex.json: "functions" must be a string`);
-    return resolve(cwd, config.functions);
-  }
-  return resolve(cwd, "bunvex");
+  const { functions } = readProjectConfig(cwd);
+  return resolve(cwd, functions ?? "bunvex");
 }
 
 /** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
 export function codegenConfig(cwd: string): CodegenConfig {
   const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
-  if (fileType !== "ts" && fileType !== "js/dts")
-    throw new Error(`bunvex.json: "codegen.fileType" must be "ts" or "js/dts"`);
   return { fileType, packages: packagesOf(cwd) };
 }
 
@@ -112,6 +153,8 @@ type Flags = TargetFlags & {
   allowDeletingLargeIndexes: boolean;
   codegen: boolean;
   typecheck: TypecheckMode;
+  cmd?: string;
+  cmdUrlEnvVarName?: string;
 };
 function parseFlags(all: string[]): Flags | string {
   const taken = takeTargetFlags(all);
@@ -136,6 +179,11 @@ function parseFlags(all: string[]): Flags | string {
       const v = inline ?? args[++i];
       if (v === undefined) return "--message needs a value";
       f.message = v;
+    } else if (name === "--cmd" || name === "--cmd-url-env-var-name") {
+      const v = inline ?? args[++i];
+      if (v === undefined) return `${name} needs a value`;
+      if (name === "--cmd") f.cmd = v;
+      else f.cmdUrlEnvVarName = v;
     } else if (name === "--codegen" || name === "--typecheck") {
       const v = inline ?? args[++i];
       if (name === "--codegen") {
@@ -172,6 +220,8 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     return 1;
   }
   try {
+    // Convex's step 1: the build command first, with the deployment's URLs in the environment (STUDY-81).
+    if (flags.cmd !== undefined && !(await runCommand(acquired.target, flags.cmd, flags, io))) return 1;
     // As Convex's `deploy`: the large-index checks ask unless a flag allows it; the message defaults to the
     // CI platform and commit.
     const message = flags.message ?? defaultDeployMessage(io.env) ?? undefined;
@@ -194,6 +244,47 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
   } finally {
     await acquired.release();
   }
+}
+
+/**
+ * Convex's `runCommand` (STUDY-81): run `cmd` in a shell, from the project, with the deployment's canonical
+ * URLs in the variables the framework reads (or `--cmd-url-env-var-name` for the first). Whether it succeeded;
+ * a dry run only says what it would run.
+ */
+async function runCommand(
+  target: Target,
+  cmd: string,
+  flags: { dryRun: boolean; cmdUrlEnvVarName?: string },
+  io: Io,
+): Promise<boolean> {
+  const suggested = urlVariables(io.cwd);
+  const urlVar = flags.cmdUrlEnvVarName ?? suggested.url;
+  const siteVar = suggested.site;
+  const vars = `environment variables "${urlVar}" and "${siteVar}" set`;
+  io.err(`Running '${cmd}' with ${vars}...${flags.dryRun ? " [dry run]" : ""}`);
+  if (!flags.dryRun) {
+    let urls: { bunvexCloudUrl?: string; bunvexSiteUrl?: string | null };
+    try {
+      const r = await fetch(`${target.url}/api/v1/get_canonical_urls`, {
+        headers: { authorization: `Bunvex ${target.adminKey}` },
+      });
+      if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+      urls = (await r.json()) as typeof urls;
+    } catch (e) {
+      io.err(`bunvex deploy: could not read the deployment's URLs: ${(e as Error).message}`);
+      return false;
+    }
+    const env: Record<string, string | undefined> = { ...process.env, ...io.env };
+    if (urls.bunvexCloudUrl) env[urlVar] = urls.bunvexCloudUrl;
+    if (urls.bunvexSiteUrl) env[siteVar] = urls.bunvexSiteUrl;
+    const result = spawnSync(cmd, { cwd: io.cwd, env, stdio: "inherit", shell: true });
+    if (result.status !== 0) {
+      io.err(`bunvex deploy: '${cmd}' failed`);
+      return false;
+    }
+  }
+  io.out(`✔ ${flags.dryRun ? "Would have run" : "Ran"} "${cmd}" with ${vars}`);
+  return true;
 }
 
 /**
@@ -320,7 +411,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
+    // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
+    const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {
+      if (startDiff) printIndexDiff(io, startDiff, true);
       const fns = Object.values(
         (start.analysis as Record<string, { functions: Record<string, { functions: unknown[] }> }>)[""]!.functions,
       );
@@ -355,15 +449,15 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         {
           moduleDiff: { added: string[]; removed: string[] };
           cronDiff: { added: string[]; updated: string[]; deleted: string[] };
-          indexDiff: { added_indexes: string[]; removed_indexes: string[] };
+          indexDiff: IndexDiff;
         }
       >;
     };
     void post("/api/deploy2/report_push_completed", { spans: [] }).catch(() => {});
     const d = diff.componentDiffs[""];
+    const indexDiff = startDiff ?? d?.indexDiff;
+    if (indexDiff) printIndexDiff(io, indexDiff, false);
     if (d) {
-      for (const i of d.indexDiff.added_indexes) io.err(`  [+] index ${i}`);
-      for (const i of d.indexDiff.removed_indexes) io.err(`  [-] index ${i}`);
       for (const c of d.cronDiff.added) io.err(`  [+] cron ${c}`);
       for (const c of d.cronDiff.deleted) io.err(`  [-] cron ${c}`);
     }

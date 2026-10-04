@@ -21,6 +21,7 @@ import {
   DatabaseTimeoutError,
   type Engine,
   firstOverlap,
+  IndexesUnavailableError,
   type Interval,
   LeaseLostError,
   type LogEntry,
@@ -29,6 +30,7 @@ import {
   type QueryJournal,
   ReadSetIndex,
   stringifyValue,
+  TooManyWritesError,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import { type Value, valueSize } from "@bunvex/values";
@@ -39,7 +41,7 @@ import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRe
 import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
-import { collectLogs, type WithLogLines } from "./logs.ts";
+import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
 
 /**
  * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
@@ -216,6 +218,11 @@ export type SyncDeps = {
   splay?: SplayOptions;
   /** Backpressure: `SYNC_MAX_SEND_TRANSITION_COUNT` (the environment, else Convex's 2). */
   maxSendTransitions?: number;
+  /**
+   * How long a session waits to run again the queries that found an index unavailable (STUDY-79), in ms
+   * (default: Convex's SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY, 3 s).
+   */
+  unavailableRetryMs?: number;
   /** Verify a `User` token (STUDY-27): its identity, or an `AuthenticationError`. */
   verifyToken: (token: string) => Promise<VerifiedIdentity>;
   /** Query rerun retries; defaults to `retryOptions()`. */
@@ -241,13 +248,22 @@ type Execution = {
   journal: string | null;
   /** The modification's fields after `queryId`, as JSON text: value or error, log lines, journal. */
   fields: string;
-  type: "QueryUpdated" | "QueryFailed";
+  /**
+   * `TemporarilyUnavailable`: the run needed an index still being rebuilt after a start (STUDY-79), Convex's
+   * `QueryResult::TemporarilyUnavailable`: no result to send, nothing to keep; the query runs again later.
+   */
+  type: "QueryUpdated" | "QueryFailed" | "TemporarilyUnavailable";
   /** What the client has seen when its hash is equal: the result and its log lines (Convex's `hash_result`). */
   hash: string;
   /** Whether the run read the caller's identity: then it is that caller's result alone. */
   identityObserved: boolean;
   /** The code generation it ran (STUDY-35): a run of superseded code is never reused nor adopted. */
   generation: number;
+  /**
+   * What a session that reuses it logs (STUDY-75, Convex's query cache hit): the lines the run logged and its
+   * result's bytes; a failed run's error, which Convex never serves from its cache.
+   */
+  logged: { lines: LogLine[]; returnBytes: number | null; error?: unknown };
 };
 
 type SessionQuery = {
@@ -312,6 +328,8 @@ export class SyncHub {
   readonly splay: SplayOptions;
   /** Transitions a session may have waiting to be sent before it computes another (STUDY-64 §1.3). */
   readonly maxSendTransitions: number;
+  /** Writable for tests. */
+  unavailableRetryMs: number;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
@@ -320,6 +338,8 @@ export class SyncHub {
     this.splay = deps.splay ?? splayOptions();
     this.maxSendTransitions =
       deps.maxSendTransitions ?? knob(process.env, "SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
+    this.unavailableRetryMs =
+      deps.unavailableRetryMs ?? knob(process.env, "SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3) * 1000;
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
     this.heartbeat = setInterval(() => {
@@ -488,7 +508,7 @@ export class SyncHub {
       const l = this.latest.get(q.key);
       if (valid(l)) {
         this.stats.reused++;
-        return Promise.resolve({ exec: l, idPart: q.idPart });
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart: q.idPart }));
       }
       // As Convex's `stored_key_hint`: a query stored shared runs at the shared key, so other callers wait
       // for that run instead of starting their own.
@@ -499,12 +519,44 @@ export class SyncHub {
       const l = this.latest.get(`${base}\u0000${idPart}`);
       if (valid(l)) {
         this.stats.reused++;
-        return Promise.resolve({ exec: l, idPart });
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart }));
       }
     }
     // Otherwise runs for different callers stay apart: nobody knows before running whether the identity is read.
     const at = this.latest.has(`${base}\u0000${SHARED}`) ? SHARED : mine;
     return this.flight(q, ts, caller, `${base}\u0000${at}`, session);
+  }
+
+  /**
+   * What a session that gets a result without running it logs, as Convex's query cache does for every sync
+   * query it serves (STUDY-75): a cache hit (`cached`), with the run's lines and this session's run reason. A
+   * failure is logged as a run of its own: Convex never serves an error from its cache, it runs the query
+   * again.
+   */
+  private async logReuse(q: SessionQuery, caller: Caller, exec: Execution): Promise<void> {
+    const { functions, fromWire } = this.deps;
+    let args: unknown;
+    try {
+      args = fromWire(q.args, q.udfPath);
+    } catch {
+      args = undefined;
+    }
+    const { lines, returnBytes, error } = exec.logged;
+    await collectLogs(() =>
+      functions.logged(
+        "Query",
+        q.udfPath,
+        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        async () => {
+          cachedQueryLogs.replay(lines, error === undefined);
+          if (error !== undefined) throw error;
+          return null;
+        },
+        () => ({ returnBytes }),
+        undefined,
+        args,
+      ),
+    );
   }
 
   /** A run of `q` at `ts` for the key `at`, joined by every caller that asks for the same one meanwhile. */
@@ -518,6 +570,10 @@ export class SyncHub {
     const key = `${this.generation}\u0000${ts}\u0000${at}`;
     const mine = idPartOf(caller);
     let f = this.inflight.get(key);
+    // Joining another session's run: Convex's `CacheOp::Wait`, logged as a cache hit when it is served.
+    const joined = f !== undefined;
+    const served = (r: { exec: Execution; idPart: string }) =>
+      joined ? this.logReuse(q, caller, r.exec).then(() => r) : r;
     if (!f) {
       const base = at.slice(0, at.lastIndexOf("\u0000"));
       const waiters = new Set<SyncSession>();
@@ -527,7 +583,8 @@ export class SyncHub {
         (exec) => {
           this.inflight.delete(key);
           const idPart = exec.identityObserved ? mine : SHARED;
-          this.adopt(`${base}\u0000${idPart}`, exec);
+          // No result to keep: whoever asks next runs it again (STUDY-79).
+          if (exec.type !== "TemporarilyUnavailable") this.adopt(`${base}\u0000${idPart}`, exec);
           return { exec, idPart };
         },
         (e) => {
@@ -539,10 +596,10 @@ export class SyncHub {
       this.inflight.set(key, f);
     }
     if (session) f.waiters.add(session);
-    if (f.owner === mine) return f.p;
+    if (f.owner === mine) return f.p.then(served);
     // A run that read another caller's identity is not ours: run at our own key.
     const own = `${at.slice(0, at.lastIndexOf("\u0000"))}\u0000${mine}`;
-    return f.p.then((r) => (r.idPart === SHARED ? r : this.flight(q, ts, caller, own, session)));
+    return f.p.then((r) => (r.idPart === SHARED ? served(r) : this.flight(q, ts, caller, own, session)));
   }
 
   /**
@@ -582,6 +639,9 @@ export class SyncHub {
     } catch {
       args = undefined; // the run reports it
     }
+    // The run's own lines, kept for the sessions that reuse its result (as the query cache keeps them).
+    let lines: LogLine[] = [];
+    let returnBytes: number | null = null;
     const r = await collectLogs(() =>
       functions.logged(
         "Query",
@@ -589,14 +649,38 @@ export class SyncHub {
         { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
-          const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
-          return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
+          const kept = cachedQueryLogs.wrap(functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller));
+          try {
+            return await engine.queryTracked(kept.body, parseJournal(q.journal), ts, caller);
+          } finally {
+            lines = kept.capture();
+          }
         },
-        (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
+        (run) => {
+          if (!run.ok) return { error: run.error };
+          returnBytes = valueSize((run.value ?? null) as Value);
+          return { returnBytes };
+        },
         undefined,
         args,
       ),
     );
+    // An index still being rebuilt after a start (STUDY-79): skipped, not failed, as Convex's sync worker's
+    // `TemporarilyUnavailable`; the session runs it again after a delay.
+    const failure = !r.ok ? r.error : !r.value.ok ? r.value.error : null;
+    if (failure instanceof IndexesUnavailableError)
+      return {
+        ts,
+        reads: [],
+        journal: q.journal,
+        type: "TemporarilyUnavailable",
+        fields: "",
+        hash: "",
+        identityObserved: false,
+        generation,
+        // A session that joined this run logs it as the failure it was (STUDY-75).
+        logged: { lines: [], returnBytes: null, error: failure },
+      };
     // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
     // fails with it; STUDY-20 D8).
     if (!r.ok && isSystemError(r.error)) throw r.error;
@@ -608,8 +692,9 @@ export class SyncHub {
     // No permit (STUDY-68): not the query's result; the session ends with "try again", as Convex's.
     if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
-    const lines = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
-    const tail = `,"logLines":${lines},"journal":${JSON.stringify(journal)}`;
+    const logged = run.ok ? { lines, returnBytes } : { lines, returnBytes: null, error: run.error };
+    const linesJson = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
+    const tail = `,"logLines":${linesJson},"journal":${JSON.stringify(journal)}`;
     if (run.ok) {
       const value = stringifyValue(run.value);
       return {
@@ -618,9 +703,10 @@ export class SyncHub {
         journal,
         type: "QueryUpdated",
         fields: `,"value":${value}${tail}`,
-        hash: `v${value}\u0000${lines}`,
+        hash: `v${value}\u0000${linesJson}`,
         identityObserved: run.identityObserved,
         generation,
+        logged,
       };
     }
     const f = this.deps.formatError(run.error);
@@ -631,9 +717,10 @@ export class SyncHub {
       journal,
       type: "QueryFailed",
       fields: `,"errorMessage":${JSON.stringify(withRequestId(f.error))}${tail}${data}`,
-      hash: `e${f.data ?? ""}\u0000${f.error}\u0000${lines}`,
+      hash: `e${f.data ?? ""}\u0000${f.error}\u0000${linesJson}`,
       identityObserved: run.identityObserved,
       generation,
+      logged,
     };
   }
 }
@@ -675,6 +762,8 @@ export class SyncSession {
   private splayedKeys = new Set<string>();
   /** `version` as JSON: the next transition's `startVersion`. */
   private versionText = versionJson(this.version);
+  /** The pending rerun of queries that found an index unavailable (STUDY-79). */
+  private unavailableTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private hub: SyncHub) {}
 
@@ -691,6 +780,8 @@ export class SyncSession {
   close() {
     this.closed = true;
     this.cancelSplay();
+    if (this.unavailableTimer !== null) clearTimeout(this.unavailableTimer);
+    this.unavailableTimer = null;
     for (const k of this.watching) this.hub.unwatch(k, this);
     this.watching.clear();
     this.queries.clear();
@@ -786,7 +877,10 @@ export class SyncSession {
     console.error("bunvex sync:", e);
     // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
     // Too many functions at once (STUDY-68): Convex's rate-limited close, "try again", with its code.
-    if (e instanceof TooManyConcurrentRequestsError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
+    if (e instanceof TooManyConcurrentRequestsError || e instanceof TooManyWritesError)
+      return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
+    // A mutation that needed an index still being rebuilt (STUDY-79): "try again", with Convex's code.
+    if (e instanceof IndexesUnavailableError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
     this.fail({
       code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,
       reason: "InternalServerError",
@@ -1061,8 +1155,15 @@ export class SyncSession {
       }
     }
     if (this.closed) return;
+    let unavailable = false;
     stale.forEach(([id, q], i) => {
       const { exec: e, idPart } = results[i];
+      // Skipped (STUDY-79): no modification, nothing kept; it stays stale and runs again on the next update.
+      if (e.type === "TemporarilyUnavailable") {
+        unavailable = true;
+        q.exec = null;
+        return;
+      }
       q.exec = e;
       if (e.journal !== q.journal || idPart !== q.idPart) {
         q.journal = e.journal;
@@ -1095,6 +1196,14 @@ export class SyncSession {
     this.version = end;
     this.versionText = endText;
     this.hub.stats.transitions++;
+    // As Convex's `schedule_unavailable_query_retry`: the skipped queries run again after a delay.
+    if (unavailable && this.unavailableTimer === null) {
+      this.unavailableTimer = setTimeout(() => {
+        this.unavailableTimer = null;
+        this.schedule();
+      }, this.hub.unavailableRetryMs);
+      this.unavailableTimer.unref?.();
+    }
     // A commit that landed while this transition ran, into what it sent: send the next one. A query this
     // transition did not rerun is still subscribed, so a splayed commit's timer covers it; one it reran is
     // subscribed anew, and Convex finds a new subscription already invalid at once (`subscribe` refreshes it
@@ -1189,7 +1298,14 @@ export class SyncSession {
         if (deadline.aborted) return;
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
-        if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
+        // The write throughput limit (STUDY-78) closes the session with "try again", as Convex's: the client
+        // reconnects and resends the mutation.
+        if (
+          !r.ok &&
+          (isSystemError(r.error) ||
+            r.error instanceof TooManyConcurrentRequestsError ||
+            r.error instanceof TooManyWritesError)
+        )
           return this.internalError(r.error);
         if (r.ok && "replayed" in r.value) {
           const { result, logLines } = r.value.replayed;
