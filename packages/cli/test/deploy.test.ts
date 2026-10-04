@@ -249,6 +249,44 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
   });
 
+  test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-80)', async () => {
+    const d = await deployment();
+    const app = tmp();
+    // The real package throws outside React server components: the stub must win over it.
+    write(app, {
+      "node_modules/server-only/package.json": JSON.stringify({ name: "server-only", main: "index.js" }),
+      "node_modules/server-only/index.js": `throw new Error("This module cannot be imported from a Client Component module.");`,
+      "bunvex/guarded.ts": `import "server-only";
+import { query } from ${JSON.stringify(SERVER)};
+import { secret } from "./lib/secret";
+export const read = query(async () => secret());`,
+      "bunvex/lib/secret.ts": `import "server-only";
+export const secret = () => "kept on the server";`,
+      "bunvex/maths.ts": `import { query } from ${JSON.stringify(SERVER)};
+import addModule from "./add.wasm";
+export const add = query(async (_ctx, { a, b }: { a: number; b: number }) =>
+  (new WebAssembly.Instance(addModule).exports.add as (a: number, b: number) => number)(a, b));
+export const isModule = query(async () => addModule instanceof WebAssembly.Module);`,
+    });
+    // (module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))
+    writeFileSync(
+      join(app, "bunvex/add.wasm"),
+      Uint8Array.from([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09, 0x01, 0x07, 0x00, 0x20,
+        0x00, 0x20, 0x01, 0x6a, 0x0b,
+      ]),
+    );
+    const b = await bundleFunctions(join(app, "bunvex"));
+    expect(b.modules.map((m) => m.source).join("\n")).not.toContain("Client Component");
+    write(app, { ".env.local": `BUNVEX_SELF_HOSTED_URL=${d.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY="${KEY}"\n` });
+    const r = io(app);
+    expect(await main(["deploy", "--typecheck=disable"], r.it)).toBe(0);
+    expect((await d.call("query", "guarded:read")).value).toBe("kept on the server");
+    expect((await d.call("query", "maths:isModule")).value).toBe(true);
+    expect((await d.call("query", "maths:add", { a: 2, b: 40 })).value).toBe(42);
+  });
+
   test("a push sends only the changed modules (Convex's partitionModulesByChanges)", () => {
     const m = (path: string, source: string, environment: "isolate" | "node" = "isolate") => ({
       path,
