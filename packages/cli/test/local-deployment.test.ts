@@ -12,6 +12,8 @@ import {
   acquireTarget,
   assetName,
   EXE,
+  forgetLatestVersion,
+  latestVersion,
   readLocalConfig,
   startLocalDeployment,
   unzipOne,
@@ -162,6 +164,8 @@ describe("the executable: download, cache, upgrade", () => {
       zips[v] = new Uint8Array(readFileSync(z));
     }
     let latest = "precompiled-2026-10-01-aaaaaaa";
+    // Each run below stands for a new CLI process, which looks the latest version up again.
+    forgetLatestVersion();
     const downloads: string[] = [];
     const server = Bun.serve({
       port: 0,
@@ -189,6 +193,7 @@ describe("the executable: download, cache, upgrade", () => {
     expect(downloads).toEqual(["precompiled-2026-10-01-aaaaaaa"]); // cached
     // A newer release: declining keeps the old one, accepting upgrades.
     latest = "precompiled-2026-10-02-bbbbbbb";
+    forgetLatestVersion();
     const asked: string[] = [];
     const no = io(dir, env);
     no.it.prompt = (q) => {
@@ -208,6 +213,33 @@ describe("the executable: download, cache, upgrade", () => {
       startLocalDeployment(io(app(), env).it, { backendVersion: "precompiled-2020-01-01-0000000" }),
     ).rejects.toThrow(/^File not found at http/);
   }, 60_000);
+
+  test("the latest version: each failure reported as Convex's findLatestVersionWithBinary reports it (G-L6)", async () => {
+    let answer: () => Response = () => Response.json({ tag_name: "precompiled-2026-10-01-aaaaaaa" });
+    const server = Bun.serve({ port: 0, fetch: () => answer() });
+    stops.push(() => server.stop(true));
+    const env = { BUNVEX_RELEASES_URL: `http://127.0.0.1:${server.port}` };
+    const lookup = () => {
+      forgetLatestVersion();
+      return latestVersion(env);
+    };
+    expect(await lookup()).toEqual({ version: "precompiled-2026-10-01-aaaaaaa" });
+    answer = () => new Response("Internal Server Error", { status: 500 });
+    expect(await lookup()).toEqual({ error: `127.0.0.1:${server.port} returned 500: Internal Server Error` });
+    answer = () => Response.json({});
+    expect(await lookup()).toEqual({ error: "Invalid response missing version field" });
+    const closed = freePort();
+    forgetLatestVersion();
+    expect(await latestVersion({ BUNVEX_RELEASES_URL: `http://127.0.0.1:${closed}` })).toEqual({
+      error: "Failed to fetch latest backend version",
+    });
+    // A version found is kept for the process, as Convex's: the next lookup does not ask again.
+    answer = () => Response.json({ tag_name: "precompiled-2026-10-02-bbbbbbb" });
+    expect(await lookup()).toEqual({ version: "precompiled-2026-10-02-bbbbbbb" });
+    answer = () => new Response("down", { status: 503 });
+    expect(await latestVersion(env)).toEqual({ version: "precompiled-2026-10-02-bbbbbbb" });
+    forgetLatestVersion();
+  });
 
   test("unzip: deflated and stored entries", () => {
     const d = tmp();

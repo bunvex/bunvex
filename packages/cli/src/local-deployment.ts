@@ -71,16 +71,32 @@ function releaseUrls(env: Io["env"]) {
   };
 }
 
-/** The latest release's version (a `precompiled-*` tag), or null when it cannot be reached. */
-export async function latestVersion(env: Io["env"]): Promise<string | null> {
+let cachedLatestVersion: string | null = null;
+
+/**
+ * The latest release's version (a `precompiled-*` tag), or why it could not be found, as Convex's
+ * `findLatestVersionWithBinary` (cli/lib/localDeployment/download.ts) reports it: the host's status and
+ * answer, a response without a version, or a failed fetch. A version found is kept for the process, as Convex.
+ */
+export async function latestVersion(env: Io["env"]): Promise<{ version: string } | { error: string }> {
+  if (cachedLatestVersion !== null) return { version: cachedLatestVersion };
+  const url = releaseUrls(env).latest;
   try {
-    const r = await fetch(releaseUrls(env).latest, { headers: { accept: "application/vnd.github+json" } });
-    if (!r.ok) return null;
-    const tag = ((await r.json()) as { tag_name?: string }).tag_name;
-    return tag?.startsWith("precompiled-") ? tag : null;
+    const r = await fetch(url, { headers: { accept: "application/vnd.github+json" } });
+    if (!r.ok) return { error: `${new URL(url).host} returned ${r.status}: ${await r.text()}` };
+    const tag = ((await r.json()) as { tag_name?: unknown }).tag_name;
+    if (typeof tag !== "string" || !tag.startsWith("precompiled-"))
+      return { error: "Invalid response missing version field" };
+    cachedLatestVersion = tag;
+    return { version: tag };
   } catch {
-    return null;
+    return { error: "Failed to fetch latest backend version" };
   }
+}
+
+/** Forget the latest version found (tests). */
+export function forgetLatestVersion() {
+  cachedLatestVersion = null;
 }
 
 /** One file of a zip archive (stored or deflated), as the release zips are made (`zip -j`). */
@@ -205,11 +221,17 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
     bin = io.env.BUNVEX_LOCAL_BACKEND_BINARY;
     version = await customVersion(bin);
   } else {
-    let chosen = opts.backendVersion ?? (await latestVersion(io.env));
-    if (!chosen) {
-      if (!existing) throw new Error("could not find the latest bunvex local backend (is GitHub reachable?)");
-      io.err(`Failed to get the latest version, using the downloaded version ${existing.backendVersion}`);
-      chosen = existing.backendVersion;
+    let chosen = opts.backendVersion;
+    if (chosen === undefined) {
+      const latest = await latestVersion(io.env);
+      if ("version" in latest) chosen = latest.version;
+      else {
+        // As Convex: without a downloaded version this stops; with one, the reason and a warning, and it is used.
+        if (!existing) throw new Error(latest.error);
+        io.err(latest.error);
+        io.err(`Failed to get latest version from GitHub, using downloaded version ${existing.backendVersion}`);
+        chosen = existing.backendVersion;
+      }
     }
     if (existing && existing.backendVersion !== chosen && !opts.backendVersion) {
       const upgrade =
