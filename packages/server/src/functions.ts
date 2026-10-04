@@ -1916,17 +1916,20 @@ export class Functions {
             const response = await this.inActionEnv(() =>
               inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request)),
             );
-            if (!(response instanceof Response) || !response.body) {
+            if (!(response instanceof Response)) {
+              warnings(0);
+              return response;
+            }
+            // The headers before the body: Bun adds a Blob body's Content-Type (`new Response(blob)`) only if
+            // they are read first; reading `body` first drops it.
+            const headers = response.headers;
+            if (!response.body) {
               warnings(0);
               return response;
             }
             // The body, sent as Convex's streamer does (20 MiB at most); the run is logged once it is.
             body = meteredBody(response.body);
-            return new Response(body.stream, {
-              status: response.status,
-              statusText: response.statusText,
-              headers: response.headers,
-            });
+            return new Response(body.stream, { status: response.status, statusText: response.statusText, headers });
           } catch (e) {
             if (!isSystemError(e)) warnings(0);
             throw e;

@@ -38,6 +38,22 @@ function requestUrl(req: Request, pathAndQuery: string): string {
   return `${scheme}://${host}${pathAndQuery}`;
 }
 
+/**
+ * `request.blob()` typed by the request's Content-Type, as the Fetch standard's `blob()` (and Convex's runtime)
+ * gives it. Bun's server-side requests return a Blob with an empty type, so `ctx.storage.store(await
+ * request.blob())` would lose the file's content type.
+ */
+function typedBlob(request: Request): void {
+  const blob = request.blob.bind(request);
+  Object.defineProperty(request, "blob", {
+    value: async () => {
+      const b = await blob();
+      const type = request.headers.get("content-type");
+      return b.type !== "" || type === null ? b : new Blob([b], { type });
+    },
+  });
+}
+
 export function httpActionServer(o: HttpActionOptions) {
   const headTimeoutMs = o.headTimeoutMs ?? HTTP_ACTION_HEAD_TIMEOUT_MS;
 
@@ -74,6 +90,7 @@ export function httpActionServer(o: HttpActionOptions) {
       signal: req.signal,
       ...(hasBody ? { duplex: "half" } : {}),
     } as RequestInit);
+    typedBlob(request);
 
     const { caller, error } = await o.identify(req);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -102,10 +119,13 @@ export function httpActionServer(o: HttpActionOptions) {
     }
     const res = outcome.r;
     if (!(res instanceof Response)) return errorResponse(new Error("HTTP actions must return a Response"));
+    // The headers before the body: Bun adds a Blob body's Content-Type (`new Response(blob)`) only if they are
+    // read first; reading `body` first drops it.
+    const resHeaders = res.headers;
     // HEAD answers GET's head without its body (Bun also drops a HEAD response's body, as axum does).
     if (method === "HEAD") {
       void res.body?.cancel().catch(() => {});
-      return new Response(null, { status: res.status, statusText: res.statusText, headers: res.headers });
+      return new Response(null, { status: res.status, statusText: res.statusText, headers: resHeaders });
     }
     // Already metered by `runHttpAction` (20 MiB at most, the run logged once it is sent).
     return res;
