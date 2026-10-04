@@ -249,6 +249,47 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
   });
 
+  test("--cmd runs first, with the deployment's URLs in the framework's variables; a failure stops the deploy (STUDY-81)", async () => {
+    const d = await deployment();
+    const urls = (await (
+      await fetch(`${d.url}/api/v1/get_canonical_urls`, { headers: { authorization: `Bunvex ${KEY}` } })
+    ).json()) as { bunvexCloudUrl: string; bunvexSiteUrl: string };
+    const app = tmp();
+    write(app, APP);
+    write(app, {
+      "package.json": JSON.stringify({ dependencies: { vite: "^7.0.0" } }),
+      ".env.local": `BUNVEX_SELF_HOSTED_URL=${d.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY="${KEY}"\n`,
+    });
+    const deployWith = async (...args: string[]) => {
+      const r = io(app);
+      return { code: await main(["deploy", "--typecheck=disable", ...args], r.it), ...r };
+    };
+    // A dry run says what it would run, and runs nothing.
+    const dry = await deployWith("--dry-run", "--cmd", "echo ran > ran.txt");
+    expect(dry.code).toBe(0);
+    expect(dry.err).toContain(
+      `Running 'echo ran > ran.txt' with environment variables "VITE_BUNVEX_URL" and "VITE_BUNVEX_SITE_URL" set... [dry run]`,
+    );
+    expect(dry.out[0]).toBe(
+      `✔ Would have run "echo ran > ran.txt" with environment variables "VITE_BUNVEX_URL" and "VITE_BUNVEX_SITE_URL" set`,
+    );
+    expect(existsSync(join(app, "ran.txt"))).toBe(false);
+    // A failing command: nothing is pushed.
+    const failed = await deployWith("--cmd", "exit 3");
+    expect(failed.code).toBe(1);
+    expect(failed.err).toContain("bunvex deploy: 'exit 3' failed");
+    expect((await d.call("query", "messages:list")).status).toBe("error");
+    // The build sees the URLs, in the framework's variables or the one asked for; then the push.
+    const ok = await deployWith("--cmd", 'printf "%s %s" "$VITE_BUNVEX_URL" "$VITE_BUNVEX_SITE_URL" > urls.txt');
+    expect(ok.code).toBe(0);
+    expect(readFileSync(join(app, "urls.txt"), "utf8")).toBe(`${urls.bunvexCloudUrl} ${urls.bunvexSiteUrl}`);
+    expect(ok.out.at(-1)).toBe(`✔ Deployed functions to ${d.url}`);
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+    const named = await deployWith("--cmd", 'printf "%s" "$MY_URL" > mine.txt', "--cmd-url-env-var-name", "MY_URL");
+    expect(named.code).toBe(0);
+    expect(readFileSync(join(app, "mine.txt"), "utf8")).toBe(urls.bunvexCloudUrl);
+  });
+
   test("a push sends only the changed modules (Convex's partitionModulesByChanges)", () => {
     const m = (path: string, source: string, environment: "isolate" | "node" = "isolate") => ({
       path,
