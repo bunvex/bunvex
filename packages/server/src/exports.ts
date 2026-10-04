@@ -15,6 +15,7 @@ import {
   type AuditLogActor,
   type Engine,
   EXPORTS_TABLE,
+  formatBytes,
   insertAuditLogEvents,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
@@ -131,6 +132,8 @@ export type ExportOptions = {
   tmpDir?: string;
   /** The current time in ms (tests). */
   now?: () => number;
+  /** The file storage total the usage gauges last measured (STUDY-73), null before they ran. */
+  fileStorageBytes?: () => number | null;
 };
 
 export class ExportService {
@@ -162,6 +165,14 @@ export class ExportService {
 
   /** Convex's `request_export`: one at a time. */
   async request(includeStorage: boolean, actor: AuditLogActor = SYSTEM_ACTOR): Promise<string> {
+    // Convex's `ensure_export_file_storage_within_limit`, on the gauges' last total (none yet: no check).
+    const files = includeStorage ? (this.opts.fileStorageBytes?.() ?? null) : null;
+    if (files !== null && files > MAX_FILE_STORAGE_EXPORT_BYTES)
+      throw new ExportError(
+        400,
+        "ExportFileStorageTooLarge",
+        `File storage is too large to include in this backup (${formatBytes(files)} > maximum size ${formatBytes(MAX_FILE_STORAGE_EXPORT_BYTES)}). You can still create a tables-only backup. Restoring it replaces table data while leaving the target deployment's current file storage unchanged.`,
+      );
     const id = await this.sys(async (db) => {
       for (const state of ["requested", "in_progress"])
         if (
@@ -374,7 +385,7 @@ export class ExportService {
         throw new ExportError(
           400,
           "ExportFileStorageTooLarge",
-          `File storage is too large to include in this backup (${total} > maximum size ${MAX_FILE_STORAGE_EXPORT_BYTES}). You can still create a tables-only backup. Restoring it replaces table data while leaving the target deployment's current file storage unchanged.`,
+          `File storage is too large to include in this backup (${formatBytes(total)} > maximum size ${formatBytes(MAX_FILE_STORAGE_EXPORT_BYTES)}). You can still create a tables-only backup. Restoring it replaces table data while leaving the target deployment's current file storage unchanged.`,
         );
     }
     await progress(`Backing up _storage: ${commas(rows.length)} / ${commas(rows.length)} entries (metadata)`, true);

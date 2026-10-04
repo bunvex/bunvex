@@ -73,6 +73,7 @@ export type StructuredLogEvent =
   | { topic: "audit_log"; action: string; metadata: unknown }
   | { topic: "scheduler_stats"; lagSeconds: number; numRunningJobs: number }
   | { topic: "scheduled_job_lag"; lagSeconds: number }
+  | ({ topic: "current_storage_usage" } & StorageUsage)
   | {
       topic: "concurrency_stats";
       query: Concurrency;
@@ -83,6 +84,18 @@ export type StructuredLogEvent =
     };
 
 /** `timestamp`: wall-clock ms. */
+/** Convex's `AggregatedStorageUsage`, as the `current_storage_usage` event carries it (STUDY-73). */
+export type StorageUsage = {
+  documentBytes: number;
+  indexBytes: number;
+  vectorBytes: number;
+  textBytes: number;
+  fileBytes: number;
+  backupBytes: number;
+  /** The virtual tables' documents: `_storage` and `_scheduled_functions`. */
+  systemTableDocumentBytes: { _storage: number; _scheduled_functions: number };
+};
+
 export type LogEvent = { timestamp: number; event: StructuredLogEvent };
 
 const functionJson = (s: FunctionSource) => ({
@@ -195,6 +208,18 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
       };
     case "scheduled_job_lag":
       return { timestamp: ms, topic: "scheduled_job_lag", lag_seconds: Math.floor(ev.lagSeconds) };
+    case "current_storage_usage":
+      return {
+        timestamp: ms,
+        topic: "current_storage_usage",
+        total_document_size_bytes: ev.documentBytes,
+        total_index_size_bytes: ev.indexBytes,
+        total_vector_storage_bytes: ev.vectorBytes,
+        total_text_storage_bytes: ev.textBytes,
+        total_file_storage_bytes: ev.fileBytes,
+        total_backup_storage_bytes: ev.backupBytes,
+        total_system_table_document_size_bytes: ev.systemTableDocumentBytes,
+      };
     case "concurrency_stats":
       return {
         timestamp: ms,

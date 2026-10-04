@@ -104,6 +104,7 @@ import {
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
 
@@ -324,6 +325,9 @@ export function createServer(opts: ServerOptions) {
   const usageMeter = new UsageMeter();
   functions.usageMeter = usageMeter;
   const usageLimitWorker = new UsageLimitWorker(engine, usageMeter, opts.usageLimitIntervalMs);
+  // Storage usage gauges (STUDY-73): to the log streams, and the file storage total exports check.
+  const usageGauges = new UsageGauges(engine, (events) => logManager.send(events));
+  usageGauges.start();
   usageLimitWorker.start();
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
@@ -1204,6 +1208,7 @@ export function createServer(opts: ServerOptions) {
   const exportService = exportStore
     ? new ExportService(engine, exportStore, blobs ?? null, {
         deploymentName: engine.instanceName,
+        fileStorageBytes: () => usageGauges.latestFileStorageBytes,
         ...(process.env.TMPDIR ? { tmpDir: process.env.TMPDIR } : {}),
       })
     : null;
@@ -1651,8 +1656,11 @@ export function createServer(opts: ServerOptions) {
     /** Usage limits (STUDY-61). */
     usageMeter,
     usageLimitWorker,
+    /** Storage usage gauges (STUDY-73). */
+    usageGauges,
     stop: () => {
       functionLog.close();
+      usageGauges.stop();
       logManager.stop();
       usageLimitWorker.stop();
       void exportService?.stop();
@@ -1668,6 +1676,7 @@ export function createServer(opts: ServerOptions) {
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      usageGauges.stop();
       await exportService?.stop();
       await importService?.stop();
       await scheduler.stop();
