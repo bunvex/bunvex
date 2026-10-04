@@ -20,6 +20,7 @@ import type { TypecheckMode } from "./codegen.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 import {
+  backendLogPath,
   configuredDeployment,
   type LocalOptions,
   startLocalDeployment,
@@ -268,6 +269,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
   let exitCode = 0;
   try {
     let target: Target | null;
+    let localLog: string | null = null;
     try {
       target = resolveTarget(taken.flags, io);
     } catch (e) {
@@ -290,6 +292,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
         return 1;
       }
       // Convex's local deployment: the project's own, created on first use (L3).
+      localLog = backendLogPath(io.cwd);
       let local: Awaited<ReturnType<typeof startLocalDeployment>>;
       try {
         local = await startLocalDeployment(io, flags.local);
@@ -373,9 +376,12 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
         backoff = Math.min(backoff * 2, 16_000);
         continue;
       } else if (flags.once) {
+        if (r.internal && localLog) io.err(`The local backend's log: ${localLog}`);
         exitCode = 1;
         break;
       }
+      // The deployment failed on its own side: for a local one, where to read why.
+      if (r.internal && localLog) io.err(`The local backend's log: ${localLog}`);
       // Wait for the next change (one during the push counts: it was not pushed), or, after a push that needs
       // an environment variable, for the deployment's variables to change (Convex's dev watches them too).
       if (watcher?.dirty) io.err("Filesystem changed during push, retrying...");

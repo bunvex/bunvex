@@ -301,10 +301,11 @@ export type DeployOptions = {
   warnOnSlowSchemaValidation?: boolean;
 };
 /**
- * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); and whether it waits on the
- * deployment's environment variables (`bunvex dev` pushes again once they change, as Convex's).
+ * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); whether the deployment failed on
+ * its own side (its log may say why); and whether it waits on the deployment's environment variables
+ * (`bunvex dev` pushes again once they change, as Convex's).
  */
-export type DeployResult = { code: number; transient?: boolean; envVars?: boolean };
+export type DeployResult = { code: number; transient?: boolean; internal?: boolean; envVars?: boolean };
 
 /** A deployment's error answer: its message and its code (Convex's `ErrorData`). */
 class DeploymentError extends Error {
@@ -494,6 +495,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     }
     io.err(`bunvex deploy: ${message}`);
     // As Convex's CLI: an unreachable deployment and a push race are worth retrying.
-    return { code: 1, transient: /^could not reach |changed during push|overwritten by another push/.test(message) };
+    return {
+      code: 1,
+      transient: /^could not reach |changed during push|overwritten by another push/.test(message),
+      internal: /couldn't be completed|Internal Server Error/.test(message),
+    };
   }
 }
