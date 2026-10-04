@@ -1896,7 +1896,7 @@ export class Functions {
               return response;
             }
             // The body, sent as Convex's streamer does (20 MiB at most); the run is logged once it is.
-            body = meteredBody(response.body);
+            body = meteredBody(response.body, request.signal);
             return new Response(body.stream, {
               status: response.status,
               statusText: response.statusText,
@@ -1913,9 +1913,12 @@ export class Functions {
       undefined,
       () =>
         body &&
-        body.sent.then(({ bytes, errors }) => () => {
+        body.sent.then(({ bytes, errors, disconnected }) => () => {
           for (const e of errors) logSystemLine("ERROR", e, "error:httpAction");
-          warnings(bytes);
+          // The client left mid-body: Convex stops the run there and ends its lines with an INFO line (no
+          // more lines or response parts will come); its run is still logged with the head's status.
+          if (disconnected) logSystemLine("INFO", "Client disconnected", "info:httpActionClientDisconnect");
+          else warnings(bytes);
         }),
     );
   }

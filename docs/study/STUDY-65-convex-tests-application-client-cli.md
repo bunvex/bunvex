@@ -155,6 +155,17 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
 - **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
+  - *While streaming (done, stacked on #369).* Convex (`application_function_runner/http_routing.rs`,
+    `forward_http_action_stream`; `function_runner/src/in_process_function_runner.rs`): once the response
+    streamer closes, the run stops with `ErrorMetadata::client_disconnect()`; as the head was sent, the run
+    is logged with its status and a system line `[INFO] Client disconnected`
+    (`info:httpActionClientDisconnect`), sent as its own Progress entry and pushed last into the run's lines
+    (`test_http_action_disconnect_while_streaming`). bunvex: `meteredBody` (`http-body.ts`) records that its
+    body was cancelled with the request's signal aborted (a HEAD request also cancels it, with no abort), and
+    the run logs the same line, without the size warning (Convex's isolate never reaches it). Fixed with it: a
+    read still pending at the cancel enqueued into the closed controller and logged a spurious
+    `error:httpAction` "Controller is already closed" line.
+  - *Before the head:* #350.
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
   "Deleted table indexes:", "Added staged table indexes:", "These indexes are now enabled:" with
