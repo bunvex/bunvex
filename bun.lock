@@ -72,6 +72,17 @@
         "postgres": "^3.4.9",
       },
     },
+    "examples/_browser": {
+      "name": "bunvex-examples-browser",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "bunvex-examples-harness": "workspace:*",
+      },
+      "devDependencies": {
+        "playwright-core": "1.63.0",
+      },
+    },
     "examples/_harness": {
       "name": "bunvex-examples-harness",
       "version": "0.0.0",
@@ -1466,6 +1477,8 @@
     "bunvex-example-users-and-clerk": ["bunvex-example-users-and-clerk@workspace:examples/users-and-clerk"],
 
     "bunvex-example-vector-search": ["bunvex-example-vector-search@workspace:examples/vector-search"],
+
+    "bunvex-examples-browser": ["bunvex-examples-browser@workspace:examples/_browser"],
 
     "bunvex-examples-harness": ["bunvex-examples-harness@workspace:examples/_harness"],
 
