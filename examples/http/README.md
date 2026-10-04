@@ -14,4 +14,9 @@ bun install
 bun run dev
 ```
 
+These routes answer `curl` and other servers, not other web pages: they send no CORS headers, so a browser
+refuses a page on another origin (e.g. Vite's `http://localhost:5173`) that calls them with `fetch`. To allow a
+page, answer with `Access-Control-Allow-Origin` (and a `Vary: origin`) and route an `OPTIONS` preflight, as
+`examples/file-storage-with-http` does.
+
 Its end-to-end test (`test/e2e.test.ts`) deploys it to a fresh backend and calls the routes with `fetch`.

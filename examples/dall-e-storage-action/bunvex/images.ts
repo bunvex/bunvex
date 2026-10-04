@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { BunvexError, v } from "bunvex/values";
 import { internal } from "./_generated/api";
 import { action } from "./_generated/server";
 
@@ -6,12 +6,22 @@ import { action } from "./_generated/server";
 const openai = async (path: string, body: unknown) => {
   const response = await fetch(`${process.env.OPENAI_BASE_URL ?? "https://api.openai.com"}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ""}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${required("OPENAI_API_KEY")}` },
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`OpenAI failed: ${response.status} ${await response.text()}`);
   return (await response.json()) as Record<string, unknown>;
 };
+
+/** A deployment variable the example needs: missing, a message saying how to set it (shown in the page). */
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value)
+    throw new BunvexError(
+      `${name} is not set: run \`bunx bunvex env set ${name} <value>\` in this example's directory.`,
+    );
+  return value;
+}
 
 /**
  * Generate an image for `prompt` and post it: check the prompt with OpenAI's moderation, ask for an image,

@@ -48,10 +48,11 @@ export function App() {
     e.preventDefault();
     setError(null);
     try {
-      await send({ body, author: NAME });
       setBody("");
+      await send({ body, author: NAME });
     } catch (err) {
       setError(describe(err));
+      setBody(body);
     }
   }
 

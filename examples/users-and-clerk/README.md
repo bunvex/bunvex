@@ -16,9 +16,18 @@ Setup:
 2. Put your publishable key in `.env.local` as `VITE_CLERK_PUBLISHABLE_KEY`.
 3. ```sh
    bun install
-   bunx bunvex env set CLERK_JWT_ISSUER_DOMAIN https://<your-instance>.clerk.accounts.dev
    bun run dev
    ```
+
+   The first push stops with "Environment variable CLERK_JWT_ISSUER_DOMAIN is used in auth config file but its
+   value was not set": `auth.config.ts` needs it, and the deployment exists only now.
+4. In another terminal in this directory:
+
+   ```sh
+   bunx bunvex env set CLERK_JWT_ISSUER_DOMAIN https://<your-instance>.clerk.accounts.dev
+   ```
+
+   then save any file in `bunvex/` (or restart `bun run dev`): `dev` pushes again on the next change.
 
 `auth.config.ts` reads the issuer as `process.env.CLERK_JWT_ISSUER_DOMAIN`; typed declarations of a deployment's
 variables come with `defineApp`. Its end-to-end test (`test/e2e.test.ts`) replaces Clerk with a local OpenID

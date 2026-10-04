@@ -15,9 +15,9 @@ function Chat() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    setBody("");
     if (delay > 0) await sendLater({ delaySeconds: delay, body, author: NAME });
     else await send({ body, author: NAME });
-    setBody("");
   }
 
   async function onImage(e: ChangeEvent<HTMLInputElement>) {

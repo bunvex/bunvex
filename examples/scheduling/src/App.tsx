@@ -12,8 +12,8 @@ export function App() {
 
   async function post(e: FormEvent, expiring: boolean) {
     e.preventDefault();
-    await (expiring ? sendExpiring({ body, author: NAME }) : send({ body, author: NAME }));
     setBody("");
+    await (expiring ? sendExpiring({ body, author: NAME }) : send({ body, author: NAME }));
   }
 
   return (
