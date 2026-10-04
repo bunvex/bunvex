@@ -49,7 +49,7 @@ test("each query's UdfResponse, in order, each in its own format", async () => {
   const r = await batch({
     queries: [
       { path: "m:ok", args: {}, format: "json" },
-      { path: "m:ok", args: {}, format: "convex_encoded_json" },
+      { path: "m:ok", args: {}, format: "encoded_json" },
       { path: "m:fails", args: {} },
       { path: "m:nope", args: {} },
       { path: "m:mut", args: {} },
