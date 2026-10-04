@@ -5,6 +5,7 @@
 //
 // `_tables` and `_index` themselves have FIXED ids — that is how startup finds everything else (Convex
 // keeps their ids in persistence globals instead).
+import { opaqueToInspect } from "./inspect.ts";
 import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 
 export const TABLES_TABLE = "_tables";
@@ -476,3 +477,6 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
     );
   return c;
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Catalog);

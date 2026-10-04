@@ -13,6 +13,7 @@ import {
 } from "@bunvex/client";
 import { toJsonValue, type Value } from "@bunvex/values";
 import { useState } from "react";
+import { useRequiredClient } from "./context.ts";
 import { useQueries } from "./hooks.ts";
 import type { RequestForQueries } from "./queries-observer.ts";
 import type {
@@ -132,6 +133,8 @@ export function usePaginatedQuery_experimental<Q extends PaginatedQueryReference
     setState(current);
   }
 
+  // As Convex: the reset warning goes to the client's logger (silent with `logger: false`).
+  const logger = useRequiredClient("usePaginatedQuery").logger;
   const results = useQueries(current.queries);
   const shape = (internal: Internal) =>
     (objectForm ? toObjectForm(internal) : internal) as
@@ -151,7 +154,7 @@ export function usePaginatedQuery_experimental<Q extends PaginatedQueryReference
       (typeof data === "object" && data?.isBunvexSystemError === true && data.paginationError === "InvalidCursor")
     ) {
       // The data under a cursor changed shape: throw every cursor away and start over.
-      console.warn(`usePaginatedQuery hit error, resetting pagination state: ${result.message}`);
+      logger.warn(`usePaginatedQuery hit error, resetting pagination state: ${result.message}`);
       setState(createInitialState);
       return shape(loading());
     }

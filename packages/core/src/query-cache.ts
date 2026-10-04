@@ -3,6 +3,7 @@
 // validated and coalesced is the engine's (`Engine.cachedQuery`); this file only keeps them.
 
 import type { Interval } from "./committer.ts";
+import { opaqueToInspect } from "./inspect.ts";
 
 /** The byte budget, as Convex's UDF_CACHE_MAX_SIZE (`crates/common/src/knobs.rs`): 100 MiB. */
 export const QUERY_CACHE_MAX_BYTES = 100 * 1024 * 1024;
@@ -173,3 +174,6 @@ export class QueryCache {
     }
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(QueryCache);

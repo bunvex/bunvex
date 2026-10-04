@@ -3,6 +3,7 @@
 // them. Each wraps the stream before it, so `.limit(5).filter(f)` keeps those of the first five that pass,
 // and a limit that is full ends the whole stream before anything more is read.
 import { type ExpressionOrValue, passes } from "./filter.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
 
 /** Convex's MAX_QUERY_OPERATORS (crates/common/src/query.rs). */
@@ -107,3 +108,6 @@ export class Pipeline {
     return true;
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Pipeline);

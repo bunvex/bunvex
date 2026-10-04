@@ -40,7 +40,7 @@ import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRe
 import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
-import { collectLogs, type WithLogLines } from "./logs.ts";
+import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
 
 /**
  * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
@@ -258,6 +258,11 @@ type Execution = {
   identityObserved: boolean;
   /** The code generation it ran (STUDY-35): a run of superseded code is never reused nor adopted. */
   generation: number;
+  /**
+   * What a session that reuses it logs (STUDY-75, Convex's query cache hit): the lines the run logged and its
+   * result's bytes; a failed run's error, which Convex never serves from its cache.
+   */
+  logged: { lines: LogLine[]; returnBytes: number | null; error?: unknown };
 };
 
 type SessionQuery = {
@@ -502,7 +507,7 @@ export class SyncHub {
       const l = this.latest.get(q.key);
       if (valid(l)) {
         this.stats.reused++;
-        return Promise.resolve({ exec: l, idPart: q.idPart });
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart: q.idPart }));
       }
       // As Convex's `stored_key_hint`: a query stored shared runs at the shared key, so other callers wait
       // for that run instead of starting their own.
@@ -513,12 +518,44 @@ export class SyncHub {
       const l = this.latest.get(`${base}\u0000${idPart}`);
       if (valid(l)) {
         this.stats.reused++;
-        return Promise.resolve({ exec: l, idPart });
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart }));
       }
     }
     // Otherwise runs for different callers stay apart: nobody knows before running whether the identity is read.
     const at = this.latest.has(`${base}\u0000${SHARED}`) ? SHARED : mine;
     return this.flight(q, ts, caller, `${base}\u0000${at}`, session);
+  }
+
+  /**
+   * What a session that gets a result without running it logs, as Convex's query cache does for every sync
+   * query it serves (STUDY-75): a cache hit (`cached`), with the run's lines and this session's run reason. A
+   * failure is logged as a run of its own: Convex never serves an error from its cache, it runs the query
+   * again.
+   */
+  private async logReuse(q: SessionQuery, caller: Caller, exec: Execution): Promise<void> {
+    const { functions, fromWire } = this.deps;
+    let args: unknown;
+    try {
+      args = fromWire(q.args, q.udfPath);
+    } catch {
+      args = undefined;
+    }
+    const { lines, returnBytes, error } = exec.logged;
+    await collectLogs(() =>
+      functions.logged(
+        "Query",
+        q.udfPath,
+        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        async () => {
+          cachedQueryLogs.replay(lines, error === undefined);
+          if (error !== undefined) throw error;
+          return null;
+        },
+        () => ({ returnBytes }),
+        undefined,
+        args,
+      ),
+    );
   }
 
   /** A run of `q` at `ts` for the key `at`, joined by every caller that asks for the same one meanwhile. */
@@ -532,6 +569,10 @@ export class SyncHub {
     const key = `${this.generation}\u0000${ts}\u0000${at}`;
     const mine = idPartOf(caller);
     let f = this.inflight.get(key);
+    // Joining another session's run: Convex's `CacheOp::Wait`, logged as a cache hit when it is served.
+    const joined = f !== undefined;
+    const served = (r: { exec: Execution; idPart: string }) =>
+      joined ? this.logReuse(q, caller, r.exec).then(() => r) : r;
     if (!f) {
       const base = at.slice(0, at.lastIndexOf("\u0000"));
       const waiters = new Set<SyncSession>();
@@ -554,10 +595,10 @@ export class SyncHub {
       this.inflight.set(key, f);
     }
     if (session) f.waiters.add(session);
-    if (f.owner === mine) return f.p;
+    if (f.owner === mine) return f.p.then(served);
     // A run that read another caller's identity is not ours: run at our own key.
     const own = `${at.slice(0, at.lastIndexOf("\u0000"))}\u0000${mine}`;
-    return f.p.then((r) => (r.idPart === SHARED ? r : this.flight(q, ts, caller, own, session)));
+    return f.p.then((r) => (r.idPart === SHARED ? served(r) : this.flight(q, ts, caller, own, session)));
   }
 
   /**
@@ -597,6 +638,9 @@ export class SyncHub {
     } catch {
       args = undefined; // the run reports it
     }
+    // The run's own lines, kept for the sessions that reuse its result (as the query cache keeps them).
+    let lines: LogLine[] = [];
+    let returnBytes: number | null = null;
     const r = await collectLogs(() =>
       functions.logged(
         "Query",
@@ -604,10 +648,18 @@ export class SyncHub {
         { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
-          const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
-          return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
+          const kept = cachedQueryLogs.wrap(functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller));
+          try {
+            return await engine.queryTracked(kept.body, parseJournal(q.journal), ts, caller);
+          } finally {
+            lines = kept.capture();
+          }
         },
-        (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
+        (run) => {
+          if (!run.ok) return { error: run.error };
+          returnBytes = valueSize((run.value ?? null) as Value);
+          return { returnBytes };
+        },
         undefined,
         args,
       ),
@@ -637,8 +689,9 @@ export class SyncHub {
     // No permit (STUDY-68): not the query's result; the session ends with "try again", as Convex's.
     if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
-    const lines = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
-    const tail = `,"logLines":${lines},"journal":${JSON.stringify(journal)}`;
+    const logged = run.ok ? { lines, returnBytes } : { lines, returnBytes: null, error: run.error };
+    const linesJson = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
+    const tail = `,"logLines":${linesJson},"journal":${JSON.stringify(journal)}`;
     if (run.ok) {
       const value = stringifyValue(run.value);
       return {
@@ -647,9 +700,10 @@ export class SyncHub {
         journal,
         type: "QueryUpdated",
         fields: `,"value":${value}${tail}`,
-        hash: `v${value}\u0000${lines}`,
+        hash: `v${value}\u0000${linesJson}`,
         identityObserved: run.identityObserved,
         generation,
+        logged,
       };
     }
     const f = this.deps.formatError(run.error);
@@ -660,9 +714,10 @@ export class SyncHub {
       journal,
       type: "QueryFailed",
       fields: `,"errorMessage":${JSON.stringify(withRequestId(f.error))}${tail}${data}`,
-      hash: `e${f.data ?? ""}\u0000${f.error}\u0000${lines}`,
+      hash: `e${f.data ?? ""}\u0000${f.error}\u0000${linesJson}`,
       identityObserved: run.identityObserved,
       generation,
+      logged,
     };
   }
 }
