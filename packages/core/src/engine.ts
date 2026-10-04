@@ -78,6 +78,7 @@ import {
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
   hasLease,
@@ -1174,20 +1175,23 @@ export class Engine {
           return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
         if (row.state === "active") return { type: "complete" as const };
         const validated = row.state === "validated";
-        const pending = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
         const indexes = (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
-        const tabletOf = new Map(tables.map((t) => [t.name, t.tablet]));
-        // The indexes this schema enables (staged ones are never waited for, as Convex's).
+        // As Convex's `load_component_schema_status`: every application index there is now (an index the push
+        // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
+        // once not backfilling.
+        const userTablets = new Set(
+          activeTables(tables)
+            .filter((t) => !t.name.startsWith("_"))
+            .map((t) => t.tablet),
+        );
         let total = 0;
         let done = 0;
-        for (const t of pending.tables.values())
-          for (const name of Object.keys(t.indexes)) {
-            if (t.staged?.includes(name)) continue;
-            const live = indexes.filter((i) => i.tablet === tabletOf.get(t.name) && i.name === name);
-            total++;
-            if (live.some((i) => i.state !== "backfilling")) done++;
-          }
+        for (const i of indexes) {
+          if (!userTablets.has(i.tablet) || i.name in SYSTEM_INDEXES || i.staged) continue;
+          total++;
+          if (i.state !== "backfilling") done++;
+        }
         if (done < total || !validated)
           return {
             type: "inProgress" as const,
@@ -2029,3 +2033,6 @@ export type IndexPrediction = {
 export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
 export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
 export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Engine);
