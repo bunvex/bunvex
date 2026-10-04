@@ -72,6 +72,23 @@ describe("deployed code in the store", () => {
     expect(await udfConfig(d.engine)).toEqual(config); // made once
   });
 
+  test("the package keeps each module's source and source map (Convex: test_source_package)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
+    dirs.push(dir);
+    const d = await deployable(dir);
+    stops.push(() => d.s.shutdown());
+    await d.s.codeReady;
+    const map = JSON.stringify({ version: 3, sources: ["../bunvex/b.ts"], mappings: "AAAA" });
+    const withMap: ModuleSource = { ...mod("b.js", "export const b = 1;"), sourceMap: map };
+    await d.s.deployCode(app(1, [withMap, mod("c.js", "export const c = 1;")]));
+    const stored = (await storedModules(d.engine))!;
+    const modules = await readPackage(d.moduleStorage, stored.pkg.storageKey);
+    const byPath = new Map(modules.map((m) => [m.path, m]));
+    expect(byPath.get("b.js")).toMatchObject({ source: "export const b = 1;", sourceMap: map });
+    // A module without a map has none after the round trip either.
+    expect(byPath.get("c.js")?.sourceMap).toBeUndefined();
+  });
+
   test("a second deploy replaces the rows and deletes the unused package", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
     dirs.push(dir);

@@ -175,7 +175,7 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         log_level: ev.line.level,
         message: ev.line.messages.join(" "),
         is_truncated: ev.line.isTruncated,
-        system_code: null,
+        system_code: ev.line.systemCode ?? null,
       };
     case "function_execution": {
       const u = ev.usage;
