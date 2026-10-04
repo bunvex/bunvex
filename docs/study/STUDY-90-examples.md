@@ -72,7 +72,12 @@ unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys
 | `system-tables` | **built** (`examples/system-tables`) | `db.system` over `_storage` (size, sha256, content type) and `_scheduled_functions`; the test cancels a scheduled send and follows another to `success`, live |
 | `prewarming` | **built** (`examples/prewarming`) | `prewarmQuery` on hover; the test checks a prewarmed result is in the client and live before any view reads it, and the subscription ends after `extendSubscriptionFor` |
 | `nextjs-pages-router` | **built** (`examples/nextjs-pages-router`) | `BunvexProvider` in `_app.tsx`, a live counter, an API route with `fetchQuery`; the test runs `next build` and `next start` and reads the page and the API route (the demo's Auth0 sign-in left out) |
-| `vector-search`, `file-storage-with-http`, `http`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
+| `http` | **built** (`examples/http`) | HTTP actions on the site origin: a POST posting through `ctx.runMutation`, GETs by query parameter, header and `pathPrefix`; the test calls them with `fetch` |
+| `file-storage-with-http` | **built** (`examples/file-storage-with-http`) | an HTTP action storing `request.blob()` and another serving it, with CORS and the preflight; `CLIENT_ORIGIN` from the environment |
+| `vector-search` | **built** (`examples/vector-search`) | embeddings from an action, `vectorSearch` with and without filters, a movie embedded by a scheduled action; a local embeddings stand-in in the test |
+| `users-and-clerk` | **built** (`examples/users-and-clerk`) | `BunvexProviderWithClerk`, `auth.config.ts` from `CLERK_JWT_ISSUER_DOMAIN`, a users table by `tokenIdentifier`; the test signs tokens with a local OIDC issuer |
+| `giphy-action` | **built** (`examples/giphy-action`) | an action calling an external API, then an internal mutation; a local Giphy stand-in in the test |
+| `dall-e-storage-action` | **built** (`examples/dall-e-storage-action`) | an action checking, generating, downloading and `ctx.storage.store`-ing an image (OpenAI over `fetch`, no SDK); a local OpenAI stand-in in the test |
 | `node` | waits | Node actions (`"use node"`) |
 | `python-quickstart` | waits | a Python client |
 | `zod-validation-ts`, `sessions`, `presence-facepile`, `presence-typing-indicator` | waits | `convex-helpers` or components |
