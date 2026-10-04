@@ -158,7 +158,7 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
 - **M5.** No `pos` in the push analysis.
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
   "Deleted table indexes:", "Added staged table indexes:", "These indexes are now enabled:" with
-  `formatIndex`. The server sends names only (`server/src/push.ts`), not the index configs. Fixed in #PR: the
+  `formatIndex`. The server sends names only (`server/src/push.ts`), not the index configs. Fixed in #347: the
   push answers Convex's `SerializedIndexDiff`, and the CLI prints it as Convex's `printDiff` (without the
   staged indexes' dashboard link, which points at Convex's dashboard).
 - **M7. `.gitignore`.** bunvex treats only `*.local` as covering `.env.local`, where Convex accepts any
@@ -186,7 +186,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 12 | F5 the React client's `logger` | `logger: false` not honoured | `react/src/client.ts`, the paginated hooks | S | |
 | 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | |
 | 14 | G-A7 disabled state; G-A10 returns validation of actions and extra fields; G-A11 an HTTP action commits after a disconnect | | `server` | S each | |
-| 15 | M6 index diff printing in Convex's format | operator output | `cli/src/deploy.ts`, `server/src/push.ts` | M | #PR |
+| 15 | M6 index diff printing in Convex's format | operator output | `cli/src/deploy.ts`, `server/src/push.ts` | M | #347 |
 | 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | |
 | 17 | the rest of §2–§4 | characterisation, messages | | S each | |
 
