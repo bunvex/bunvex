@@ -5,7 +5,7 @@ import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { BunvexError, v } from "@bunvex/values";
 import { ActionPermits } from "../src/action-permits.ts";
-import { Functions, internalMutation, query } from "../src/functions.ts";
+import { Functions, internalAction, internalMutation, query } from "../src/functions.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
 import { startIssuer } from "./issuer.ts";
@@ -28,6 +28,14 @@ async function setup(
   const gates = new Map<string, Promise<void>>();
   const functions = new Functions(engine, { actionPermits: opts.permits }).register("m", {
     whoami: query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null),
+    // An action the HTTP action runs: Convex passes it the same identity, a bad token's error included.
+    whoamiAction: internalAction(async ({ auth }) => {
+      try {
+        return (await auth.getUserIdentity())?.subject ?? null;
+      } catch (e) {
+        return `threw: ${(e as Error).message}`;
+      }
+    }),
     note: internalMutation(async ({ db }, { tag }: { tag: string }) => {
       await db.insert("items", { tag });
     }),
@@ -113,7 +121,11 @@ async function setup(
       } catch (e) {
         direct = `threw: ${(e as Error).message}`;
       }
-      return Response.json({ direct, viaQuery: await ctx.runQuery("m:whoami", {}) });
+      return Response.json({
+        direct,
+        viaQuery: await ctx.runQuery("m:whoami", {}),
+        viaAction: await ctx.runAction("m:whoamiAction", {}),
+      });
     }),
   });
   http.route({
@@ -323,11 +335,12 @@ describe("requests and responses", () => {
 describe("auth, limits, time", () => {
   test("no token: null; a good one: the user, inside ctx.runQuery too; a bad one still runs and getUserIdentity() throws", async () => {
     const { site, issuer } = await setup();
-    expect(await (await fetch(`${site}/whoami`)).json()).toEqual({ direct: null, viaQuery: null });
+    expect(await (await fetch(`${site}/whoami`)).json()).toEqual({ direct: null, viaQuery: null, viaAction: null });
     const good = await issuer.sign({ sub: "ada" });
     expect(await (await fetch(`${site}/whoami`, { headers: { authorization: `Bearer ${good}` } })).json()).toEqual({
       direct: "ada",
       viaQuery: "ada",
+      viaAction: "ada",
     });
     const bad = await issuer.sign({ aud: "other" });
     const r = await fetch(`${site}/whoami`, { headers: { authorization: `Bearer ${bad}` } });
@@ -335,6 +348,8 @@ describe("auth, limits, time", () => {
     const b = (await r.json()) as Record<string, string | null>;
     expect(b.direct).toStartWith("threw: No auth provider found");
     expect(b.viaQuery).toBeNull();
+    // A nested action throws as the HTTP action does (STUDY-66 §5).
+    expect(b.viaAction).toBe(b.direct);
   });
 
   test("past the action limit, a request waits, then gets Convex's 429", async () => {

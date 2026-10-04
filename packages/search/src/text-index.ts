@@ -12,7 +12,11 @@ export const MAX_UNIQUE_QUERY_TERMS = 64;
 export const MAX_CANDIDATE_REVISIONS = 1024;
 
 /** A document as the index sees it: its search tokens (duplicates kept), filter keys by field, creation time. */
-export type IndexedDoc = { tokens: string[]; filters: Record<string, string>; creationTime: number };
+/**
+ * A document as an index holds it. `bytes`: its metered size (Convex's `estimate_size`: the search field's
+ * UTF-8 bytes plus each filter value's stored bytes), which a search is charged for (STUDY-71, DV-317).
+ */
+export type IndexedDoc = { tokens: string[]; filters: Record<string, string>; creationTime: number; bytes?: number };
 
 /**
  * A search: the query's tokens (at most MAX_QUERY_TERMS are used), whether the last one also matches as a
@@ -25,20 +29,28 @@ export type TextHit = { id: string; score: number; creationTime: number };
 /** A query term chosen for the search (Convex's step 1: exact matches first, then prefix expansions). */
 type QueryTerm = { term: string; prefix: boolean; ord: number };
 
-type Stored = { tf: Map<string, number>; length: number; filters: Record<string, string>; creationTime: number };
+type Stored = {
+  tf: Map<string, number>;
+  length: number;
+  filters: Record<string, string>;
+  creationTime: number;
+  bytes: number;
+};
 
 const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
 function store(d: IndexedDoc): Stored {
   const tf = new Map<string, number>();
   for (const t of d.tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-  return { tf, length: d.tokens.length, filters: d.filters, creationTime: d.creationTime };
+  return { tf, length: d.tokens.length, filters: d.filters, creationTime: d.creationTime, bytes: d.bytes ?? 0 };
 }
 
 export class TextIndex {
   private docs = new Map<string, Stored>();
   private postings = new Map<string, Set<string>>();
   private totalTokens = 0;
+  /** The indexed documents' metered bytes (`IndexedDoc.bytes`), what each search is charged (DV-317). */
+  indexedBytes = 0;
   private sorted: string[] | null = null;
 
   get size(): number {
@@ -50,6 +62,7 @@ export class TextIndex {
     const old = this.docs.get(id);
     if (old) {
       this.totalTokens -= old.length;
+      this.indexedBytes -= old.bytes;
       for (const t of old.tf.keys()) {
         const p = this.postings.get(t)!;
         p.delete(id);
@@ -64,6 +77,7 @@ export class TextIndex {
     const s = store(doc);
     this.docs.set(id, s);
     this.totalTokens += s.length;
+    this.indexedBytes += s.bytes;
     for (const t of s.tf.keys()) {
       let p = this.postings.get(t);
       if (!p) {
@@ -81,7 +95,7 @@ export class TextIndex {
     if (!s) return null;
     const tokens: string[] = [];
     for (const [t, n] of s.tf) for (let i = 0; i < n; i++) tokens.push(t);
-    return { tokens, filters: s.filters, creationTime: s.creationTime };
+    return { tokens, filters: s.filters, creationTime: s.creationTime, bytes: s.bytes };
   }
 
   /** Terms starting with `prefix`, in byte order. */

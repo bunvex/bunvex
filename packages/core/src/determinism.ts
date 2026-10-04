@@ -51,6 +51,8 @@ export type UserTimer = {
   systemMs: number;
   /** The timeout, once hit: thrown again at every store call and at the end. */
   failed: Error | null;
+  /** When the body ended (its user time stops there, as Convex's `into_function_execution_time`). */
+  ended: number | null;
 };
 
 /** Rust's `Duration` Debug form, as Convex's message prints the limit (`1s`, `1.5s`, `500ms`). */
@@ -63,8 +65,15 @@ export function formatDuration(ms: number): string {
 export const SYSTEM_TIMEOUT_MESSAGE = "Your request timed out performing too many system operations.";
 
 export function newUserTimer(userMs: number, systemMs: number): UserTimer {
-  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null };
+  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null, ended: null };
 }
+
+/**
+ * The user time a body took, in ms (STUDY-71): its wall time minus the time paused in store calls and
+ * nested calls, as Convex's `user_execution_time` (wall time minus its timeout's pauses); up to now while it
+ * runs.
+ */
+export const userTimeMs = (t: UserTimer) => (t.ended ?? realPerformanceNow()) - t.start - pausedNow(t);
 
 const pausedNow = (t: UserTimer) => t.paused + (t.pausedSince === null ? 0 : realPerformanceNow() - t.pausedSince);
 
@@ -125,6 +134,7 @@ export async function withUserTimer<T>(timer: UserTimer, fn: () => T): Promise<A
     if (timer.failed) throw timer.failed;
     throw err;
   } finally {
+    timer.ended ??= realPerformanceNow();
     e.timer = outer;
   }
 }
@@ -325,7 +335,8 @@ export function installDeterminism() {
     (...args: Parameters<typeof fetch>) => {
       const e = executions.getStore();
       if (e) return Promise.reject(notAllowed("fetch()", e.kind));
-      return realFetch(...args);
+      const meter = fetchMeter?.();
+      return meter ? meteredFetch(meter, ...args) : realFetch(...args);
     },
     { preconnect: realFetch.preconnect },
   ) as typeof fetch;
@@ -493,6 +504,47 @@ export function installDeterminismIn(g: { Date: DateConstructor; Math: Math }) {
 }
 
 /** Run engine work (a persistence call) outside the current execution: real globals, no restrictions. */
+/**
+ * Who a `fetch` outside a query or mutation is charged to (STUDY-71): set by the server, it returns the
+ * running action's counter, or null when nothing meters this call.
+ */
+let fetchMeter: (() => ((bytes: number) => void) | null) | null = null;
+export function setFetchMeter(m: typeof fetchMeter) {
+  fetchMeter = m;
+}
+
+/** A body's bytes when they can be known without reading it; null for a stream or form data. */
+function knownBodySize(body: unknown): number | null {
+  if (body === null || body === undefined) return 0;
+  if (typeof body === "string") return Buffer.byteLength(body);
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return body.byteLength;
+  if (body instanceof Blob) return body.size;
+  if (body instanceof URLSearchParams) return Buffer.byteLength(body.toString());
+  return null;
+}
+
+/**
+ * A metered fetch, as Convex's (`track_fetch_egress`): the request body's bytes — not its headers or URL,
+ * nor the response — charged once the request went out without failing.
+ */
+async function meteredFetch(charge: (bytes: number) => void, ...args: Parameters<typeof fetch>): Promise<Response> {
+  const [input, init] = args;
+  let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
+  if (size === null) {
+    const req =
+      typeof input === "string" || input instanceof URL
+        ? new Request(input.toString(), init)
+        : new Request(input, init);
+    size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
+    const res = await realFetch(req);
+    charge(size);
+    return res;
+  }
+  const res = await realFetch(...args);
+  charge(size);
+  return res;
+}
+
 export function outsideExecution<T>(fn: () => T): T {
   return executions.exit(fn);
 }

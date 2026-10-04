@@ -37,13 +37,16 @@ const bad = (code: string, message: string) => new StreamingExportError(400, cod
 
 // ---------------------------------------------------------------- encodings
 
-/** Convex's `ValueFormat`: `json` (clean), `convex_encoded_json`, `export_json`. */
+/** Convex's `ValueFormat` (`json` clean, `convex_encoded_json`, `export_json`), with bunvex's names (DV-307). */
 export type Format = "clean" | "encoded" | "export";
 
-/** The `format` argument, Convex's names (rule 5's wire-name exception, DV-307). */
+/**
+ * The `format` argument: `json` or `clean_json`, `encoded_json`, `export_json` (DV-307: Convex's
+ * `convex_encoded_json` / `convex_clean_json` renamed, its legacy `convex_json` alias dropped).
+ */
 export function parseFormat(s: string | null | undefined): Format {
-  if (s === undefined || s === null || s === "json" || s === "convex_clean_json") return "clean";
-  if (s === "convex_encoded_json" || s === "convex_json") return "encoded";
+  if (s === undefined || s === null || s === "json" || s === "clean_json") return "clean";
+  if (s === "encoded_json") return "encoded";
   if (s === "export_json") return "export";
   throw bad("BadFormat", `format param must be one of [\`json\`]. Got ${s}`);
 }
@@ -102,7 +105,7 @@ function docJson(table: string, tsNs: bigint, deleted: boolean | null, doc: Reco
 // ---------------------------------------------------------------- selection
 
 type Inclusion = "included" | "excluded";
-type Columns = Record<string, Inclusion> & { _other: Inclusion };
+export type Columns = Record<string, Inclusion> & { _other: Inclusion };
 type Tables = Record<string, Columns | "excluded"> & { _other: Inclusion | Columns };
 /** Convex's `Selection`: per component path (`""` the root), per table, per column. */
 export type Selection = Record<string, Tables | Inclusion> & { _other: Inclusion };
@@ -143,7 +146,7 @@ function checkSelection(raw: unknown): Selection {
 }
 
 /** Whether the selection takes `table` of the root component, and which of its columns. */
-function tableSelection(s: Selection, table: string): Columns | null {
+export function tableSelection(s: Selection, table: string): Columns | null {
   const comp = s[""] ?? s._other;
   if (comp === "excluded") return null;
   if (comp === "included") return { _other: "included" } as Columns;
@@ -156,7 +159,7 @@ function tableSelection(s: Selection, table: string): Columns | null {
   return cols;
 }
 
-function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, Value> {
+export function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, Value> {
   if (cols._other === "included" && Object.keys(cols).length === 1) return doc;
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(doc)) if (k === "_id" || (cols[k] ?? cols._other) === "included") out[k] = v;
@@ -168,7 +171,7 @@ function pickColumns(doc: Record<string, Value>, cols: Columns): Record<string, 
 type Deps = { engine: Engine };
 
 /** The user tables a stream reads: active and hidden (an import's), not system ones, by tablet. */
-function streamedTables(engine: Engine): TableDef[] {
+export function streamedTables(engine: Engine): TableDef[] {
   const c = engine.catalog;
   return [...c.tables.values(), ...c.hidden.values()]
     .filter((t) => !t.name.startsWith("_"))
@@ -230,8 +233,19 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
     if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
     throw e;
   }
-  // Each document as of the snapshot; `_ts` is the snapshot (DV-306).
-  const values = page.map((d) => docJson(t.name, snapshotNs, null, pickColumns(d, cols!), f));
+  // Each document as of the snapshot, `_ts` its revision's ts (PERSIST-01 C16); a third-party store without
+  // `getVersions` gives the snapshot instead.
+  const versions = engine.persistence.getVersions
+    ? await engine.persistence.getVersions(
+        t.id,
+        page.map((d) => d._id as string),
+        snapshotUs,
+      )
+    : null;
+  const values = page.map((d, i) => {
+    const v = versions?.[i];
+    return docJson(t.name, v ? BigInt(v.ts) * 1000n : snapshotNs, null, pickColumns(d, cols!), f);
+  });
   if (page.length >= SNAPSHOT_LIST_LIMIT)
     return out(values, JSON.stringify({ tablet: t.id, id: page[page.length - 1]!._id }));
   const next = tables[1];

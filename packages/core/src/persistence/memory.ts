@@ -475,6 +475,13 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return visible(this.docs.get(`${table}:${id}`), ts)?.v ?? null;
   }
 
+  getVersions(table: number, ids: string[], ts: number) {
+    return ids.map((id) => {
+      const v = visible(this.docs.get(`${table}:${id}`), ts);
+      return v && v.v !== null ? { json: v.v, ts: v.ts } : null;
+    });
+  }
+
   async close() {
     await this.fh?.close();
     this.lock?.release();

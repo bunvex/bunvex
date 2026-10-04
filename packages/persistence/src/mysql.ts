@@ -626,6 +626,25 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
+  async getVersions(table: number, ids: string[], ts: number) {
+    const found = new Map<string, { json: string | null; ts: number }>();
+    const unique = [...new Set(ids)];
+    for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
+      const chunk = unique.slice(i, i + VERSIONS_CHUNK);
+      const [rows] = (await this.read((c) =>
+        c.execute(
+          `select id, ts, json_value, deleted from (
+             select id, ts, json_value, deleted, row_number() over (partition by id order by ts desc) rn
+             from documents where table_id = ? and id in (${chunk.map(() => "?").join(",")}) and ts <= ?) v
+           where rn = 1`,
+          [table, ...chunk, ts],
+        ),
+      )) as any;
+      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: Number(r.ts) });
+    }
+    return versionsInOrder(ids, found);
+  }
+
   async scanDocs(
     table: number,
     index: number,
@@ -834,3 +853,14 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(MysqlPersistence);
+
+/** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
+function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {
+  return ids.map((id) => {
+    const v = found.get(id);
+    return v && v.json !== null ? { json: v.json, ts: v.ts } : null;
+  });
+}
+
+/** Ids per `getVersions` statement: one round trip each, within every store's parameter limits. */
+const VERSIONS_CHUNK = 1000;

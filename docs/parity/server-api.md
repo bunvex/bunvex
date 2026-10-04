@@ -117,8 +117,8 @@ Key bunvex facts behind the statuses:
 | `api` / `internal` function references (`anyApi`, codegen), `makeFunctionReference`, `getFunctionName`, `filterApi` | server/api.ts | partial (STUDY-26, STUDY-36) | `anyApi`, `makeFunctionReference`, `getFunctionName` and codegen's `api` / `internal`; references accepted everywhere a name is. The runtime `filterApi` helper is missing (the `FilterApi` type exists). |
 | Typed `FunctionArgs` / `FunctionReturnType`, `ApiFromModules`, `FilterApi`, `FunctionReferenceFromExport` | server/api.ts | done (STUDY-36) | `_generated/api.d.ts` (codegen PR) builds `api` / `internal` with them; `FunctionReference_future` is missing. |
 | Generic builders (`queryGeneric` etc.) and typed `_generated/server` builders bound to the DataModel | impl/registration_impl.ts; codegen | done (STUDY-36) | `queryGeneric` … `httpActionGeneric`, `QueryBuilder<DataModel, Visibility>` …, `GenericQueryCtx` / `GenericMutationCtx` / `GenericActionCtx`, `RegisteredQuery` … typed from the validators; codegen writes `_generated/server` bound to the DataModel. Convex's markers at run time (`isQuery`, `isPublic`, …), with `isBunvexFunction` for `isConvexFunction` (rule 5). |
-| Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | missing | Minor. |
-| Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | missing | Minor. |
+| Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | done (STUDY-66) | A registered function is callable: it warns (the caller's log line) and runs its handler, as Convex's; bunvex's wording, no docs link. |
+| Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | done (STUDY-66) | `console.error` when defined in a real browser (native `window` getter); the opt-out is `window.__bunvexAllowFunctionsInBrowser` (the naming rule). |
 | `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | partial (STUDY-35) | The push analysis records each function's `args` / `returns` validator JSON (Convex's `AnalyzedFunction`), for the dashboard and `_system` functions; the `exportArgs()` / `exportReturns()` methods on a registered function are missing. |
 
 ### 6. Function contexts
@@ -192,7 +192,7 @@ Key bunvex facts behind the statuses:
 | Value `ArrayBuffer` (bytes) | values/value.ts | done (#21) | `$bytes` encoding; copied at the call. |
 | Value arrays and plain objects | values/value.ts | done (#21) | Stored and index-keyable, in Convex's order (B11). |
 | `undefined` isn't a value (error at a path); `undefined` object fields are dropped | values/value.ts (`convexToJsonInternal`) | done (#21) | `toJsonValue` refuses `undefined` with a path and drops `undefined` fields. |
-| Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | done (#21) | Class instances, `Map` and `Set` refused ("… is not a supported value type", Convex's message structure without "Convex"). |
+| Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | done (#21) | Class instances, `Map` and `Set` refused ("… is not a supported value type", Convex's message structure without "Convex"). The message names a class instance (`Point {…}`) without opening it (DV-316, decided by the owner 2026-10-03). |
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | done (STUDY-36) | `GenericId<T>` in `@bunvex/values`; `v.id(t)` infers it; `_generated/dataModel` names it `Id<T>` (codegen PR). |
 | `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | partial (#21) | `compareValues` and `valueSize` (Convex's `getConvexSize`) are exported by `@bunvex/values`; `getDocumentSize` and `Base64` are missing. |
@@ -234,7 +234,8 @@ Key bunvex facts behind the statuses:
 | `.staged(validator)`: staged document validator, checked in the background | server/schema.ts | missing | New. |
 | `schemaValidation` option (default true) | server/schema.ts | done (#29) | |
 | `strictTableNameTypes` option (type-level) | server/schema.ts | done (STUDY-36) | `false` adds `AnyDataModel` to the data model: any other table name is allowed. |
-| `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | missing | |
+| `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | done (STUDY-66) | Convex's validators and types (`DocValidator`), and its error for a table the schema does not have; `TableDefinition.validator` too. |
+| `schema.tables` is the record of `TableDefinition`s (`schema.tables.messages.validator`) | server/schema.ts | missing (STUDY-66 §6) | bunvex's `schema.tables` is a `Map` of the engine's declared tables, so Convex's `docValidator("messages", schema.tables.messages)` does not work; `schema.doc("messages")` does. |
 | Pushing a schema validates existing documents against it | crates/model / schema worker | done (STUDY-35) | A pushed schema is pending until existing documents are checked: the first that does not match fails the push, named as Convex's; writes meanwhile fail the pending schema. |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | done (STUDY-29) | In the background, as Convex: a worker, `backfilling` → `backfilled` → `enabled`, checkpoints and resume (DV-54 resolved; DV-126, DV-127). |
 | Table names: identifier ≤64, starts with a letter, `[A-Za-z0-9_]`; `_` prefix reserved | sync_types/identifier.rs; index_validation_error.rs | done (#6) | Convex's identifier rule; a leading `_` is reserved for system tables. |
@@ -355,7 +356,7 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 210 |
+| done | 213 |
 | partial | 9 |
-| missing | 20 |
-| **total** | **239** |
+| missing | 18 |
+| **total** | **240** |

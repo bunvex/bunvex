@@ -27,6 +27,13 @@ function faults(name: string, kinds: Fault[], store: boolean): Nemesis {
     const port = await ctx.server.start(store ? { JEPSEN_STORE_FAULTS: String(ctx.seed + ++restarts), ...env } : env);
     proxy!.upstreamPort = port;
   };
+  // a store fault the committer cannot retry ends the process (fail-stop), and so can one while it starts (a
+  // read of the crons' push): bring it back, as a supervisor
+  const recover = async (ctx: NemesisContext) => {
+    if (ctx.server.alive) return;
+    ctx.events.push(`${ctx.now().toFixed(0)} server exited: restart`);
+    await restart(ctx);
+  };
   return {
     name,
     serverEnv(seed, env) {
@@ -58,13 +65,10 @@ function faults(name: string, kinds: Fault[], store: boolean): Nemesis {
       proxy = new TcpProxy(ctx.server.port);
       return `http://127.0.0.1:${proxy.listen()}`;
     },
+    recover,
     async act(ctx, r: Rng) {
       await Bun.sleep(150 + r.int(450));
-      // a store fault the committer cannot retry ends the process (fail-stop): bring it back, as a supervisor
-      if (!ctx.server.alive) {
-        ctx.events.push(`${ctx.now().toFixed(0)} server exited: restart`);
-        await restart(ctx);
-      }
+      await recover(ctx);
       const all: Fault[] = db ? [...kinds, "db"] : kinds;
       if (!all.length) return;
       const kind = r.pick(all);

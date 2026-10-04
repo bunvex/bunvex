@@ -24,6 +24,7 @@ import {
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
+  DATA_SYNC_PROGRESS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -112,7 +113,13 @@ import {
   type SessionRequestOutcome,
 } from "./session-requests.ts";
 import { TableSummaries, TableSummariesUnavailableError } from "./table-summaries.ts";
-import { Tx } from "./tx.ts";
+import {
+  canCheckpoint,
+  restoreSummaries,
+  SummaryCheckpointer,
+  type SummaryCheckpointOptions,
+} from "./table-summary-checkpoint.ts";
+import { decodeDoc, Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
   MAX_VECTOR_FILTER_CONDITIONS,
@@ -157,6 +164,11 @@ export const occBackoffMs = (failures: number, initialMs: number, maxMs: number,
  */
 export class OccError extends Error {
   readonly code = "OptimisticConcurrencyControlFailure";
+  /**
+   * What the lost attempt returned (its commit-ts placeholders unresolved): Convex logs an attempt that will
+   * retry before it fails it, so its `function_returns_bytes` is that value's (STUDY-74).
+   */
+  attempt?: { value: unknown };
   constructor(
     message: string,
     /** `retries`: how many times the mutation had already been re-run. */
@@ -281,6 +293,8 @@ export class Engine {
       storedSchema?: boolean;
       /** Retention's knobs (Convex's INDEX_RETENTION_DELAY, DOCUMENT_RETENTION_DELAY, …; STUDY-33). */
       retention?: RetentionOptions;
+      /** Table summary checkpoints' knobs (STUDY-72); `false`: none, the summaries scanned on every start. */
+      summaryCheckpoints?: SummaryCheckpointOptions | false;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -299,7 +313,7 @@ export class Engine {
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
-    this.committer.onCommit((entries) => this.backendState.observe(entries));
+    this.committer.onCommit((entries) => this.backendState.observe(entries), "backend state");
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
@@ -430,6 +444,7 @@ export class Engine {
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
+    await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
     if (this.lease) {
@@ -566,6 +581,14 @@ export class Engine {
         document: v.any(),
       },
       { name: FUNCTION_HANDLES_TABLE, indexes: { by_component_path: ["component", "path"] }, document: v.any() },
+      {
+        name: DATA_SYNC_PROGRESS_TABLE,
+        indexes: {
+          by_sync_id: ["syncId", "_creationTime"],
+          by_last_updated: ["lastUpdatedMs", "_creationTime"],
+        },
+        document: v.any(),
+      },
       {
         name: USAGE_LIMITS_TABLE,
         indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },
@@ -751,6 +774,8 @@ export class Engine {
     table: string,
     index: string,
     query: { vector: number[]; limit?: number; filter?: unknown },
+    /** Told what the search was charged, as Convex's `bytes_searched`: its vectors × dimensions × 4 (STUDY-71). */
+    charge?: (bytesSearched: number) => void,
   ): { _id: string; _score: number }[] {
     const t = this.catalog.tables.get(table);
     if (!t) return [];
@@ -789,6 +814,7 @@ export class Engine {
     }
     if (v.length !== e.def.dimensions)
       throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
+    charge?.(e.docs.size * v.length * 4);
     return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
   }
 
@@ -823,12 +849,42 @@ export class Engine {
   }
 
   /**
-   * Build the table summaries from every table's documents (active, hidden and being deleted) at one
-   * snapshot, page by page; commits meanwhile are queued and applied after (STUDY-52 PR 2).
+   * Build the table summaries at one snapshot: from the last checkpoint and the document log since (STUDY-72),
+   * else from every table's documents (active, hidden and being deleted), page by page. Commits meanwhile
+   * are queued and applied after (STUDY-52 PR 2). Then checkpoints are written as Convex's worker does.
    */
   private async buildSummaries() {
     const at = this.committer.visibleTs;
     const defs = [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()];
+    const p = this.persistence;
+    const checkpoints = this.opts.summaryCheckpoints !== false && canCheckpoint(p);
+    const restored =
+      checkpoints &&
+      (await restoreSummaries(p, this.tableSummaries, at, new Set(defs.map((t) => t.id)), decodeDoc).catch((e) => {
+        console.error(`bunvex: the table summary checkpoint could not be loaded, scanning: ${(e as Error).message}`);
+        return false;
+      }));
+    this.summariesRestored = restored;
+    if (!restored) await this.scanSummaries(at, defs);
+    if (this.closed) return;
+    this.tableSummaries.finish();
+    if (checkpoints) {
+      this.summaryCheckpointer = new SummaryCheckpointer(
+        p,
+        this.tableSummaries,
+        this.opts.summaryCheckpoints || undefined,
+      );
+      this.summaryCheckpointer.start();
+    }
+  }
+
+  /** Whether the summaries came from a checkpoint (tests, STUDY-72). */
+  summariesRestored = false;
+  /** @internal The checkpoint worker, once the summaries are built. */
+  summaryCheckpointer: SummaryCheckpointer | null = null;
+
+  private async scanSummaries(at: number, defs: TableDef[]) {
+    this.tableSummaries.reset();
     for (const t of defs) {
       let last: string | null = null;
       for (;;) {
@@ -852,7 +908,6 @@ export class Engine {
         await new Promise((r) => setImmediate(r));
       }
     }
-    this.tableSummaries.finish();
   }
 
   private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
@@ -1484,6 +1539,7 @@ export class Engine {
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
+    tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
@@ -1673,6 +1729,7 @@ export class Engine {
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
     tx.searchIndexes = this.searchIndexes;
+    tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
     tx.request = caller.request ?? null;
     // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
@@ -1814,9 +1871,10 @@ export class Engine {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
         // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
-        if (failures >= maxRetries) throw this.occError(e.conflict, source, failures);
+        const lost = Object.assign(this.occError(e.conflict, source, failures), { attempt: { value: raw } });
+        if (failures >= maxRetries) throw lost;
         const sleep = occBackoffMs(failures, initialMs, maxMs);
-        this.onOccRetry?.(this.occError(e.conflict, source, failures), failures + 1);
+        this.onOccRetry?.(lost, failures + 1);
         failures++;
         this.stats.retries++;
         await new Promise((r) => setTimeout(r, sleep));
