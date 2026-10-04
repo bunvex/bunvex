@@ -64,9 +64,8 @@ function log's `error` (null) and `returnBytes`.
 |---|---|---|---|---|---|
 | F1 | `function_args_bytes` | the raw JSON text as received | the arguments re-serialized compactly | Não dá pra fazer igual without carrying every path's raw text: arguments arrive decoded. Equal for every official client (compact JSON); a hand-written HTTP body with spaces counts fewer bytes | DV-320, owner, 2026-10-03 (as recommended) |
 
-Found, not decided (a follow-up): a sync query whose shared result is still valid for another session is
-reused without a log entry; Convex runs it through its query cache and logs a cache hit (`cached: true`, with
-its run reason and console lines).
+Found, then fixed in [STUDY-75](STUDY-75-sync-cache-hit-logs.md): a sync query served from another session's
+run was not logged; it now logs a cache hit, as Convex's query cache does.
 
 ## 5. Tests
 

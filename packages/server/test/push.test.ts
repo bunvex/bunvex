@@ -1,7 +1,7 @@
 // Pushing over HTTP (STUDY-35 PR 4): Convex's deploy2 protocol — get_config_hashes, start_push,
 // wait_for_schema, finish_push — with the Deploy operation, diff pushes, Convex's errors, the schema and
 // auth.config from the push, crons in the same commit, and a restart on the pushed code and schema.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -287,15 +287,63 @@ describe("deploy2 over HTTP", () => {
       "send",
     ]);
     expect(r.start.body.analysis[""].schema.tables[0].tableName).toBe("messages");
-    expect(r.start.body.schemaChange.indexDiffs[""].added_indexes).toEqual(["messages.by_author"]);
+    // Convex's `SerializedIndexDiff`: each index a named `DeveloperIndexConfig`.
+    expect(r.start.body.schemaChange.indexDiffs[""]).toEqual({
+      added_indexes: [{ name: "messages.by_author", type: "database", fields: ["author"], staged: false }],
+      removed_indexes: [],
+      enabled_indexes: [],
+      disabled_indexes: [],
+    });
     expect(r.wait).toEqual({ type: "complete" });
     expect(r.finish!.status).toBe(200);
     expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({ added: ["messages.js", "other.js"], removed: [] });
+    expect(r.finish!.body.componentDiffs[""].indexDiff).toEqual(r.start.body.schemaChange.indexDiffs[""]);
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["hi v1"]);
     // The schema's validator holds.
     expect((await d.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
   });
+
+  test("the largest push: 4096 modules and 4096 under _deps/, twice (Convex: test_max_size_push)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const modules = [
+      ...Array.from({ length: 4096 }, (_, i) => mod(`mod${i}.js`, `// ${i}`)),
+      ...Array.from({ length: 4096 }, (_, i) => mod(`_deps/mod${i}.js`, `// dep ${i}`)),
+    ];
+    for (let round = 0; round < 2; round++) {
+      const r = await d.push(modules);
+      expect(r.start.status).toBe(200);
+      expect(r.finish!.status).toBe(200);
+    }
+  }, 120_000);
+
+  test("one function file more is InvalidModules with Convex's message; more dependencies than that a system error", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const users = (n: number) => Array.from({ length: n }, (_, i) => mod(`mod${i}.js`, `// ${i}`));
+    const deps = (n: number) => Array.from({ length: n }, (_, i) => mod(`_deps/mod${i}.js`, `// dep ${i}`));
+    const tooMany = await d.push(users(4097));
+    expect(tooMany.start.status).toBe(400);
+    expect(tooMany.start.body).toMatchObject({
+      code: "InvalidModules",
+      message: expect.stringContaining('Too many function files (4097 > maximum 4096) in "bunvex/".'),
+    });
+    // Dependencies do not count as function files...
+    expect((await d.push([...users(10), ...deps(5000)])).start.status).toBe(200);
+    // ...but the whole push may not pass twice the limit.
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const tooManyDeps = await d.push([...users(4096), ...deps(4097)]);
+      expect(tooManyDeps.start.status).toBe(500);
+      expect(tooManyDeps.start.body.code).toBe("InternalServerError");
+      expect(String(logged.mock.calls[0]?.[1])).toContain(
+        "Too many dependencies modules! Dependencies: 4097, Total modules: 8193",
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  }, 120_000);
 
   test("a second push sends only what changed; a wrong hash is a 409", async () => {
     const d = await deployment(tmp());
