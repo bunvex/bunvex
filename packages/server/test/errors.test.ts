@@ -25,7 +25,7 @@ async function serve(fns: Record<string, FunctionDef>, opts: Partial<ServerOptio
     const r = await fetch(`${base}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
+      body: JSON.stringify({ path, args, format: "encoded_json" }),
     });
     return { status: r.status, body: (await r.json()) as any };
   };
@@ -319,6 +319,24 @@ test("a system failure is a 500 with the fixed message, not the function's error
     code: "InternalServerError",
     message: "Your request couldn't be completed. Try again later.",
   });
+});
+
+test("a commit listener that throws stops the server, reported as that listener's error, not persistence's", async () => {
+  const persistence = await MemoryPersistence.open(null, { durable: false });
+  const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), persistence).init();
+  const functions = new Functions(engine).register("m", { add: mutation(({ db }) => db.insert("items", {})) });
+  const fatal: Error[] = [];
+  const app = createServer({ engine, functions, port: 0, onFatal: (e) => fatal.push(e) });
+  stops.push(app.stop);
+  // A bug in the sync layer's handling of a commit.
+  (app.sync as unknown as { reads: { matchingEntries: () => never } }).reads.matchingEntries = () => {
+    throw new Error("index broke");
+  };
+  await engine.mutation((db) => db.insert("items", {}));
+  expect(fatal.map((e) => e.message)).toEqual([
+    'the committer stopped after an internal error in commit listener "sync": index broke',
+  ]);
+  expect((fatal[0].cause as Error).cause).toEqual(new Error("index broke"));
 });
 
 test("request errors use Convex's {code, message} body; args may be wrapped in an array", async () => {

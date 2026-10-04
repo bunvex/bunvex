@@ -34,6 +34,7 @@ export type FunctionSource = {
   cached: boolean | null;
   requestId: string;
   mutationRetryCount: number | null;
+  mutationQueueLength: number | null;
 };
 
 /** Convex's `FunctionRunReason`. */
@@ -69,10 +70,25 @@ export type StructuredLogEvent =
       schedulerJobId: string | null;
       runReason: RunReason;
     }
-  | { topic: "exception"; source: FunctionSource; message: string; userIdentifier: string | null }
+  | {
+      topic: "exception";
+      source: FunctionSource;
+      message: string;
+      /** The caller's `tokenIdentifier`, when a user called. */
+      userIdentifier: string | null;
+      /** The stack, innermost first (Convex's `JsError.frames`); null when unknown. */
+      frames: StackFrame[] | null;
+      /** A `BunvexError`'s data, as internal JSON. */
+      customData: unknown;
+      /** The request's IP, when known. */
+      ip: string | null;
+      /** Convex's `func_runtime`: `default`, or `node` for a `"use node"` action. */
+      runtime: "default" | "node";
+    }
   | { topic: "audit_log"; action: string; metadata: unknown }
   | { topic: "scheduler_stats"; lagSeconds: number; numRunningJobs: number }
   | { topic: "scheduled_job_lag"; lagSeconds: number }
+  | ({ topic: "current_storage_usage" } & StorageUsage)
   | {
       topic: "concurrency_stats";
       query: Concurrency;
@@ -82,7 +98,53 @@ export type StructuredLogEvent =
       httpAction: Concurrency;
     };
 
+/** One stack frame (Convex's `FrameData`), each part null when the line did not say. */
+export type StackFrame = {
+  functionName: string | null;
+  fileName: string | null;
+  lineNumber: number | null;
+  columnNumber: number | null;
+  /** The frame's line as the runtime printed it, `at …` (V1's string frames). */
+  text: string;
+};
+
+/** The frames of an error's stack, innermost first: lines `at fn (file:line:col)` or `at file:line:col`. */
+export function stackFrames(stack: string | undefined): StackFrame[] | null {
+  if (!stack) return null;
+  const frames: StackFrame[] = [];
+  for (const raw of stack.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("at ")) continue;
+    const body = line.slice(3);
+    const m = /^(.*?) \((.*):(\d+):(\d+)\)$/.exec(body) ?? /^()(.*):(\d+):(\d+)$/.exec(body);
+    frames.push(
+      m
+        ? {
+            functionName: m[1] ? m[1] : null,
+            fileName: m[2] ?? null,
+            lineNumber: Number(m[3]),
+            columnNumber: Number(m[4]),
+            text: line,
+          }
+        : { functionName: body || null, fileName: null, lineNumber: null, columnNumber: null, text: line },
+    );
+  }
+  return frames;
+}
+
 /** `timestamp`: wall-clock ms. */
+/** Convex's `AggregatedStorageUsage`, as the `current_storage_usage` event carries it (STUDY-73). */
+export type StorageUsage = {
+  documentBytes: number;
+  indexBytes: number;
+  vectorBytes: number;
+  textBytes: number;
+  fileBytes: number;
+  backupBytes: number;
+  /** The virtual tables' documents: `_storage` and `_scheduled_functions`. */
+  systemTableDocumentBytes: { _storage: number; _scheduled_functions: number };
+};
+
 export type LogEvent = { timestamp: number; event: StructuredLogEvent };
 
 const functionJson = (s: FunctionSource) => ({
@@ -90,7 +152,7 @@ const functionJson = (s: FunctionSource) => ({
   type: { Query: "query", Mutation: "mutation", Action: "action", HttpAction: "http_action" }[s.udfType],
   cached: s.udfType === "Query" ? s.cached : null,
   request_id: s.requestId,
-  mutation_queue_length: null,
+  mutation_queue_length: s.mutationQueueLength,
   mutation_retry_count: s.mutationRetryCount,
 });
 
@@ -174,7 +236,7 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         _functionType: type,
         _functionCached: ev.source.udfType === "Query" ? ev.source.cached : null,
         message: ev.message,
-        frames: null,
+        frames: ev.frames === null ? null : ev.frames.map((f) => f.text),
         udfServerVersion: null,
         userIdentifier: ev.userIdentifier,
       };
@@ -195,6 +257,18 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
       };
     case "scheduled_job_lag":
       return { timestamp: ms, topic: "scheduled_job_lag", lag_seconds: Math.floor(ev.lagSeconds) };
+    case "current_storage_usage":
+      return {
+        timestamp: ms,
+        topic: "current_storage_usage",
+        total_document_size_bytes: ev.documentBytes,
+        total_index_size_bytes: ev.indexBytes,
+        total_vector_storage_bytes: ev.vectorBytes,
+        total_text_storage_bytes: ev.textBytes,
+        total_file_storage_bytes: ev.fileBytes,
+        total_backup_storage_bytes: ev.backupBytes,
+        total_system_table_document_size_bytes: ev.systemTableDocumentBytes,
+      };
     case "concurrency_stats":
       return {
         timestamp: ms,

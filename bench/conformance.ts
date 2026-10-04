@@ -28,6 +28,8 @@ for (const name of drivers) {
     requireReadLog: true,
     // PERSIST-01 C12–C14 (retention: the document log, pruning, globals): every first-party driver.
     requireRetention: true,
+    // PERSIST-01 C16 (document versions): every first-party driver.
+    requireVersions: true,
   });
   failures += r.failures;
 }
