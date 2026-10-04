@@ -89,7 +89,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
 | Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
 | `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | done (STUDY-30) | A real system table, projected to the public shape through `db.system` (S2, DV-140); only `by_id` / `by_creation_time` are public. |
-| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | done (STUDY-30) | As Convex: no-op on finished jobs; self-cancel refused; what a canceled running action schedules is born canceled. |
+| `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | done (STUDY-30) | As Convex: no-op on finished jobs; self-cancel refused; what a canceled running action schedules is born canceled. A job canceled after the executor picked it, or while its mutation runs, does not run (`server/test/executor-races.test.ts`, STUDY-65 G-A6). |
 | Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | done (STUDY-30) | The job is finished in the mutation's transaction; OCC retried with backoff (100 ms to 60 s); a user error gives `failed`. |
 | Scheduled actions run at most once | same | done (STUDY-30) | A job found in progress that no one runs fails with "Transient error while executing action". |
 | System-error retry with backoff (500 ms to 2 h, unbounded attempts) | same; knobs `SCHEDULED_JOB_*_BACKOFF` | done (STUDY-30) | |
@@ -107,7 +107,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | Convex's three tables and indexes; not visible to apps. |
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. A diff the store fails is logged and retried with the executor's backoff (500 ms–15 s), never fatal (Convex fails only that push). |
 | Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
-| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
+| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. A cron deleted after the executor picked it, or while its mutation runs, does not run and is not logged (`server/test/executor-races.test.ts`, STUDY-65 G-A6). As Convex, the executor checks a picked cron before its function: one a push deleted along with its function is dropped, not retried (STUDY-65 F6). |
 | Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | done (STUDY-30, STUDY-34) | Both system functions, in Convex's document shapes, for admins with `ViewData`. |
 
 ### 6. Full-text search

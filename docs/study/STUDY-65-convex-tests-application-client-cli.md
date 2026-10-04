@@ -1,6 +1,6 @@
 # STUDY-65 — What Convex tests in the application, the clients and the CLI, and what bunvex covers
 
-- **Status:** draft (inventory done; F1–F4 fixed in #277, #278, #279, #281; client tests in #282)
+- **Status:** draft (inventory done; F1–F4 fixed in #277, #278, #279, #281; F6 in #331; client tests in #282)
 - **Convex source read:** the last snapshots with tests, `bea52bde0` (Rust, 2026-04-09) and `c358201e1`
   (TypeScript, 2026-04-08), compared with the current source (`4577b9031`) where they differ
 - **Related:** [TEST-01](../specs/TEST-01-test-strategy.md) §3 (the first round: values, database,
@@ -34,6 +34,7 @@ a sabotage check, and its parity or study rows.
 | F3 | `application/tests/auth_config.rs` `test_evaluate_auth_config_has_custom_system_env_var` | an environment-variable update re-evaluated `auth.config` with the raw built-ins, without the canonical URL overrides that a push, a restart and a canonical-URL change apply | with a canonical site URL and `domain: process.env.BUNVEX_SITE_URL`, changing **any** variable reinstalled the provider with the raw origin, and the issuer's tokens were refused until the next push or restart | #279 |
 | F4 | `application/tests/scheduled_jobs.rs` `test_cancel_recursively_scheduled_job` | "born canceled" only looked at the job of the function that scheduled; the mutations and actions a scheduled action calls (`ctx.runMutation`, `ctx.runAction`) ran without it. Convex propagates `parent_scheduled_job` down the call tree | the common "action → runMutation(schedule the next step)" loop kept running after the job was canceled | #281 |
 | F5 | `react/use_paginated_query.test.tsx` (the reset path), `ConvexReactClient.logger` | `BunvexReactClient.logger` returned the raw option (`Logger \| boolean \| undefined`), and the paginated hooks warned with `console.warn` | `logger: false` did not silence the pagination reset warning, and a custom logger never got it | open (§6 #12): Convex builds the `Logger` in the React client with `instantiateDefaultLogger` / `instantiateNoopLogger`, which `@bunvex/client` does not export; the fix needs that export or another way in |
+| F6 | `cron_jobs.rs` `test_cron_jobs_race_condition` (an executor handed a cron deleted after it picked it) | `CronJobExecutor.execute` looked the function up before checking the cron; a missing function was a system error, retried without end | a push that removed a cron and its function while the executor held the cron: "Cron trying to execute missing function" logged every 15 s, forever, and one of the 8 run slots never freed. Convex's `run_function` checks the job first and drops it | #331 |
 
 ## 2. `crates/application/src/tests`
 
@@ -72,7 +73,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `auth_config.rs` `test_evaluate_auth_config_has_system_env_var` | `auth.config` sees the built-in site URL | — | gap (closed by #279's test) |
 | `auth_config.rs` `test_evaluate_auth_config_has_custom_system_env_var` | the canonical URL overrides the built-in in `auth.config` | only push and restart applied it | **bug F3** (#279) |
 | `scheduled_jobs.rs` `test_cancel_recursively_scheduled_job` | what a canceled job's callees schedule is born canceled | only the job's own `ctx.scheduler` | **bug F4** (#281) |
-| `scheduled_jobs.rs` `test_scheduled_jobs_race_condition`, `cron_jobs.rs` `test_cron_jobs_race_condition` | a job canceled (a cron deleted) after the executor picked it is not run | `unchanged()` in `server/src/scheduler.ts` and `cron-executor.ts` | gap (G-A6) |
+| `scheduled_jobs.rs` `test_scheduled_jobs_race_condition`, `cron_jobs.rs` `test_cron_jobs_race_condition` | a job canceled (a cron deleted) after the executor picked it is not run | `unchanged()` in `server/src/scheduler.ts` and `cron-executor.ts`; also a cancel or delete while the mutation runs | covered (G-A6): `server/test/executor-races.test.ts` (#330) |
 | `scheduled_jobs.rs` `test_disable_scheduled_jobs`, `cron_jobs.rs` `test_disable_cron_jobs` | a *disabled* backend runs no jobs or crons, then resumes | `isStopped` (`core/src/backend-state.ts`); only *paused* is tested | gap (G-A7) |
 | `cron_jobs.rs` `test_cron_occ_gets_logged`, `scheduled_jobs.rs` OCC logging | a lost OCC attempt of a cron or scheduled mutation is in the function log | tested for a client mutation only (`function-log.test.ts`) | gap (G-A8) |
 | `storage.rs` `test_storage_get_url`, `test_storage_generate_upload_url` | user `getUrl` (query, action) and `generateUploadUrl` (mutation, action) follow the canonical cloud URL | only a system mutation is tested (`audit-log.test.ts`) | gap (G-A4) |
@@ -107,7 +108,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `browser/query_options.test.ts` | — | n/a: `convexQueryOptions` missing (client-sync §11); types only |
 | `browser/simple_client.test.ts` | deduplicated subscriptions (`client/pieces.test.ts`) | partial: the optimistic callback's synchrony is not asserted |
 | `browser/sync/client.test.ts` | — | G-C20 `localQueryResult` of a never-subscribed optimistic query; the legacy-config warning is n/a |
-| `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; **G-C23 backoff reset only after a real resync** (3 cases) |
+| `browser/sync/client_node.test.ts` | Connect + ModifyQuerySet, long encoding, early actions, chunks (`client/pieces.test.ts`, `protocol/test/v1.test.ts`, `client/web-socket-manager.test.ts`); STUDY-57 maps maxObservedTimestamp and out-of-order results | G-C21 clean exit after `close()`; G-C22 a result outside the announced query-set version, `QueryRemoved`; G-C23 backoff reset only after a real resync (3 cases): covered by `client/test/reconnect-backoff.test.ts` (#329) |
 | `browser/sync/local_state.test.ts` | creation | **G-C24** outstanding-after-restart until every query is answered; reset by unsubscribe, `markAuthCompletion`, `clearAuth` |
 | `browser/sync/optimistic_query_set.test.ts` | server results, errors, apply / replay / drop (`client/pieces.test.ts`) | **G-C25** only changed queries notified; stacked updates dropped in order; set to `undefined` |
 | `browser/sync/paginated_query_client.test.ts` | subscribe, loadMore, split (`e2e/paginated-client.test.ts`) | partial: a split driven by optimistic updates alone |
@@ -175,9 +176,9 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 3 | F3 `auth.config` after an env update with a canonical URL | sign-in breaks after an unrelated change | `server/src/server.ts` | S | #279 |
 | 4 | F2 repeated names in an env batch | the dashboard's rename and swap fail | `core/src/environment-variables.ts` | S | #278 |
 | 5 | G-C8, G-C24, G-C25, G-C26: pause/resume of the query set, outstanding state after a restart, optimistic stacking, incomplete requests | a duplicate Add or an Add+Remove is a base-version mismatch, a fatal client error; wrong rollback order is wrong UI | `client/src/{local-state,optimistic-updates,request-manager}.ts` | S | #282 |
-| 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | |
+| 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | #329 (tests only: bunvex already matched) |
 | 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
-| 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
+| 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | #330 (tests; bunvex matched) |
 | 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | |
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
