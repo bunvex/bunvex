@@ -196,7 +196,7 @@ divergences and cloud-only items are not gaps.
   - `run --component` / `--inline-query`;
   - `typecheck`, `mcp`, `usage-limits` commands;
   - `dev` waiting on an env var or a table.
-- An HTTP action's response-size warning (DV-323, next PR).
+- An HTTP action's response-size warning (DV-323, #369).
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen now exists (admin API, function and audit logs, scheduler, env vars,
