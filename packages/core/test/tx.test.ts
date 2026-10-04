@@ -183,5 +183,6 @@ describe("read-own-writes inside a mutation", () => {
       for (const q of asked) expect(await e.query((db) => runQuery(db, q))).toEqual(expected(q));
     }
     expect(checked).toBe(720);
-  });
+    // fixed work, no waiting: 2.8 s in CI's coverage job, and slower under contention, near the default 5 s
+  }, 30_000);
 });

@@ -55,6 +55,7 @@ describe("catalog (_tables / _index)", () => {
           _snapshot_imports: 541,
           _function_handles: 545,
           _cron_next_run: 547,
+          _data_sync_progress: 553,
           _usage_limits: 552,
           _index_backfills: 548,
           _storage_deletions: 9998,
@@ -145,7 +146,9 @@ describe("catalog (_tables / _index)", () => {
     expect(() => defineSchema({ ["x".repeat(65)]: defineTable(v.any()) })).toThrow("Invalid table name");
     expect(() => defineSchema({ t: defineTable(v.any()).index("by_id", ["x"]) })).toThrow("reserved");
     expect(() => defineSchema({ t: defineTable(v.any()).index("_ix", ["x"]) })).toThrow("reserved");
-    expect(() => defineTable(v.any()).index("by_a", ["a"]).index("by_a", ["b"])).toThrow("Duplicate index name");
+    expect(() => defineSchema({ t: defineTable(v.any()).index("by_a", ["a"]).index("by_a", ["b"]) })).toThrow(
+      'Table "t" has two or more definitions of index "by_a".',
+    );
     expect(() => defineSchema({ ok_Name_1: defineTable(v.any()).index("by_a", ["a"]) })).not.toThrow();
   });
 

@@ -91,7 +91,8 @@ export class QueriesObserver {
       const journal = "journal" in watch ? watch.journal() : undefined;
       this.removeQuery(id);
       this.addQuery(id, query, args, {
-        ...(journal === undefined ? {} : { journal }),
+        // As Convex: only a journal there is (a `null` one is not passed on, so the new `Add` carries none).
+        ...(journal ? { journal } : {}),
         ...withPagination(paginationOptions),
       });
     }

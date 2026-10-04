@@ -82,7 +82,7 @@ async function setup(schema: SchemaDefinition = defineSchema({})) {
   const queryImport = async (importId: string) =>
     (
       (await (
-        await post("/api/query", { path: "_system/cli/queryImport", args: { importId }, format: "convex_encoded_json" })
+        await post("/api/query", { path: "_system/cli/queryImport", args: { importId }, format: "encoded_json" })
       ).json()) as {
         value: Record<string, unknown> & { state: Record<string, unknown> };
       }
@@ -609,7 +609,7 @@ describe("round trip", () => {
           await src.post("/api/query", {
             path: "_system/cli/exports:getLatest",
             args: {},
-            format: "convex_encoded_json",
+            format: "encoded_json",
           })
         ).json()) as {
           value: Record<string, unknown> | null;

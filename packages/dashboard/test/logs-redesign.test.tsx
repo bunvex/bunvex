@@ -1,6 +1,6 @@
 // The Logs redesign (UI-01 §22.4): the filter column and its counts, the time range presets, the histogram
 // and its window, Export, the details' time and raw JSON, the phone's Filters sheet.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Dashboard, type LogEntry } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
@@ -18,6 +18,7 @@ import {
   validateLogsSearch,
   viewFromSearch,
 } from "../src/logs/log-filter.ts";
+import { formatLogTime } from "../src/shell/time.tsx";
 import { expectAccessible } from "./axe.ts";
 
 let history: ReturnType<typeof createMemoryHistory>;
@@ -56,6 +57,7 @@ const countOf = (section: string, name: string) =>
     .closest("li")!.lastElementChild!.textContent;
 
 beforeEach(() => localStorage.clear());
+afterEach(() => setSystemTime()); // back to the real clock after a test that fixed it
 
 const line = (over: Partial<LogEntry>): LogEntry => ({
   id: "1",
@@ -237,31 +239,48 @@ describe("the histogram", () => {
     await waitFor(() => expect(shownCount()).toBe(before));
   });
 
-  test("dragging across the strip picks the window between the drag's ends", async () => {
-    mount(recent());
-    await opened();
-    const plot = screen.getByRole("application", { name: "Log lines per time bucket" });
-    plot.getBoundingClientRect = () => ({ left: 0, width: 600, top: 0, height: 56 }) as DOMRect;
-    fireEvent.pointerDown(plot, { clientX: 300, button: 0 });
-    fireEvent.pointerMove(plot, { clientX: 600 });
-    fireEvent.pointerUp(plot, { clientX: 600 });
-    await waitFor(() => expect(Object.keys(params()).sort()).toEqual(["from", "to"]));
-    const from = Number(params().from);
-    const shown = rows().map(timeOf);
-    expect(shown.length).toBeGreaterThan(0);
-    // every shown line is in the later half: compared as instants, since a line's time is "HH:mm:ss.SSS" today
-    // and "YYYY-MM-DD HH:mm:ss.SSS" before (shell/time.tsx), so its text does not sort against a date
-    const instant = (t: string) => {
-      const today = new Date();
-      const [date, clock] = t.includes(" ")
-        ? (t.split(" ") as [string, string])
-        : [`${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`, t];
-      const [y, mo, d] = date.split("-").map(Number) as [number, number, number];
-      const [h, mi, s] = clock.split(":").map(Number) as [number, number, number];
-      return new Date(y, mo - 1, d, h, mi, Math.floor(s), Math.round((s % 1) * 1000)).getTime();
-    };
-    expect(shown.filter((t) => instant(t) < from)).toEqual([]);
-  });
+  // The drag runs on a fixed clock: the list shows a line's time as "HH:mm:ss.SSS" today and
+  // "YYYY-MM-DD HH:mm:ss.SSS" before (shell/time.tsx), so on the real clock which lines carry a date depended
+  // on the hour, and an earlier version of this test failed every night (00:00–10:00 UTC on CI) by comparing
+  // that text. At noon the window is all today; just after midnight it straddles the day boundary.
+  for (const [when, clock] of [
+    ["at noon", 12],
+    ["just after midnight, across the day boundary", 0],
+  ] as const) {
+    test(`dragging across the strip picks the window between the drag's ends, ${when}`, async () => {
+      const now = new Date(2026, 9, 3, clock, 20).getTime(); // in the viewer's zone, as the list's times
+      setSystemTime(now);
+      const source = new MockDataSource({ seed: 7, now, executions: 120, logIntervalMs: 3_600_000 });
+      mount(source);
+      await opened();
+      const all = await loaded(source);
+      const plot = screen.getByRole("application", { name: "Log lines per time bucket" });
+      plot.getBoundingClientRect = () => ({ left: 0, width: 600, top: 0, height: 56 }) as DOMRect;
+      fireEvent.pointerDown(plot, { clientX: 300, button: 0 });
+      fireEvent.pointerMove(plot, { clientX: 600 });
+      fireEvent.pointerUp(plot, { clientX: 600 });
+      await waitFor(() => expect(Object.keys(params()).sort()).toEqual(["from", "to"]));
+      const from = Number(params().from);
+      const to = Number(params().to);
+      // the later half of the strip, which runs from the oldest loaded line to now
+      const oldest = all.at(-1)!.time;
+      expect(Math.abs(from - (oldest + (now - oldest) / 2))).toBeLessThan(1000);
+      expect(to).toBeGreaterThanOrEqual(now);
+      // exactly the loaded lines inside the window, newest first, each with its time as the list writes it
+      const inside = all.filter((e) => e.time >= from && e.time <= to);
+      await waitFor(() => expect(shownCount()).toBe(inside.length));
+      const shown = rows().map(timeOf);
+      expect(shown.length).toBeGreaterThan(0);
+      expect(shown).toEqual(inside.slice(0, shown.length).map((e) => formatLogTime(e.time, now)));
+      const dated = inside.filter((e) => formatLogTime(e.time, now).includes(" ")).length;
+      if (clock === 0) {
+        // both sides of midnight are in the window, and none of the lines before it
+        expect(dated).toBeGreaterThan(0);
+        expect(dated).toBeLessThan(inside.length);
+        expect(all.length).toBeGreaterThan(inside.length);
+      } else expect(dated).toBe(0);
+    });
+  }
 });
 
 describe("Export", () => {

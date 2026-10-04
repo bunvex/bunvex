@@ -3,6 +3,7 @@
 // two-argument form with the table filled in, so validation and errors are those of `db.get(table, id)`,
 // `db.patch(table, id, value)`, … — after Convex's own argument checks, which the scoped forms need: a
 // missing `id` or `value` must not turn a two-argument call into the one-argument form.
+import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
 import type { TxQuery } from "./tx.ts";
 
@@ -66,3 +67,6 @@ export class TableWriter extends TableReader {
     return this.writer.delete(this.tableName, id);
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(TableReader);
