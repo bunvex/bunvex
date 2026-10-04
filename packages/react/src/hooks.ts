@@ -46,7 +46,7 @@ export function useQueries(queries: RequestForQueries): Record<string, unknown> 
       (query, args, { journal, paginationOptions }) =>
         paginationOptions !== undefined
           ? client.watchPaginatedQuery(query, args, paginationOptions)
-          : client.watchQuery(query, args, journal === undefined ? {} : { journal }),
+          : client.watchQuery(query, args, journal ? { journal } : {}),
     [client],
   );
   const [observer] = useState(() => new QueriesObserver(createWatch));
