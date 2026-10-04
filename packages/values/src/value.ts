@@ -5,6 +5,7 @@
 //
 // JSON: bigint → {"$integer": base64 LE}, special float → {"$float": base64 LE}, bytes → {"$bytes": base64};
 // object fields are sorted and `undefined` fields are dropped. Anything else is refused.
+import { fromBase64, toBase64, utf8Length } from "./bytes.ts";
 import { type CommitTsPlaceholder, isCommitTsPlaceholder } from "./commit-ts.ts";
 
 /** A Convex value; `CommitTsPlaceholder` is `db.vars.commitTs` before its mutation commits (STUDY-53). */
@@ -28,8 +29,8 @@ const MAX_VALUE_FOR_ERROR_LEN = 16384;
 /** NaN, ±Infinity and −0 cannot be plain JSON numbers. */
 export const isSpecialFloat = (n: number) => Number.isNaN(n) || !Number.isFinite(n) || Object.is(n, -0);
 
-const b64 = (bytes: Uint8Array) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
-const unb64 = (s: string) => new Uint8Array(Buffer.from(s, "base64"));
+const b64 = toBase64;
+const unb64 = fromBase64;
 
 export function validateObjectField(k: string) {
   if (k.length > MAX_FIELD_NAME_LEN)
@@ -371,7 +372,7 @@ function copy(value: unknown, original: unknown, context: string): Value {
 
 const MAX_ARRAY_LEN = 8192;
 const MAX_OBJECT_FIELDS = 1024;
-const utf8len = (s: string) => Buffer.byteLength(s, "utf8");
+const utf8len = utf8Length;
 
 /** Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. */
 export function valueSize(v: Value): number {

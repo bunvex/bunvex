@@ -12,8 +12,8 @@ function Channel({ channel }: { channel: Id<"channels"> }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    await send({ channel, body, author: NAME });
     setBody("");
+    await send({ channel, body, author: NAME });
   }
 
   return (

@@ -15,6 +15,7 @@
 //   while a push runs), as `bunvex logs` prints them (STUDY-47).
 import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
 import { join, sep } from "node:path";
+import { BunvexClient, makeFunctionReference } from "@bunvex/client";
 import type { TypecheckMode } from "./codegen.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
@@ -221,6 +222,34 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 const clock = () => new Date().toTimeString().slice(0, 8);
 
+/**
+ * Resolves when the deployment's environment variables change (Convex's `getDeplymentEnvVarWatch`): a
+ * subscription to `_system/cli/queryEnvironmentVariables`, whose first result is the current state. Never
+ * resolves if the deployment cannot be watched (the file watch still runs); ends on abort.
+ */
+function envVarsChanged(target: Target, signal: AbortSignal): Promise<void> {
+  return new Promise((done) => {
+    const client = new BunvexClient(target.url, { logger: false });
+    client.client.setAdminAuth(target.adminKey);
+    let updates = 0;
+    const finish = () => {
+      sub.unsubscribe();
+      void client.close();
+      done();
+    };
+    const sub = client.onUpdate(
+      makeFunctionReference<"query">("_system/cli/queryEnvironmentVariables"),
+      {},
+      () => {
+        if (++updates > 1) finish();
+      },
+      () => {},
+    );
+    if (signal.aborted) finish();
+    else signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
 export async function devCommand(args: string[], io: Io, opts: { signal?: AbortSignal } = {}): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     io.out(DEV_USAGE);
@@ -353,9 +382,17 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       }
       // The deployment failed on its own side: for a local one, where to read why.
       if (r.internal && localLog) io.err(`The local backend's log: ${localLog}`);
-      // Wait for the next change (one during the push counts: it was not pushed).
+      // Wait for the next change (one during the push counts: it was not pushed), or, after a push that needs
+      // an environment variable, for the deployment's variables to change (Convex's dev watches them too).
       if (watcher?.dirty) io.err("Filesystem changed during push, retrying...");
-      await watcher?.quiet(stop.signal);
+      if (watcher && r.envVars) {
+        const waiting = new AbortController();
+        const abort = () => waiting.abort();
+        stop.signal.addEventListener("abort", abort, { once: true });
+        await Promise.race([watcher.quiet(waiting.signal), envVarsChanged(target, waiting.signal)]);
+        waiting.abort();
+        stop.signal.removeEventListener("abort", abort);
+      } else await watcher?.quiet(stop.signal);
     }
     return exitCode;
   } finally {

@@ -140,13 +140,16 @@ export function encodeU64(n: bigint): string {
   if (n < 0n || n > 0xffffffffffffffffn) throw new RangeError(`not a u64: ${n}`);
   const b = new Uint8Array(8);
   new DataView(b.buffer).setBigUint64(0, n, true);
-  return Buffer.from(b).toString("base64");
+  return btoa(String.fromCharCode(...b));
 }
 
 export function decodeU64(s: string): bigint {
-  const b = Buffer.from(s, "base64");
-  if (b.length !== 8) throw new Error(`expected 8 bytes of u64, got ${b.length}`);
-  return new DataView(b.buffer, b.byteOffset, 8).getBigUint64(0, true);
+  // `atob`, not Node's `Buffer`: the client decodes these in browsers too.
+  const binary = atob(s);
+  if (binary.length !== 8) throw new Error(`expected 8 bytes of u64, got ${binary.length}`);
+  const b = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) b[i] = binary.charCodeAt(i);
+  return new DataView(b.buffer).getBigUint64(0, true);
 }
 
 // ---------------------------------------------------------------- server side: encode / parse

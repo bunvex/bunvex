@@ -301,10 +301,21 @@ export type DeployOptions = {
   warnOnSlowSchemaValidation?: boolean;
 };
 /**
- * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); and whether the deployment
- * failed on its own side (its log may say why).
+ * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); whether the deployment failed on
+ * its own side (its log may say why); and whether it waits on the deployment's environment variables
+ * (`bunvex dev` pushes again once they change, as Convex's).
  */
-export type DeployResult = { code: number; transient?: boolean; internal?: boolean };
+export type DeployResult = { code: number; transient?: boolean; internal?: boolean; envVars?: boolean };
+
+/** A deployment's error answer: its message and its code (Convex's `ErrorData`). */
+class DeploymentError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | undefined,
+  ) {
+    super(message);
+  }
+}
 
 /** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
 /**
@@ -363,7 +374,11 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     } catch {
       throw new Error(`${url}${path} answered ${r.status}: ${text.slice(0, 200)}`);
     }
-    if (!r.ok) throw new Error(String(json.message ?? `${r.status} ${json.code ?? ""}`));
+    if (!r.ok)
+      throw new DeploymentError(
+        String(json.message ?? `${r.status} ${json.code ?? ""}`),
+        typeof json.code === "string" ? json.code : undefined,
+      );
     return json;
   };
   try {
@@ -469,6 +484,15 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
   } catch (e) {
     if (e instanceof PushCanceled) return { code: 1 };
     const message = (e as Error).message;
+    // Convex's `handlePushConfigError`: the variable named, and how to set it (with no deployment dashboard
+    // link to give, Convex's own words for that case).
+    if (e instanceof DeploymentError && e.code === "AuthConfigMissingEnvironmentVariable") {
+      const [, name] = message.match(/Environment variable (\S+)/i) ?? [];
+      io.err(
+        `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\nGo set it in the dashboard or using \`bunvex env set\``,
+      );
+      return { code: 1, envVars: true };
+    }
     io.err(`bunvex deploy: ${message}`);
     // As Convex's CLI: an unreachable deployment and a push race are worth retrying.
     return {

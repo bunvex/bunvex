@@ -25,7 +25,9 @@
     "e2e": "bun run --cwd apps/dashboard e2e",
     "build:site": "bun run --cwd apps/site build",
     "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard && bun run build:site",
-    "test:examples": "cd examples && bun test --timeout 120000"
+    "test:examples": "cd examples && bun test --timeout 120000",
+    "example": "bun scripts/example.ts",
+    "test:examples:browser": "cd examples/_browser && bun test --timeout 180000 ./*.browser.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

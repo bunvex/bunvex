@@ -4,3 +4,6 @@ next-env.d.ts
 .env.local
 .bunvex
 *.tsbuildinfo
+# next dev writes its agent docs here
+AGENTS.md
+CLAUDE.md

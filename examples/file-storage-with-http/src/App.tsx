@@ -12,16 +12,29 @@ export function App() {
   const [body, setBody] = useState("");
   const [image, setImage] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function onSendImage(e: FormEvent) {
     e.preventDefault();
     if (!image) return;
+    setError(null);
     // One request: the HTTP action stores the file and posts the message.
-    await fetch(`${SITE}/sendImage?author=${encodeURIComponent(NAME)}`, {
-      method: "POST",
-      headers: { "Content-Type": image.type },
-      body: image,
-    });
+    try {
+      const response = await fetch(`${SITE}/sendImage?author=${encodeURIComponent(NAME)}`, {
+        method: "POST",
+        headers: { "Content-Type": image.type },
+        body: image,
+      });
+      if (!response.ok) throw new Error(`the upload failed: ${response.status} ${await response.text()}`);
+    } catch (err) {
+      // A browser refuses the request outright (a TypeError) when the CORS preflight does not allow this page.
+      setError(
+        err instanceof TypeError
+          ? `The browser refused the upload: is CLIENT_ORIGIN set to ${location.origin}? Run \`bunx bunvex env set CLIENT_ORIGIN ${location.origin}\` in this example's directory.`
+          : (err as Error).message,
+      );
+      return;
+    }
     setImage(null);
     if (fileInput.current) fileInput.current.value = "";
   }
@@ -44,8 +57,8 @@ export function App() {
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          await send({ body, author: NAME });
           setBody("");
+          await send({ body, author: NAME });
         }}
       >
         <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" />
@@ -59,6 +72,7 @@ export function App() {
           Send image
         </button>
       </form>
+      {error && <p role="alert">{error}</p>}
     </main>
   );
 }
