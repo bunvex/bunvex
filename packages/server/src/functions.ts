@@ -72,6 +72,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import { HTTP_ACTION_RESPONSE_LIMIT, meteredBody } from "./http-body.ts";
 import { actionWarnings, functionWarnings, httpActionWarnings } from "./limit-warnings.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
@@ -81,6 +82,7 @@ import {
   currentOwner,
   currentOwnLines,
   type LogLine,
+  logSystemLine,
   perAttempt,
   withOwner,
 } from "./logs.ts";
@@ -655,6 +657,11 @@ export class Functions {
     routePath?: string,
     /** The arguments, for `function_args_bytes` (none for an HTTP action, as Convex's). */
     args?: unknown,
+    /**
+     * An HTTP action's run is logged once its response's body is sent, as Convex's (STUDY-76, DV-323):
+     * `settled` gives the work to do then (in the run's log context), when it resolves.
+     */
+    settled?: (value: T) => Promise<() => void> | null,
   ): Promise<T> {
     const log = this.functionLog;
     // System functions are not logged, as in Convex, but their compute and bandwidth are metered.
@@ -709,6 +716,17 @@ export class Functions {
     const res = await withOwner(r, run);
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
+    const later = res.ok && !o.skip ? settled?.(res.value) : null;
+    if (res.ok && later) {
+      // Logged when the body is sent: the lines written meanwhile join the run's.
+      void later.then(async (after) => {
+        const more = await withOwner(r, async () => after());
+        const c = this.completion(r, [...res.lines, ...more.lines], o, false);
+        if (system) this.meterCompletion(r, c, false);
+        else this.logCompletion(log, r, c, o.error);
+      });
+      return res.value;
+    }
     if (!o.skip) {
       const c = this.completion(r, res.lines, o, retried);
       if (system) this.meterCompletion(r, c, false);
@@ -1846,6 +1864,17 @@ export class Functions {
     routePath?: string,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
+    let t0 = 0;
+    let running: Running | null = null;
+    let body: ReturnType<typeof meteredBody> | null = null;
+    // Convex's HTTP action warnings (STUDY-76), when its response is sent or its handler failed.
+    const warnings = (sentBytes: number) =>
+      httpActionWarnings({
+        sentBytes,
+        limitBytes: HTTP_ACTION_RESPONSE_LIMIT,
+        pending: running?.pendingOps ?? new Map(),
+        elapsedMs: performance.now() - t0,
+      });
     // Logged under its route, as Convex's `HttpActionRoute` (`<METHOD> <path>`).
     const route = `${request.method} ${new URL(request.url).pathname}`;
     return this.logged(
@@ -1856,26 +1885,38 @@ export class Functions {
         await this.failActionWhileNotRunning();
         // HTTP actions share the action limiter, as in Convex.
         return this.limits.action.run(async () => {
-          const t0 = performance.now();
-          const warn = () =>
-            httpActionWarnings({
-              pending: meteredAction()?.pendingOps ?? new Map(),
-              elapsedMs: performance.now() - t0,
-            });
+          t0 = performance.now();
+          running = meteredAction();
           try {
             const response = await this.inActionEnv(() =>
               inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request)),
             );
-            warn();
-            return response;
+            if (!(response instanceof Response) || !response.body) {
+              warnings(0);
+              return response;
+            }
+            // The body, sent as Convex's streamer does (20 MiB at most); the run is logged once it is.
+            body = meteredBody(response.body);
+            return new Response(body.stream, {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            });
           } catch (e) {
-            if (!isSystemError(e)) warn();
+            if (!isSystemError(e)) warnings(0);
             throw e;
           }
         });
       },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
       routePath ?? new URL(request.url).pathname,
+      undefined,
+      () =>
+        body &&
+        body.sent.then(({ bytes, errors }) => () => {
+          for (const e of errors) logSystemLine("ERROR", e, "error:httpAction");
+          warnings(bytes);
+        }),
     );
   }
 }

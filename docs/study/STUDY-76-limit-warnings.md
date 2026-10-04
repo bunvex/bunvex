@@ -2,8 +2,8 @@
 
 - **Status:** implemented. Owner decisions (2026-10-04):
   - system functions warn as Convex's;
-  - an HTTP action's response-size warning comes in a later PR, which logs the run once its body is sent
-    (DV-323, temporary).
+  - an HTTP action's response-size warning came in the next PR, which logs the run once its body is sent
+    (DV-323, resolved).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03
 - **Related:**
   - [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md) (the time budget);
@@ -101,8 +101,17 @@ Sources: `crates/udf/src/warnings.rs`, `crates/isolate/src/environment/udf/mod.r
   `systemMetadata: null`.
 - **Actions:** the context's operations count as pending until they settle (`trackedCtx`, Convex's names);
   `fetch` is counted through the core's fetch hook, which now also reports failures. Node actions get none.
-- **HTTP actions:** the unawaited operations and the duration warn when the handler returns. The response
-  size does not yet (DV-323).
+- **HTTP actions** are logged once their response is sent, as Convex's (the PR after the first; DV-323
+  resolved):
+  - `runHttpAction` streams the body through `meteredBody` (`http-body.ts`), on demand as the client reads.
+  - A chunk that would cross 20 MiB is dropped with Convex's `error:httpAction` line ("HttpResponseTooLarge:
+    HTTP actions support responses up to 20 MiB"). Later chunks that fit still go, as Convex's streamer
+    sends them; bunvex used to end the body there.
+  - A body that fails is reported the same way.
+  - When the body has ended, the run's lines get the response-size warning, the unawaited operations and
+    the duration, and the run is logged. `logged`'s `settled` option defers it.
+  - A HEAD request, a 408 or a client that goes away cancels the body, which settles it too.
+  - Cost: about 5 µs per small response (95 → 100 µs); a 10 MiB response is unchanged (4.5 ms).
 - **System functions** run under a timer that measures their user time but never fails them (they have no
   budget in bunvex), and warn as Convex's.
 - **Measured:**
@@ -115,7 +124,7 @@ Sources: `crates/udf/src/warnings.rs`, `crates/isolate/src/environment/udf/mod.r
 | # | Topic | Convex | bunvex | Why | Decision |
 |---|---|---|---|---|---|
 | W1 | Unawaited-operations message | ends with a docs link | no link | DV-04 | — |
-| W2 | HTTP action response size | warns, and logs the 20 MiB error, in the run's lines once the body is sent | neither (the error goes to the server console) | Ainda não fizemos: bunvex logs the run when the handler returns; a later PR logs it once the body is sent | DV-323, owner, 2026-10-04 (temporary) |
+| W2 | HTTP action response size | warns, and logs the 20 MiB error, in the run's lines once the body is sent | the same (the next PR) | Resolved | DV-323, owner, 2026-10-04 |
 | W3 | System functions' duration | their user time against 1 s | the same, measured by a timer that never fails them | They have no budget in bunvex (not a divergence in the warning) | — |
 
 ## 5. Tests
@@ -147,3 +156,22 @@ Sabotage checks, each failing a test:
 - the pending `fetch`;
 - the nesting;
 - system functions' warnings.
+
+`packages/server/test/http-action-response-log.test.ts` (the next PR):
+
+- the run is logged once its body is sent, its time covering the body;
+- the size warning;
+- a chunk past 20 MiB dropped with the error line while a later one still goes;
+- a failing body;
+- HEAD and an aborted client, also with a body that never ends.
+
+Sabotage checks, each failing a test:
+
+- deferred logging;
+- later chunks;
+- the overflow line, the stream-error line and its code;
+- cancellation settling;
+- HEAD cancelling;
+- the size warning.
+
+Pulling only on demand is not observable by these tests: it spares reading a body ahead of the client.

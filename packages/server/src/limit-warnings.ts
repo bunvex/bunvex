@@ -183,10 +183,18 @@ export function actionWarnings(o: {
 }
 
 /**
- * An HTTP action's warnings when its handler returns: its pending operations, its duration. (Convex's first,
- * the response's size, comes once the body is sent, after bunvex has logged the run: DV-323.)
+ * An HTTP action's warnings once its response is sent (or its handler failed): the response's size, its
+ * pending operations, its duration.
  */
-export function httpActionWarnings(o: { pending: Map<string, number>; elapsedMs: number }) {
+export function httpActionWarnings(o: {
+  sentBytes: number;
+  limitBytes: number;
+  pending: Map<string, number>;
+  elapsedMs: number;
+}) {
+  approaching(o.sentBytes, o.limitBytes, "HttpResponseTooLarge", "Large response returned from an HTTP action", {
+    unit: " bytes",
+  });
   unawaitedWarning(o.pending);
   approachingDuration(o.elapsedMs, V8_ACTION_USER_TIMEOUT_MS);
 }
