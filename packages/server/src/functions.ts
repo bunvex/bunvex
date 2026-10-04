@@ -72,6 +72,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import { actionWarnings, functionWarnings, httpActionWarnings } from "./limit-warnings.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
@@ -414,10 +415,69 @@ const storageMeter: StorageMeter = ({ read, written }) => {
 setFetchMeter(() => {
   const r = meteredAction();
   if (!r || r.environment !== "isolate") return null;
+  // Pending until it settles (an action's unawaited operations, STUDY-76); charged once it went out.
+  const settle = pendingOp(r, "fetch");
   return (bytes) => {
-    r.io.networkEgressBytes += bytes;
+    settle();
+    if (bytes !== null) r.io.networkEgressBytes += bytes;
   };
 });
+
+/** Count an operation of `r` as pending until the returned function is called (Convex's dangling tasks). */
+function pendingOp(r: Running, name: string): () => void {
+  r.pendingOps.set(name, (r.pendingOps.get(name) ?? 0) + 1);
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    r.pendingOps.set(name, (r.pendingOps.get(name) ?? 1) - 1);
+  };
+}
+
+/** `fn`'s promise, pending under `name` for the running action until it settles. */
+function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const r = meteredAction();
+  if (!r) return fn();
+  const settle = pendingOp(r, name);
+  return fn().finally(settle);
+}
+
+/**
+ * An action's context whose operations count as pending until they settle, under Convex's names for them
+ * (its syscalls, `name_when_dangling`): the unawaited-operations warning lists those still pending when the
+ * action returns (STUDY-76).
+ */
+function trackedCtx(ctx: ActionCtx): ActionCtx {
+  // biome-ignore lint/suspicious/noExplicitAny: wraps methods of every signature
+  const wrap = <F extends (...a: any[]) => any>(name: string, fn: F | undefined): F =>
+    (fn === undefined ? fn : (...a: Parameters<F>) => tracked(name, async () => fn(...a))) as F;
+  const c = ctx as unknown as Record<string, any>;
+  const s = c.scheduler;
+  const st = c.storage;
+  return {
+    ...c,
+    auth: { ...c.auth, getUserIdentity: wrap("getUserIdentity", c.auth.getUserIdentity) },
+    runQuery: wrap("query", c.runQuery),
+    runMutation: wrap("mutation", c.runMutation),
+    runAction: wrap("action", c.runAction),
+    scheduler: {
+      ...s,
+      runAfter: wrap("schedule", s.runAfter?.bind(s)),
+      runAt: wrap("schedule", s.runAt?.bind(s)),
+      cancel: wrap("cancel_job", s.cancel?.bind(s)),
+    },
+    storage: {
+      ...st,
+      getUrl: wrap("storageGetUrl", st.getUrl),
+      getMetadata: wrap("storageGetMetadata", st.getMetadata),
+      generateUploadUrl: wrap("storageGenerateUploadUrl", st.generateUploadUrl),
+      delete: wrap("storageDelete", st.delete),
+      store: wrap("storage.store", st.store),
+      get: wrap("storage.get", st.get),
+    },
+    vectorSearch: wrap("vectorSearch", c.vectorSearch),
+  } as unknown as ActionCtx;
+}
 
 /** A query's or mutation's timer, for the log's user execution time (STUDY-71). */
 function timed(timer: UserTimer): UserTimer {
@@ -1045,6 +1105,38 @@ export class Functions {
     };
   }
 
+  /**
+   * Run a query's or mutation's body, then add Convex's approaching-limit warnings to its lines (STUDY-76):
+   * when it returned or threw the app's error; a system failure ends it without them, as in Convex.
+   */
+  private async warned<T>(
+    db: Tx,
+    args: unknown,
+    timer: UserTimer,
+    body: () => Promise<T>,
+    userLimitMs = timer.userMs,
+  ): Promise<T> {
+    const warnings = (resultBytes: number | null) =>
+      functionWarnings({
+        argsBytes: valueSize([args as Value]),
+        maxArgsBytes: this.maxArgsSize,
+        tx: db,
+        resultBytes,
+        maxResultBytes: this.maxResultSize,
+        userMs: userTimeMs(timer),
+        userLimitMs,
+      });
+    let value: T;
+    try {
+      value = await body();
+    } catch (e) {
+      if (!isSystemError(e)) warnings(null);
+      throw e;
+    }
+    warnings(sizeOfResult(value ?? null));
+    return value;
+  }
+
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
     if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
     const resolved = this.fnLater(name, "query", fromClient, caller);
@@ -1054,9 +1146,12 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0));
       // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
-      return this.limits.query.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
+      return this.limits.query.run(async () => {
+        const timer = timed(this.newTimer());
+        const run = () => withUserTimer(timer, () => this.invoke(f, db, a, 0));
+        return this.warned(db, a, timer, async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
+      });
     };
   }
 
@@ -1077,10 +1172,13 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0, job));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => {
-        const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+        const timer = timed(this.newTimer());
+        const run = () => withUserTimer(timer, () => this.invoke(f, db, a, 0, job));
+        const value = await this.warned(db, a, timer, async () =>
+          this.checkReturns(f, await (env ? withEnv(env, run) : run())),
+        );
         checkDeadline(deadline);
         return value;
       });
@@ -1414,7 +1512,16 @@ export class Functions {
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
-      return q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+      // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
+      // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      return this.warned(
+        db,
+        a,
+        timer,
+        () => withUserTimer(timer, () => q!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+        this.userTimeoutMs,
+      );
     };
   }
 
@@ -1426,7 +1533,16 @@ export class Functions {
     const a = this.systemArgs(args, m!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
-      return m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+      // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
+      // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      return this.warned(
+        db,
+        a,
+        timer,
+        () => withUserTimer(timer, () => m!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+        this.userTimeoutMs,
+      );
     };
   }
 
@@ -1624,12 +1740,36 @@ export class Functions {
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
-        const limiter = NODE_FUNCTIONS.has(f) ? this.limits.nodeAction : this.limits.action;
+        const node = NODE_FUNCTIONS.has(f);
+        const limiter = node ? this.limits.nodeAction : this.limits.action;
         return limiter.run(
-          () =>
-            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then(
-              (r) => this.checkReturns(f, r),
-            ),
+          async () => {
+            const t0 = performance.now();
+            // Convex's action warnings (STUDY-76), when it returned or threw the app's error; Node actions'
+            // runtime has none.
+            const warn = (resultBytes: number | null) => {
+              if (node) return;
+              actionWarnings({
+                argsBytes: valueSize([a as Value]),
+                maxArgsBytes: this.maxArgsSize,
+                pending: meteredAction()?.pendingOps ?? new Map(),
+                elapsedMs: performance.now() - t0,
+                resultBytes,
+                maxResultBytes: this.maxResultSize,
+              });
+            };
+            try {
+              const value = this.checkReturns(
+                f,
+                await this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))),
+              );
+              warn(sizeOfResult(value ?? null));
+              return value;
+            } catch (e) {
+              if (!isSystemError(e)) warn(null);
+              throw e;
+            }
+          },
           { wait: opts.waitForPermit === true },
         );
       },
@@ -1646,7 +1786,7 @@ export class Functions {
    */
   private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
-    return {
+    return trackedCtx({
       auth: {
         getUserIdentity: async () => {
           if (authError) throw authError;
@@ -1693,7 +1833,7 @@ export class Functions {
         return results;
       },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
-    } as ActionCtx;
+    } as ActionCtx);
   }
 
   /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */
@@ -1715,9 +1855,24 @@ export class Functions {
       async () => {
         await this.failActionWhileNotRunning();
         // HTTP actions share the action limiter, as in Convex.
-        return this.limits.action.run(async () =>
-          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
-        );
+        return this.limits.action.run(async () => {
+          const t0 = performance.now();
+          const warn = () =>
+            httpActionWarnings({
+              pending: meteredAction()?.pendingOps ?? new Map(),
+              elapsedMs: performance.now() - t0,
+            });
+          try {
+            const response = await this.inActionEnv(() =>
+              inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request)),
+            );
+            warn();
+            return response;
+          } catch (e) {
+            if (!isSystemError(e)) warn();
+            throw e;
+          }
+        });
       },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
       routePath ?? new URL(request.url).pathname,

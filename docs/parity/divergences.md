@@ -325,6 +325,7 @@ classed as bugs by their study; they are listed here because they change what op
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
+| DV-323 | An HTTP action's response-size warning (`HttpResponseTooLarge` past 80 % of 20 MiB) and its over-limit error line are not in the run's log lines (the error goes to the server console). Owner, 2026-10-04: a later PR logs the run once its body is sent | logs the run once the body is sent, with both | [STUDY-76 §4](../study/STUDY-76-limit-warnings.md#4-divergences) |
 
 ## Pending owner decisions
 

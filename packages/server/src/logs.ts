@@ -23,7 +23,17 @@ const TRUNCATED_LINE_SUFFIX = " (truncated due to length)";
 export type LogLevel = "DEBUG" | "ERROR" | "WARN" | "INFO" | "LOG";
 
 /** One line (Convex's `LogLineStructured`): `timestamp` in wall-clock ms, `isTruncated` when it was cut. */
-export type LogLine = { level: LogLevel; messages: string[]; isTruncated: boolean; timestamp: number };
+export type LogLine = {
+  level: LogLevel;
+  messages: string[];
+  isTruncated: boolean;
+  timestamp: number;
+  /**
+   * A line the system wrote, not the function (Convex's `SystemLogMetadata`): its code, e.g.
+   * `warning:TooManyReads` (STUDY-76). Never cut, and not counted against the line limit.
+   */
+  systemCode?: string;
+};
 
 /**
  * The function execution lines belong to, for the function log (STUDY-47). Set on the executions the
@@ -174,9 +184,13 @@ function ownLinesOf(execution: Execution): LogLine[] {
 
 const logLinesOf = (execution: Execution): string[] => capped(allLines(execution)).map(prettyLogLine);
 
-/** Convex keeps MAX_LOG_LINES - 1 lines and spends the last on an [ERROR] notice. */
-function capped(lines: LogLine[]): LogLine[] {
-  if (lines.length < MAX_LOG_LINES) return lines;
+/**
+ * Convex keeps MAX_LOG_LINES - 1 lines and spends the last on an [ERROR] notice. System lines are not the
+ * function's: they are kept whatever its count (Convex writes them past the limit).
+ */
+function capped(all: LogLine[]): LogLine[] {
+  const lines = all.filter((l) => l.systemCode === undefined);
+  if (lines.length < MAX_LOG_LINES) return lines.length === all.length ? all : [...lines, ...systemLines(all)];
   const kept = lines.slice(0, MAX_LOG_LINES - 1);
   kept.push({
     level: "ERROR",
@@ -184,7 +198,21 @@ function capped(lines: LogLine[]): LogLine[] {
     isTruncated: false,
     timestamp: kept[kept.length - 1]!.timestamp,
   });
-  return kept;
+  return [...kept, ...systemLines(all)];
+}
+
+const systemLines = (lines: LogLine[]) => lines.filter((l) => l.systemCode !== undefined);
+
+/**
+ * A system warning on the running function's lines (Convex's `SystemWarning`, STUDY-76): a WARN line with its
+ * code, after the function's own lines, never cut. Outside a logged function, nothing.
+ */
+export function logSystemLine(level: LogLevel, message: string, systemCode: string) {
+  const e = current.getStore();
+  if (!e) return;
+  const line: LogLine = { level, messages: [message], isTruncated: false, timestamp: wallClock(), systemCode };
+  e.entries.push(line);
+  e.owner?.onLine?.(line);
 }
 
 const utf8 = new TextEncoder();
