@@ -296,6 +296,10 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
         partitionModules([m("f.js", "same", "isolate", "new-map")], remote([m("f.js", "same", "isolate", "old-map")])),
       ),
     ).toEqual({ changed: ["f.js"], unchanged: [] });
+    // The same source with the same map is unchanged: the map is part of the hash.
+    expect(
+      paths(partitionModules([m("f.js", "same", "isolate", "map")], remote([m("f.js", "same", "isolate", "map")]))),
+    ).toEqual({ changed: [], unchanged: ["f.js"] });
     // Deleted modules are in neither list (the push leaves them out).
     expect(
       paths(
