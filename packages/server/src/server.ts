@@ -46,11 +46,13 @@ import {
   setCanonicalUrl,
   withCanonical,
 } from "./canonical-urls.ts";
+import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
+import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import {
   clientError,
   FunctionPathError,
@@ -63,12 +65,14 @@ import {
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
+import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import {
   BadJsonBody,
+  QUERY_BATCH,
   readJsonBody,
   UDF_POST,
   UDF_POST_ARGS_ONLY,
@@ -501,6 +505,15 @@ export function createServer(opts: ServerOptions) {
    * Convex parses it after the run.
    */
   const udfResponse = (r: WithLogLines<string>, kind: string, req: { format?: unknown; client: string | null }) => {
+    const b = udfBody(r, kind, req);
+    return typeof b === "string" ? jsonText(b) : b;
+  };
+  /** The `UdfResponse` JSON of a run, or the request's error response when the run failed the request. */
+  const udfBody = (
+    r: WithLogLines<string>,
+    kind: string,
+    req: { format?: unknown; client: string | null },
+  ): string | Response => {
     // A mutation that exhausted its OCC retries is not the function's error in Convex: the request fails
     // with 503 and the OCC code (`ErrorCode::OCC` → SERVICE_UNAVAILABLE, crates/errors/src/lib.rs). Inside
     // an action, the same error is just an exception the action may catch.
@@ -524,13 +537,70 @@ export function createServer(opts: ServerOptions) {
       throw e;
     }
     if (r.ok)
-      return jsonText(
-        `{"status":"success","value":${reformat(r.value, format)}${linesField("logLines", r.logLines, redact)}}`,
-      );
+      return `{"status":"success","value":${reformat(r.value, format)}${linesField("logLines", r.logLines, redact)}}`;
     const e = formatError(r.error);
     const data = e.data === undefined ? "" : `,"errorData":${reformat(e.data, format)}`;
-    return jsonText(
-      `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`,
+    return `{"status":"error","errorMessage":${JSON.stringify(withRequestId(e.error))}${data}${linesField("logLines", r.logLines, redact)}}`;
+  };
+
+  /**
+   * `POST /api/query_batch` (Convex's `public_query_batch_post`, STUDY-67 H9): every query at one timestamp,
+   * the latest when the request came, each answered as `/api/query` would answer it, in order. A query's bad
+   * format, or a run that fails the request (a system error), fails the whole batch.
+   */
+  const queryBatch = async (
+    queries: { path: string; args: unknown; format?: string | null }[],
+    at: number,
+    caller: Caller,
+    client: string | null,
+  ): Promise<Response> => {
+    const results: string[] = [];
+    for (const q of queries) {
+      if (typeof q.format === "string")
+        try {
+          parseFormat(q.format);
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          throw e;
+        }
+      // Each entry's path is parsed after its format, and fails the whole batch (Convex's `parse_export_path`).
+      const badPath = badFunctionPath(q.path);
+      if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
+      const r = await collectLogs(async () => functions.runQueryAtJson(q.path, fromWire(q.args, q.path), at, caller));
+      const b = udfBody(r, "query", { format: q.format, client });
+      if (typeof b !== "string") return b;
+      results.push(b);
+    }
+    return jsonText(`{"results":[${results.join(",")}]}`);
+  };
+
+  /**
+   * `GET /api/query` (Convex's `public_query_get`): the query string's `path`, `args` (JSON text) and `format`,
+   * answered as `POST /api/query`. Convex declares this route but cannot read `args` from a query string, so
+   * every request there is a 400 (STUDY-67 §1.7); bunvex's works (DV-313, decided by the owner).
+   */
+  const getQuery = async (url: URL, req: Request): Promise<Response> => {
+    const badHeader = authHeaderSyntaxError(req);
+    if (badHeader) return badHeader;
+    const q = url.searchParams;
+    const path = q.get("path");
+    const argsText = q.get("args");
+    const bad = (why: string) => requestError(400, "BadQueryArgs", `Failed to deserialize query string: ${why}`);
+    if (path === null) return bad("missing field `path`");
+    if (argsText === null) return bad("missing field `args`");
+    let args: unknown;
+    try {
+      args = JSON.parse(argsText);
+    } catch (e) {
+      return bad(`args: ${(e as Error).message}`);
+    }
+    const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
+    const caller = await callerOfRequest(req);
+    if (caller instanceof Response) return caller;
+    return udfResponse(
+      await collectLogs(async () => functions.runQueryJson(path, fromWire(args, path), caller)),
+      "query",
+      formatRequest,
     );
   };
 
@@ -790,6 +860,33 @@ export function createServer(opts: ServerOptions) {
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
     }
+    const dataSyncRoute = DATA_SYNC_ROUTE.exec(url.pathname);
+    if (dataSyncRoute) {
+      const [, kind, id, fromDeltas] = dataSyncRoute;
+      const ok =
+        (kind === "sync" && id === undefined && req.method === "POST") ||
+        (kind === "sync" && id !== undefined && req.method === "GET") ||
+        (kind === "list_active_syncs" && id === undefined && req.method === "GET") ||
+        (fromDeltas !== undefined && req.method === "POST");
+      if (ok) {
+        // Convex's order: the streaming export entitlement (always on here), then `ViewData` (STUDY-69).
+        functions.requireOperation(caller, "ViewData");
+        try {
+          const text =
+            fromDeltas !== undefined
+              ? await cursorFromDeltas(engine, req)
+              : kind === "list_active_syncs"
+                ? await listActiveSyncs(engine, url.searchParams)
+                : id !== undefined
+                  ? await activeSync(engine, decodeURIComponent(id))
+                  : await dataSync(engine, req, caller);
+          return jsonText(text);
+        } catch (e) {
+          if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          throw e;
+        }
+      }
+    }
     const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
     if (streaming) {
       const route = streaming[1]!;
@@ -934,7 +1031,10 @@ export function createServer(opts: ServerOptions) {
           ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
           userAgent: req.headers.get("user-agent"),
         };
-        if (srv.upgrade(req, { data })) return undefined as never;
+        // A deprecated client's upgrade carries the deprecation headers (a refused one never gets here).
+        const verdict = requestVerdict(req);
+        const headers = verdict?.status === 200 ? verdict.headers : undefined;
+        if (srv.upgrade(req, { data, ...(headers ? { headers } : {}) })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");
@@ -985,6 +1085,7 @@ export function createServer(opts: ServerOptions) {
         METRICS_ROUTE.test(url.pathname) ||
         LOG_STREAM_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
+        DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
         USAGE_LIMIT_ROUTE.test(url.pathname) ||
@@ -1004,7 +1105,9 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts|function|run\/.+)$/.exec(url.pathname);
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
+      if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
+      const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
       if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
@@ -1014,7 +1117,14 @@ export function createServer(opts: ServerOptions) {
       // Convex's extractors, in order: the auth header's syntax, then the body (STUDY-67 H4).
       const badHeader = authHeaderSyntaxError(req);
       if (badHeader) return badHeader;
-      let body: { path: string; args: unknown; ts?: string; format?: string | null; componentPath?: string | null };
+      let body: {
+        path: string;
+        args: unknown;
+        ts?: string;
+        format?: string | null;
+        componentPath?: string | null;
+        queries?: { path: string; args: unknown; format?: string | null }[];
+      };
       try {
         body = await readJsonBody(
           req,
@@ -1029,18 +1139,33 @@ export function createServer(opts: ServerOptions) {
             ? UDF_POST_WITH_TS
             : kind === "function"
               ? UDF_POST_WITH_COMPONENT
-              : kind === "run"
-                ? UDF_POST_ARGS_ONLY
-                : UDF_POST,
+              : kind === "query_batch"
+                ? QUERY_BATCH
+                : kind === "run"
+                  ? UDF_POST_ARGS_ONLY
+                  : UDF_POST,
         );
       } catch (e) {
         if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
         throw e;
       }
+      // Convex parses the path before it authenticates (`parse_export_path`); `/api/function`, after its admin
+      // check, and `/api/run`'s after its identifier (STUDY-67 H7).
+      const badPath = () => {
+        const bad = badFunctionPath(body.path);
+        return bad && requestError(bad.status, bad.code, bad.message);
+      };
+      if (kind !== "function" && kind !== "run" && kind !== "query_batch") {
+        const bad = badPath();
+        if (bad) return bad;
+      }
       // `/api/run` answers clean JSON by default, whatever the client (Convex's `ConvexCleanJSON` default there).
       const formatRequest = { format: body.format, client: kind === "run" ? null : req.headers.get("bunvex-client") };
+      // Convex takes the batch's timestamp before it authenticates.
+      const batchTs = engine.committer.visibleTs;
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
+      if (kind === "query_batch") return queryBatch(body.queries!, batchTs, caller, formatRequest.client);
       if (runIdentifier !== null) {
         const path = runPath(runIdentifier);
         if (path === null)
@@ -1050,6 +1175,8 @@ export function createServer(opts: ServerOptions) {
             "Path or function name not provided in path, e.g. /api/run/messages/list",
           );
         body.path = path;
+        const bad = badPath();
+        if (bad) return bad;
       }
       // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
       // a user), on the root component; the function's own kind, internal ones included.
@@ -1073,6 +1200,8 @@ export function createServer(opts: ServerOptions) {
         // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
         if (typeof body.componentPath === "string" && body.componentPath !== "")
           return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        const bad = badPath();
+        if (bad) return bad;
         const found = functions.kindOf(body.path);
         if (!found)
           return udfResponse(
@@ -1120,7 +1249,8 @@ export function createServer(opts: ServerOptions) {
       );
     },
   };
-  server = Bun.serve<WsData, never>(withApiCors(apiOptions));
+  // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
+  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1147,18 +1277,20 @@ export function createServer(opts: ServerOptions) {
   const site =
     sitePort === null
       ? null
-      : Bun.serve({
-          port: sitePort,
-          ...(opts.hostname ? { hostname: opts.hostname } : {}),
-          idleTimeout: 120,
-          ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-          fetch(req, srv) {
-            const url = new URL(req.url);
-            if (url.pathname === "/version") return new Response("bunvex");
-            srv.timeout(req, 0);
-            return serveHttpAction(req, url.pathname, url.search);
-          },
-        });
+      : Bun.serve(
+          withClientVersionCheck({
+            port: sitePort,
+            ...(opts.hostname ? { hostname: opts.hostname } : {}),
+            idleTimeout: 120,
+            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+            fetch(req, srv) {
+              const url = new URL(req.url);
+              if (url.pathname === "/version") return new Response("bunvex");
+              srv.timeout(req, 0);
+              return serveHttpAction(req, url.pathname, url.search);
+            },
+          } as Bun.Serve.Options<undefined, never>),
+        );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
     ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`)

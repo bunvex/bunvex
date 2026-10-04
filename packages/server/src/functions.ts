@@ -250,20 +250,53 @@ const DEFINED = new WeakSet<object>();
 /** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
 export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
 
-export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
+export const isFunctionDef = (x: unknown): x is FunctionDef =>
+  (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);
 
 const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
 
 function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
-  const f = defineUnmarked(kind, visibility, def);
+  const spec = defineUnmarked(kind, visibility, def);
+  const builderName = visibility === "public" ? kind : `internal${kind[0]!.toUpperCase()}${kind.slice(1)}`;
+  const f = dontCallDirectly(builderName, spec.handler as (ctx: unknown, args: unknown) => unknown);
+  assertNotBrowser();
   // Convex's markers: what the function is (`ApiFromModules` reads them as types).
-  Object.assign(f, {
+  Object.assign(f, spec, {
     isBunvexFunction: true,
     [KIND_MARKER[kind]]: true,
     [visibility === "public" ? "isPublic" : "isInternal"]: true,
   });
   DEFINED.add(f);
-  return f;
+  return f as unknown as FunctionDef;
+}
+
+/**
+ * A registered function is callable, as Convex's (registration_impl.ts `dontCallDirectly`, STUDY-66 §7): called
+ * directly (`await foo(ctx, args)`), it warns and runs the handler.
+ */
+function dontCallDirectly(builderName: string, handler: (ctx: unknown, args: unknown) => unknown) {
+  return (ctx: unknown, args: unknown) => {
+    console.warn(
+      "bunvex functions should not directly call other bunvex functions. Consider calling a helper function instead. " +
+        `e.g. \`export const foo = ${builderName}(...); await foo(ctx);\` is not supported.`,
+    );
+    return handler(ctx, args);
+  };
+}
+
+/**
+ * Convex's `assertNotBrowser`: functions imported in a real browser (its `window` getter is native code;
+ * JSDOM's is not) log an error. `window.__bunvexAllowFunctionsInBrowser` turns it off.
+ */
+function assertNotBrowser() {
+  const w = (globalThis as { window?: { __bunvexAllowFunctionsInBrowser?: unknown } }).window;
+  if (w === undefined || w.__bunvexAllowFunctionsInBrowser) return;
+  const isRealBrowser =
+    Object.getOwnPropertyDescriptor(globalThis, "window")?.get?.toString().includes("[native code]") ?? false;
+  if (isRealBrowser)
+    console.error(
+      "bunvex functions should not be imported in the browser. This will throw an error in future versions of `bunvex`. If this is a false negative, please report it to bunvex.",
+    );
 }
 
 function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
@@ -1495,7 +1528,8 @@ export class Functions {
     name: string,
     args: unknown,
     caller?: Caller,
-    opts: { job?: string; internal?: boolean; waitForPermit?: boolean } = {},
+    /** `authError`: the calling action's token failed verification (an HTTP action's), passed on. */
+    opts: { job?: string; internal?: boolean; authError?: Error | null; waitForPermit?: boolean } = {},
   ): Promise<unknown> {
     return this.logged(
       "Action",
@@ -1504,7 +1538,7 @@ export class Functions {
       async () => {
         await this.failActionWhileNotRunning();
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-        const ctx = this.actionCtx(caller, null, opts.job, f);
+        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const limiter = NODE_FUNCTIONS.has(f) ? this.limits.nodeAction : this.limits.action;
@@ -1522,7 +1556,8 @@ export class Functions {
 
   /**
    * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
-   * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
+   * as in Convex): `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity.
+   * The actions it calls get the error too, as Convex passes them the same identity (STUDY-66 §5).
    */
   private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
@@ -1538,7 +1573,7 @@ export class Functions {
       runMutation: async (n: FunctionRef, a?: unknown) =>
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: makeScheduler(this, {
         engine: this.engine,

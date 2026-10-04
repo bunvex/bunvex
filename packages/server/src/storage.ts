@@ -440,7 +440,7 @@ export function startFileSweeps(engine: Engine, files: FileStorage): () => void 
   const queue = engine.catalog.table(STORAGE_DELETIONS_TABLE).indexes.get("by_creation_time")!.id;
   engine.committer.onCommit((entries) => {
     if (entries.some((e) => e.writes.some((w) => w.index === queue && w.id !== null))) void deleted();
-  });
+  }, "file storage sweeps");
   const every = setInterval(() => void deleted(), 30_000);
   const orphans = setInterval(
     () => {
