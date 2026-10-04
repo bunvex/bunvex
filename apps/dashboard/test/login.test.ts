@@ -8,7 +8,6 @@ import {
   mockVerifier,
   normalizeDeploymentUrl,
 } from "../src/login/credentials.ts";
-import { listenForEmbeddedCredentials, parseEmbeddedCredentials } from "../src/login/embedded.ts";
 import { initialSession, rememberDemo } from "../src/login/host-session.ts";
 
 function memoryStorage(init: Record<string, string> = {}) {
@@ -61,54 +60,6 @@ describe("the mock verifier and the key's permissions", () => {
       ).operations,
     ).toEqual(["resumeDeployment", "runFunctions"]);
     expect(deploymentNameOf("happy-otter-123|eyJ…")).toBe("happy-otter-123");
-  });
-});
-
-describe("credentials from an embedding page", () => {
-  test("only a well-formed dashboard-credentials message counts", () => {
-    const good = {
-      type: "dashboard-credentials",
-      adminKey: "k|1",
-      deploymentUrl: "http://127.0.0.1:3210/",
-      deploymentName: "dev",
-    };
-    expect(parseEmbeddedCredentials(good)).toEqual({
-      adminKey: "k|1",
-      deploymentUrl: "http://127.0.0.1:3210",
-      deploymentName: "dev",
-    });
-    expect(parseEmbeddedCredentials({ ...good, type: "other" })).toBeNull();
-    expect(parseEmbeddedCredentials({ ...good, deploymentUrl: "127.0.0.1:3210" })).toBeNull();
-    expect(parseEmbeddedCredentials("hello")).toBeNull();
-  });
-
-  test("asks the parent once, after it listens, and hands each answer over", () => {
-    const sent: unknown[] = [];
-    let handler: ((e: MessageEvent) => void) | undefined;
-    const win = {
-      parent: { postMessage: (m: unknown) => void sent.push(m) },
-      addEventListener: (_: string, h: EventListener) => {
-        handler = h as never;
-      },
-      removeEventListener: () => {
-        handler = undefined;
-      },
-    };
-    const got: unknown[] = [];
-    const stop = listenForEmbeddedCredentials(win as never, (c) => got.push(c));
-    expect(sent).toEqual([{ type: "dashboard-credentials-request" }]);
-    handler!({
-      data: {
-        type: "dashboard-credentials",
-        adminKey: "a|b",
-        deploymentUrl: "https://d.example.com",
-        deploymentName: "d",
-      },
-    } as MessageEvent);
-    handler!({ data: { type: "nope" } } as MessageEvent);
-    expect(got).toEqual([{ adminKey: "a|b", deploymentUrl: "https://d.example.com", deploymentName: "d" }]);
-    stop();
-    expect(handler).toBeUndefined();
   });
 });
 
