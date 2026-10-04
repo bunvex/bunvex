@@ -10,6 +10,7 @@
 // built when missing, as `indexes_by_ts`); prunes are `ts <= X` per key, Convex's SQLite statements;
 // globals are `persistence_globals` rows.
 import { Database } from "bun:sqlite";
+import { opaqueToInspect } from "../inspect.ts";
 import type {
   DocLogRow,
   DocPrune,
@@ -99,7 +100,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4 order by key ${dir}, ts desc limit ?5`);
     this.scanAsc = scan("asc");
     this.scanDesc = scan("desc");
-    this.getDoc = this.db.prepare(`select json_value, deleted from documents
+    this.getDoc = this.db.prepare(`select json_value, deleted, ts from documents
         where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`);
     // The rows of the first ?3 commits in (?1, ?2], in ts order: the inner query walks the ts index to find
     // the last of those commits, the outer one reads every row up to it.
@@ -323,6 +324,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
+  getVersions(table: number, ids: string[], ts: number) {
+    // Embedded: one indexed lookup per id is the fastest form (no round trips to save).
+    return ids.map((id) => {
+      const r = this.getDoc.get(table, id, ts) as any;
+      return r && !r.deleted ? { json: r.json_value as string, ts: Number(r.ts) } : null;
+    });
+  }
+
   auditLiveDocs(table: number, ts: number) {
     const r = this.db
       .query(`select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
@@ -348,3 +357,6 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lock = null;
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(SqlitePersistence);
