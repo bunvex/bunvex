@@ -16,6 +16,7 @@ import { dirname, join, relative, resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "..");
 const PKGS = join(ROOT, "packages");
 const APPS = join(ROOT, "apps");
+const EXAMPLES = join(ROOT, "examples");
 
 /** Which @bunvex packages each package may import (by directory name; apps as "apps/<dir>"). */
 const ALLOWED: Record<string, string[]> = {
@@ -62,7 +63,11 @@ const ALLOWED: Record<string, string[]> = {
   "apps/dashboard": ["dashboard", "ui"],
   // SITE-01: the website renders content only; it never talks to a deployment.
   "apps/site": ["ui"],
+  // STUDY-90: an example is a user's app: the public packages only (and the shared end-to-end helper).
+  "examples/_harness": ["bunvex"],
 };
+/** Every example (examples/<dir>) may import what a user's app may. */
+const EXAMPLE_ALLOWED = ["bunvex", "react-query", "examples/_harness"];
 /** Imports core must never contain (rule 2). */
 const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^mongodb$/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];
 const CORE_FORBIDDEN_TEXT = [/\bBun\.serve\b/, /\bnew WebSocket\b/];
@@ -72,6 +77,7 @@ const workspaces = new Map<string, string>();
 for (const [base, prefix] of [
   [PKGS, ""],
   [APPS, "apps/"],
+  [EXAMPLES, "examples/"],
 ] as const) {
   if (!existsSync(base)) continue;
   for (const d of readdirSync(base))
@@ -134,7 +140,7 @@ const errors: string[] = [];
 for (const [name, dir] of dirOfName) {
   const root = workspaces.get(dir)!;
   const where = relative(ROOT, root);
-  const allowed = ALLOWED[dir];
+  const allowed = ALLOWED[dir] ?? (dir.startsWith("examples/") ? EXAMPLE_ALLOWED : undefined);
   if (!allowed) {
     errors.push(`${name}: no dependency rule for ${where} — add it to scripts/check-deps.ts and ARCHITECTURE.md`);
     continue;

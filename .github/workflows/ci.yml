@@ -71,6 +71,21 @@ jobs:
       - if: needs.changes.outputs.code == 'false'
         run: bun run --cwd apps/site test
 
+  # The example apps end to end (STUDY-90): each is deployed to a bunvex-local-backend, its functions run
+  # through the public client, and its front end typechecked and built.
+  examples:
+    name: examples
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run test:examples
+
   # Line coverage of the root `bun test`, a table per package and per critical file, and a failure when a
   # critical file drops below its floor (scripts/coverage-floors.ts, TEST-01 §4). Its own job, in parallel
   # with `check`, so the suite's time is not paid twice on the critical path.

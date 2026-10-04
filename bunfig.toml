@@ -1,4 +1,4 @@
 # The UI packages run their tests in their own process, with a DOM preloaded (their bunfig.toml);
 # the root run must not load them, or happy-dom's globals would reach the engine and server tests (UI-01 §7).
 [test]
-pathIgnorePatterns = ["packages/ui/**", "packages/dashboard/**", "packages/sync-e2e/react/**", "apps/**"]
+pathIgnorePatterns = ["packages/ui/**", "packages/dashboard/**", "packages/sync-e2e/react/**", "apps/**", "examples/**"]
