@@ -39,3 +39,25 @@ verifier exists for now — the dashboard does not talk to a real server yet: a 
 signs in (`name|readonly…` read-only, `name|viewer…` view-only). **Use the demo data** opens the screens on the
 mock; `?demo=1` does it from the address. `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY` prefill the
 form. The key lives in memory: a reload asks for it again.
+
+### Embedding the dashboard
+
+A page can show the dashboard in an `<iframe>` and sign it in, with the same messages as Convex's self-hosted
+dashboard: on load the dashboard asks its parent with `{ type: "dashboard-credentials-request" }`, and the parent
+answers with `{ type: "dashboard-credentials", adminKey, deploymentUrl, deploymentName }`.
+
+Unlike Convex, which takes that answer from any page, **the dashboard accepts it only from the parent origins
+you allow, and embedded sign-in is off until you do** (STUDY-12 LG3, DV-319). The request is addressed to those
+origins only, never `*`, and an answer counts only if it comes from the parent window at one of them.
+
+- At build time: `VITE_BUNVEX_EMBED_ORIGINS="https://admin.example.com, http://localhost:3000" bun run build`.
+- In a built dashboard: the list is in `dist/index.html`, so it can be set without rebuilding (by hand, or by a
+  container's start script):
+
+  ```html
+  <meta name="bunvex-embed-origins" content="https://admin.example.com http://localhost:3000">
+  ```
+
+Origins are separated by commas or spaces and compared as scheme, host and port (`https://admin.example.com`,
+not a path). Anything that is not an `http(s)` URL is ignored, `*` included: there is no "any origin" setting.
+The parent page sends the admin key to the dashboard, so it must only be served to people who may hold that key.

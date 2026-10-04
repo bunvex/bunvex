@@ -694,7 +694,7 @@ describe("environment variables (STUDY-37)", () => {
     stops.push(() => d.s.shutdown());
     await d.push([envMod]);
     const values: unknown[] = [];
-    const ws = new WebSocket(`${d.api.replace("http", "ws")}/api/1.0/sync`);
+    const ws = new WebSocket(`${d.api.replace("http", "ws")}/api/1.46.0/sync`);
     await new Promise((r) => ws.addEventListener("open", r));
     ws.addEventListener("message", (ev) => {
       const m = JSON.parse(String(ev.data));

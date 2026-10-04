@@ -60,6 +60,21 @@
 - Bytes → `{"$bytes": base64}`.
 - Object keys are sorted.
 
+### The value in an error message
+
+`stringifyValueForError` (npm-packages/convex/src/values/value.ts) prints the value of every
+"… is not a supported Convex type" / "undefined is not a valid Convex value" message, and the data of a
+`ConvexError` as its message:
+
+- `JSON.stringify` with a replacer: `undefined` → `"undefined"`, a bigint → `"5n"`; then cut at 16384
+  characters with `[...truncated]`, never between the halves of a surrogate pair.
+- The message is `${typeName}${value}`: `Set` / `Map` print their entries (`Set[1]`), a class instance its
+  constructor name then its JSON (`Point {"x":1}`), a function `Function undefined`.
+- Plain `JSON.stringify` semantics otherwise: a class instance's enumerable fields, its `toJSON` (a `Date`
+  prints its ISO string) and getters run; a cycle throws `TypeError` from inside the message builder.
+- It runs in the function's isolate, on the app's own objects. Convex's `ctx.db` and query objects are thin
+  JS shells over syscalls, so their JSON holds no engine state.
+
 ### Long keys
 
 - In the SQL stores (`crates/postgres/src/sql.rs`, `crates/common/src/index.rs`), a key is split into
@@ -90,6 +105,12 @@
   - documents are stored as `toJsonValue` text and read with `fromJsonValue`;
   - `patch` with `undefined` removes a field;
   - writes are validated as `toJsonValue` would (`copyValue`), so an unsupported type throws at the call.
+- **Error messages** (`stringifyValueForError`, `displayValue`): plain data prints exactly as Convex prints
+  it; a class instance, `Map`, `Set`, `Date` or function prints as `Name {…}` and is never opened (no
+  field, getter or `toJSON` read), a cycle as `"[Circular]"`, and the walk stops at the 16384-character
+  limit. bunvex's engine objects live in the same process as function code: `ctx.db` is the transaction,
+  whose fields reach the catalog, the store and its recent writes, so opening it put them in a message the
+  client receives (D2).
 - **`@bunvex/server`:** decodes arguments with `fromJsonValue` and encodes results with `toJsonValue`.
 - **Old stores are unreadable**, which is fine: there is no production data.
 
@@ -98,6 +119,7 @@
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | D1 | Public function names: `toJsonValue` / `fromJsonValue` instead of `convexToJson` / `jsonToConvex` | bunvex's public API carries no "convex" in its names (owner, 2026-09-30) | accepted |
+| D2 | An error message prints a class instance as `Name {…}` (Convex: `Name {"field":…}`, its JSON), a `Date` as `Date {…}` (Convex: its ISO string), and a cycle as `"[Circular]"` (Convex: a `TypeError` from `JSON.stringify`) | Opening a non-plain object leaked the transaction, catalog and store state of bunvex's engine objects to the client; naming it is the bounded form that cannot leak | owner, 2026-10-03 (#308): accepted, option 1 (DV-316) |
 
 ## 5. Tests
 
@@ -107,5 +129,10 @@
   Infinity < NaN < false < true < "" < "a" < bytes < [] < {}.
 - **Round trips** through JSON for every special value. Refusals of `Date`, `Map`, `Set`, class
   instances, `$`-prefixed and control-character field names, and out-of-range bigint.
+- **Error display** (`values/test/error-display.test.ts`): plain data prints as Convex's algorithm prints
+  it (property test against it, cut included); class instances, cycles, huge and deep values; no getter or
+  `toJSON` runs. `server/test/unsupported-value-leak.test.ts`: results, writes, arguments, `returns` and
+  filter literals holding a query, `ctx.db`, `ctx` or a class instance give a short message with none of
+  the engine's internals.
 - **Engine:** a missing field vs `null` in an index; boolean after number; bigint and bytes stored and
   read back.
