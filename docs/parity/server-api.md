@@ -61,7 +61,7 @@ Key bunvex facts behind the statuses:
 | Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | done (#40) | Reusing or rechaining throws Convex's "This query has been chained with another operator and can't be reused."; iteration only once. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | done (STUDY-66) | Convex's message, for the top-level result of a query or mutation (`db.query` and its operators, `db.system.query`), before `returns` is checked. |
-| `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
+| `.count()` (internal, not public) | impl/query_impl.ts | partial | The engine's count exists, for system functions only (`Tx.countTable`, `tableSize`); not on the query builder (Convex's `1.0/count`). |
 | `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | done (STUDY-45) | `SearchFilterBuilder` (`search` then `eq`s, single use), Convex's checks of the index and filters; the index is in memory, rebuilt at start (DV-227, DV-228). |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | done (STUDY-45) | BM25 ranking in relevance order, `order()` refused; the last term also matches as a prefix (DV-231). Reactive, with Convex's search read set (DV-230). |
 | Search limits: 16 query terms, 32-char term max, ≤8 filter conditions, ≤1024 results | crates/search/src/constants.rs | done (STUDY-45) | 16 query terms, tokens of 32+ bytes dropped (DV-229), ≤8 `eq` conditions, ≤1024 candidates ("Search query scanned too many documents"). |
@@ -77,7 +77,7 @@ Key bunvex facts behind the statuses:
 | `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts | done (#42) | See STUDY-17 §4. |
 | Only one paginated query per query or mutation (`MultiplePaginatedDatabaseQueries`) | async_syscall.rs | done (#42) | A second `paginate()` in one function throws Convex's message. |
-| `paginate()` isn't supported inside components | async_syscall.rs | missing | Components are phase 4. |
+| `paginate()` isn't supported inside components | async_syscall.rs | missing (DV-55) | Nothing to enforce until components exist (STUDY-62). |
 | `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | done (#42) | See STUDY-17 §4. |
 
 ### 4. Database writer: `ctx.db` in mutations
@@ -195,7 +195,7 @@ Key bunvex facts behind the statuses:
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | done (#21) | Class instances, `Map` and `Set` refused ("… is not a supported value type", Convex's message structure without "Convex"). The message names a class instance (`Point {…}`) without opening it (DV-316, decided by the owner 2026-10-03). |
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | done (STUDY-36) | `GenericId<T>` in `@bunvex/values`; `v.id(t)` infers it; `_generated/dataModel` names it `Id<T>` (codegen PR). |
-| `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | partial (#21) | `compareValues` and `valueSize` (Convex's `getConvexSize`) are exported by `@bunvex/values`; `getDocumentSize` and `Base64` are missing. |
+| `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | partial (#21) | `compareValues` and `valueSize` (Convex's `getConvexSize`) are exported by `@bunvex/values`; `getDocumentSize` and `Base64` are missing, and so is the name `getConvexSize` (an import of it fails). |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
 ### 9. Value ordering (index order and filter comparisons)
@@ -310,10 +310,10 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | missing | |
-| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing | |
-| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing | |
-| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing | New. |
+| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
+| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
+| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing (DV-55, DV-174) | `components` is generated as `{}` until components exist (STUDY-62). |
+| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |
 | Isolated per-component tables, functions and data | crates (component registry) | missing | |
 
@@ -342,7 +342,7 @@ Key bunvex facts behind the statuses:
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
 | Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | done (STUDY-41) | User time is wall time minus the time awaiting the store and nested calls (each nested call has its own budget); Convex's message ("Function execution timed out (maximum duration: 1s)"), not catchable, a mutation commits nothing; the 15 s system budget with Convex's message; `DATABASE_UDF_USER_TIMEOUT_SECONDS` / `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS`. Checked at store calls and at the end: a synchronous loop that never reaches the store is not interrupted (DV-208). |
 | Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
-| Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | missing | |
+| Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | n/a (DV-164) | No isolates: deployed code runs in `vm` contexts in the server's process. |
 | Log lines ≤ 256 per execution, ≤ 32 KiB each | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | See §7. |
 | Scheduling: 1000 per transaction, 4 MiB per job, 16 MiB total | knobs.rs | done (STUDY-30) | 1000 per transaction and 16 MiB total enforced; the 4 MiB per job is only a warning in Convex, and bunvex does not warn yet. |
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | done (STUDY-32) | As Convex: declared but never enforced, so none here (§13). |
@@ -356,7 +356,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 213 |
-| partial | 9 |
-| missing | 18 |
+| done | 216 |
+| partial | 10 |
+| missing | 13 |
+| n/a (a decided divergence) | 1 |
 | **total** | **240** |
