@@ -81,3 +81,23 @@ export function authAuditDiff(before: unknown[] | null, after: unknown[] | null)
   const b = new Set((after ?? []).map(providerJson));
   return { added: [...b].filter((x) => !a.has(x)).sort(), removed: [...a].filter((x) => !b.has(x)).sort() };
 }
+
+/**
+ * The same diff as a push answers it (`start_push`'s `schemaChange.indexDiffs` and `finish_push`'s
+ * `componentDiffs[""].indexDiff`, Convex's `SerializedIndexDiff`): each index a
+ * `SerializedNamedDeveloperIndexConfig` in JSON, so `dimensions` is a number.
+ */
+export function indexDiffJson(diff: ReturnType<typeof indexAuditDiff>) {
+  const json = (list: Value[]) =>
+    list.map((c) =>
+      Object.fromEntries(
+        Object.entries(c as Record<string, Value>).map(([k, v]) => [k, typeof v === "bigint" ? Number(v) : v]),
+      ),
+    );
+  return {
+    added_indexes: json(diff.added_indexes),
+    removed_indexes: json(diff.removed_indexes),
+    enabled_indexes: json(diff.enabled_indexes),
+    disabled_indexes: json(diff.disabled_indexes),
+  };
+}
