@@ -75,6 +75,12 @@ async function setup(opts: { maxRequestBodySize?: number } = {}) {
     method: "POST",
     handler: httpAction(async (_ctx, req) => new Response(await req.text())),
   });
+  // Store the request's body (Convex's file-storage-with-HTTP pattern): the blob carries its Content-Type.
+  http.route({
+    path: "/store",
+    method: "POST",
+    handler: httpAction(async (ctx, req) => new Response(await ctx.storage.store(await req.blob()))),
+  });
   const server = createServer({
     engine,
     functions,
@@ -299,6 +305,19 @@ describe("ctx.storage", () => {
     const id = await storeText("served by http");
     expect(await (await fetch(`${server.siteUrl}/file?id=${id}`)).text()).toBe("served by http");
     expect((await fetch(`${server.siteUrl}/file?id=${crypto.randomUUID()}`)).status).toBe(404);
+  });
+
+  test("an HTTP action storing `await request.blob()` keeps the request's Content-Type, and serves it back", async () => {
+    const { functions, server } = await setup();
+    const r = await fetch(`${server.siteUrl}/store`, {
+      method: "POST",
+      headers: { "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    const id = await r.text();
+    expect(((await functions.runQuery("m:doc", { id })) as { contentType: unknown }).contentType).toBe("image/png");
+    const served = await fetch(`${server.siteUrl}/file?id=${id}`);
+    expect(served.headers.get("content-type")).toBe("image/png");
   });
 });
 
