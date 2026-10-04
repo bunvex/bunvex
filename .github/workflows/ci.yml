@@ -86,6 +86,25 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test:examples
 
+  # The example apps in a real browser (STUDY-90): each deployed, its front end served by its own dev server
+  # (Vite or Next.js), its page driven in Chromium; a page error or console error fails it. What the e2e tests
+  # cannot see: the client running in a browser (`Buffer is not defined` passed them all).
+  examples-browser:
+    name: examples · browser (Chromium)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: install Chromium (the version playwright-core 1.63.0 drives)
+        working-directory: examples/_browser
+        run: bun x playwright-core install --with-deps chromium
+      - run: bun run test:examples:browser
+
   # Line coverage of the root `bun test`, a table per package and per critical file, and a failure when a
   # critical file drops below its floor (scripts/coverage-floors.ts, TEST-01 §4). Its own job, in parallel
   # with `check`, so the suite's time is not paid twice on the critical path.
