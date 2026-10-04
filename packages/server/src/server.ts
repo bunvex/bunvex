@@ -1760,7 +1760,9 @@ export function createServer(opts: ServerOptions) {
         );
       const r = accessError(e);
       if (r) return r;
-      throw e;
+      // Anything else is a system error, as Convex answers one: 500, its generic message; the cause is logged.
+      console.error("bunvex: a push failed:", e);
+      return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
     }
   };
 
