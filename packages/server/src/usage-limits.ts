@@ -119,8 +119,19 @@ export class UsageMeter {
     userExecutionTime: number | null;
     memoryMb: number;
     databaseIoBytes: number;
+    /** An action's `fetch` request bodies and file reads (Convex's network and storage egress). */
+    dataEgressBytes?: number;
+    /** An action's file storage calls, counted as function calls as Convex's are. */
+    storageCalls?: number;
+    /** Text and vector searches' `bytes_searched`, into `searchQueryGb` (in GB, as Convex's recorder). */
+    searchQueryBytes?: number;
+    /** False for a `_system/` function: Convex counts its compute and bandwidth, not the call. */
+    tracked?: boolean;
   }) {
-    this.record("functionCalls", 1);
+    if (e.tracked !== false) this.record("functionCalls", 1);
+    this.record("functionCalls", e.storageCalls ?? 0);
+    this.record("dataEgressGb", e.dataEgressBytes ?? 0);
+    this.record("searchQueryGb", (e.searchQueryBytes ?? 0) / 2 ** 30);
     const gbs = (seconds: number) => (e.memoryMb / 1024) * seconds;
     if (e.udfType === "Action" || e.udfType === "HttpAction") {
       if (e.environment === "node") this.record("actionComputeNodeJsGbHours", gbs(e.executionTime));

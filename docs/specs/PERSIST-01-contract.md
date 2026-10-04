@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -323,6 +323,15 @@ reference", "Index reference to deleted document"; STUDY-09 §1.6):
 
 Documents are keyed by (table, id): one id in two tables is two documents. Conformance K30–K31.
 
+## C16 — document versions
+
+`getVersions(table, ids, ts)` returns one answer per id, in the ids' order, duplicates included: the
+version of `(table, id)` visible at `ts` as `{ json, ts }` (the JSON `get` would return, and the ts it was
+written at), or null when the document is missing or deleted at `ts`. A remote store answers in one round
+trip per batch of ids (the first-party drivers: 1 000 ids per statement), not one per id. Streaming
+export reads it for each document's revision ts (Convex's `LatestDocument.ts`; STUDY-60, data sync).
+Optional in the interface; required of the first-party drivers. Conformance K32.
+
 
 | # | property | how |
 |---|---|---|
@@ -355,6 +364,7 @@ Documents are keyed by (table, id): one id in two tables is two documents. Confo
 | K29 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
 | K30 | index references (C15) | an index entry whose document was never written and one whose document was deleted while the entry stayed, among live ones: `scan` returns every entry (asc and desc), `get` is null for both (and the deleted one reads below its delete); `scanDocs` over the whole index (both directions), over each broken entry alone and below the delete rejects with `DanglingReferenceError` carrying the right `deleted` flag, and reads ranges with no broken entry. From Convex's `query_dangling_reference` and `query_reference_deleted_doc` |
 | K31 | one id in two tables (C15) | the same id written in two tables in one commit (different documents, one index each), then replaced in one and deleted in the other: `get`, `scan` and `scanDocs` answer each table's own document at every snapshot. From Convex's `same_internal_id_multiple_tables` |
+| K32 | document versions (C16) | a random history of 200 commits over two tables with the same ids (inserts, rewrites, deletes, re-inserts), flushed in random groups: `getVersions` at 120 random snapshots, with unknown and repeated ids, equals the reference model (version and ts, null when missing or deleted) and agrees with `get`; no ids give `[]` |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

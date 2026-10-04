@@ -110,10 +110,9 @@ A connector's view: pages, cursors, value encodings, field order, errors.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | DV-307 | The formats are bunvex-named: `encoded_json` and `clean_json` (with `json` and `export_json`, which hold no "convex"). Convex's `convex_encoded_json`, `convex_clean_json` and legacy `convex_json` are `BadFormat`; the legacy alias has no bunvex counterpart. | Rule 5 with no exceptions: the clients that talk to bunvex are bunvex's (as DV-312). A connector written for Convex must ask for `encoded_json`. | owner, 2026-10-03, revisited: B (as DV-312); first resolved the same day to Convex's names by a wire-name exception, now removed |
-| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s); older gives `SnapshotTooOld`. Each value's `_ts` is the snapshot. | Ainda não fizemos: Convex's table iterator rebuilds old snapshots from the document log, and bunvex's drivers do not expose a revision's ts. A connector paging one snapshot for more than 4 minutes would restart. | accepted (owner, 2026-10-03) |
+| DV-306 | `list_snapshot` reads a snapshot only within the index retention window (240 s); older gives `SnapshotTooOld`. Each value's `_ts` is its revision's ts since PERSIST-01 C16 (`getVersions`; owner, 2026-10-03); the snapshot age limit stays. | Ainda não fizemos: Convex's table iterator rebuilds old snapshots from the document log. A connector paging one snapshot for more than 4 minutes would restart. | accepted (owner, 2026-10-03) |
 
-Not built yet (not a divergence): `/api/v1/data/sync`, `list_active_syncs`, `data_sync_cursor_from_deltas`,
-`_data_sync_progress`. These are the current Fivetran connector's API.
+Built since in [STUDY-69](STUDY-69-data-sync.md): `/api/v1/data/sync`, `list_active_syncs`, `data_sync_cursor_from_deltas`, `_data_sync_progress`.
 
 ## 5. Tests
 
