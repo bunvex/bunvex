@@ -38,6 +38,17 @@ describe("BunvexHttpClient", () => {
     await expect(http.query(api.messages.nope)).rejects.toThrow("Could not find public function for 'messages:nope'.");
   });
 
+  test("a path that does not parse is the server's 400, its code and reason as given (DV-312)", async () => {
+    const { http } = await setup();
+    const e = (await http.query("messages:li-st").catch((x) => x)) as Error;
+    expect(e).not.toBeInstanceOf(BunvexError);
+    expect(JSON.parse(e.message)).toEqual({
+      code: "BadBunvexFunctionIdentifier",
+      message:
+        "messages:li-st is not a valid path to a bunvex function. Identifier li-st has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
+    });
+  });
+
   test("mutations run one at a time, in order; skipQueue does not wait", async () => {
     const { h, http } = await setup();
     const open = h.gate("first");
@@ -68,6 +79,7 @@ describe("BunvexHttpClient", () => {
     expect(lines.flat().join(" ")).toContain("[BUNVEX M(messages:logged)] [LOG]");
     const r = await fetch(`${h.url}/api/query_at_ts`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "messages:count", args: [{}], ts: v1.encodeU64(2n ** 62n) }),
     });
     expect(r.status).toBe(400);

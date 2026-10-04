@@ -40,7 +40,7 @@ bunvex/
 │   │   ├── committer                timestamps, group commit in write batches, optimistic validation, write log ✅
 │   │   ├── tx                       read-set, write-set, versioned rows, query builder:
 │   │   │                            withIndex/order/take/first ✅ · read-own-writes in queries ✅ ·
-│   │   │                            filter M · paginate M
+│   │   │                            filter M · paginate M · limit + 256-operator cap (query-ops, STUDY-66) ✅
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅

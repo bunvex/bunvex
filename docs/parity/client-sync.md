@@ -22,9 +22,9 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`; the version is not checked yet (no feature gates). |
+| WebSocket endpoint versioned by client version (`/api/{version}/sync`) | `browser/sync/client.ts`, `crates/local_backend/src/router.rs` | done (STUDY-23) | `/api/{version}/sync`. Without a client header, the version is checked as Convex's (400 `InvalidClientVersion` when not semver, `ClientVersionUnsupported` at or below 0.19.1; STUDY-67 H12, DV-315). |
 | Deriving `ws(s)://` from the deployment `http(s)://` URL | `browser/sync/client.ts` | done (STUDY-26) | `/api/<client version>/sync`. |
-| Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | missing | No client-version negotiation. |
+| Client identifies itself (`Convex-Client: npm-<ver>` header / version in path) so the server can gate features (e.g. chunking) | `browser/http_client.ts`, `crates/local_backend/src/subs/mod.rs` (`new_sync_worker_config`) | done | `Bunvex-Client: npm-<ver>` (STUDY-26 H1) and the version in the sync URL, announcing the Convex client version followed (DV-225); the server gates transition chunks and the HTTP `format` default on it, and validates it as Convex (STUDY-67 H12, DV-315: 400s, `x-bunvex-deprecation-*` headers). The CLI sends `npm-cli-<same version>`. |
 | JSON text frames, one message per frame, discriminated by `type` | `browser/sync/protocol.ts` | done (STUDY-23) | v1 frames are Convex's (`@bunvex/protocol` `v1`). |
 | u64 timestamps encoded as base64 little-endian strings (`EncodedTS`) | `browser/sync/protocol.ts` (`u64ToLong`/`longToU64`) | done (STUDY-23) | `encodeU64`/`decodeU64`. The ts is bunvex's commit counter (P7). |
 | Function args sent as a one-element array of Convex-encoded JSON (`args: [convexToJson(args)]`) | `browser/sync/protocol.ts`, `browser/sync/client.ts` | done (STUDY-23) | `$integer`/`$float`/`$bytes` decoded by the server; args canonicalized for the execution key. |
@@ -218,7 +218,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | bunvex accepts `{path, args}` with the JSON value encoding (`$integer`, `$bytes`, …); ignores `format`. |
+| `POST /api/query`, `/api/mutation`, `/api/action` with body `{path, args, format}` | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | partial | `{path, args}` with the JSON value encoding (`$integer`, `$bytes`, …). `format` as Convex (STUDY-67 H3): `convex_encoded_json`/`convex_json`, `json`/`convex_clean_json`, `export_json`, else 400 `BadFormat` after the run; without one, clean JSON unless the `Bunvex-Client` header names an old npm/CLI/actions (< 1.4.1) or python (< 0.5.0) client; `errorData` too. `BunvexHttpClient` and the CLI ask for `convex_encoded_json`, as Convex's do. |
 | Response `{status: "success", value, logLines}` \| `{status: "error", errorMessage, errorData?, logLines}`; the client accepts HTTP 200 or 560 for a function error (anything else throws the text) | `browser/http_client.ts`, `crates/local_backend/src/public_api.rs` | done (STUDY-26) | `BunvexHttpClient`; the official `ConvexHttpClient` works against bunvex too. |
 | `GET /api/query?path=&args=&format=` | `crates/local_backend/src/public_api.rs` | missing | — |
 | `POST /api/function` (any kind, by name) and `/api/run/{path}` | `crates/local_backend/src/public_api.rs`, `browser/http_client.ts` (`function`) | missing | With components (STUDY-26 H3). |

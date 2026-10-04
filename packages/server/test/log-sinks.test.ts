@@ -90,7 +90,11 @@ async function setup(opts: { localLogSink?: string; engine?: Engine } = {}) {
     return { status: r.status, body: text ? JSON.parse(text) : null };
   };
   const call = (path: string) =>
-    fetch(`${api}/mutation`, { method: "POST", body: JSON.stringify({ path, args: {} }) }).then((r) => r.json());
+    fetch(`${api}/mutation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    }).then((r) => r.json());
   const status = async (id: string) => (await req(`get_log_stream/${id}`)).body?.status;
   const audit = async () =>
     ((await engine.query((db) => db.asSystem(() => db.query(DEPLOYMENT_AUDIT_LOG_TABLE).collect()))) as any[]).map(
@@ -280,9 +284,13 @@ test("the local sink: every event as a V2 line, exceptions too, kept across a re
   const hook = receiver();
   const { id } = (await t.req("create_log_stream", { logStreamType: "webhook", url: hook.url, format: "json" })).body;
   await until(async () => (await t.status(id))?.type === "active");
-  const verifications = hook.got.length;
+  // Verification events only: the stream also receives the deployment's events (its own creation's audit
+  // event among them), whenever they come.
+  const verifications = () => hook.events().filter((e) => e.topic === "verification").length;
+  expect(verifications()).toBe(1);
   t.s.stop();
   const again = await setup({ engine: t.engine });
   await until(async () => (await again.status(id))?.type === "active");
-  expect(hook.got.length).toBe(verifications);
+  await Bun.sleep(100);
+  expect(verifications()).toBe(1);
 });
