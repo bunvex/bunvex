@@ -25,8 +25,8 @@ async function setup() {
   });
   const s = createServer({ engine, functions, port: 0, sitePort: null, redactLogsToClient: false });
   stops.push(s.stop);
-  const get = async (query: string) => {
-    const r = await fetch(`http://127.0.0.1:${s.server!.port}/api/query?${query}`);
+  const get = async (query: string, headers: Record<string, string> = {}) => {
+    const r = await fetch(`http://127.0.0.1:${s.server!.port}/api/query?${query}`, { headers });
     return { status: r.status, body: (await r.json()) as any };
   };
   return { get };
@@ -61,4 +61,28 @@ test("a missing or malformed parameter is 400 BadQueryArgs", async () => {
   const bad = await get("path=m:typed&args=nope");
   expect([bad.status, bad.body.code]).toEqual([400, "BadQueryArgs"]);
   expect((await get(`path=m:typed&args=${args({})}&format=bogus`)).body.code).toBe("BadFormat");
+});
+
+test("a path that does not parse is 400 BadBunvexFunctionIdentifier, as POST, before authentication", async () => {
+  const { get } = await setup();
+  const invalid = {
+    status: 400,
+    body: {
+      code: "BadBunvexFunctionIdentifier",
+      message:
+        "m:o-k is not a valid path to a bunvex function. Identifier o-k has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
+    },
+  };
+  expect(await get(`path=${encodeURIComponent("m:o-k")}&args=${args({})}`)).toEqual(invalid);
+  // Convex's `public_query_get` parses the path before it authenticates: a bad token does not hide it.
+  expect(await get(`path=${encodeURIComponent("m:o-k")}&args=${args({})}`, { authorization: "Bearer nope" })).toEqual(
+    invalid,
+  );
+  expect((await get(`path=${encodeURIComponent("../m:ok")}&args=${args({})}`)).body).toEqual({
+    code: "BadBunvexFunctionIdentifier",
+    message: "../m:ok is not a valid path to a bunvex function. Invalid path component ParentDir in ../m.",
+  });
+  // a path that parses but names nothing is the function's error, as before
+  const missing = await get(`path=m:nothing&args=${args({})}`);
+  expect([missing.status, missing.body.status]).toEqual([200, "error"]);
 });
