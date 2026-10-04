@@ -118,7 +118,7 @@ describe("withIndex ranges follow Convex's rules", () => {
   });
 
   test("index definitions fail with Convex's codes' messages (STUDY-65 M1; Convex: tests/schema.rs, testing/schema.rs)", () => {
-    const err = (t: ReturnType<typeof defineTable>, table = "t") => {
+    const err = (t: Parameters<typeof defineSchema>[0][string], table = "t") => {
       try {
         defineSchema({ [table]: t });
       } catch (e) {

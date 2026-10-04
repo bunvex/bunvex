@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import type { Io } from "./io.ts";
-import { deploymentVariables, resolveTarget, type Target, type TargetFlags } from "./target.ts";
+import { deploymentVariables, parseEnvFile, resolveTarget, type Target, type TargetFlags } from "./target.ts";
 
 export const EXE = process.platform === "win32" ? "bunvex-local-backend.exe" : "bunvex-local-backend";
 const REPO = "bunvex/bunvex";
