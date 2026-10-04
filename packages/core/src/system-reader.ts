@@ -4,6 +4,7 @@
 import { decodeId } from "@bunvex/values";
 import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "./catalog.ts";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { type JobDoc, publicJob } from "./scheduled-jobs.ts";
 import type { Doc } from "./schema.ts";
 import { TableReader } from "./table-scope.ts";
@@ -130,3 +131,6 @@ export class ProjectedQuery implements TxQuery {
     };
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(SystemReader, ProjectedQuery);

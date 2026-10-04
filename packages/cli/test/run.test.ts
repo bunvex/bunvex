@@ -215,6 +215,27 @@ describe("names and JSON5", () => {
     expect(p("bunvex/inner:x")).toBe("bunvex/inner:x"); // a file of that name exists under the directory
   });
 
+  test("Convex's parseFunctionName cases, with bunvex's directory (cli/lib/run.test.ts; G-L7)", () => {
+    const dir = tmp();
+    for (const f of ["bunvex/foo/bar.ts", "bunvex/bunvex/bar/baz.ts", "src/bunvex/foo/bar.ts"]) {
+      mkdirSync(join(dir, f, ".."), { recursive: true });
+      writeFileSync(join(dir, f), "export default 1;");
+    }
+    const p = (n: string, functionsDir = "bunvex/") => parseFunctionName(n, dir, join(dir, functionsDir));
+    expect(p("api.foo.bar")).toBe("foo:bar");
+    expect(p("internal.foo.bar")).toBe("foo:bar");
+    expect(p("foo/bar")).toBe("foo/bar:default");
+    expect(p("foo/bar:baz")).toBe("foo/bar:baz");
+    expect(p("bunvex/foo/bar")).toBe("foo/bar:default");
+    expect(p("bunvex/foo/bar.ts")).toBe("foo/bar:default");
+    expect(p("bunvex/foo/bar.ts:baz")).toBe("foo/bar:baz");
+    // A file `bunvex/bar/baz.ts` under the functions directory: the prefix is the module's.
+    expect(p("bunvex/bar/baz")).toBe("bunvex/bar/baz:default");
+    // A nested functions directory.
+    expect(p("src/bunvex/foo/bar", "src/bunvex/")).toBe("foo/bar:default");
+    expect(p("foo/bar", "src/bunvex/")).toBe("foo/bar:default");
+  });
+
   test("the JSON5 reader", () => {
     expect(
       parseJson5(`{
