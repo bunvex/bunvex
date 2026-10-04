@@ -182,7 +182,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
 | 12 | F5 the React client's `logger` | `logger: false` not honoured | `react/src/client.ts`, the paginated hooks | S | |
-| 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | G-L2: #342; M1: open |
+| 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | G-L2: #342; M1: #343 |
 | 14 | G-A7 disabled state; G-A10 returns validation of actions and extra fields; G-A11 an HTTP action commits after a disconnect | | `server` | S each | |
 | 15 | M6 index diff printing in Convex's format | operator output | `cli/src/deploy.ts`, `server/src/push.ts` | M | |
 | 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | |
