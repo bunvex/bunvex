@@ -59,7 +59,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `scheduled_jobs.rs` success, canceled, garbage collection, pause, OCC retry | | `server/test/scheduler.test.ts`, `pause-deployment.test.ts` |
 | `scheduled_jobs.rs` inline args, delete the jobs table, write-throughput limit | | n/a: bunvex never wrote inline args; `delete_scheduled_jobs_table` is not built ([divergences](../parity/divergences.md)); no write-throughput limit |
 | `schema.rs` (4) | `_creationTime` appended; `_id`, `_creationTime`, system fields refused in indexes | `core/test/index-range.test.ts` (see M1 in §5) |
-| `source_package.rs` | upload and download of the source package | `server/test/code-store.test.ts` (with the source map's round trip, #PR) |
+| `source_package.rs` | upload and download of the source package | `server/test/code-store.test.ts` (with the source map's round trip, #366) |
 | `storage.rs` `test_backend_not_running_cannot_store_file` | | `server/test/pause-deployment.test.ts` (paused; the disabled state is not tested) |
 | `cron_jobs.rs` success, paused | | `server/test/cron.test.ts` |
 
