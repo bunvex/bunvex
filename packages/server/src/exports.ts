@@ -140,6 +140,28 @@ export class ExportService {
   private running: Promise<void> | null = null;
   private stopped = false;
   private wake: (() => void) | null = null;
+  /**
+   * A wake with no worker waiting yet (it was reading the store): the worker's next sleep returns at once.
+   * Without it, a request or a stop that races the worker's read is lost, and the worker sleeps for good.
+   */
+  private woken = false;
+
+  /** Wake the worker, now or at its next sleep. */
+  private signal() {
+    if (this.wake) this.wake();
+    else this.woken = true;
+  }
+
+  /** The worker waits for a signal (one already given returns at once). */
+  private sleep(): Promise<void> {
+    if (this.woken) {
+      this.woken = false;
+      return Promise.resolve();
+    }
+    return new Promise<void>((done) => {
+      this.wake = done;
+    });
+  }
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private readonly tokenKey: Buffer;
   private readonly now: () => number;
@@ -192,7 +214,7 @@ export class ExportService {
       await insertAuditLogEvents(db, [auditEvents.requestExport(id, includeStorage)], actor);
       return id;
     }, true);
-    this.wake?.();
+    this.signal();
     return id;
   }
 
@@ -224,7 +246,7 @@ export class ExportService {
 
   async stop() {
     this.stopped = true;
-    this.wake?.();
+    this.signal();
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     await this.running;
   }
@@ -237,12 +259,7 @@ export class ExportService {
     const retry = async (what: string, e: unknown) => {
       console.error(`bunvex: exports: ${what} failed, retrying: ${(e as Error).message}`);
       // Woken early by a request or a stop.
-      await Promise.race([
-        Bun.sleep(backoff),
-        new Promise<void>((done) => {
-          this.wake = done;
-        }),
-      ]);
+      await Promise.race([Bun.sleep(backoff), this.sleep()]);
       this.wake = null;
       backoff = Math.min(backoff * 2, 15 * 60 * 1000);
     };
@@ -266,9 +283,7 @@ export class ExportService {
       }
       if (!next) {
         // Every request goes through `request()`, which wakes the worker: nothing to poll.
-        await new Promise<void>((done) => {
-          this.wake = done;
-        });
+        await this.sleep();
         this.wake = null;
         continue;
       }
