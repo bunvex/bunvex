@@ -58,6 +58,9 @@ unit tests (`bun run test:examples`); the root `bun test` ignores `examples/**`.
 | Demo | bunvex | |
 |---|---|---|
 | `tutorial`, `pagination`, `search`, `file-storage`, `scheduling`, `cron-jobs`, `nextjs-app-router`, `react-query` | **first batch** (this study) | every piece is on main |
+| `scheduling` | **built** | `examples/scheduling`: a countdown of `runAfter` steps in an internal mutation, followed live |
+| `cron-jobs` | **built** | `examples/cron-jobs`: a 10-second `crons.interval` clearing the messages; the test waits for it |
+| `nextjs-app-router` | **built** | `examples/nextjs-app-router`: `preloadQuery` in a Server Component, `usePreloadedQuery` live, a Server Action; `next build` in the test (Next 16.3.8, `transpilePackages`) |
 | `typescript`, `args-validation`, `custom-errors`, `relational-data-modeling`, `system-tables`, `vector-search`, `file-storage-with-http`, `http`, `prewarming`, `nextjs-pages-router`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
 | `node` | waits | Node actions (`"use node"`) |
 | `python-quickstart` | waits | a Python client |

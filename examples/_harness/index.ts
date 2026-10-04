@@ -139,9 +139,9 @@ export async function deploy(dir: string): Promise<Deployment> {
   }
 }
 
-/** Run the example's `build` script: its front end typechecked, then bundled. */
-export async function build(dir: string): Promise<void> {
-  await run([process.execPath, "run", "build"], dir);
+/** Run the example's `build` script (its front end typechecked, then bundled), with `env` added. */
+export async function build(dir: string, env: Record<string, string> = {}): Promise<void> {
+  await run([process.execPath, "run", "build"], dir, env);
 }
 
 /** Wait until `f` returns something truthy (polled every 10 ms, for up to 10 s). */
