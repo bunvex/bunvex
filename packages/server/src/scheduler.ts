@@ -20,6 +20,7 @@ import {
   dueJobs,
   type Engine,
   getJob,
+  IndexesUnavailableError,
   insertJob,
   isJobId,
   isStopped,
@@ -29,6 +30,7 @@ import {
   patchJob,
   readBackendState,
   stringifyValue,
+  TooManyWritesError,
   type Tx,
   wallClock,
 } from "@bunvex/core";
@@ -41,7 +43,7 @@ import {
 import { type GenericId, hasCommitTs, isSimpleObject, type Value, valueSize } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import { functionNameOf } from "./function-handles.ts";
-import type { Functions, SourcedCaller } from "./functions.ts";
+import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
 export type SchedulableFunction = AnyFunctionReference | string;
@@ -401,6 +403,7 @@ export class ScheduledJobExecutor {
               },
               job.name,
               caller,
+              THROTTLED,
             ),
           // A job that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
@@ -410,7 +413,9 @@ export class ScheduledJobExecutor {
         if (ran) this.stats.succeeded++;
         return;
       } catch (e) {
-        if (e instanceof OccError) {
+        // A lost conflict, or the write throughput limit (STUDY-78): the job stays pending and runs again
+        // later, as long as it takes (Convex retries both without limit).
+        if (e instanceof OccError || e instanceof TooManyWritesError) {
           this.stats.occRetries++;
           await Bun.sleep(backoff(++occFailures, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
           continue;
@@ -477,5 +482,6 @@ export class ScheduledJobExecutor {
 
 /** A failure of the system rather than of the function: the job is retried later, not failed. */
 function isSystemFailure(e: unknown) {
-  return e instanceof CommitterStoppedError;
+  // An index still being rebuilt after a start (STUDY-79) is the system's too: the job runs later.
+  return e instanceof CommitterStoppedError || e instanceof IndexesUnavailableError;
 }

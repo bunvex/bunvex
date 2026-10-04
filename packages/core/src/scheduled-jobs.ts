@@ -77,6 +77,7 @@ export async function insertJob(
     );
   db.scheduledCount++;
   db.scheduledBytes += size;
+  db.scheduledMaxBytes = Math.max(db.scheduledMaxBytes, size);
   const doc: Omit<JobDoc, "_id" | "_creationTime"> = job.canceled
     ? {
         name: job.name,

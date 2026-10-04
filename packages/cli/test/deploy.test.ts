@@ -69,6 +69,36 @@ function io(cwd: string, env: Record<string, string | undefined> = {}) {
   return { it, out, err };
 }
 
+/** A source map's segments: generated line and column, source index, original line and column. */
+function segments(mappings: string): number[][] {
+  const out: number[][] = [];
+  const acc = [0, 0, 0, 0];
+  mappings.split(";").forEach((group, line) => {
+    let genCol = 0;
+    for (const seg of group.split(",").filter(Boolean)) {
+      const f: number[] = [];
+      let value = 0;
+      let shift = 0;
+      for (const c of seg) {
+        const d = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(c);
+        value += (d & 31) << shift;
+        shift += 5;
+        if (d & 32) continue;
+        f.push(value & 1 ? -(value >> 1) : value >> 1);
+        value = 0;
+        shift = 0;
+      }
+      genCol += f[0]!;
+      if (f.length < 4) continue;
+      acc[1]! += f[1]!;
+      acc[2]! += f[2]!;
+      acc[3]! += f[3]!;
+      out.push([line, genCol, acc[1]!, acc[2]!, acc[3]!]);
+    }
+  });
+  return out;
+}
+
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
@@ -111,7 +141,7 @@ describe("bunvex deploy", () => {
     const r = io(app);
     expect(await main(["deploy"], r.it)).toBe(0);
     expect(r.out).toEqual([`✔ Deployed functions to ${d.url}`]);
-    expect(r.err).toContain("  [+] index messages.by_author");
+    expect(r.err).toContain("✔ Added table indexes:\n  [+] messages.by_author   author");
     expect(r.err).toContain("  [+] cron tick");
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["HI"]);
@@ -166,6 +196,42 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8")).toBe(before);
     expect(await main(["deploy", "--codegen=sometimes", ...flags], io(app).it)).toBe(2);
   }, 120_000);
+
+  test("the index diff, as Convex's printDiff: added, staged, enabled, staged again, deleted; a dry run says would", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const env = { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY };
+    const withSchema = (indexes: string) =>
+      write(app, {
+        "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(VALUES)};
+export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(), t: v.string() })${indexes} });`,
+      });
+    const deploy = async (...flags: string[]) => {
+      const r = io(app, env);
+      expect(await main(["deploy", "--typecheck=disable", "--codegen=disable", ...flags], r.it)).toBe(0);
+      return r.err.filter((l) => l.startsWith("✔ ") && l.includes("\n"));
+    };
+    withSchema(
+      '.index("by_a", ["a"]).index("by_ab", { fields: ["a", "b"], staged: true }).searchIndex("search_t", { searchField: "t", filterFields: ["a"] })',
+    );
+    expect(await deploy("--dry-run")).toEqual([
+      "✔ Would add table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Would add staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    expect(await deploy()).toEqual([
+      "✔ Added table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Added staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    // by_ab enabled, by_a staged again, search_t deleted.
+    withSchema('.index("by_a", { fields: ["a"], staged: true }).index("by_ab", ["a", "b"])');
+    expect(await deploy()).toEqual([
+      "✔ Deleted table indexes:\n  [-] notes.search_t (text)   t, filter on a",
+      "✔ These indexes are now enabled:\n  [*] notes.by_ab   a, b",
+      "✔ These indexes are now staged:\n  [*] notes.by_a   a  (staged)",
+    ]);
+    expect(await deploy()).toEqual([]);
+  });
 
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();
@@ -247,6 +313,58 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(b.modules.some((m) => m.path.startsWith("_deps/"))).toBe(true); // lib/format shared by two modules
     expect(b.modules.every((m) => !m.source.startsWith("// @bun"))).toBe(true);
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
+    // Each source map still matches its module once the `// @bun` line is dropped (the server reads the
+    // functions' positions from it, STUDY-65 M5): a string literal is at the same place in both.
+    let checked = 0;
+    for (const m of b.modules.filter((x) => x.sourceMap)) {
+      const map = JSON.parse(m.sourceMap!) as { mappings: string; sourcesContent: string[] };
+      const lines = m.source.split("\n");
+      const strings = segments(map.mappings).filter(([l, c]) => lines[l!]?.[c!] === '"');
+      checked += strings.length;
+      for (const [l, c, src, sl, sc] of strings) {
+        const original = map.sourcesContent[src!]!.split("\n")[sl!]!.slice(sc!, sc! + 6);
+        expect([m.path, lines[l!]!.slice(c!, c! + 6)]).toEqual([m.path, original]);
+      }
+    }
+    expect(checked).toBeGreaterThan(3);
+  });
+
+  test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-83)', async () => {
+    const d = await deployment();
+    const app = tmp();
+    // The real package throws outside React server components: the stub must win over it.
+    write(app, {
+      "node_modules/server-only/package.json": JSON.stringify({ name: "server-only", main: "index.js" }),
+      "node_modules/server-only/index.js": `throw new Error("This module cannot be imported from a Client Component module.");`,
+      "bunvex/guarded.ts": `import "server-only";
+import { query } from ${JSON.stringify(SERVER)};
+import { secret } from "./lib/secret";
+export const read = query(async () => secret());`,
+      "bunvex/lib/secret.ts": `import "server-only";
+export const secret = () => "kept on the server";`,
+      "bunvex/maths.ts": `import { query } from ${JSON.stringify(SERVER)};
+import addModule from "./add.wasm";
+export const add = query(async (_ctx, { a, b }: { a: number; b: number }) =>
+  (new WebAssembly.Instance(addModule).exports.add as (a: number, b: number) => number)(a, b));
+export const isModule = query(async () => addModule instanceof WebAssembly.Module);`,
+    });
+    // (module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))
+    writeFileSync(
+      join(app, "bunvex/add.wasm"),
+      Uint8Array.from([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09, 0x01, 0x07, 0x00, 0x20,
+        0x00, 0x20, 0x01, 0x6a, 0x0b,
+      ]),
+    );
+    const b = await bundleFunctions(join(app, "bunvex"));
+    expect(b.modules.map((m) => m.source).join("\n")).not.toContain("Client Component");
+    write(app, { ".env.local": `BUNVEX_SELF_HOSTED_URL=${d.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY="${KEY}"\n` });
+    const r = io(app);
+    expect(await main(["deploy", "--typecheck=disable"], r.it)).toBe(0);
+    expect((await d.call("query", "guarded:read")).value).toBe("kept on the server");
+    expect((await d.call("query", "maths:isModule")).value).toBe(true);
+    expect((await d.call("query", "maths:add", { a: 2, b: 40 })).value).toBe(42);
   });
 
   test("--cmd runs first, with the deployment's URLs in the framework's variables; a failure stops the deploy (STUDY-81)", async () => {
@@ -312,6 +430,64 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(r.unchangedModuleHashes).toEqual([{ path: "a.js", environment: "isolate", sha256: hash(a) }]);
   });
 
+  test("Convex's partitionModulesByChanges cases: source maps, deletions, all of it at once", () => {
+    const m = (path: string, source: string, environment: "isolate" | "node" = "isolate", sourceMap?: string) => ({
+      path,
+      source,
+      environment,
+      ...(sourceMap === undefined ? {} : { sourceMap }),
+    });
+    // Convex's `hash`: the source, then the source map.
+    const hash = (x: { source: string; sourceMap?: string }) =>
+      new Bun.CryptoHasher("sha256")
+        .update(x.source)
+        .update(x.sourceMap ?? "")
+        .digest("hex");
+    const remote = (mods: ReturnType<typeof m>[]) =>
+      mods.map((x) => ({ path: x.path, hash: hash(x), environment: x.environment }));
+    const paths = (r: ReturnType<typeof partitionModules>) => ({
+      changed: r.changedModules.map((x) => x.path).sort(),
+      unchanged: r.unchangedModuleHashes.map((x) => x.path),
+    });
+    // A different source map is a change.
+    expect(
+      paths(
+        partitionModules([m("f.js", "same", "isolate", "new-map")], remote([m("f.js", "same", "isolate", "old-map")])),
+      ),
+    ).toEqual({ changed: ["f.js"], unchanged: [] });
+    // The same source with the same map is unchanged: the map is part of the hash.
+    expect(
+      paths(partitionModules([m("f.js", "same", "isolate", "map")], remote([m("f.js", "same", "isolate", "map")]))),
+    ).toEqual({ changed: [], unchanged: ["f.js"] });
+    // Deleted modules are in neither list (the push leaves them out).
+    expect(
+      paths(
+        partitionModules(
+          [m("a.js", "same1"), m("c.js", "same3")],
+          remote([m("a.js", "same1"), m("b.js", "gone"), m("c.js", "same3")]),
+        ),
+      ),
+    ).toEqual({ changed: [], unchanged: ["a.js", "c.js"] });
+    expect(paths(partitionModules([], remote([m("a.js", "x"), m("b.js", "y")])))).toEqual({
+      changed: [],
+      unchanged: [],
+    });
+    // New, changed, unchanged and deleted together.
+    expect(
+      paths(
+        partitionModules(
+          [m("unchanged.js", "u"), m("changed.js", "new"), m("new.js", "n")],
+          remote([m("unchanged.js", "u"), m("changed.js", "old"), m("deleted.js", "d")]),
+        ),
+      ),
+    ).toEqual({ changed: ["changed.js", "new.js"], unchanged: ["unchanged.js"] });
+    // Nothing deployed yet: every module is sent.
+    expect(paths(partitionModules([m("a.js", "x"), m("b.js", "y")], []))).toEqual({
+      changed: ["a.js", "b.js"],
+      unchanged: [],
+    });
+  });
+
   test(".env files: KEY=value, quotes, comments, export", () => {
     expect(parseEnvFile(`# c\nA=1\nexport B="two words"\nC='3' # trailing\nD = four # note\nbad line`)).toEqual({
       A: "1",
@@ -364,7 +540,8 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
 
   test("a non-staged index on a large table asks; the answer decides; a dry run only warns", async () => {
     const { app, env } = await setup();
-    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body"])'));
+    // Two indexes on the same fields are refused, as Convex: by_other adds a field.
+    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body", "other"])'));
     const no = io(app, env);
     no.it.prompt = () => "n";
     expect(await main(["deploy", "--typecheck=disable"], no.it)).toBe(1);
@@ -381,7 +558,7 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
     write(
       app,
       schema(
-        '.index("by_body", ["body"]).index("by_other", ["body"]).index("later", { fields: ["body"], staged: true })',
+        '.index("by_body", ["body"]).index("by_other", ["body", "other"]).index("later", { fields: ["other"], staged: true })',
       ),
     );
     const staged = io(app, env);
