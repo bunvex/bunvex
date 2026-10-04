@@ -1,6 +1,6 @@
 # STUDY-95 — A function's error stack: the app's frames, mapped to its sources
 
-- **Status:** implemented; S1 and S2 for the owner (draft PR)
+- **Status:** implemented; S1 and S2 accepted as recommended (owner, 2026-10-04)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-35](STUDY-35-push-and-deploy.md) (bundling, source maps), [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md)
   N2 (a nested error's display), [STUDY-65](STUDY-65-convex-tests-application-client-cli.md) M5 (source
@@ -82,8 +82,8 @@ beyond the `sources` names.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| S1 | A frame's function name is JavaScriptCore's: a name the bundler changed (`assertShort2`, `$explode`) shows changed, an inline handler shows `<anonymous>`, and a strict-mode tail call (`return f()`) has no frame for its caller. Convex's (V8, esbuild `keepNames`) show the original names and every caller | the engine: JavaScriptCore names a frame by the declared identifier (Bun's `minify.keepNames` changes `fn.name`, not the frame), and implements proper tail calls. Mapping names through the map's `names` is possible later | **owner** (recommended: accept now, a follow-up to map names): DV-345 |
-| S2 | A frame's line and column are the original 1-based position the source map defines (the token at or before the frame's position, looked up 0-based). Convex passes the 1-based position to the 0-based lookup and prints the token's 0-based position, which on esbuild's output usually shows the right line and a 0-based column | Convex's arithmetic tracks esbuild's output layout; over Bun's output it shows the wrong line (seen: a throw on line 3 printed as line 2, a call on line 5 as line 6). The right line is what Convex's users see | **owner** (recommended: map as the map defines): DV-346 |
+| S1 | A frame's function name is JavaScriptCore's: a name the bundler changed (`assertShort2`, `$explode`) shows changed, an inline handler shows `<anonymous>`, and a strict-mode tail call (`return f()`) has no frame for its caller. Convex's (V8, esbuild `keepNames`) show the original names and every caller | the engine: JavaScriptCore names a frame by the declared identifier (Bun's `minify.keepNames` changes `fn.name`, not the frame), and implements proper tail calls. Mapping names through the map's `names` is possible later | accepted (owner, 2026-10-04): DV-345; mapping names through the map is a follow-up |
+| S2 | A frame's line and column are the original 1-based position the source map defines (the token at or before the frame's position, looked up 0-based). Convex passes the 1-based position to the 0-based lookup and prints the token's 0-based position, which on esbuild's output usually shows the right line and a 0-based column | Convex's arithmetic tracks esbuild's output layout; over Bun's output it shows the wrong line (seen: a throw on line 3 printed as line 2, a call on line 5 as line 6). The right line is what Convex's users see | accepted (owner, 2026-10-04): DV-346 |
 
 Not divergences: dropping the server's frames (Convex has none of them, its harness's are dropped); the sources'
 names (now Convex's).
