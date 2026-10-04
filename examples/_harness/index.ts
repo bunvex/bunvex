@@ -62,10 +62,11 @@ export type Deployment = {
 };
 
 /**
- * Deploy the example at `dir` to a fresh backend. The example's committed `bunvex/_generated/` must be what
- * the deploy's codegen writes: an example never ships stale generated code.
+ * Deploy the example at `dir` to a fresh backend, with `options.env` as its environment variables. The
+ * example's committed `bunvex/_generated/` must be what the deploy's codegen writes: an example never ships
+ * stale generated code.
  */
-export async function deploy(dir: string): Promise<Deployment> {
+export async function deploy(dir: string, options: { env?: Record<string, string> } = {}): Promise<Deployment> {
   const state = mkdtempSync(join(tmpdir(), "bunvex-example-"));
   const [port, sitePort] = freePorts();
   const name = "bunvex-example";
@@ -114,6 +115,8 @@ export async function deploy(dir: string): Promise<Deployment> {
     ).trim();
     const env = { BUNVEX_SELF_HOSTED_URL: url, BUNVEX_SELF_HOSTED_ADMIN_KEY: adminKey };
     const cli = (...args: string[]) => run([process.execPath, CLI, ...args], dir, env);
+    // The deployment's variables before its first push: `auth.config.ts` reads them when the push analyzes it.
+    for (const [k, value] of Object.entries(options.env ?? {})) await cli("env", "set", k, value);
     const generated = join(dir, "bunvex/_generated");
     const before = snapshot(generated);
     await cli("deploy", "--typecheck=enable");

@@ -65,7 +65,13 @@ unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys
 | `scheduling` | **built** (`examples/scheduling`) | a countdown of `runAfter` steps in an internal mutation, followed live |
 | `cron-jobs` | **built** (`examples/cron-jobs`) | a 10-second `crons.interval` clearing the messages; the test waits for it |
 | `nextjs-app-router` | **built** (`examples/nextjs-app-router`) | `preloadQuery` in a Server Component, `usePreloadedQuery` live, a Server Action; `next build` in the test (Next 16.3.8, `transpilePackages`) |
-| `typescript`, `args-validation`, `custom-errors`, `relational-data-modeling`, `system-tables`, `vector-search`, `file-storage-with-http`, `http`, `prewarming`, `nextjs-pages-router`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
+| `http` | **built** (`examples/http`) | HTTP actions on the site origin: a POST posting through `ctx.runMutation`, GETs by query parameter, header and `pathPrefix`; the test calls them with `fetch` |
+| `file-storage-with-http` | **built** (`examples/file-storage-with-http`) | an HTTP action storing `request.blob()` and another serving it, with CORS and the preflight; `CLIENT_ORIGIN` from the environment |
+| `vector-search` | **built** (`examples/vector-search`) | embeddings from an action, `vectorSearch` with and without filters, a movie embedded by a scheduled action; a local embeddings stand-in in the test |
+| `users-and-clerk` | **built** (`examples/users-and-clerk`) | `BunvexProviderWithClerk`, `auth.config.ts` from `CLERK_JWT_ISSUER_DOMAIN`, a users table by `tokenIdentifier`; the test signs tokens with a local OIDC issuer |
+| `giphy-action` | **built** (`examples/giphy-action`) | an action calling an external API, then an internal mutation; a local Giphy stand-in in the test |
+| `dall-e-storage-action` | **built** (`examples/dall-e-storage-action`) | an action checking, generating, downloading and `ctx.storage.store`-ing an image (OpenAI over `fetch`, no SDK); a local OpenAI stand-in in the test |
+| `typescript`, `args-validation`, `custom-errors`, `relational-data-modeling`, `system-tables`, `prewarming`, `nextjs-pages-router` | later batches | ready |
 | `node` | waits | Node actions (`"use node"`) |
 | `python-quickstart` | waits | a Python client |
 | `zod-validation-ts`, `sessions`, `presence-facepile`, `presence-typing-indicator` | waits | `convex-helpers` or components |
