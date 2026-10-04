@@ -38,6 +38,7 @@ test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; fro
     const call = async (kind: string, path: string) => {
       const r = await fetch(`http://127.0.0.1:${server!.port}/api/${kind}`, {
         method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, args: {} }),
       });
       return { status: r.status, body: (await r.json()) as Record<string, unknown> };

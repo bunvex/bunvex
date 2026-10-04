@@ -189,16 +189,15 @@ describe("bunvex run", () => {
     expect(r.out.at(-1)).toBe('"pushed"');
   });
 
-  test("POST /api/function without an admin key: public functions only, Convex's message otherwise", async () => {
+  test("POST /api/function without an admin key: 403 BadDeployKey, as Convex's `must_be_admin` (STUDY-67 H5)", async () => {
     const url = await deployment();
-    const call = async (path: string) =>
-      (await (
-        await fetch(`${url}/api/function`, { method: "POST", body: JSON.stringify({ path, args: {} }) })
-      ).json()) as { status: string; value?: unknown; errorMessage?: string };
-    expect(await call("items:list")).toMatchObject({ status: "success", value: [] });
-    expect((await call("items:secret")).errorMessage).toContain(
-      "Could not find function for 'items:secret'. Did you forget to run `bunvex dev`?",
-    );
+    const r = await fetch(`${url}/api/function`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "items:list", args: {} }),
+    });
+    expect(r.status).toBe(403);
+    expect(((await r.json()) as { code: string }).code).toBe("BadDeployKey");
   });
 });
 

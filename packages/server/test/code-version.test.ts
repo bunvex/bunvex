@@ -56,7 +56,7 @@ async function server() {
       await fetch(`${api}/api/${kind}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, args }),
+        body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
       })
     ).json()) as { status: string; value?: unknown; errorMessage?: string; errorData?: unknown };
   return { engine, functions, s, api, call };
@@ -178,12 +178,19 @@ describe("loading and analysis", () => {
     expect(await failure(load([mod("m.js", `await fetch("http://127.0.0.1:1/");`)]))).toBe(
       "Failed to analyze m.js: Uncaught Error: fetch() unsupported at import time",
     );
-    expect(await failure(load([mod("m.js", `setTimeout(() => {}, 1);`)]))).toBe(
-      "Failed to analyze m.js: Uncaught Error: setTimeout() unsupported at import time",
+    // As Convex (STUDY-66 §4): a timer returns, then fails the import; getRandomValues and randomUUID use the
+    // seeded PRNG; crypto.subtle's randomness is refused.
+    expect(await failure(load([mod("m.js", `try { setTimeout(() => {}, 1); } catch {}`)]))).toBe(
+      "Failed to analyze m.js: Uncaught Error: setTimeout unsupported at import time",
     );
-    expect(await failure(load([mod("m.js", `crypto.getRandomValues(new Uint8Array(4));`)]))).toBe(
-      "Failed to analyze m.js: Uncaught Error: Cannot use cryptographic randomness at import time",
-    );
+    const rand = `export const b = [...crypto.getRandomValues(new Uint8Array(4))]; export const u = crypto.randomUUID();`;
+    const [ra, rb] = [await load([mod("m.js", rand)]), await load([mod("m.js", rand)])];
+    expect(ra.modules.get("m.js")!.module.namespace).toEqual(rb.modules.get("m.js")!.module.namespace);
+    expect(
+      await failure(
+        load([mod("m.js", `await crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"]);`)]),
+      ),
+    ).toBe("Failed to analyze m.js: Uncaught Error: Cannot use cryptographic randomness at import time");
     expect(await failure(load([mod("m.js", `throw new TypeError("bad module");`)]))).toBe(
       "Failed to analyze m.js: Uncaught TypeError: bad module",
     );
