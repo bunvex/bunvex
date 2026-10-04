@@ -57,15 +57,110 @@ describe("deterministic execution", () => {
     for (let i = 0; i < 100; i++) expect(r1()).toBe(r2());
   });
 
-  test("fetch and crypto.getRandomValues are refused in queries and mutations, allowed outside", async () => {
+  // STUDY-66 §4: Convex's not_allowed_in_udf, its timers, its seeded crypto, its crypto_rng.
+  const NO = (what: string) => `Can't use ${what} in queries and mutations. Please consider using an action.`;
+
+  test("fetch is refused with Convex's message, a rejection the function can catch", async () => {
     const e = await engine();
-    await expect(e.query(() => fetch("http://127.0.0.1:1/"))).rejects.toThrow("Can't use fetch() in queries");
-    await expect(e.mutation(() => crypto.getRandomValues(new Uint8Array(4)))).rejects.toThrow(
-      "Can't use crypto.getRandomValues() in mutations",
+    await expect(e.query(() => fetch("http://127.0.0.1:1/"))).rejects.toThrow(NO("fetch()"));
+    const caught = await e.mutation(async () => {
+      try {
+        await fetch("http://127.0.0.1:1/");
+      } catch (err) {
+        return (err as Error).message;
+      }
+    });
+    expect(caught).toBe(NO("fetch()"));
+  });
+
+  test("setTimeout / setInterval return, then fail the function: a try around them does not help", async () => {
+    const e = await engine();
+    let ran = false;
+    await expect(
+      e.query(() => {
+        try {
+          setTimeout(() => {
+            ran = true;
+          }, 0);
+        } catch {}
+        return "done";
+      }),
+    ).rejects.toThrow(NO("setTimeout"));
+    await expect(
+      e.mutation(async () => {
+        const id = setInterval(() => {}, 1);
+        await tick();
+        return typeof id;
+      }),
+    ).rejects.toThrow(NO("setInterval"));
+    await tick();
+    expect(ran).toBe(false);
+    // Outside an execution, the real timers.
+    await new Promise((r) => setTimeout(r, 1));
+  });
+
+  test("crypto.getRandomValues and randomUUID are allowed, from a stream fixed per execution", async () => {
+    const e = await engine();
+    const draw = () =>
+      e.query(() => {
+        const bytes = crypto.getRandomValues(new Uint8Array(32));
+        const words = crypto.getRandomValues(new Uint32Array(3));
+        return { bytes: [...bytes], words: [...words], uuid: crypto.randomUUID() };
+      });
+    const [a, b] = [await draw(), await draw()];
+    // A fresh seed per execution: two runs differ (as two Math.random sequences do).
+    expect(a.bytes).not.toEqual(b.bytes);
+    expect(a.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(new Set(a.bytes).size).toBeGreaterThan(8);
+    // One stream per execution: successive draws differ.
+    const twice = await e.query(() => [
+      [...crypto.getRandomValues(new Uint8Array(8))],
+      [...crypto.getRandomValues(new Uint8Array(8))],
+    ]);
+    expect(twice[0]).not.toEqual(twice[1]);
+    await expect(e.query(() => crypto.getRandomValues(new Float32Array(4) as never))).rejects.toThrow(
+      "The provided ArrayBufferView is not an integer array type",
     );
-    await expect(e.query(() => setTimeout(() => {}, 1))).rejects.toThrow("Can't use setTimeout() in queries");
-    await expect(e.mutation(() => setInterval(() => {}, 1))).rejects.toThrow("Can't use setInterval() in mutations");
+    await expect(e.query(() => crypto.getRandomValues(new Uint8Array(65537)))).rejects.toThrow(
+      "Byte length (65537) exceeds the number of bytes of entropy available via this API (65536)",
+    );
+    expect(await e.query(() => crypto.getRandomValues(new Uint8Array(65536)).length)).toBe(65536);
     expect(crypto.getRandomValues(new Uint8Array(4)).length).toBe(4);
+  });
+
+  test("crypto.subtle: cryptographic randomness is refused, the rest works", async () => {
+    const e = await engine();
+    const RNG = NO("cryptographic randomness");
+    await expect(
+      e.query(() => crypto.subtle.generateKey({ name: "HMAC", hash: "SHA-256" }, true, ["sign"])),
+    ).rejects.toThrow(RNG);
+    const rsa = (await crypto.subtle.generateKey(
+      { name: "RSA-OAEP", modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["encrypt", "decrypt"],
+    )) as CryptoKeyPair;
+    await expect(
+      e.mutation(() => crypto.subtle.encrypt({ name: "rsa-oaep" }, rsa.publicKey, new Uint8Array(4))),
+    ).rejects.toThrow(RNG);
+    const ec = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+      "verify",
+    ])) as CryptoKeyPair;
+    await expect(
+      e.query(() => crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, ec.privateKey, new Uint8Array(4))),
+    ).rejects.toThrow(RNG);
+    // Deterministic operations work: digest, HMAC, AES-GCM with the app's IV.
+    const hmac = await crypto.subtle.importKey("raw", new Uint8Array(32), { name: "HMAC", hash: "SHA-256" }, false, [
+      "sign",
+    ]);
+    const aes = await crypto.subtle.importKey("raw", new Uint8Array(16), "AES-GCM", false, ["encrypt"]);
+    const ok = await e.query(async () => {
+      const d = await crypto.subtle.digest("SHA-256", new Uint8Array(4));
+      const s = await crypto.subtle.sign("HMAC", hmac, new Uint8Array(4));
+      const c = await crypto.subtle.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, aes, new Uint8Array(4));
+      return [d.byteLength, s.byteLength, c.byteLength];
+    });
+    expect(ok).toEqual([32, 32, 20]);
   });
 
   test("engine work inside an execution (persistence calls) sees the real globals", async () => {

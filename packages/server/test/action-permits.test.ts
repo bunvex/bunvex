@@ -53,6 +53,7 @@ describe("ActionPermits", () => {
       const call = () =>
         fetch(`http://127.0.0.1:${server.server.port}/api/action`, {
           method: "POST",
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({ path: "m:slow", args: {} }),
         });
       const first = call();

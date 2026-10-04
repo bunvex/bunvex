@@ -31,7 +31,11 @@ test("each user table's shape: system fields, ids by table name, optional fields
   const s = createServer({ engine, functions, port: 0 });
   stops.push(s.stop);
   const api = `http://127.0.0.1:${s.server!.port}`;
-  await fetch(`${api}/api/mutation`, { method: "POST", body: JSON.stringify({ path: "m:seed", args: {} }) });
+  await fetch(`${api}/api/mutation`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: "m:seed", args: {} }),
+  });
   const r = await fetch(`${api}/api/shapes2`, { headers: { authorization: `Bunvex ${KEY}` } });
   expect(r.status).toBe(200);
   const shapes = (await r.json()) as Record<string, any>;
@@ -75,13 +79,17 @@ test("tableSize system functions: a table's count from the summaries; cached res
       (await (
         await fetch(`${api}/api/query`, {
           method: "POST",
-          headers: { authorization: `Bunvex ${KEY}` },
+          headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
           body: JSON.stringify({ path, args }),
         })
       ).json()) as { value: number }
     ).value;
   const add = (table: string) =>
-    fetch(`${api}/api/mutation`, { method: "POST", body: JSON.stringify({ path: "m:add", args: { table } }) });
+    fetch(`${api}/api/mutation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "m:add", args: { table } }),
+    });
   expect(await q("_system/cli/tableSize", { tableName: "a" })).toBe(0);
   await add("a");
   await add("a");

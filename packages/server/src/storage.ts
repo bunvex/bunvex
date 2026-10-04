@@ -327,30 +327,6 @@ export class FileStorage {
 
   // ---------------------------------------------------------------- HTTP
 
-  /** Convex's `/api` CORS: the request's origin and headers mirrored, credentials allowed. */
-  cors(req: Request, res: Response): Response {
-    const origin = req.headers.get("origin");
-    if (origin === null) return res;
-    const h = new Headers(res.headers);
-    h.set("access-control-allow-origin", origin);
-    h.set("access-control-allow-credentials", "true");
-    h.append("vary", "origin");
-    return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
-  }
-
-  preflight(req: Request): Response {
-    const h = new Headers({
-      "access-control-allow-origin": req.headers.get("origin") ?? "*",
-      "access-control-allow-credentials": "true",
-      "access-control-allow-methods": "GET,POST,OPTIONS,PATCH,DELETE,PUT",
-      "access-control-max-age": "86400",
-      vary: "origin, access-control-request-method, access-control-request-headers",
-    });
-    const asked = req.headers.get("access-control-request-headers");
-    if (asked) h.set("access-control-allow-headers", asked);
-    return new Response(null, { status: 200, headers: h });
-  }
-
   /** `POST /api/storage/upload?token=`: the body to the backend, hashed; `{storageId}`. */
   async upload(req: Request, url: URL): Promise<Response> {
     this.checkToken(url.searchParams.get("token"));
@@ -455,7 +431,7 @@ export function startFileSweeps(engine: Engine, files: FileStorage): () => void 
   const queue = engine.catalog.table(STORAGE_DELETIONS_TABLE).indexes.get("by_creation_time")!.id;
   engine.committer.onCommit((entries) => {
     if (entries.some((e) => e.writes.some((w) => w.index === queue && w.id !== null))) void deleted();
-  });
+  }, "file storage sweeps");
   const every = setInterval(() => void deleted(), 30_000);
   const orphans = setInterval(
     () => {

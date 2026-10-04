@@ -140,7 +140,8 @@ export class BunvexHttpClient {
   private async call(endpoint: string, body: Record<string, unknown>, type: UdfType, name: string): Promise<unknown> {
     const response = await this.localFetch()(`${this.address}/api/${endpoint}`, {
       ...this.fetchOptions,
-      body: JSON.stringify(body),
+      // As Convex's client: results in the encoded form whatever the server's default (STUDY-67 H3).
+      body: JSON.stringify({ ...body, format: "encoded_json" }),
       method: "POST",
       headers: this.headers(),
     });

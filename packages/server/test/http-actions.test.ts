@@ -229,7 +229,15 @@ describe("both ways in", () => {
     expect(r.status).toBe(404);
     expect(r.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     expect(await r.text()).toBe("No matching routes found");
-    expect((await fetch(`${site}/api/query`, { method: "POST", body: "{}" })).status).toBe(404); // user space
+    expect(
+      (
+        await fetch(`${site}/api/query`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(404); // user space
     expect(await raw(server.site!.port!, "TRACE /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")).toStartWith(
       "HTTP/1.1 405",
     );
