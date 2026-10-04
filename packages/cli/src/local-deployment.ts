@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import type { Io } from "./io.ts";
-import { parseEnvFile, resolveTarget, type Target, type TargetFlags } from "./target.ts";
+import { deploymentVariables, resolveTarget, type Target, type TargetFlags } from "./target.ts";
 
 export const EXE = process.platform === "win32" ? "bunvex-local-backend.exe" : "bunvex-local-backend";
 const REPO = "bunvex/bunvex";
@@ -297,14 +297,12 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
   return { target: { url: `http://127.0.0.1:${cloud}`, adminKey }, config, stop };
 }
 
-/** `BUNVEX_DEPLOYMENT` from the environment, `.env.local` or `.env` (Convex reads CONVEX_DEPLOYMENT so). */
-export function configuredDeployment(io: Io): { type: string; name: string } | null {
-  const fromFiles: Record<string, string> = {};
-  for (const f of [".env", ".env.local"]) {
-    const p = join(io.cwd, f);
-    if (existsSync(p)) Object.assign(fromFiles, parseEnvFile(readFileSync(p, "utf8")));
-  }
-  const v = io.env.BUNVEX_DEPLOYMENT || fromFiles.BUNVEX_DEPLOYMENT;
+/**
+ * `BUNVEX_DEPLOYMENT` as Convex reads CONVEX_DEPLOYMENT: from `--env-file` alone when given, else the
+ * environment, `.env.local` or `.env` (`deploymentVariables`).
+ */
+export function configuredDeployment(io: Io, flags: TargetFlags = {}): { type: string; name: string } | null {
+  const v = deploymentVariables(flags, io)("BUNVEX_DEPLOYMENT");
   if (!v) return null;
   const i = v.indexOf(":");
   return i === -1 ? null : { type: v.slice(0, i), name: v.slice(v.lastIndexOf(":") + 1) };
@@ -380,7 +378,7 @@ export async function acquireTarget(
 ): Promise<{ target: Target; release: () => Promise<void> } | null> {
   const t = resolveTarget(flags, io);
   if (t) return { target: t, release: async () => {} };
-  if (configuredDeployment(io)?.type !== "local") return null;
+  if (configuredDeployment(io, flags)?.type !== "local") return null;
   const c = readLocalConfig(io.cwd);
   if (!c) return null;
   if ((await instanceNameAt(c.ports.cloud)) === c.deploymentName)
