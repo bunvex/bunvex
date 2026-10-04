@@ -139,9 +139,53 @@ export async function deploy(dir: string): Promise<Deployment> {
   }
 }
 
-/** Run the example's `build` script (its front end typechecked, then bundled), with `env` added. */
+/**
+ * Run the example's `build` script (its front end typechecked, then bundled), with `env` added; then check its
+ * client bundle holds nothing of the server.
+ */
 export async function build(dir: string, env: Record<string, string> = {}): Promise<void> {
   await run([process.execPath, "run", "build"], dir, env);
+  checkClientBundle(dir);
+}
+
+/**
+ * What must never reach a browser: the server's runtime, admin keys, and the functions' own code. Each marker
+ * survives minification: a module or export name, or a call only a running function makes (`ctx` is renamed,
+ * the property chain is not). The front end reaches functions through `_generated/api`, which holds names only.
+ */
+export const SERVER_ONLY_MARKERS: [what: string, marker: RegExp][] = [
+  ["the server", /\bcreateServer\b/],
+  ["SQLite", /bun:sqlite/],
+  ["persistence", /\bopenPersistence\b/],
+  ["the S3 client", /\bS3Client\b/],
+  ["admin keys", /\b(issueAdminKey|adminKeyCipherKey|checkAdminKey)\b/],
+  ["a self-hosted admin key variable", /BUNVEX_SELF_HOSTED_ADMIN_KEY/],
+  ["a function's database access", /\.db\.(query|insert|patch|replace|delete|get|normalizeId|system)\(/],
+  ["a function's scheduler", /\.scheduler\.(runAfter|runAt|cancel)\(/],
+  ["a function's file storage", /\.storage\.(generateUploadUrl|getUrl|getMetadata|delete|store)\(/],
+  ["a function's nested calls", /\.(runQuery|runMutation|runAction)\(/],
+];
+
+/** The client bundle a build wrote: Vite's `dist/`, or Next.js's `.next/static/`. */
+function clientFiles(dir: string): string[] {
+  const root = existsSync(join(dir, ".next/static")) ? join(dir, ".next/static") : join(dir, "dist");
+  if (!existsSync(root)) throw new Error(`${dir}: no client bundle (dist/ or .next/static/) after the build`);
+  return [...snapshot(root).keys()].filter((f) => f.endsWith(".js")).map((f) => join(root, f));
+}
+
+/** Throw if the example's client bundle holds anything of the server (see SERVER_ONLY_MARKERS). */
+export function checkClientBundle(dir: string): void {
+  const files = clientFiles(dir);
+  if (files.length === 0) throw new Error(`${dir}: the client bundle has no JavaScript`);
+  const found: string[] = [];
+  for (const file of files) {
+    const code = readFileSync(file, "utf8");
+    for (const [what, marker] of SERVER_ONLY_MARKERS) {
+      const m = marker.exec(code);
+      if (m) found.push(`${what} (${JSON.stringify(m[0])}) in ${file.slice(dir.length + 1)}`);
+    }
+  }
+  if (found.length) throw new Error(`${dir}: the client bundle holds server code:\n  ${found.join("\n  ")}`);
 }
 
 /** Wait until `f` returns something truthy (polled every 10 ms, for up to 10 s). */

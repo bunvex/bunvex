@@ -99,7 +99,11 @@ Neither changes how an app behaves; they are recorded here, not in the divergenc
 
 Each example's `test/e2e.test.ts`, by the shared helper `examples/e2e.ts`: deploy, then the scenario through
 `BunvexClient` / `BunvexHttpClient` (live updates where the demo shows them), the `_generated/` check, and the
-front end's `tsc` and build. Sabotage: break a function, and its example's test fails.
+front end's `tsc` and build, then a scan of the client bundle (Vite's `dist/`, Next.js's `.next/static/`): it
+must hold nothing of the server — the runtime (`createServer`, `bun:sqlite`, persistence, S3, admin keys) and
+the functions' own code (calls only a running function makes, `.db.query(`, `.scheduler.runAfter(`, …, which
+minification keeps). Sabotage: break a function, and its example's test fails; import a functions module in
+the front end (Vite or a Next.js Client Component), and the bundle scan fails naming the chunk.
 
 ## 6. Open questions
 
