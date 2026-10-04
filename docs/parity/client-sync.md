@@ -193,7 +193,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `ConvexProvider` / `useConvex()` context | `react/client.ts` | done (STUDY-26) | `BunvexProvider` / `useBunvex()` (R1). |
 | `useQuery(query, args \| "skip")` → value \| undefined while loading; throws query errors to the error boundary; args memoised by their JSON | `react/client.ts` | done (STUDY-26) |  |
 | `useQuery_experimental({query, args, throwOnError})` → `{status: pending \| success \| error}` | `react/client.ts` | done (STUDY-26) |  |
-| `useQueries(record)`: many queries in one hook, errors returned as `Error` values | `react/use_queries.ts`, `react/queries_observer.ts` | done (STUDY-26) |  |
+| `useQueries(record)`: many queries in one hook, errors returned as `Error` values | `react/use_queries.ts`, `react/queries_observer.ts` | done (STUDY-26) | Differential with the official `useQueries` over a fake client (`sync-e2e/react/use-queries.test.tsx`, STUDY-65 G-C12): swaps, unsubscribes, local results on the first render, errors, journals carried to a new client, pagination options. |
 | Concurrent-mode-safe subscription hook (no tearing between render and subscribe) | `react/use_subscription.ts` | done (STUDY-26) | On `useSyncExternalStore`, with a re-read after subscribing (R2). |
 | `useMutation(ref)`: stable function + `.withOptimisticUpdate` | `react/client.ts` | done (STUDY-26) |  |
 | `useAction(ref)` | `react/client.ts` | done (STUDY-26) |  |
