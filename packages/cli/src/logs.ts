@@ -3,6 +3,7 @@
 // cursor, printing each line of each execution as `<local time> [BUNVEX <Q|M|A|H>(<path>)] [LEVEL] message`;
 // with `--success`, a line for each successful execution; with `--jsonl`, each entry as JSON. Convex's prefix
 // says CONVEX; bunvex's says BUNVEX (rule 5).
+import { VERSION } from "@bunvex/client";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -107,17 +108,18 @@ export function formatEntries(
   return out;
 }
 
-/** The client header the server reads to send structured lines, as Convex's CLI's `npm-cli-<version>`. */
-async function clientHeader(): Promise<string> {
-  const pkg = (await import("../package.json")) as { version: string };
-  return `npm-cli-${pkg.version}`;
-}
+/**
+ * The client header the server reads to send structured lines, as Convex's CLI's `npm-cli-<version>`. The
+ * version is the Convex npm package's this one follows, as bunvex's client announces (DV-225): bunvex's own
+ * `0.x` would be refused as an npm client at or below 0.19.1 (STUDY-67 H12, DV-315).
+ */
+const clientHeader = () => `npm-cli-${VERSION}`;
 
 class ForbiddenError extends Error {}
 
 async function poll(target: Target, cursor: number, signal?: AbortSignal) {
   const r = await fetch(`${target.url}/api/stream_function_logs?cursor=${cursor}`, {
-    headers: { authorization: `Bunvex ${target.adminKey}`, "bunvex-client": await clientHeader() },
+    headers: { authorization: `Bunvex ${target.adminKey}`, "bunvex-client": clientHeader() },
     ...(signal ? { signal } : {}),
   });
   const body = (await r.json()) as { entries: LogEntry[]; newCursor: number; message?: string };

@@ -84,7 +84,7 @@ export class EnvironmentVariables {
           this.lastWriteTs = Math.max(this.lastWriteTs, e.ts);
           this.cache = null;
         }
-    });
+    }, "environment variables");
   }
 
   private async rows(db: Tx): Promise<Row[]> {

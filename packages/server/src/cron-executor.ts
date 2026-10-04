@@ -19,6 +19,7 @@ import type { CronSpec } from "./cron.ts";
 import {
   applyCrons,
   CRON_LOG_MAX_RESULT_LENGTH,
+  type CronDiff,
   type CronJob,
   type CronStatus,
   completeRun,
@@ -63,6 +64,8 @@ export class CronJobExecutor {
   private wake: (() => void) | null = null;
   private pokes = 0;
   private loop: Promise<void> | null = null;
+  /** Ends a backoff sleep early (on stop). */
+  private interrupt: (() => void) | null = null;
   private readonly o: Required<Omit<CronExecutorOptions, "rng">> & NextOpts;
   readonly stats = { runs: 0, skippedLogs: 0 };
 
@@ -86,19 +89,51 @@ export class CronJobExecutor {
   /**
    * Register the declared crons (S1: the start is the push), then run them. `apply: false` (a deployable
    * server, STUDY-35): the stored crons stay as they are until a code version pushes its own.
+   *
+   * Resolves with the diff once the crons are registered, or with undefined if the executor stops first. It
+   * never rejects: a failed registration (the store failing a read, say) is logged and retried with backoff,
+   * as Convex's background workers do (crates/application/src/cron_jobs/mod.rs `CronJobExecutor::run`), and
+   * the crons run once it succeeds — a store fault at startup never takes the process down.
    */
-  async start(apply = true) {
-    const diff = apply
-      ? await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push")
-      : undefined;
+  start(apply = true): Promise<CronDiff | undefined> {
     const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
+    }, "cron executor");
+    const registered = apply ? this.register() : Promise.resolve(undefined);
+    this.loop = registered.then(() => (this.stopped ? undefined : this.run()));
+    return registered;
+  }
+
+  /** The startup diff, until it commits (or the executor stops). */
+  private async register(): Promise<CronDiff | undefined> {
+    for (let failures = 1; !this.stopped; failures++) {
+      try {
+        return await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push");
+      } catch (e) {
+        if (e instanceof CommitterStoppedError || this.stopped) return undefined;
+        const delay = backoff(failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
+        console.error(`cron jobs: registering the crons failed, retrying in ${Math.round(delay)} ms`, e);
+        await this.pause(delay);
+      }
+    }
+    return undefined;
+  }
+
+  /** Sleep `ms`, or less if the executor stops. */
+  private pause(ms: number) {
+    return new Promise<void>((resolve) => {
+      const t = setTimeout(done, ms);
+      const self = this;
+      function done() {
+        clearTimeout(t);
+        self.interrupt = null;
+        resolve();
+      }
+      this.interrupt = done;
     });
-    this.loop = this.run();
-    return diff;
   }
 
   /** The same diff inside a transaction of the caller's (a push's commit, STUDY-35); `wake()` once it commits. */
@@ -122,6 +157,7 @@ export class CronJobExecutor {
 
   async stop() {
     this.stopped = true;
+    this.interrupt?.();
     this.poke();
     await this.loop;
     await Promise.allSettled(this.tasks);
@@ -135,6 +171,7 @@ export class CronJobExecutor {
   }
 
   private async run() {
+    let failures = 0;
     while (!this.stopped) {
       const seen = this.pokes;
       let nextAt: number | null = null;
@@ -164,10 +201,13 @@ export class CronJobExecutor {
           }
         }
         nextAt = await this.engine.query((db) => nextCronTs(db, now));
+        failures = 0;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
-        console.error("cron jobs: the executor failed, retrying", e);
-        nextAt = wallClock() + 1000;
+        // As Convex's executor loop: log, back off (500 ms to 15 s), and look again.
+        const delay = backoff(++failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
+        console.error(`cron jobs: the executor failed, retrying in ${Math.round(delay)} ms`, e);
+        nextAt = wallClock() + delay;
       }
       if (this.stopped) return;
       if (this.pokes !== seen) continue;

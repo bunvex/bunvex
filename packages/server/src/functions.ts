@@ -248,20 +248,53 @@ const DEFINED = new WeakSet<object>();
 /** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
 export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
 
-export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
+export const isFunctionDef = (x: unknown): x is FunctionDef =>
+  (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);
 
 const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
 
 function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
-  const f = defineUnmarked(kind, visibility, def);
+  const spec = defineUnmarked(kind, visibility, def);
+  const builderName = visibility === "public" ? kind : `internal${kind[0]!.toUpperCase()}${kind.slice(1)}`;
+  const f = dontCallDirectly(builderName, spec.handler as (ctx: unknown, args: unknown) => unknown);
+  assertNotBrowser();
   // Convex's markers: what the function is (`ApiFromModules` reads them as types).
-  Object.assign(f, {
+  Object.assign(f, spec, {
     isBunvexFunction: true,
     [KIND_MARKER[kind]]: true,
     [visibility === "public" ? "isPublic" : "isInternal"]: true,
   });
   DEFINED.add(f);
-  return f;
+  return f as unknown as FunctionDef;
+}
+
+/**
+ * A registered function is callable, as Convex's (registration_impl.ts `dontCallDirectly`, STUDY-66 §7): called
+ * directly (`await foo(ctx, args)`), it warns and runs the handler.
+ */
+function dontCallDirectly(builderName: string, handler: (ctx: unknown, args: unknown) => unknown) {
+  return (ctx: unknown, args: unknown) => {
+    console.warn(
+      "bunvex functions should not directly call other bunvex functions. Consider calling a helper function instead. " +
+        `e.g. \`export const foo = ${builderName}(...); await foo(ctx);\` is not supported.`,
+    );
+    return handler(ctx, args);
+  };
+}
+
+/**
+ * Convex's `assertNotBrowser`: functions imported in a real browser (its `window` getter is native code;
+ * JSDOM's is not) log an error. `window.__bunvexAllowFunctionsInBrowser` turns it off.
+ */
+function assertNotBrowser() {
+  const w = (globalThis as { window?: { __bunvexAllowFunctionsInBrowser?: unknown } }).window;
+  if (w === undefined || w.__bunvexAllowFunctionsInBrowser) return;
+  const isRealBrowser =
+    Object.getOwnPropertyDescriptor(globalThis, "window")?.get?.toString().includes("[native code]") ?? false;
+  if (isRealBrowser)
+    console.error(
+      "bunvex functions should not be imported in the browser. This will throw an error in future versions of `bunvex`. If this is a false negative, please report it to bunvex.",
+    );
 }
 
 function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {

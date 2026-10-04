@@ -165,20 +165,46 @@ export class ConflictError extends Error {
 }
 
 /**
- * The committer stopped because persistence failed (a throwing `apply` or `flush`). As in Convex, this is
- * fail-stop: nothing after the failure is ever made visible, every later commit is refused, and the process
- * is expected to restart and recover from what persistence durably holds (PERSIST-01 C5).
+ * A commit listener (`onCommit`) or a commit's `onVisible` hook threw: an internal error of bunvex, not of
+ * persistence. The commit it was told about is durable and visible; the committer still stops (fail-stop): a
+ * layer left half-notified, the sync layer above all, would leave clients silently stale.
+ */
+export class CommitListenerError extends Error {
+  constructor(
+    /** The listener's name, given at registration, if any. */
+    readonly listener: string | undefined,
+    cause: unknown,
+  ) {
+    super(
+      `an internal error in ${listener === undefined ? "a commit listener" : `commit listener ${JSON.stringify(listener)}`}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = "CommitListenerError";
+  }
+}
+
+/**
+ * The committer stopped. As in Convex, this is fail-stop: nothing after the failure is ever made visible,
+ * every later commit is refused, and the process is expected to restart and recover from what persistence
+ * durably holds (PERSIST-01 C5). Usually persistence failed (a throwing `apply` or `flush`, a lost lease);
+ * a `CommitListenerError` cause is an internal error in a commit listener instead, and says so.
  */
 export class CommitterStoppedError extends Error {
+  /** Whether persistence failed (false: a commit listener threw). */
+  readonly persistenceFailure: boolean;
   constructor(
     cause: unknown,
     /** What failed, when known: a flush is "write failed, unsure if the group committed to disk" (Convex). */
     context?: string,
   ) {
+    const listener = cause instanceof CommitListenerError;
     super(
-      `the committer stopped after a persistence failure: ${context ? `${context}: ` : ""}${cause instanceof Error ? cause.message : String(cause)}`,
+      listener
+        ? `the committer stopped after ${cause.message}`
+        : `the committer stopped after a persistence failure: ${context ? `${context}: ` : ""}${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
+    this.persistenceFailure = !listener;
   }
 }
 
@@ -288,6 +314,8 @@ export class Committer {
   private queue: PendingCommit[] = [];
   private running = false;
   private listeners: ((e: LogEntry[]) => void)[] = [];
+  /** Each listener's name (same order), for the error if it throws. */
+  private listenerNames: (string | undefined)[] = [];
   private fatalListeners: ((e: CommitterStoppedError) => void)[] = [];
   /** Callers of `waitForVisible`, woken once `visibleTs` reaches their ts. */
   private visibleWaiters: { ts: number; resolve: () => void }[] = [];
@@ -368,12 +396,16 @@ export class Committer {
     return lo < this.log.length && this.log[lo].ts === ts ? this.log[lo].source : undefined;
   };
 
-  /** Subscribe to durable commits (the query cache and subscriptions). */
-  onCommit(fn: (entries: LogEntry[]) => void) {
+  /**
+   * Subscribe to durable commits (the query cache and subscriptions). `name` identifies the listener if it
+   * ever throws: that stops the committer, with a `CommitListenerError` naming it.
+   */
+  onCommit(fn: (entries: LogEntry[]) => void, name?: string) {
     this.listeners.push(fn);
+    this.listenerNames.push(name);
   }
 
-  /** Called once, when persistence fails and the committer stops (the server shuts the process down). */
+  /** Called once, when the committer stops (persistence failed, or a commit listener threw); the server shuts the process down. */
   onFatal(fn: (e: CommitterStoppedError) => void) {
     this.fatalListeners.push(fn);
   }
@@ -587,9 +619,21 @@ export class Committer {
     this.batches++;
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
-    for (const [p, e] of batch) p.onVisible?.(e.ts);
     const entries = batch.map(([, e]) => e);
-    for (const l of this.listeners) l(entries);
+    // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and
+    // visible, so its commits are answered as committed, but the committer stops (fail-stop) and says which.
+    let i = -1; // -1: the commits' `onVisible` hooks, else the listener at i
+    try {
+      for (const [p, e] of batch) p.onVisible?.(e.ts);
+      const listeners = this.listeners;
+      for (i = 0; i < listeners.length; i++) listeners[i](entries);
+    } catch (e) {
+      this.stop(new CommitListenerError(i < 0 ? "onVisible" : this.listenerNames[i], e));
+      for (const [p, e] of batch) p.resolve(e.ts);
+      this.wakeVisible();
+      for (let i = to; i < accepted.length; i++) accepted[i][0].reject(this.stopped);
+      return false;
+    }
     for (const [p, e] of batch) p.resolve(e.ts);
     this.wakeVisible();
     // As Convex, once the commits are published to subscriptions, relative to the latest of them.

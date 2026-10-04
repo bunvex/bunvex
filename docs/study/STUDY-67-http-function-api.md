@@ -174,7 +174,7 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 | H4 | Content-Type not required; `args` optional; body error messages | gap | fix to match (#295) |
 | H5 | `/api/function` open to non-admins; `componentPath` ignored; 404 for a wrong method | gap | fix to match (#295) |
 | H6 | Argument errors rendered as an uncaught JS error, other messages, extra args accepted | gap | fix to match (#298) |
-| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **pending owner** (DV-312, draft #302): recommended, a wire-name exception as DV-307 |
+| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **owner, 2026-10-03: option B** (DV-312, #302): a 400 with bunvex's code `BadBunvexFunctionIdentifier` ("the client used has to be bunvex's"), Convex's reasons, the sentence in bunvex's words |
 | H8 | `/api/run/{path}` missing | gap | add (#299) |
 | H9 | `/api/query_batch` missing | gap | add (#301) |
 | H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **pending owner** (DV-313, draft #303): recommended, a working route (args as JSON text) |
@@ -197,3 +197,54 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
   function for '_system/x:y'.". Minor; left for the system-functions study (STUDY-34).
 - A number result renders `1.0` in Convex (`serde_json`'s float) and `1` in bunvex: the same JSON number,
   nothing to do.
+
+## 7. The client version check (H12, as built: #319)
+
+The owner chose option A for DV-315 (2026-10-03): validate as Convex, with the deprecation headers named
+`x-bunvex-*`.
+
+**Convex** (`crates/common/src/http/mod.rs` `ExtractClientVersion`, `client_version_state_middleware`;
+`crates/common/src/version.rs`; `crates/common/deprecation.json`). The middleware is a layer of
+`ConvexHttpService`, so it runs on every request of the backend and of the site proxy, outside the router's
+own layers (CORS):
+
+- **Which version.** The `Convex-Client` header (`ClientVersion::from_str`): split on `-`, and the longest
+  suffix that parses as semver is the version. Without such a suffix, the first part is the client and the
+  rest an unrecognised version. The client name is lower-cased: `npm`, `npm-cli`, `actions`, `python` (also
+  `python-convex`), `rust`, and others with no threshold. Without the header, the version in
+  `/{client_version}/sync`, percent-decoded, as an npm client (`from_path_param`). Otherwise the client is
+  unknown.
+- **400 `InvalidClientVersion`.**
+  - A header with no `-`: "Failed to parse client version string: '<s>'. Expected format is
+    {client_name}-{semver}, e.g. my-esolang-client-0.0.1".
+  - A sync URL version that is not semver: "Failed to parse client version: <reason>". The reason is the
+    `semver` crate's, e.g. "unexpected end of input while parsing minor version number".
+- **`current_state`**, against the thresholds:
+  - **Unsupported** at or below `unsupported`: npm, npm-cli and actions 0.19.1; python 0.0.2; rust 0.0.1.
+    An unrecognised version always counts as below. This is a **400 `ClientVersionUnsupported`** with the
+    message, plus `x-convex-deprecation-state: Unsupported` and `x-convex-deprecation-message`.
+  - **UpgradeRequired** at or below `upgradeRequired` (npm 0.19.1, so never for npm; python 0.2.0; rust
+    0.0.1). The request runs, and its answer carries the two headers with `UpgradeRequired`.
+  - Comparisons follow the `semver` crate's order: a pre-release sorts before its release, and build
+    metadata sorts after none, so `npm-0.19.1+b` is supported.
+
+**Probe.** 69 cases were sent to Convex's local backend (`Convex-Client`) and to bunvex (`Bunvex-Client`):
+headers, sync URL versions, percent-encoding, invalid UTF-8. Convex's wording mapped to bunvex's, every
+status, body and deprecation header is the same, except `python-convex-0.0.1`. Neither server puts CORS
+headers on these 400s. The cases are in `packages/server/test/client-version.test.ts`.
+
+**bunvex** (`packages/server/src/client-version.ts`) wraps the API server's `fetch` outside CORS, and also
+the site server's. Verdicts are cached per distinct header in a bounded map.
+
+- **Header names.** It reads `Bunvex-Client` and answers with `x-bunvex-deprecation-state` and
+  `x-bunvex-deprecation-message` (rule 5).
+- **Messages.** They keep Convex's structure without naming a product: "The npm package at version abc is
+  no longer supported. Update your npm package with \`npm update\`."
+- **`python-convex`.** It is an unknown client (rule 5). Convex's python client sends `Convex-Client`,
+  never this header.
+- **The CLI** sent `npm-cli-0.1.0-alpha.0`, which this check refuses. It now announces the Convex npm
+  version it follows, as the client does (DV-225, `VERSION` 1.46.0).
+
+**Cost.** 80 ns per request without a header, 120–130 ns with one (cached); an uncached parse costs about
+1.1 µs. HTTP query throughput (32 requests in flight, memory store) is unchanged within noise: about
+20.3k req/s with and without the check.
