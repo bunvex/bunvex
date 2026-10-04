@@ -64,6 +64,7 @@ import {
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
+import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -1037,6 +1038,16 @@ export function createServer(opts: ServerOptions) {
         if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
         throw e;
       }
+      // Convex parses the path before it authenticates (`parse_export_path`); `/api/function`, after its admin
+      // check, and `/api/run`'s after its identifier (STUDY-67 H7).
+      const badPath = () => {
+        const bad = badFunctionPath(body.path);
+        return bad && requestError(bad.status, bad.code, bad.message);
+      };
+      if (kind !== "function" && kind !== "run") {
+        const bad = badPath();
+        if (bad) return bad;
+      }
       // `/api/run` answers clean JSON by default, whatever the client (Convex's `ConvexCleanJSON` default there).
       const formatRequest = { format: body.format, client: kind === "run" ? null : req.headers.get("bunvex-client") };
       const caller = await callerOfRequest(req);
@@ -1050,6 +1061,8 @@ export function createServer(opts: ServerOptions) {
             "Path or function name not provided in path, e.g. /api/run/messages/list",
           );
         body.path = path;
+        const bad = badPath();
+        if (bad) return bad;
       }
       // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
       // a user), on the root component; the function's own kind, internal ones included.
@@ -1073,6 +1086,8 @@ export function createServer(opts: ServerOptions) {
         // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
         if (typeof body.componentPath === "string" && body.componentPath !== "")
           return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        const bad = badPath();
+        if (bad) return bad;
         const found = functions.kindOf(body.path);
         if (!found)
           return udfResponse(
