@@ -29,6 +29,7 @@ export {
   EXPORTS_TABLE,
   FUNCTION_HANDLES_TABLE,
   IndexBackfillingError,
+  IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
   LOG_SINKS_TABLE,
@@ -39,8 +40,10 @@ export {
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  searchIndexesUnavailable,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  vectorIndexesUnavailable,
 } from "./catalog.ts";
 export {
   CommitListenerError,
@@ -119,6 +122,7 @@ export type {
 } from "./database-types.ts";
 export {
   checkUserTime,
+  directFetch,
   type ExecutionKind,
   failExecution,
   formatDuration,
@@ -131,6 +135,8 @@ export {
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
   setFetchMeter,
+  setFetchSender,
+  setFetchSignal,
   type UserTimer,
   userTimeMs,
   wallClock,
@@ -145,6 +151,7 @@ export {
   Engine,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,
+  type MutationOptions,
   OCC_INITIAL_BACKOFF_MS,
   OCC_MAX_BACKOFF_MS,
   OCC_MAX_RETRIES,
@@ -173,6 +180,7 @@ export {
   orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
+export { opaqueToInspect } from "./inspect.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
@@ -280,11 +288,28 @@ export {
   formatBytes,
   ImportIdError,
   isQueryObject,
+  MAX_DOCUMENT_NESTING,
+  MAX_USER_SIZE,
+  OVER_LIMIT_HELP,
   type PaginationOptions,
   type PaginationResult,
   QueryCursorError,
   type Savepoint,
+  TRANSACTION_MAX_NUM_USER_WRITES,
+  TRANSACTION_MAX_READ_SET_INTERVALS,
+  TRANSACTION_MAX_READ_SIZE_BYTES,
+  TRANSACTION_MAX_READ_SIZE_ROWS,
+  TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
   Tx,
   type TxLimits,
   type TxQuery,
 } from "./tx.ts";
+export {
+  formatByteCount,
+  formatWindow,
+  MAX_BYTES_WRITTEN_PER_SECOND,
+  TooManyWritesError,
+  WRITE_THROUGHPUT_WINDOW_MS,
+  WriteThroughputLimiter,
+  type WriteThroughputOptions,
+} from "./write-throughput.ts";

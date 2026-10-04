@@ -88,7 +88,8 @@ export function passes(topics: LogTopic[] | undefined, e: LogEvent): boolean {
   const t = e.event.topic;
   if (t === "verification") return true;
   if (t === "exception") return false;
-  return topics === undefined ? true : topics.includes(t);
+  // Subscribing to every topic leaves out `custom_audit`: it is opt-in (Convex's entitlement), STUDY-82.
+  return topics === undefined ? t !== "custom_audit" : topics.includes(t);
 }
 
 /** The exception sinks' filter (Convex's `OnlyExceptions`). */

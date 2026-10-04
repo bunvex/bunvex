@@ -12,8 +12,7 @@ import { describeUncaught, newRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { type HttpRouter, ROUTABLE_HTTP_METHODS, type RoutableMethod } from "./router.ts";
 
-/** Convex's HTTP_ACTION_BODY_LIMIT, for responses. */
-export const HTTP_ACTION_RESPONSE_LIMIT = 20 << 20;
+export { HTTP_ACTION_RESPONSE_LIMIT } from "./http-body.ts";
 /** Convex's HTTP_SERVER_TIMEOUT_DURATION: no response head by then answers 408. */
 export const HTTP_ACTION_HEAD_TIMEOUT_MS = 300_000;
 export const REQUEST_ID_HEADER = "bunvex-request-id";
@@ -37,27 +36,6 @@ function requestUrl(req: Request, pathAndQuery: string): string {
   const scheme = h.get("x-forwarded-proto") ?? forwarded ?? "http";
   const host = h.get("host") ?? new URL(req.url).host;
   return `${scheme}://${host}${pathAndQuery}`;
-}
-
-/** The response body, cut once it would pass 20 MiB (Convex drops the rest and logs it; the status stays). */
-function limited(body: ReadableStream<Uint8Array>, route: string): ReadableStream<Uint8Array> {
-  let sent = 0;
-  let over = false;
-  return body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        if (over) return;
-        if (sent + chunk.byteLength > HTTP_ACTION_RESPONSE_LIMIT) {
-          over = true;
-          console.error(`${route}: HttpResponseTooLarge: HTTP actions support responses up to 20 MiB`);
-          controller.terminate();
-          return;
-        }
-        sent += chunk.byteLength;
-        controller.enqueue(chunk);
-      },
-    }),
-  );
 }
 
 export function httpActionServer(o: HttpActionOptions) {
@@ -85,7 +63,6 @@ export function httpActionServer(o: HttpActionOptions) {
     const match = o.router.lookup(path, method as RoutableMethod | "HEAD");
     if (!match) return text(404, "No matching routes found");
     const [handler, routedMethod, routePath] = match;
-    const route = `${routedMethod} ${routePath}`;
 
     const headers = new Headers(req.headers);
     if (!headers.has(REQUEST_ID_HEADER)) headers.set(REQUEST_ID_HEADER, newRequestId());
@@ -110,7 +87,11 @@ export function httpActionServer(o: HttpActionOptions) {
     );
     const outcome = await Promise.race([run, timedOut]);
     clearTimeout(timer);
-    if (outcome === "timeout") return new Response(null, { status: 408 });
+    if (outcome === "timeout") {
+      // Its response, when it comes, is never sent: let its run be logged then.
+      void run.then((o) => (o.ok && o.r instanceof Response ? o.r.body?.cancel() : undefined)).catch(() => {});
+      return new Response(null, { status: 408 });
+    }
     if (!outcome.ok) {
       if (outcome.e instanceof TooManyConcurrentRequestsError)
         return new Response(JSON.stringify({ code: outcome.e.code, message: outcome.e.message }), {
@@ -122,13 +103,11 @@ export function httpActionServer(o: HttpActionOptions) {
     const res = outcome.r;
     if (!(res instanceof Response)) return errorResponse(new Error("HTTP actions must return a Response"));
     // HEAD answers GET's head without its body (Bun also drops a HEAD response's body, as axum does).
-    if (method === "HEAD")
+    if (method === "HEAD") {
+      void res.body?.cancel().catch(() => {});
       return new Response(null, { status: res.status, statusText: res.statusText, headers: res.headers });
-    if (!res.body) return res;
-    return new Response(limited(res.body, route), {
-      status: res.status,
-      statusText: res.statusText,
-      headers: res.headers,
-    });
+    }
+    // Already metered by `runHttpAction` (20 MiB at most, the run logged once it is sent).
+    return res;
   };
 }

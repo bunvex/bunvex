@@ -110,6 +110,43 @@ describe("a push's schema change", () => {
     await e.commitSchemaPush(p.schemaId, async () => {});
   });
 
+  test("the status counts every index there is, as Convex: a changed index waits for its new version; staged ones do not count", async () => {
+    const e = await new Engine(defineSchema({}), new SqlitePersistence(tmp(), { durable: true }), {
+      storedSchema: true,
+      indexBackfill: { chunkSize: 10, chunkRate: 20 },
+    }).init();
+    engines.push(e);
+    const p0 = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()).index("by_a", ["a"]) }));
+    await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
+    await e.commitSchemaPush(p0.schemaId, async () => {});
+    await e.mutation(async (db) => {
+      for (let j = 0; j < 300; j++) await db.insert("items", { a: j, b: j });
+    });
+    // by_a gets another field (its new version backfills next to the enabled one); by_s is staged.
+    const p = await e.startSchemaPush(
+      defineSchema({
+        items: defineTable(v.any())
+          .index("by_a", ["a", "b"])
+          .index("by_s", { fields: ["b"], staged: true }),
+      }),
+    );
+    // Convex's test_component_status_skips_staged_index: the staged index is not counted.
+    expect(await e.schemaPushStatus(p.schemaId)).toMatchObject({
+      type: "inProgress",
+      indexesComplete: 1,
+      indexesTotal: 2,
+    });
+    // Still in progress once the documents are validated: the new by_a is not ready (it used to say complete
+    // here, and then `finish_push` refused: "The schema's indexes are still backfilling").
+    await until(async () => {
+      const s = await e.schemaPushStatus(p.schemaId);
+      return s.type === "inProgress" && s.schemaValidationComplete;
+    });
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    expect((await byIndex(e, "by_a", "a", 7)).length).toBe(1);
+  });
+
   test("a newer push overwrites an older one: raceDetected, and its commit is refused", async () => {
     const e = await open(tmp());
     const a = await e.startSchemaPush(v1);
@@ -195,7 +232,8 @@ describe("a push's schema change", () => {
     // ...and a push meanwhile that wants another index: the start's backfill ending must not finish with
     // the old schema (which would drop the push's index).
     const p = await b.startSchemaPush(
-      defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]).index("by_n2", ["n"]) }),
+      // Not the same fields as by_n: Convex refuses two indexes on the same fields.
+      defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]).index("by_n2", ["n", "m"]) }),
     );
     await until(async () => (await b.schemaPushStatus(p.schemaId)).type === "complete");
     await Bun.sleep(100);

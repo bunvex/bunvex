@@ -7,9 +7,11 @@ import {
   type Caller,
   checkIdentifier,
   DEPLOYMENT_AUDIT_LOG_TABLE,
+  directFetch,
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
+  IndexesUnavailableError,
   insertAuditLogEvents,
   OccError,
   orderEnvVarChanges,
@@ -19,12 +21,14 @@ import {
   setUserStopState,
   stringifyValue,
   TableSummariesUnavailableError,
+  TooManyWritesError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
+import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
 import {
   ADMIN_KEY_PURPOSE,
   AdminKeys,
@@ -68,6 +72,7 @@ import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId 
 import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
+import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import {
@@ -79,6 +84,7 @@ import {
   UDF_POST_WITH_COMPONENT,
   UDF_POST_WITH_TS,
 } from "./json-body.ts";
+import { AuditLogLimitError } from "./log.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -153,6 +159,20 @@ export type ServerOptions = {
   auth?: AuthConfig;
   /** `fetch` for OIDC discovery and JWKS (tests point it at an in-process issuer). */
   authFetch?: typeof fetch;
+  /**
+   * The proxy that requests made on the app's behalf go through (STUDY-80 §3.2; Convex's
+   * `--convex-http-proxy`), to screen them for SSRF: an action's `fetch`, OIDC discovery and JWKS, and the
+   * log stream sinks but Sentry's. Each carries `Proxy-Authorization: <instance name>`; a 407 refuses it.
+   * Default: `BUNVEX_HTTP_PROXY`, else none (null: none, whatever the environment says).
+   */
+  httpProxy?: string | null;
+  /**
+   * Without `httpProxy`, the addresses bunvex itself refuses those requests (STUDY-80 P1, DV-325;
+   * beyond Convex): `metadata` (link-local and the cloud metadata endpoints), `private` (also loopback,
+   * RFC 1918, CGNAT, unique-local, …) or `none` (Convex's behaviour). Default: `BUNVEX_DENY_ADDRESSES`,
+   * else `metadata`.
+   */
+  denyAddresses?: AddressScreen;
   /**
    * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
@@ -304,8 +324,20 @@ export function createServer(opts: ServerOptions) {
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
   functions.functionLog = functionLog;
+  // The operator's proxy (STUDY-80 §3.2, Convex's `--convex-http-proxy`): actions' `fetch`, OIDC discovery and
+  // JWKS, and the log stream sinks but Sentry's go through it, named by the instance.
+  const proxyUrl = httpProxyUrl(
+    opts.httpProxy === null ? undefined : (opts.httpProxy ?? process.env.BUNVEX_HTTP_PROXY),
+  );
+  // Without one, bunvex's own screen (STUDY-80 P1, DV-325; beyond Convex): the same path, through a
+  // proxy in the process that refuses the denied ranges.
+  const screen = addressScreen(opts.denyAddresses ?? process.env.BUNVEX_DENY_ADDRESSES);
+  const builtinScreen = !proxyUrl && screen !== "none" ? startAddressScreen(screen) : null;
+  const screenUrl = proxyUrl ?? builtinScreen?.url;
+  const httpProxy: HttpProxy | null = screenUrl ? { url: screenUrl, clientId: engine.instanceName } : null;
+  functions.httpProxy = httpProxy;
   // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
-  const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), ...opts.logSinks });
+  const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), httpProxy, ...opts.logSinks });
   functions.logManager = logManager;
   logManager.watchConcurrency(() => functions.concurrency());
   const logSinksReady = logManager.start(opts.localLogSink ?? (process.env.BUNVEX_LOCAL_LOG_SINK || undefined));
@@ -338,7 +370,7 @@ export function createServer(opts: ServerOptions) {
   const makeVerifier = (auth: AuthConfig | undefined) =>
     new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
       redactErrors: redact,
-      ...(opts.authFetch ? { fetch: opts.authFetch } : {}),
+      fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
   let verifier = makeVerifier(opts.auth);
@@ -519,8 +551,13 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // Audit log lines over Convex's limits (STUDY-82): a bad request, as Convex's `resolve_bodies`.
+    if (!r.ok && r.error instanceof AuditLogLimitError) return requestError(400, r.error.code, r.error.message);
+    // An index still being rebuilt after a start (STUDY-79): Convex's 503 with the feature's code and message.
+    if (!r.ok && r.error instanceof IndexesUnavailableError) return requestError(503, r.error.code, r.error.message);
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
-    if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
+    // So is the write throughput limit (STUDY-78), once its retries are spent.
+    if (!r.ok && (r.error instanceof TooManyConcurrentRequestsError || r.error instanceof TooManyWritesError))
       return requestError(429, r.error.code, r.error.message);
     // An access check (an admin's operation, a key where one is required) is the request's error (403).
     if (!r.ok) {
@@ -594,6 +631,9 @@ export function createServer(opts: ServerOptions) {
     } catch (e) {
       return bad(`args: ${(e as Error).message}`);
     }
+    // As `public_query_get`: the path is parsed before authentication (`parse_export_path`, STUDY-67 H7).
+    const badPath = badFunctionPath(path);
+    if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
     const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
     const caller = await callerOfRequest(req);
     if (caller instanceof Response) return caller;
@@ -676,16 +716,22 @@ export function createServer(opts: ServerOptions) {
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     try {
-      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      // Each one a call for usage limits, a download's bytes egress as they are sent (Convex's `StorageCall`,
+      // `StorageBandwidth`), and once it ends a `storage_api_bandwidth` event (Convex's `get_file`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
         return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
-        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)), {
+          chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
+          done: (storageId, egressBytes) =>
+            logManager.send([
+              { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
+            ]),
+        });
         usageMeter.record("functionCalls", 1);
-        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
         return r;
       }
       return new Response(null, { status: 405 });
@@ -1760,7 +1806,9 @@ export function createServer(opts: ServerOptions) {
         );
       const r = accessError(e);
       if (r) return r;
-      throw e;
+      // Anything else is a system error, as Convex answers one: 500, its generic message; the cause is logged.
+      console.error("bunvex: a push failed:", e);
+      return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
     }
   };
 
@@ -1791,6 +1839,7 @@ export function createServer(opts: ServerOptions) {
     /** Storage usage gauges (STUDY-73). */
     usageGauges,
     stop: () => {
+      builtinScreen?.stop();
       functionLog.close();
       usageGauges.stop();
       logManager.stop();
@@ -1817,6 +1866,7 @@ export function createServer(opts: ServerOptions) {
       site?.stop(true);
       server?.stop(true);
       stopFileSweeps();
+      builtinScreen?.stop();
       await engine.close();
     },
   };
