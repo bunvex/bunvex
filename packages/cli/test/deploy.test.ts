@@ -69,6 +69,36 @@ function io(cwd: string, env: Record<string, string | undefined> = {}) {
   return { it, out, err };
 }
 
+/** A source map's segments: generated line and column, source index, original line and column. */
+function segments(mappings: string): number[][] {
+  const out: number[][] = [];
+  const acc = [0, 0, 0, 0];
+  mappings.split(";").forEach((group, line) => {
+    let genCol = 0;
+    for (const seg of group.split(",").filter(Boolean)) {
+      const f: number[] = [];
+      let value = 0;
+      let shift = 0;
+      for (const c of seg) {
+        const d = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(c);
+        value += (d & 31) << shift;
+        shift += 5;
+        if (d & 32) continue;
+        f.push(value & 1 ? -(value >> 1) : value >> 1);
+        value = 0;
+        shift = 0;
+      }
+      genCol += f[0]!;
+      if (f.length < 4) continue;
+      acc[1]! += f[1]!;
+      acc[2]! += f[2]!;
+      acc[3]! += f[3]!;
+      out.push([line, genCol, acc[1]!, acc[2]!, acc[3]!]);
+    }
+  });
+  return out;
+}
+
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
@@ -283,6 +313,20 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     expect(b.modules.some((m) => m.path.startsWith("_deps/"))).toBe(true); // lib/format shared by two modules
     expect(b.modules.every((m) => !m.source.startsWith("// @bun"))).toBe(true);
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
+    // Each source map still matches its module once the `// @bun` line is dropped (the server reads the
+    // functions' positions from it, STUDY-65 M5): a string literal is at the same place in both.
+    let checked = 0;
+    for (const m of b.modules.filter((x) => x.sourceMap)) {
+      const map = JSON.parse(m.sourceMap!) as { mappings: string; sourcesContent: string[] };
+      const lines = m.source.split("\n");
+      const strings = segments(map.mappings).filter(([l, c]) => lines[l!]?.[c!] === '"');
+      checked += strings.length;
+      for (const [l, c, src, sl, sc] of strings) {
+        const original = map.sourcesContent[src!]!.split("\n")[sl!]!.slice(sc!, sc! + 6);
+        expect([m.path, lines[l!]!.slice(c!, c! + 6)]).toEqual([m.path, original]);
+      }
+    }
+    expect(checked).toBeGreaterThan(3);
   });
 
   test("a push sends only the changed modules (Convex's partitionModulesByChanges)", () => {

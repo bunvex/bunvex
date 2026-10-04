@@ -129,6 +129,7 @@ import {
   type VectorIndexEntry,
   VectorIndexes,
 } from "./vector-indexes.ts";
+import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -248,7 +249,9 @@ export class Engine {
    * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
    */
-  stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
+  stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0, writeThroughputRetries: 0 };
+  /** The deployment's write throughput limit (STUDY-78): every commit counts, gated writers check it. */
+  readonly writeThroughput: WriteThroughputLimiter;
   /**
    * Called when a mutation attempt lost an OCC conflict and will run again (`failures`: the attempts lost so
    * far), in the mutation's own async context: the server logs each such attempt, as Convex's
@@ -305,12 +308,19 @@ export class Engine {
       flushRetry?: FlushRetryOptions;
       /** The soft caps on what one flush carries (default: Convex's 64 documents / 64 KiB; DV-62). */
       writeBatch?: Partial<WriteBatchLimits>;
+      /**
+       * The write throughput limit (STUDY-78; default: MAX_BYTES_WRITTEN_PER_SECOND and WRITE_THROUGHPUT_WINDOW
+       * from the environment, else Convex's 4 MiB per 1 s).
+       */
+      writeThroughput?: WriteThroughputOptions;
     } = {},
   ) {
     installDeterminism();
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
+    this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
+    this.committer.writeThroughput = this.writeThroughput;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -1761,16 +1771,21 @@ export class Engine {
    * once the budget is spent. `source` names the mutation (e.g. "messages:send") in the conflict errors of
    * the transactions it beats.
    */
-  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<T> {
-    return this.runMutation(body, false, source, false, caller);
+  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller, opts?: MutationOptions): Promise<T> {
+    return this.runMutation(body, false, source, false, caller, opts?.throttled);
   }
 
   /**
    * The same, with the commit timestamp (the snapshot, for a mutation that wrote nothing): what the sync
    * protocol's MutationResponse carries so a client can wait for its queries to reflect the write.
    */
-  mutationWithTs<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<{ value: T; ts: number }> {
-    return this.runMutation(body, false, source, true, caller);
+  mutationWithTs<T>(
+    body: TxBody<T>,
+    source?: string,
+    caller?: Caller,
+    opts?: MutationOptions,
+  ): Promise<{ value: T; ts: number }> {
+    return this.runMutation(body, false, source, true, caller, opts?.throttled);
   }
 
   /**
@@ -1787,6 +1802,7 @@ export class Engine {
     request: SessionRequestId,
     outcome: (value: T) => SessionRequestOutcome,
     caller?: Caller,
+    opts?: MutationOptions,
   ): Promise<{ ts: number } & ({ value: T } | { replayed: SessionRequestOutcome })> {
     const r = await this.runMutation(
       async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
@@ -1800,6 +1816,7 @@ export class Engine {
       source,
       true,
       caller,
+      opts?.throttled,
     );
     return { ...r.value, ts: r.ts };
   }
@@ -1815,6 +1832,7 @@ export class Engine {
     source?: string,
     withTs?: false,
     caller?: Caller,
+    throttled?: boolean,
   ): Promise<T>;
   private runMutation<T>(
     body: TxBody<T>,
@@ -1822,6 +1840,7 @@ export class Engine {
     source: string | undefined,
     withTs: true,
     caller?: Caller,
+    throttled?: boolean,
   ): Promise<{ value: T; ts: number }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
   private async runMutation<T>(
@@ -1830,11 +1849,23 @@ export class Engine {
     source?: string,
     withTs = false,
     caller: Caller = ANONYMOUS,
+    throttled = false,
   ): Promise<unknown> {
     const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
+      // Each attempt of a mutation first checks the write throughput limit (STUDY-78), as Convex's
+      // `run_mutation_no_udf_log`; refused, it is retried within the OCC budget and backoff, then fails.
+      if (throttled && !this.writeThroughput.allowsNow()) {
+        if (failures >= maxRetries)
+          throw new TooManyWritesError(this.writeThroughput.maxBytesPerSecond, this.writeThroughput.windowMs);
+        const sleep = occBackoffMs(failures, initialMs, maxMs);
+        failures++;
+        this.stats.writeThroughputRetries++;
+        await new Promise((r) => setTimeout(r, sleep));
+        continue;
+      }
       const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
       const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
@@ -1926,6 +1957,26 @@ export function transactionStart(snapshotUs: number, clockMs: number, last: numb
   const t = Math.max(clockMs, Math.ceil(snapshotUs / 1000));
   return t > last ? t : nextUp(last);
 }
+
+/** MAX_BYTES_WRITTEN_PER_SECOND (bytes) and WRITE_THROUGHPUT_WINDOW (ms), as Convex's knobs, else defaults. */
+function writeThroughputFromEnv(): WriteThroughputOptions {
+  const knob = (name: string) => {
+    const raw = process.env[name];
+    if (raw === undefined || raw === "") return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`${name}: not a number of at least 0: ${raw}`);
+    return n;
+  };
+  const maxBytesPerSecond = knob("MAX_BYTES_WRITTEN_PER_SECOND");
+  const windowMs = knob("WRITE_THROUGHPUT_WINDOW");
+  return {
+    ...(maxBytesPerSecond === undefined ? {} : { maxBytesPerSecond }),
+    ...(windowMs === undefined ? {} : { windowMs }),
+  };
+}
+
+/** How a mutation runs: `throttled`, an app's mutation, checks the write throughput limit (STUDY-78). */
+export type MutationOptions = { throttled?: boolean };
 
 /** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */
 function cacheMaxBytesFromEnv(): number {

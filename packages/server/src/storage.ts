@@ -358,8 +358,12 @@ export class FileStorage {
     return Response.json({ storageId: id });
   }
 
-  /** `GET /api/storage/<uuid>`: Convex's headers; one range gives 206, several or none satisfiable 416. */
-  async download(req: Request, uuid: string): Promise<Response> {
+  /**
+   * `GET /api/storage/<uuid>`: Convex's headers; one range gives 206, several or none satisfiable 416. The
+   * body is metered as it is sent (Convex's `track_storage_egress` per chunk, `add_on_complete` once it ends
+   * or the client leaves): `sent.chunk` per chunk, `sent.done` once with the file's id and the bytes sent.
+   */
+  async download(req: Request, uuid: string, sent?: DownloadMeter): Promise<Response> {
     if (!UUID.test(uuid))
       throw new StorageError(
         400,
@@ -377,8 +381,11 @@ export class FileStorage {
     const rangeHeader = req.headers.get("range");
     const range = rangeHeader === null || row.size === 0 ? null : parseRange(rangeHeader, row.size);
     if (range === "unsatisfiable") return new Response(null, { status: 416 });
-    const body = await this.blobs.get(row.storageKey, range ?? undefined);
-    if (!body) throw missing();
+    const stored = await this.blobs.get(row.storageKey, range ?? undefined);
+    if (!stored) throw missing();
+    // A HEAD request sends no body: nothing to count, and its sized body keeps Bun's `content-length`.
+    if (sent && req.method === "HEAD") sent.done?.(row._id, 0);
+    const body = sent && req.method !== "HEAD" ? meteredDownload(stored, row._id, sent) : stored;
     if (range) {
       headers["content-range"] = `bytes ${range.start}-${range.end}/${row.size}`;
       headers["content-length"] = String(range.end - range.start + 1);
@@ -388,6 +395,51 @@ export class FileStorage {
     headers["content-length"] = String(row.size);
     return new Response(body, { status: 200, headers });
   }
+}
+
+/** How a download's bytes are counted as they are sent. */
+export type DownloadMeter = { chunk?: (bytes: number) => void; done?: (storageId: string, bytes: number) => void };
+
+/**
+ * `body` as it is sent: pulled only as the client reads (so what is counted is what went out), `done` called
+ * once when it ends, fails, or the client leaves.
+ */
+function meteredDownload(body: ReadableStream<Uint8Array>, storageId: string, meter: DownloadMeter) {
+  const reader = body.getReader();
+  let bytes = 0;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    meter.done?.(storageId, bytes);
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        try {
+          const { value, done } = await reader.read();
+          if (finished) return; // the client left while this chunk was read
+          if (done) {
+            finish();
+            controller.close();
+            return;
+          }
+          bytes += value.byteLength;
+          meter.chunk?.(value.byteLength);
+          controller.enqueue(value);
+        } catch (e) {
+          if (finished) return;
+          finish();
+          controller.error(e);
+        }
+      },
+      cancel(reason) {
+        finish();
+        void reader.cancel(reason).catch(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
 }
 
 /**

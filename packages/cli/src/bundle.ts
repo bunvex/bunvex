@@ -99,12 +99,28 @@ async function build(dir: string, entries: string[], node: boolean): Promise<Mod
   for (const o of result.outputs) {
     if (o.kind === "sourcemap") continue;
     const path = posix(o.path.replace(/^\.\//, ""));
-    const map = maps.get(o.path);
-    // Bun marks its output pre-transpiled (`// @bun`): meaningless to the server's loader, so dropped.
-    const source = (await o.text()).replace(/^\/\/ @bun[^\n]*\n/, "");
+    let map = maps.get(o.path);
+    // Bun marks its output pre-transpiled (`// @bun`): meaningless to the server's loader, so dropped, and its
+    // line with it from the source map, which must match the source (the server reads positions from it).
+    const text = await o.text();
+    const source = text.replace(/^\/\/ @bun[^\n]*\n/, "");
+    if (map && source !== text) map = withoutFirstLine(map);
     out.push({ path, source, ...(map ? { sourceMap: map } : {}), environment: node ? "node" : "isolate" });
   }
   return out;
+}
+
+/** A source map with its first generated line dropped (that line's mappings, up to the first `;`). */
+export function withoutFirstLine(map: string): string {
+  try {
+    const m = JSON.parse(map) as { mappings?: unknown };
+    if (typeof m.mappings !== "string") return map;
+    const i = m.mappings.indexOf(";");
+    m.mappings = i === -1 ? "" : m.mappings.slice(i + 1);
+    return JSON.stringify(m);
+  } catch {
+    return map;
+  }
 }
 
 export type Bundled = { modules: ModuleConfig[]; schema: ModuleConfig | null };

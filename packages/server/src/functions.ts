@@ -63,6 +63,15 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  actionTimeoutError,
+  checkActionAlive,
+  cutOffWithAction,
+  NODE_ACTION_USER_TIMEOUT_MS,
+  nodeActionTimeoutError,
+  V8_ACTION_USER_TIMEOUT_MS,
+  withActionTimeout,
+} from "./action-timeout.ts";
+import {
   type AdminKeyIdentity,
   allows,
   BadDeployKeyError,
@@ -133,6 +142,22 @@ const unavailableAsError = <T>(p: Promise<T>): Promise<T> =>
   p.catch((e) => {
     throw unavailableToAction(e);
   });
+
+/**
+ * How a mutation run by the function runner commits (STUDY-78): it checks the write throughput limit first,
+ * as each of Convex's `run_mutation_no_udf_log` attempts does. Mutations a function calls inside its own
+ * transaction do not: they are part of it.
+ */
+export const THROTTLED = { throttled: true } as const;
+
+/** A duration knob in seconds from the environment (Convex's `env_config`), in ms; else `fallbackMs`. */
+function secondsKnob(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallbackMs;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name}: not a positive number of seconds: ${raw}`);
+  return n * 1000;
+}
 
 /** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
 export const MAX_NESTED_CALL_DEPTH = 8;
@@ -751,10 +776,14 @@ export class Functions {
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
     const later = res.ok && !o.skip ? settled?.(res.value) : null;
+    // Its lines end with it: an action cut off by its timeout (STUDY-77) logs nothing more, as Convex's
+    // terminated isolate. An HTTP action's run ends once its body is sent (its lines until then still stream).
+    if (!(res.ok && later)) r.onLine = null;
     if (res.ok && later) {
       // Logged when the body is sent: the lines written meanwhile join the run's.
       void later.then(async (after) => {
         const more = await withOwner(r, async () => after());
+        r.onLine = null;
         const c = this.completion(r, [...res.lines, ...more.lines], o, false);
         if (system) this.meterCompletion(r, c, false);
         else this.logCompletion(log, r, c, o.error);
@@ -1274,6 +1303,9 @@ export class Functions {
   userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
   systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
   private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs);
+  /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
+  actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS);
+  nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS);
 
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
@@ -1720,6 +1752,7 @@ export class Functions {
         untilAborted(this.systemMutationBody(name, args, fromClient, caller), deadline),
         name,
         caller,
+        THROTTLED,
       );
     return this.logged(
       "Mutation",
@@ -1730,6 +1763,7 @@ export class Functions {
           this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline),
           name,
           caller,
+          THROTTLED,
         ),
       (r) => returned(r.value),
       undefined,
@@ -1758,6 +1792,7 @@ export class Functions {
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
         (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
         caller,
+        THROTTLED,
       );
     // A replayed request did not run: nothing to log.
     return this.logged(
@@ -1794,6 +1829,11 @@ export class Functions {
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const node = NODE_FUNCTIONS.has(f);
         const limiter = node ? this.limits.nodeAction : this.limits.action;
+        // The timeout runs from when the action holds its permit (STUDY-77).
+        const ms = node ? this.nodeActionTimeoutMs : this.actionTimeoutMs;
+        const timeout = node
+          ? () => nodeActionTimeoutError(registryKey(name).slice(registryKey(name).lastIndexOf(":") + 1), ms)
+          : () => actionTimeoutError(ms);
         return limiter.run(
           async () => {
             const t0 = performance.now();
@@ -1813,7 +1853,9 @@ export class Functions {
             try {
               const value = this.checkReturns(
                 f,
-                await this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))),
+                await withActionTimeout(ms, timeout, () =>
+                  this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))),
+                ),
               );
               warn(sizeOfResult(value ?? null));
               return value;
@@ -1845,29 +1887,39 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: async (n: FunctionRef, a?: unknown) =>
-        acrossCall(
+      // Once the action timed out, nothing it calls starts (STUDY-77).
+      runQuery: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return acrossCall(
           await unavailableAsError(
             this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
-        ),
-      runMutation: async (n: FunctionRef, a?: unknown) =>
-        acrossCall(
+        );
+      },
+      runMutation: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return acrossCall(
           await unavailableAsError(
             this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
-        ),
-      runAction: async (n: FunctionRef, a?: unknown) =>
-        acrossCall(
+        );
+      },
+      runAction: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return acrossCall(
           await this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
-        ),
+        );
+      },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
-      scheduler: makeScheduler(this, {
-        engine: this.engine,
-        job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
-      }),
-      storage: this.fileStorage?.actionWriter(storageMeter) ?? noStorage,
+      scheduler: cutOffWithAction(
+        makeScheduler(this, {
+          engine: this.engine,
+          job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+        }),
+      ),
+      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+        checkActionAlive();
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
         const argNames = ["tableName", "indexName", "query"];
@@ -1932,20 +1984,24 @@ export class Functions {
       caller,
       async () => {
         await this.failActionWhileNotRunning();
-        // HTTP actions share the action limiter, as in Convex.
+        // HTTP actions share the action limiter and the action timeout, as in Convex.
+        const ms = this.actionTimeoutMs;
         return this.limits.action.run(async () => {
           t0 = performance.now();
           running = meteredAction();
           try {
-            const response = await this.inActionEnv(() =>
-              inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request)),
+            const response = await withActionTimeout(
+              ms,
+              () => actionTimeoutError(ms),
+              () =>
+                this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
             );
             if (!(response instanceof Response) || !response.body) {
               warnings(0);
               return response;
             }
             // The body, sent as Convex's streamer does (20 MiB at most); the run is logged once it is.
-            body = meteredBody(response.body);
+            body = meteredBody(response.body, request.signal);
             return new Response(body.stream, {
               status: response.status,
               statusText: response.statusText,
@@ -1969,9 +2025,12 @@ export class Functions {
       undefined,
       () =>
         body &&
-        body.sent.then(({ bytes, errors }) => () => {
+        body.sent.then(({ bytes, errors, disconnected }) => () => {
           for (const e of errors) logSystemLine("ERROR", e, "error:httpAction");
-          warnings(bytes);
+          // The client left mid-body: Convex stops the run there and ends its lines with an INFO line (no
+          // more lines or response parts will come); its run is still logged with the head's status.
+          if (disconnected) logSystemLine("INFO", "Client disconnected", "info:httpActionClientDisconnect");
+          else warnings(bytes);
         }),
     );
   }

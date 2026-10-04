@@ -163,9 +163,58 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   push failure is a 500 `InternalServerError`, as Convex's, instead of an unhandled error).
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
-- **M4. HTTP action disconnect** is not in the function log ("Client disconnected"). Before the head: fixed in
-  #350. While streaming: open; it needs the Completion logged once the body is sent, as Convex's.
-- **M5.** No `pos` in the push analysis.
+  - *Convex.* `crates/application/src/lib.rs` `get_file` / `get_file_range` (the HTTP storage route,
+    `local_backend/src/storage.rs`): the file stream charges `track_storage_egress` per chunk as it is yielded
+    (`file_storage/src/core.rs` `track_stream_usage`), and `add_on_complete` sends one
+    `StorageApiBandwidth { storage_id: <document id>, egress_bytes }` once the stream ends or is dropped
+    (`log_streaming.rs`, V2 JSON `{timestamp, topic: "storage_api_bandwidth", storage_id, egress_bytes}`;
+    PostHog Logs names it `storage_bandwidth`). Its test reads a file fully, partly, and by range.
+  - *bunvex (DV-324, decided by the owner 2026-10-04 (#373): option (a)).* Metering the bytes sent matches DV-309, which the owner already decided.
+    But in Bun any counting wrapper drops `content-length` from the response (chunked), and it halves the
+    throughput of large downloads. `storage.ts` `meteredDownload` counts as the client pulls. The usage meter
+    charges each chunk, and `done` sends the event once. A HEAD request is not wrapped: it keeps its header and
+    sends a 0-byte event.
+  - *Option (c), tried.* Setting `content-length` explicitly on the wrapped body does not help: Bun 1.4.2
+    still sends it chunked. The same holds for every wrapper measured: pull with or without
+    `highWaterMark: 0`, `type: "bytes"`, `TransformStream`, `type: "direct"`, an async generator. Convex sends
+    the header with its streamed body (`local_backend/src/storage.rs`), so (a) is a header divergence and (b)
+    a metering one. Measurements are in #373. The owner chose (a): the missing `content-length` stays a
+    recorded divergence, to revisit when Bun keeps it on a stream (a test pins it).
+- **M4. HTTP action disconnect** is not in the function log ("Client disconnected").
+  - *While streaming (done, stacked on #369).* Convex (`application_function_runner/http_routing.rs`,
+    `forward_http_action_stream`; `function_runner/src/in_process_function_runner.rs`): once the response
+    streamer closes, the run stops with `ErrorMetadata::client_disconnect()`; as the head was sent, the run
+    is logged with its status and a system line `[INFO] Client disconnected`
+    (`info:httpActionClientDisconnect`), sent as its own Progress entry and pushed last into the run's lines
+    (`test_http_action_disconnect_while_streaming`). bunvex: `meteredBody` (`http-body.ts`) records that its
+    body was cancelled with the request's signal aborted (a HEAD request also cancels it, with no abort), and
+    the run logs the same line, without the size warning (Convex's isolate never reaches it). Fixed with it: a
+    read still pending at the cancel enqueued into the closed controller and logged a spurious
+    `error:httpAction` "Controller is already closed" line.
+  - *Before the head:* #350.
+- **M5.** No `pos` in the push analysis. *Done (this PR).*
+  - *Convex.* `crates/isolate/src/environment/analyze.rs` (`udf_analyze`, `http_analyze`): the handler's
+    (`_handler`, else the function) V8 start (`get_script_line_number` / `get_script_column_number`, 0-based;
+    an arrow starts at its first character, other functions at their `(`) gets `+ 1` on both, believing the
+    lookup 1-based, and goes to `sourcemap::SourceMap::lookup_token`, which is 0-based and returns the token at
+    or before. `pos = { path, start_lineno, start_col }` (`module_versions.rs` `AnalyzedSourcePosition`,
+    serialized with snake_case fields) is that token's original 0-based line and column. In practice, for a
+    handler whose body spans lines, `start_lineno` is the handler's 1-based line. No `pos` without a source
+    map, without a token, or when the handler is in another module (a `_deps` chunk). Functions and HTTP routes
+    are sorted by `pos`, those without one first. Routes serialize as `{ route: { path, method }, pos }`.
+    The dashboard reads it through `_system/frontend/modules.ts` (`lineno = pos.start_lineno`) to order a
+    file's functions. Test: `tests/analyze.rs` `test_analyze_with_source_map`.
+  - *bunvex.* `server/src/source-position.ts`, used by `CodeVersion.analyze`: the same lookup on the module's
+    pushed source map. JavaScriptCore does not report where a function starts, so the handler is found by
+    its exact text (`Function.prototype.toString`) in the module; when the text occurs more than once, the
+    occurrence after the exported binding's declaration; when that cannot be told, no `pos`. Text not in the
+    module (a shared chunk) gives no `pos`, as Convex. The push answer and the `_modules` rows carry it; routes
+    now have Convex's `{ route, pos }` shape.
+  - *Fixed with it.* The CLI drops Bun's `// @bun` first line from each module but kept it in the source map:
+    every mapping was one line off. The map now loses that line too (`cli/src/bundle.ts` `withoutFirstLine`).
+  - *Not done.* bunvex has no `_system/frontend/modules:list`; its dashboard lists functions its own way.
+  - *Measured.* `CodeVersion.load` of 300 modules / 3000 functions with ~1 MB of source maps: 12–13 ms
+    without positions, ~21 ms with (only the maps' `mappings` are read, decoded into a flat array).
 - **M6. Index diff after a push.** The CLI prints `[+] index <name>`; Convex prints "Added table indexes:",
   "Deleted table indexes:", "Added staged table indexes:", "These indexes are now enabled:" with
   `formatIndex`. The server sends names only (`server/src/push.ts`), not the index configs. Fixed in #347: the

@@ -30,6 +30,7 @@ import {
   type QueryJournal,
   ReadSetIndex,
   stringifyValue,
+  TooManyWritesError,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import { type Value, valueSize } from "@bunvex/values";
@@ -876,7 +877,8 @@ export class SyncSession {
     console.error("bunvex sync:", e);
     // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
     // Too many functions at once (STUDY-68): Convex's rate-limited close, "try again", with its code.
-    if (e instanceof TooManyConcurrentRequestsError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
+    if (e instanceof TooManyConcurrentRequestsError || e instanceof TooManyWritesError)
+      return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
     // A mutation that needed an index still being rebuilt (STUDY-79): "try again", with Convex's code.
     if (e instanceof IndexesUnavailableError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
     this.fail({
@@ -1296,7 +1298,14 @@ export class SyncSession {
         if (deadline.aborted) return;
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
-        if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
+        // The write throughput limit (STUDY-78) closes the session with "try again", as Convex's: the client
+        // reconnects and resends the mutation.
+        if (
+          !r.ok &&
+          (isSystemError(r.error) ||
+            r.error instanceof TooManyConcurrentRequestsError ||
+            r.error instanceof TooManyWritesError)
+        )
           return this.internalError(r.error);
         if (r.ok && "replayed" in r.value) {
           const { result, logLines } = r.value.replayed;

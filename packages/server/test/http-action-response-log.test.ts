@@ -59,9 +59,11 @@ async function setup() {
   const s = createServer({ engine, functions, port: 0, http });
   stops.push(() => s.stop());
   const completions: any[] = [];
+  const progress: any[] = [];
   functions.functionLog = {
     append: (p: any) => {
       if (p.kind === "Completion") completions.push(p);
+      else if (p.kind === "Progress") progress.push(p);
     },
   } as unknown as FunctionLog;
   const consoleEvents: Record<string, any>[] = [];
@@ -82,7 +84,7 @@ async function setup() {
   };
   const logged = (path: string, method = "GET") =>
     until(() => completions.find((c) => c.identifier === `${method} ${path}`));
-  return { site, completions, consoleEvents, logged, until };
+  return { site, completions, progress, consoleEvents, logged, until };
 }
 
 test("the run is logged once its body is sent: its time covers the body", async () => {
@@ -145,4 +147,37 @@ test("a body that never ends: the run is logged when the client goes away, or fo
   await reader.read();
   aborted.abort();
   await t.logged("/endless");
+});
+
+// Convex's test_http_action_disconnect_while_streaming (http_routing.rs): the client leaves after the head
+// and a first chunk; the run's last line is `[INFO] Client disconnected`, streamed as its own Progress
+// entry, and the run is logged with the head's status, not as an error.
+test("a client that leaves mid-body: an INFO Client disconnected line; the run logged with its status", async () => {
+  const t = await setup();
+  const aborted = new AbortController();
+  const r = await fetch(`${t.site}/endless`, { signal: aborted.signal });
+  await r.body!.getReader().read();
+  aborted.abort();
+  const c = await t.logged("/endless");
+  const line = { level: "INFO", messages: ["Client disconnected"], systemCode: "info:httpActionClientDisconnect" };
+  expect(c.success).toEqual({ status: "200" });
+  expect(c.error ?? null).toBeNull();
+  expect(c.logLines.at(-1)).toMatchObject(line);
+  const p = t.progress.filter((x) => x.identifier === "GET /endless");
+  expect(p.length).toBe(1);
+  expect(p[0].logLines).toEqual([expect.objectContaining(line)]);
+  expect(t.consoleEvents.find((e) => e.message === "Client disconnected")).toMatchObject({
+    log_level: "INFO",
+    system_code: "info:httpActionClientDisconnect",
+  });
+});
+
+test("a body read to its end, or a HEAD request: no Client disconnected line", async () => {
+  const t = await setup();
+  await (await fetch(`${t.site}/slow`)).arrayBuffer();
+  await fetch(`${t.site}/endless`, { method: "HEAD" });
+  const read = await t.logged("/slow");
+  const head = await t.logged("/endless", "HEAD");
+  for (const c of [read, head]) expect(JSON.stringify(c.logLines)).not.toContain("Client disconnected");
+  expect(t.progress).toEqual([]);
 });

@@ -6,13 +6,13 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 206 | 10 | 23 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 136 | 10 | 14 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 136 | 49 | 61 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 218 | 8 | 13 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 155 | 5 | 5 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 179 | 40 | 31 |
 
-These counts were taken on 2026-10-03 (main at #245; server-api.md rechecked against the code) from each row's status column: a row counts as done,
-partial or missing by the word its status starts with. A few rows have no single status and are not
-counted.
+These counts were recounted on 2026-10-04 (main at #369) from each row's status column: a row counts as done,
+partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
+are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
 
 ## How to use it
 

@@ -16,6 +16,7 @@ import {
   QueryCursorError,
 } from "@bunvex/core";
 import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import { ActionTimeoutError } from "./action-timeout.ts";
 
 /** The message a client gets for a failure that is not the function's (Convex's INTERNAL_SERVER_ERROR_MSG). */
 export const INTERNAL_SERVER_ERROR_MESSAGE = "Your request couldn't be completed. Try again later.";
@@ -75,7 +76,7 @@ export class ValidatorError extends Error {
 }
 
 export function describeUncaught(e: unknown): UncaughtError {
-  if (e instanceof FunctionPathError) return { message: `${e.message}\n` };
+  if (e instanceof FunctionPathError || e instanceof ActionTimeoutError) return { message: `${e.message}\n` };
   if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
