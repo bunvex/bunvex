@@ -54,6 +54,7 @@ import {
   type TableMeta,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  vectorIndexesUnavailable,
 } from "./catalog.ts";
 import {
   Committer,
@@ -78,6 +79,7 @@ import {
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
   hasLease,
@@ -127,6 +129,7 @@ import {
   type VectorIndexEntry,
   VectorIndexes,
 } from "./vector-indexes.ts";
+import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -246,7 +249,9 @@ export class Engine {
    * `cacheHits` counts answers from the cache, including the ones that waited for another caller's run;
    * `cacheWaits` counts the waits; `cacheMisses` counts the runs.
    */
-  stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0 };
+  stats = { cacheHits: 0, cacheMisses: 0, cacheWaits: 0, retries: 0, writeThroughputRetries: 0 };
+  /** The deployment's write throughput limit (STUDY-78): every commit counts, gated writers check it. */
+  readonly writeThroughput: WriteThroughputLimiter;
   /**
    * Called when a mutation attempt lost an OCC conflict and will run again (`failures`: the attempts lost so
    * far), in the mutation's own async context: the server logs each such attempt, as Convex's
@@ -263,7 +268,7 @@ export class Engine {
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
       cacheClock?: () => number;
-      /** Awaited before each page a search index's backfill reads (tests hold the backfill with it). */
+      /** Awaited before each page a search or vector index's backfill reads (tests hold the backfill with it). */
       beforeSearchBackfillPage?: () => Promise<void>;
       /** Retries after an OCC conflict (default: Convex's 4). */
       maxRetries?: number;
@@ -303,12 +308,19 @@ export class Engine {
       flushRetry?: FlushRetryOptions;
       /** The soft caps on what one flush carries (default: Convex's 64 documents / 64 KiB; DV-62). */
       writeBatch?: Partial<WriteBatchLimits>;
+      /**
+       * The write throughput limit (STUDY-78; default: MAX_BYTES_WRITTEN_PER_SECOND and WRITE_THROUGHPUT_WINDOW
+       * from the environment, else Convex's 4 MiB per 1 s).
+       */
+      writeThroughput?: WriteThroughputOptions;
     } = {},
   ) {
     installDeterminism();
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
+    this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
+    this.committer.writeThroughput = this.writeThroughput;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -350,8 +362,10 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
-    this.reconcileSearch();
-    this.reconcileVector();
+    // The search and vector indexes of the schema the process starts on existed before it: they are rebuilt
+    // in memory (DV-227, DV-270), and searches meanwhile are Convex's bootstrapping answer (STUDY-79).
+    this.reconcileSearch(true);
+    this.reconcileVector(true);
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -698,7 +712,7 @@ export class Engine {
    * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
    * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
    */
-  private reconcileSearch() {
+  private reconcileSearch(bootstrapping = false) {
     const wanted = [];
     for (const [name, declared] of this.schema.tables) {
       const t = this.catalog.tables.get(name);
@@ -707,7 +721,7 @@ export class Engine {
       for (const [index, def] of Object.entries(declared.searchIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
     }
-    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs)) {
+    for (const e of this.searchIndexes.reconcile(wanted, this.committer.visibleTs, bootstrapping)) {
       const p = this.backfillSearch(e).catch((err) => {
         if (!this.closed) console.error(`bunvex: search index ${e.table}.${e.name} failed to build: ${err.message}`);
       });
@@ -717,7 +731,7 @@ export class Engine {
   }
 
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
-  private reconcileVector() {
+  private reconcileVector(bootstrapping = false) {
     const wanted = [];
     for (const [name, declared] of this.schema.tables) {
       const t = this.catalog.tables.get(name);
@@ -726,7 +740,7 @@ export class Engine {
       for (const [index, def] of Object.entries(declared.vectorIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
     }
-    for (const e of this.vectorIndexes.reconcile(wanted)) {
+    for (const e of this.vectorIndexes.reconcile(wanted, bootstrapping)) {
       const p = this.backfillVector(e).catch((err) => {
         if (!this.closed) console.error(`bunvex: vector index ${e.table}.${e.name} failed to build: ${err.message}`);
       });
@@ -741,6 +755,7 @@ export class Engine {
     const at = this.committer.visibleTs;
     let last: string | null = null;
     for (;;) {
+      await this.opts.beforeSearchBackfillPage?.();
       if (this.closed) return;
       const page = (await this.query(
         (db) =>
@@ -787,7 +802,7 @@ export class Engine {
       throw new Error(`Index ${name} not found.`);
     }
     if (e.staged) throw new IndexStagedError(name);
-    if (!e.ready) throw new IndexBackfillingError(name);
+    if (!e.ready) throw e.bootstrapping ? vectorIndexesUnavailable() : new IndexBackfillingError(name);
     const v = query.vector;
     const limit = query.limit ?? DEFAULT_VECTOR_LIMIT;
     if (!Number.isInteger(limit) || limit < 0)
@@ -1174,20 +1189,23 @@ export class Engine {
           return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
         if (row.state === "active") return { type: "complete" as const };
         const validated = row.state === "validated";
-        const pending = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
         const indexes = (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
-        const tabletOf = new Map(tables.map((t) => [t.name, t.tablet]));
-        // The indexes this schema enables (staged ones are never waited for, as Convex's).
+        // As Convex's `load_component_schema_status`: every application index there is now (an index the push
+        // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
+        // once not backfilling.
+        const userTablets = new Set(
+          activeTables(tables)
+            .filter((t) => !t.name.startsWith("_"))
+            .map((t) => t.tablet),
+        );
         let total = 0;
         let done = 0;
-        for (const t of pending.tables.values())
-          for (const name of Object.keys(t.indexes)) {
-            if (t.staged?.includes(name)) continue;
-            const live = indexes.filter((i) => i.tablet === tabletOf.get(t.name) && i.name === name);
-            total++;
-            if (live.some((i) => i.state !== "backfilling")) done++;
-          }
+        for (const i of indexes) {
+          if (!userTablets.has(i.tablet) || i.name in SYSTEM_INDEXES || i.staged) continue;
+          total++;
+          if (i.state !== "backfilling") done++;
+        }
         if (done < total || !validated)
           return {
             type: "inProgress" as const,
@@ -1753,16 +1771,21 @@ export class Engine {
    * once the budget is spent. `source` names the mutation (e.g. "messages:send") in the conflict errors of
    * the transactions it beats.
    */
-  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<T> {
-    return this.runMutation(body, false, source, false, caller);
+  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller, opts?: MutationOptions): Promise<T> {
+    return this.runMutation(body, false, source, false, caller, opts?.throttled);
   }
 
   /**
    * The same, with the commit timestamp (the snapshot, for a mutation that wrote nothing): what the sync
    * protocol's MutationResponse carries so a client can wait for its queries to reflect the write.
    */
-  mutationWithTs<T>(body: TxBody<T>, source?: string, caller?: Caller): Promise<{ value: T; ts: number }> {
-    return this.runMutation(body, false, source, true, caller);
+  mutationWithTs<T>(
+    body: TxBody<T>,
+    source?: string,
+    caller?: Caller,
+    opts?: MutationOptions,
+  ): Promise<{ value: T; ts: number }> {
+    return this.runMutation(body, false, source, true, caller, opts?.throttled);
   }
 
   /**
@@ -1779,6 +1802,7 @@ export class Engine {
     request: SessionRequestId,
     outcome: (value: T) => SessionRequestOutcome,
     caller?: Caller,
+    opts?: MutationOptions,
   ): Promise<{ ts: number } & ({ value: T } | { replayed: SessionRequestOutcome })> {
     const r = await this.runMutation(
       async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
@@ -1792,6 +1816,7 @@ export class Engine {
       source,
       true,
       caller,
+      opts?.throttled,
     );
     return { ...r.value, ts: r.ts };
   }
@@ -1807,6 +1832,7 @@ export class Engine {
     source?: string,
     withTs?: false,
     caller?: Caller,
+    throttled?: boolean,
   ): Promise<T>;
   private runMutation<T>(
     body: TxBody<T>,
@@ -1814,6 +1840,7 @@ export class Engine {
     source: string | undefined,
     withTs: true,
     caller?: Caller,
+    throttled?: boolean,
   ): Promise<{ value: T; ts: number }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
   private async runMutation<T>(
@@ -1822,11 +1849,23 @@ export class Engine {
     source?: string,
     withTs = false,
     caller: Caller = ANONYMOUS,
+    throttled = false,
   ): Promise<unknown> {
     const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {
+      // Each attempt of a mutation first checks the write throughput limit (STUDY-78), as Convex's
+      // `run_mutation_no_udf_log`; refused, it is retried within the OCC budget and backoff, then fails.
+      if (throttled && !this.writeThroughput.allowsNow()) {
+        if (failures >= maxRetries)
+          throw new TooManyWritesError(this.writeThroughput.maxBytesPerSecond, this.writeThroughput.windowMs);
+        const sleep = occBackoffMs(failures, initialMs, maxMs);
+        failures++;
+        this.stats.writeThroughputRetries++;
+        await new Promise((r) => setTimeout(r, sleep));
+        continue;
+      }
       const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
       const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
@@ -1918,6 +1957,26 @@ export function transactionStart(snapshotUs: number, clockMs: number, last: numb
   const t = Math.max(clockMs, Math.ceil(snapshotUs / 1000));
   return t > last ? t : nextUp(last);
 }
+
+/** MAX_BYTES_WRITTEN_PER_SECOND (bytes) and WRITE_THROUGHPUT_WINDOW (ms), as Convex's knobs, else defaults. */
+function writeThroughputFromEnv(): WriteThroughputOptions {
+  const knob = (name: string) => {
+    const raw = process.env[name];
+    if (raw === undefined || raw === "") return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`${name}: not a number of at least 0: ${raw}`);
+    return n;
+  };
+  const maxBytesPerSecond = knob("MAX_BYTES_WRITTEN_PER_SECOND");
+  const windowMs = knob("WRITE_THROUGHPUT_WINDOW");
+  return {
+    ...(maxBytesPerSecond === undefined ? {} : { maxBytesPerSecond }),
+    ...(windowMs === undefined ? {} : { windowMs }),
+  };
+}
+
+/** How a mutation runs: `throttled`, an app's mutation, checks the write throughput limit (STUDY-78). */
+export type MutationOptions = { throttled?: boolean };
 
 /** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */
 function cacheMaxBytesFromEnv(): number {
@@ -2029,3 +2088,6 @@ export type IndexPrediction = {
 export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
 export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
 export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Engine);

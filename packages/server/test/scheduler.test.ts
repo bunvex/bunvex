@@ -20,10 +20,13 @@ async function until<T>(f: () => Promise<T | undefined | false> | T | undefined 
   throw new Error(`timed out waiting for ${what}`);
 }
 
-async function setup(opts: { start?: boolean; parallelism?: number; retentionSeconds?: number } = {}) {
+async function setup(
+  opts: { start?: boolean; parallelism?: number; retentionSeconds?: number; maxBytesPerSecond?: number } = {},
+) {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()), counters: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
+    opts.maxBytesPerSecond ? { writeThroughput: { maxBytesPerSecond: opts.maxBytesPerSecond } } : {},
   ).init();
   const ran: string[] = [];
   const gates = new Map<string, Promise<void>>();
@@ -194,7 +197,9 @@ describe("ctx.scheduler", () => {
   });
 
   test("Convex's checks and messages", async () => {
-    const { functions } = await setup({ start: false });
+    // "tooLarge" commits about 16 MiB of scheduled arguments: over Convex's 4 MiB/s write throughput limit
+    // (STUDY-78), the next mutation would be refused, as on Convex.
+    const { functions } = await setup({ start: false, maxBytesPerSecond: 1 << 30 });
     const msg = (how: string) => functions.runMutation("m:tryScheduling", { how }) as Promise<string>;
     expect(await msg("delayString")).toBe("`delayMs` must be a number");
     expect(await msg("delayNaN")).toBe("`delayMs` must be a finite number");

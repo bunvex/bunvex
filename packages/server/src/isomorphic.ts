@@ -27,6 +27,7 @@ export {
 export { Crons, cronJobs } from "./cron.ts";
 // Types: every type ./index.ts exports (erased from every bundle).
 export type * from "./index.ts";
+export { AuditLogLimitError, log } from "./log.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { HttpRouter, httpAction, httpActionGeneric, httpRouter, ROUTABLE_HTTP_METHODS } from "./router.ts";
 

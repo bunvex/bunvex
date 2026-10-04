@@ -210,7 +210,7 @@ describe("loading and analysis", () => {
   test("http.js and crons.js: their default exports, checked as Convex's", async () => {
     const http = `import { httpRouter, httpAction } from "@bunvex/server"; const h = httpRouter(); h.route({ path: "/hi", method: "GET", handler: httpAction(async () => new Response("hi")) }); export default h;`;
     const v1 = await load([mod("http.js", http)]);
-    expect(v1.analysis["http.js"]!.httpRoutes).toEqual([{ path: "/hi", method: "GET" }]);
+    expect(v1.analysis["http.js"]!.httpRoutes).toEqual([{ route: { path: "/hi", method: "GET" }, pos: null }]);
     expect(await failure(load([mod("http.js", `export const a = 1;`)]))).toBe(
       "Failed to analyze http.js: `http.js` must have a default export of a Router.",
     );

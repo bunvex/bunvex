@@ -5,6 +5,7 @@ import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { type GenericId, v } from "@bunvex/values";
+import { type RequestDestination, setCanonicalUrl } from "../src/canonical-urls.ts";
 import { action, Functions, mutation, query, type StorageActionWriter } from "../src/functions.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
@@ -45,6 +46,8 @@ async function setup(opts: { maxRequestBodySize?: number } = {}) {
     docs: query(async ({ db }) => db.system.query("_storage").collect()),
     otherId: mutation(async ({ db }) => db.insert("items", {})),
     uploadUrl: mutation(async ({ storage }) => storage.generateUploadUrl()),
+    uploadUrlFromAction: action(async ({ storage }) => storage.generateUploadUrl()),
+    urlFromAction: action(async ({ storage }, { id }: { id: string }) => storage.getUrl(id)),
     del: mutation(async ({ storage }, { id, fail }: { id: string; fail?: boolean }) => {
       await storage.delete(id);
       if (fail) throw new Error("rolled back");
@@ -262,6 +265,48 @@ describe("ctx.storage", () => {
     };
     for (let i = 0; i < 100 && (await count()) > 0; i++) await Bun.sleep(10);
     expect(await count()).toBe(0);
+  });
+
+  test("URLs follow the canonical cloud URL: getUrl from a query and an action, generateUploadUrl from a mutation and an action (Convex: test_storage_get_url, test_storage_generate_upload_url)", async () => {
+    const { engine, functions, storeText, api } = await setup();
+    const id = await storeText("canonical");
+    const canonical = (destination: RequestDestination, url: string | null) =>
+      engine.mutation((db) => setCanonicalUrl(db, destination, url));
+    const urls = async () => [
+      await functions.runQuery("m:url", { id }),
+      await functions.runAction("m:urlFromAction", { id }),
+      await functions.runMutation("m:uploadUrl", {}),
+      await functions.runAction("m:uploadUrlFromAction", {}),
+    ];
+    const shapes = (origin: string) => [
+      expect.stringMatching(new RegExp(`^${origin}/api/storage/[0-9a-f-]{36}$`)),
+      expect.stringMatching(new RegExp(`^${origin}/api/storage/[0-9a-f-]{36}$`)),
+      expect.stringMatching(new RegExp(`^${origin}/api/storage/upload\\?token=`)),
+      expect.stringMatching(new RegExp(`^${origin}/api/storage/upload\\?token=`)),
+    ];
+    expect(await urls()).toEqual(shapes(api));
+
+    await canonical("bunvexCloud", "https://files.example.com");
+    expect(await urls()).toEqual(shapes("https://files\\.example\\.com"));
+    // The site URL is for HTTP actions: file URLs do not use it.
+    await canonical("bunvexSite", "https://site.example.com");
+    expect(await urls()).toEqual(shapes("https://files\\.example\\.com"));
+    // Unset: the server's own origin again.
+    await canonical("bunvexCloud", null);
+    expect(await urls()).toEqual(shapes(api));
+  });
+
+  test("a subscribed getUrl re-runs when the canonical cloud URL changes (it is read in the query's transaction)", async () => {
+    const { engine, storeText, server, api } = await setup();
+    const id = await storeText("watched");
+    const c = await v1Client(syncUrl(server.server.port));
+    c.modify([add(1, "m:url", { id })]);
+    await c.until(() => history(c.transitions(), 1).length === 1);
+    expect(history(c.transitions(), 1)[0]).toStartWith(`${api}/api/storage/`);
+    await engine.mutation((db) => setCanonicalUrl(db, "bunvexCloud", "https://files.example.com"));
+    await c.until(() => history(c.transitions(), 1).length === 2);
+    expect(history(c.transitions(), 1)[1]).toStartWith("https://files.example.com/api/storage/");
+    c.ws.close();
   });
 
   test("getUrl is reactive: a subscribed query re-runs when the file is deleted", async () => {
