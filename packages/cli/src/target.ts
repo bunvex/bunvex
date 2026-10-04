@@ -12,8 +12,8 @@ export const TARGET_OPTIONS = `  --url <url>          the deployment (default: B
   --admin-key <key>    its admin key (default: BUNVEX_SELF_HOSTED_ADMIN_KEY)
   --env-file <path>    read BUNVEX_SELF_HOSTED_* from this file instead of .env.local / .env`;
 
-export const NO_DEPLOYMENT =
-  "no deployment: set BUNVEX_SELF_HOSTED_URL and BUNVEX_SELF_HOSTED_ADMIN_KEY (in the environment or .env.local), or pass --url and --admin-key";
+/** No deployment configured: Convex's message (`loadSelectedDeploymentCredentials`), with bunvex's names. */
+export const NO_DEPLOYMENT = "No BUNVEX_DEPLOYMENT set, run `bunvex dev` to configure a bunvex project";
 
 // One assignment of a .env file, read as dotenv 16's `parse` reads it (Convex's CLI uses dotenv for `.env`,
 // `.env.local` and `env set --from-file`): from the start of a line, an optional `export`, a name of word
