@@ -6,7 +6,7 @@ import { S3BlobStore, s3OptionsFromEnv } from "./s3.ts";
 import type { BlobStore } from "./store.ts";
 
 export function blobStoreFromEnv(
-  env = process.env,
+  env: Record<string, string | undefined> = process.env,
   opts: {
     s3Prefix?: string | (() => Promise<string>);
     useCase?: "files" | "modules" | "exports" | "snapshot_imports";
