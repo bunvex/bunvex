@@ -165,7 +165,13 @@ test("the CLI and the dashboard get structured lines; a failure's error; writes 
   const { body } = await stream("/api/stream_function_logs", "cursor=0", { "bunvex-client": "npm-cli-1.0.0" });
   const [failed, wrote] = completions(body.entries);
   expect(failed.logLines).toEqual([
-    { messages: ["'about to fail'"], isTruncated: false, timestamp: expect.any(Number), level: "WARN" },
+    {
+      messages: ["'about to fail'"],
+      isTruncated: false,
+      timestamp: expect.any(Number),
+      level: "WARN",
+      systemMetadata: null,
+    },
   ]);
   expect(failed.error).toMatch(/^Uncaught Error: nope\n/);
   expect(failed.returnBytes).toBeNull();

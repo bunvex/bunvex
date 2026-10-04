@@ -115,6 +115,8 @@ export class TableDefinition<
   VectorIndexes extends GenericTableVectorIndexes = {},
 > {
   readonly indexes: Record<string, string[]> = {};
+  /** Index names declared more than once (Convex refuses them at push, naming the table: see `defineSchema`). */
+  readonly duplicateIndexes: string[] = [];
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly staged: string[] = [];
   /** Full-text search indexes (STUDY-45), and those declared `staged: true`. */
@@ -158,17 +160,11 @@ export class TableDefinition<
     const fields = Array.isArray(config) ? config : config?.fields;
     if (!Array.isArray(fields)) throw new Error(`Index "${name}" must be declared with an array of fields.`);
     checkIdentifier("index", name);
-    if (name in SYSTEM_INDEXES || name.startsWith("_"))
-      throw new Error(`Invalid index name "${name}": the name is reserved.`);
-    if (name in this.indexes) throw new Error(`Duplicate index name "${name}".`);
-    if (fields.length === 0) throw new Error(`Index "${name}" must have at least one field.`);
-    if (fields.length > 16) throw new Error(`Index "${name}" has more than 16 fields.`);
-    if (new Set(fields).size !== fields.length) throw new Error(`Index "${name}" has duplicate fields.`);
-    for (const f of fields)
-      if (f === "_id" || f === "_creationTime" || f.split(".").some((part) => part.startsWith("_")))
-        throw new Error(
-          `Index "${name}" uses the reserved field "${f}": _id and _creationTime are added to every index automatically, and fields starting with "_" are reserved.`,
-        );
+    // The other checks need the table's name and run in `defineSchema`, as Convex runs them at push.
+    if (name in this.indexes) {
+      this.duplicateIndexes.push(name);
+      return this;
+    }
     this.indexes[name] = [...fields];
     if (!Array.isArray(config) && config.staged === true) this.staged.push(name);
     return this;
@@ -256,6 +252,90 @@ export class TableDefinition<
   }
 }
 
+/** The most fields a database index may have, `_creationTime` included (Convex's `MAX_INDEX_FIELDS_SIZE`). */
+const MAX_INDEX_FIELDS = 16;
+const reservedIndexName = (table: string, n: string) =>
+  new Error(
+    `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
+  );
+
+/**
+ * Convex's push-time checks of a table's database indexes, in its order and with its messages
+ * (`schemas/json.rs` `TableDefinition::try_from`, `indexed_fields.rs`, `index_validation_error.rs`): the
+ * number of indexes; each index's fields (at most 16, no `_id`, no repeats); no empty index; no two indexes on
+ * the same fields. The names are checked by `checkIndexNames`, the system fields by `checkIndexSystemFields`.
+ */
+function checkDatabaseIndexes(table: string, t: TableDefinition) {
+  const count =
+    Object.keys(t.indexes).length +
+    t.duplicateIndexes.length +
+    Object.keys(t.searchIndexes).length +
+    Object.keys(t.vectorIndexes).length;
+  if (count > MAX_INDEXES_PER_TABLE)
+    throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
+  const staged = new Set(t.staged);
+  const entries = Object.entries(t.indexes);
+  for (const group of [false, true]) {
+    const mine = entries.filter(([n]) => staged.has(n) === group);
+    for (const [n, fields] of mine) {
+      const where = `In table "${table}": In index "${n}": `;
+      if (fields.length > MAX_INDEX_FIELDS)
+        throw new Error(`${where}Indexes may have up to ${MAX_INDEX_FIELDS} fields.`);
+      if (fields.includes("_id"))
+        throw new Error(`${where}\`_id\` is not a valid index field. To load documents by ID, use \`db.get(id)\`.`);
+      const seen = new Set<string>();
+      for (const f of fields) {
+        if (seen.has(f))
+          throw new Error(`${where}Duplicate field "${f}". Index fields must be unique within an index.`);
+        seen.add(f);
+      }
+    }
+    for (const [n, fields] of [...mine].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      if (fields.length === 0)
+        throw new Error(`In table "${table}" ${group ? "staged " : ""}index "${n}" must have at least one field.`);
+  }
+  // Convex walks the indexes by name and names the later one first.
+  const byFields = new Map<string, string>();
+  for (const [n, fields] of [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const key = JSON.stringify(fields);
+    const other = byFields.get(key);
+    if (other !== undefined)
+      throw new Error(
+        `In table "${table}" index "${n}" and index "${other}" have the same fields. Indexes must be unique within a table.`,
+      );
+    byFields.set(key, n);
+  }
+}
+
+/** Convex's name checks for database indexes: reserved names, and a name declared twice. */
+function checkIndexNames(table: string, t: TableDefinition) {
+  for (const n of Object.keys(t.indexes))
+    if (n.startsWith("_") || n in SYSTEM_INDEXES) throw reservedIndexName(table, n);
+  for (const n of t.duplicateIndexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
+}
+
+/**
+ * Convex's last checks, once every table parsed (`Application::_validate_user_defined_index_fields`):
+ * `_creationTime` and other system fields are refused, and with `_creationTime` appended an index may not
+ * pass 16 fields. Convex's `_creationTime` message ends with a docs link, left out (DV-04).
+ */
+function checkIndexSystemFields(t: TableDefinition) {
+  const staged = new Set(t.staged);
+  const sorted = (group: boolean) =>
+    Object.entries(t.indexes)
+      .filter(([n]) => staged.has(n) === group)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const [, fields] of [...sorted(false), ...sorted(true)]) {
+    if (fields.includes("_creationTime"))
+      throw new Error(
+        "`_creationTime` is automatically added to the end of each index. It should not be added explicitly in the index definition.",
+      );
+    if (fields.some((f) => f.split(".").some((part) => part.startsWith("_"))))
+      throw new Error("Reserved fields (starting with `_`) are not allowed in indexes.");
+    if (fields.length + 1 > MAX_INDEX_FIELDS) throw new Error(`Indexes may have up to ${MAX_INDEX_FIELDS} fields.`);
+  }
+}
+
 /** Convex's push-time checks of a table's vector indexes (`schemas/json.rs`, `dimensions.rs`). */
 function checkVectorIndexes(table: string, t: TableDefinition) {
   const others = new Set([...Object.keys(t.indexes), ...Object.keys(t.searchIndexes)]);
@@ -290,7 +370,6 @@ const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /** Convex's push-time checks of a table's search indexes (`schemas/json.rs`, `index_validation_error.rs`). */
 function checkSearchIndexes(table: string, t: TableDefinition) {
-  const names = [...Object.keys(t.indexes), ...Object.keys(t.searchIndexes), ...Object.keys(t.vectorIndexes)];
   for (const n of Object.keys(t.searchIndexes)) {
     if (n.startsWith("_") || n in SYSTEM_INDEXES)
       throw new Error(
@@ -298,8 +377,6 @@ function checkSearchIndexes(table: string, t: TableDefinition) {
       );
     if (n in t.indexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
   }
-  if (names.length > MAX_INDEXES_PER_TABLE)
-    throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
   const seen = new Map<string, string>();
   for (const [n, d] of Object.entries(t.searchIndexes)) {
     for (const f of [d.searchField, ...d.filterFields])
@@ -445,8 +522,10 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
     checkIdentifier("table", name);
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
     if (!(t instanceof TableDefinition)) throw new Error(`Table "${name}" must be defined with defineTable(...).`);
+    checkDatabaseIndexes(name, t);
     checkSearchIndexes(name, t);
     checkVectorIndexes(name, t);
+    checkIndexNames(name, t);
     out.set(name, {
       name,
       indexes: { ...t.indexes },
@@ -460,6 +539,7 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
         : {}),
     });
   }
+  for (const t of Object.values(tables)) checkIndexSystemFields(t);
   // Convex's `tableInSchema`: the definition of a table of this schema, or its error.
   const tableOf = (name: string) => {
     const t = Object.hasOwn(tables, name) ? tables[name] : undefined;

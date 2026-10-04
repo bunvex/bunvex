@@ -22,6 +22,8 @@ export type VectorIndexEntry = {
   def: VectorIndexDef;
   staged: boolean;
   ready: boolean;
+  /** Being rebuilt after the process started (STUDY-79): a search meanwhile is `VectorIndexesUnavailable`. */
+  bootstrapping: boolean;
   docs: Map<string, Entry>;
   /** Documents a commit set while the backfill ran: the backfill's older copy must not replace them. */
   touched: Set<string> | null;
@@ -83,7 +85,11 @@ export class VectorIndexes {
   }
 
   /** Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill. */
-  reconcile(wanted: { table: TableDef; name: string; def: VectorIndexDef; staged: boolean }[]) {
+  reconcile(
+    wanted: { table: TableDef; name: string; def: VectorIndexDef; staged: boolean }[],
+    /** The first reconcile after the process started: every index is rebuilt, not new (STUDY-79). */
+    bootstrapping = false,
+  ) {
     const next = new Map<string, VectorIndexEntry>();
     const added: VectorIndexEntry[] = [];
     for (const w of wanted) {
@@ -100,6 +106,7 @@ export class VectorIndexes {
         def: w.def,
         staged: w.staged,
         ready: false,
+        bootstrapping,
         docs: new Map(),
         touched: new Set(),
       };
