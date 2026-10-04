@@ -84,7 +84,7 @@ export function resolveTarget(flags: TargetFlags, io: Io): Target | null {
  */
 const withFormat = (path: string, body: object) =>
   /^\/api\/(query|mutation|action|function|query_at_ts)$/.test(path) && !("format" in body)
-    ? { ...body, format: "convex_encoded_json" }
+    ? { ...body, format: "encoded_json" }
     : body;
 
 export async function adminRequest(

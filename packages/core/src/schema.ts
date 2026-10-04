@@ -4,13 +4,19 @@
 // resolves them into its own catalog (catalog.ts, STUDY-04). Every table also gets Convex's two system
 // indexes, `by_id` and `by_creation_time`.
 import {
+  type GenericId,
   type GenericValidator,
   isBytes,
   type ObjectType,
   type PropertyValidators,
+  type Validator,
   type ValidatorJSON,
+  type VFloat64,
+  type VId,
   type VObject,
+  type VUnion,
   v,
+  valueSize,
 } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
@@ -120,6 +126,10 @@ export class TableDefinition<
   readonly vectorIndexes: Record<string, VectorIndexDef> = {};
   readonly stagedVector: string[] = [];
   readonly document: GenericValidator;
+  /** Convex's name for the table's document validator (`schema.tables.x.validator`, `docValidator`). */
+  get validator(): DocumentType {
+    return this.document as DocumentType;
+  }
   constructor(document: GenericValidator | PropertyValidators) {
     this.document = (document as GenericValidator)?.isValidator
       ? (document as GenericValidator)
@@ -392,6 +402,80 @@ export function defineTable(document: GenericValidator | PropertyValidators): Ta
   return new TableDefinition(document);
 }
 
+/** The validators of the system fields every document has (Convex's `SystemFieldValidators`). */
+export type SystemFieldValidators<TableName extends string> = {
+  _id: VId<GenericId<TableName>>;
+  _creationTime: VFloat64<number>;
+};
+
+/** An object validator with the system fields added; any other validator as it is. */
+type WithSystemFieldValidators<TableName extends string, D extends GenericValidator> =
+  // biome-ignore lint/suspicious/noExplicitAny: any optionality
+  D extends VObject<infer Type, infer Fields, any>
+    ? VObject<
+        Expand<{ _id: GenericId<TableName>; _creationTime: number } & Type>,
+        Expand<SystemFieldValidators<TableName> & Fields>
+      >
+    : D;
+
+/**
+ * The validator of a table's whole documents (Convex's `DocValidator`): the table's own, with `_id` and
+ * `_creationTime` added — to each member of a union.
+ */
+export type DocValidator<TableName extends string, D extends GenericValidator> =
+  // biome-ignore lint/suspicious/noExplicitAny: any type, any optionality
+  D extends VUnion<any, infer Members, any>
+    ? { [I in keyof Members]: WithSystemFieldValidators<TableName, Members[I]> } extends infer New extends
+        // biome-ignore lint/suspicious/noExplicitAny: any type
+        Validator<any, "required">[]
+      ? VUnion<WithSystemFieldValidators<TableName, Members[number]>["type"], New>
+      : never
+    : WithSystemFieldValidators<TableName, D>;
+
+/** The system fields added to a table validator (Convex's `addSystemFields`, STUDY-66 §6). */
+function addSystemFields(tableName: string, validator: GenericValidator): GenericValidator {
+  switch (validator.kind) {
+    case "object":
+      return (validator as VObject<unknown, PropertyValidators>).extend({
+        _id: v.id(tableName),
+        _creationTime: v.number(),
+      });
+    case "union":
+      return v.union(
+        ...(validator as VUnion<unknown, GenericValidator[]>).members.map((m) => addSystemFields(tableName, m)),
+      );
+    // `v.any()` already accepts the system fields.
+    case "any":
+      return validator;
+    default:
+      throw new Error(
+        `Invalid validator for table "${tableName}": a table's documents must be objects, or a union of objects`,
+      );
+  }
+}
+
+/**
+ * Convex's `docValidator(tableName, table)`: a validator of the table's whole documents, for `args` and
+ * `returns`. `schema.doc(tableName)` is the same, with the table looked up in the schema.
+ */
+export function docValidator<
+  TableName extends string,
+  // biome-ignore lint/suspicious/noExplicitAny: any table definition
+  Table extends TableDefinition<any, any, any, any>,
+>(tableName: TableName, table: Table): DocValidator<TableName, Table["validator"]> {
+  return addSystemFields(tableName, table.validator) as DocValidator<TableName, Table["validator"]>;
+}
+
+/** What `defineSchema` adds to a schema for its tables' validators (Convex's `SchemaDefinition.doc` / `.id`). */
+export type SchemaValidators<Schema extends GenericSchema> = {
+  /** The validator of a table's whole documents: its validator with `_id` and `_creationTime`. */
+  doc<TableName extends keyof Schema & string>(
+    tableName: TableName,
+  ): DocValidator<TableName, Schema[TableName]["validator"]>;
+  /** `v.id(tableName)`, for a table of this schema only. */
+  id<TableName extends keyof Schema & string>(tableName: TableName): VId<GenericId<TableName>>;
+};
+
 export type DeclaredTable = {
   name: string;
   indexes: Record<string, string[]>;
@@ -432,7 +516,7 @@ export type SchemaDefinition<
 export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes extends boolean = true>(
   tables: Schema,
   options: { schemaValidation?: boolean; strictTableNameTypes?: StrictTableNameTypes } = {},
-): SchemaDefinition<Schema, StrictTableNameTypes> {
+): SchemaDefinition<Schema, StrictTableNameTypes> & SchemaValidators<Schema> {
   const out = new Map<string, DeclaredTable>();
   for (const [name, t] of Object.entries(tables)) {
     checkIdentifier("table", name);
@@ -456,7 +540,27 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
     });
   }
   for (const t of Object.values(tables)) checkIndexSystemFields(t);
-  return { tables: out, schemaValidation: options.schemaValidation ?? true };
+  // Convex's `tableInSchema`: the definition of a table of this schema, or its error.
+  const tableOf = (name: string) => {
+    const t = Object.hasOwn(tables, name) ? tables[name] : undefined;
+    if (t === undefined)
+      throw new Error(
+        `Table "${name}" is not in this schema. Tables in this schema: ${Object.keys(tables).join(", ")}`,
+      );
+    return t;
+  };
+  const helpers: SchemaValidators<Schema> = {
+    doc: (name) => docValidator(name, tableOf(name)) as never,
+    id: (name) => {
+      tableOf(name);
+      return v.id(name);
+    },
+  };
+  // Not enumerable: the schema's own fields stay what the engine reads and compares.
+  return Object.defineProperties(
+    { tables: out, schemaValidation: options.schemaValidation ?? true },
+    { doc: { value: helpers.doc }, id: { value: helpers.id } },
+  ) as SchemaDefinition<Schema, StrictTableNameTypes> & SchemaValidators<Schema>;
 }
 
 /** A table's validator for its stored documents: the declared one with the system fields added. */
@@ -491,6 +595,20 @@ export function indexKeyValues(ix: IndexDef, doc: Doc): KeyValue[] {
   const vals: KeyValue[] = ix.name === "by_id" ? [] : ix.fields.map((f) => fieldValue(doc, f));
   vals.push(doc._id);
   return vals;
+}
+
+/** Convex's reserved index descriptors (`by_id`, `by_creation_time`, `_…`): their I/O is not metered. */
+export const isReservedIndex = (ix: IndexDef) =>
+  ix.name === "by_id" || ix.name === "by_creation_time" || ix.name.startsWith("_");
+
+/**
+ * An index entry's metered size, as Convex's `IndexKey::size` (STUDY-71): the document id's 33 bytes (table
+ * number and internal id) plus the size of each indexed value present, the `_id` string included.
+ */
+export function indexKeySize(ix: IndexDef, doc: Doc): number {
+  let n = 33;
+  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += valueSize(v);
+  return n;
 }
 
 /** Table names a document validator points to with `v.id` (Convex's `foreign_keys`). */

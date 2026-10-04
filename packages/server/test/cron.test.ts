@@ -13,9 +13,10 @@ import { makeFunctionReference } from "@bunvex/protocol";
 import { BunvexError, v } from "@bunvex/values";
 import { type Crons, cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
-import { completeRun, currentJob, insertLog } from "../src/cron-model.ts";
+import { type CronJob, completeRun, currentJob, dueCrons, insertLog } from "../src/cron-model.ts";
 import { computeNextTs } from "../src/cron-next.ts";
 import { action, Functions, internalMutation, mutation, query } from "../src/functions.ts";
+import { captureErrors, failingReads, watchUnhandled } from "./faulty-store.ts";
 
 const stops: (() => unknown)[] = [];
 afterEach(async () => {
@@ -373,6 +374,70 @@ describe("createServer({ crons })", () => {
     await until(async () => (await engine.query((db) => db.query("items").collect())).length === 1);
   });
 
+  test("a store read failing during the startup registration: retried with backoff, never a crash", async () => {
+    const { createServer } = await import("../src/server.ts");
+    // Reads fail (as an injected store fault that outlived the driver's retries) until `failing` is cleared.
+    const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+    const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), store).init();
+    const functions = new Functions(engine).register("m", {
+      tick: internalMutation(async ({ db }) => {
+        await db.insert("items", {});
+      }),
+    });
+    const crons = cronJobs();
+    crons.interval("tick", { minutes: 1 }, "m:tick");
+    const unhandled = watchUnhandled();
+    stops.push(unhandled.stop);
+    const logged = captureErrors();
+    stops.push(logged.stop);
+    state.failing = true;
+    const server = createServer({ engine, functions, port: 0, crons });
+    stops.push(() => server.stop());
+    let registered: unknown;
+    void server.cronsReady.then((d) => {
+      registered = d;
+    });
+    // A few failed attempts, logged, and nothing escapes.
+    await until(() => state.failed >= 2 && logged.calls.length >= 2, "the registration to be retried");
+    await Bun.sleep(20);
+    expect(unhandled.seen).toEqual([]);
+    expect(registered).toBeUndefined();
+    expect(String(logged.calls[0][0])).toContain("cron jobs: registering the crons failed, retrying in");
+    // The store recovers: the crons are registered, and run.
+    state.failing = false;
+    await until(() => registered !== undefined, "the crons to be registered");
+    expect(registered).toEqual({ added: ["tick"], updated: [], deleted: [] });
+    await until(async () => (await engine.query((db) => db.query("items").collect())).length === 1);
+    expect(unhandled.seen).toEqual([]);
+  });
+
+  test("stopping while the registration is retried ends it at once; nothing registered", async () => {
+    const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+    const engine = await new Engine(defineSchema({}), store).init();
+    const functions = new Functions(engine).register("m", { tick: internalMutation(async () => {}) });
+    const crons = cronJobs();
+    crons.interval("tick", { minutes: 1 }, "m:tick");
+    const logged = captureErrors();
+    stops.push(logged.stop);
+    state.failing = true;
+    // A long backoff: the stop must not wait for it.
+    const ex = new CronJobExecutor(
+      engine,
+      functions,
+      cronSpecs(crons, (id, name) => functions.cronTarget(id, name)),
+      {
+        errorInitialBackoffMs: 60_000,
+        errorMaxBackoffMs: 60_000,
+      },
+    );
+    const ready = ex.start();
+    await until(() => logged.calls.length >= 1, "a failed attempt");
+    const t0 = performance.now();
+    await ex.stop();
+    expect(await ready).toBeUndefined();
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
   test("an invalid cron fails the start", async () => {
     const { createServer } = await import("../src/server.ts");
     const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
@@ -398,4 +463,36 @@ test("a paused deployment's crons wait; unpausing wakes the executor (STUDY-63)"
   await t.engine.mutation((db) => setUserStopState(db, "none"));
   await until(() => t.ran.length > 0, "the cron to run");
   expect(t.ran).toEqual(["tick"]);
+});
+
+test("a cron deleted with its function after the executor picked it is dropped, not retried (Convex checks the job first)", async () => {
+  // Convex's `run_function` (crates/application/src/cron_jobs/mod.rs) re-reads the job before it looks the
+  // function up: a push that removed both leaves nothing to run, and the executor moves on.
+  const c = cronJobs();
+  c.interval("gone", { seconds: 60 }, "m:tick", { tag: "stale" });
+  const { engine, ran, logs } = await setup(c);
+  await until(async () => (await logs("gone")).length === 1, "the first run");
+  // The next run, as the executor would pick it once due.
+  const [picked] = await engine.query((db) => dueCrons(db, Date.now() + 120_000, 10));
+  expect(picked?.name).toBe("gone");
+
+  // A new code version without the cron and without its function.
+  const next = new Functions(engine).register("m", { other: mutation(async () => {}) });
+  const none = cronSpecs(cronJobs(), (id, n) => next.cronTarget(id, n));
+  const after = new CronJobExecutor(engine, next, none, { cronSplaySeconds: 0, errorInitialBackoffMs: 5 });
+  stops.push(() => after.stop());
+  expect(await after.push(none)).toMatchObject({ deleted: ["gone"] });
+
+  const errors: unknown[][] = [];
+  const consoleError = console.error;
+  console.error = (...a: unknown[]) => errors.push(a);
+  try {
+    const execute = (after as unknown as { execute(j: CronJob): Promise<void> }).execute(picked!);
+    const outcome = await Promise.race([execute.then(() => "done"), Bun.sleep(500).then(() => "still retrying")]);
+    expect(outcome).toBe("done");
+  } finally {
+    console.error = consoleError;
+  }
+  expect(errors).toEqual([]);
+  expect(ran).toEqual(["stale"]);
 });

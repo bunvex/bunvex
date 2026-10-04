@@ -55,6 +55,7 @@ describe("catalog (_tables / _index)", () => {
           _snapshot_imports: 541,
           _function_handles: 545,
           _cron_next_run: 547,
+          _data_sync_progress: 553,
           _usage_limits: 552,
           _index_backfills: 548,
           _storage_deletions: 9998,
