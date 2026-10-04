@@ -113,7 +113,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `browser/sync/paginated_query_client.test.ts` | subscribe, loadMore, split (`e2e/paginated-client.test.ts`) | partial: a split driven by optimistic updates alone |
 | `browser/sync/protocol.test.ts` | u64 round trip (`protocol/test/v1.test.ts`) | — |
 | `browser/sync/request_manager.test.ts` | retries (STUDY-57) | G-C26 `hasIncompleteRequests`, dirty notifications |
-| `nextjs/nextjs.test.tsx` | the URL variable, preloaded first render (`e2e/nextjs.test.ts`, `e2e-react/preloaded.test.tsx`) | G-C27 a live `null` replaces the preloaded value: `e2e-react/preloaded-live-null.test.tsx` (#PR, differential) |
+| `nextjs/nextjs.test.tsx` | the URL variable, preloaded first render (`e2e/nextjs.test.ts`, `e2e-react/preloaded.test.tsx`) | G-C27 a live `null` replaces the preloaded value: `e2e-react/preloaded-live-null.test.tsx` (#361, differential) |
 
 Shared with Convex, not divergences (§6 has the questions):
 - `WebSocketManager.stop()` does not cancel a pending scheduled reconnect (Convex's `web_socket_manager.ts`
