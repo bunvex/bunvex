@@ -42,6 +42,7 @@ export {
   USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 export {
+  CommitListenerError,
   Committer,
   CommitterStoppedError,
   type Conflict,

@@ -317,7 +317,7 @@ export class SyncHub {
     this.splay = deps.splay ?? splayOptions();
     this.maxSendTransitions =
       deps.maxSendTransitions ?? knob(process.env, "SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
-    deps.engine.committer.onCommit((entries) => this.onCommit(entries));
+    deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
     this.heartbeat = setInterval(() => {
       const now = performance.now();

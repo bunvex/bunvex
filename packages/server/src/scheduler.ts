@@ -226,7 +226,7 @@ export class ScheduledJobExecutor {
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
-    });
+    }, "scheduler");
     this.loop = this.run();
     this.scheduleGc(1000);
   }
