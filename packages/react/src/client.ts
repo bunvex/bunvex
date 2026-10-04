@@ -12,6 +12,8 @@ import {
   type FunctionArgs,
   type FunctionReturnType,
   getFunctionName,
+  instantiateDefaultLogger,
+  instantiateNoopLogger,
   type LoadMoreOfPaginatedQuery,
   type Logger,
   type OptimisticUpdate,
@@ -127,6 +129,7 @@ export class BunvexReactClient {
   private readonly options: BunvexReactClientOptions;
   private closed = false;
   private adminAuth: string | undefined;
+  private readonly _logger: Logger;
 
   /** @param address - The deployment's URL, e.g. `http://localhost:3210`. */
   constructor(address: string, options: BunvexReactClientOptions = {}) {
@@ -140,7 +143,15 @@ export class BunvexReactClient {
       );
     if (!address.includes("://")) throw new Error("Provided address was not an absolute URL.");
     this.address = address;
-    this.options = options;
+    // As Convex's `ConvexReactClient`: the logger is built here, and the base client gets this one.
+    const verbose = options.verbose ?? false;
+    this._logger =
+      options.logger === false
+        ? instantiateNoopLogger({ verbose })
+        : options.logger !== true && options.logger
+          ? options.logger
+          : instantiateDefaultLogger({ verbose });
+    this.options = { ...options, logger: this._logger };
   }
 
   get url(): string {
@@ -309,8 +320,9 @@ export class BunvexReactClient {
     return this.sync.subscribeToConnectionState(cb);
   }
 
-  get logger(): Logger | boolean | undefined {
-    return this.options.logger;
+  /** The client's logger: the one passed, the console (`true` or unset), or nowhere (`false`). */
+  get logger(): Logger {
+    return this._logger;
   }
 
   async close(): Promise<void> {
