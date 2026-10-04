@@ -95,7 +95,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 
 | Convex file | Covered | Gaps |
 |---|---|---|
-| `react/ConvexAuthState.test.tsx` | loading → authenticated (`e2e-react/auth.test.tsx`); refetch at exp − iat − leeway (`e2e/client-auth.test.ts`) | G-C1 (a non-JWT token logs and schedules nothing; also no `iat`/`exp`, a 2 s life, a leeway longer than the life): `e2e/client-auth-token-shapes.test.ts` (#PR, differential) |
+| `react/ConvexAuthState.test.tsx` | loading → authenticated (`e2e-react/auth.test.tsx`); refetch at exp − iat − leeway (`e2e/client-auth.test.ts`) | G-C1 (a non-JWT token logs and schedules nothing; also no `iat`/`exp`, a 2 s life, a leeway longer than the life): `e2e/client-auth-token-shapes.test.ts` (#359, differential) |
 | `react/auth_helpers.test.tsx` | `<Authenticated>` etc. (`e2e-react/auth.test.tsx`) | — |
 | `react/auth_websocket.test.tsx` | valid token, refused cached token, always refused, null token, `expectAuth: true` (`e2e/client-auth.test.ts`) | G-C2 cache failure then fresh token; G-C3 a stale AuthError after a second `setAuth`; G-C4 a non-auth AuthError while awaiting a fresh token; G-C5 a refetch during a reauth; G-C6 a fresh token refused once, then accepted; G-C7 Authenticate before an Add made during the fetch; **G-C8 pause/resume of the query set** (no duplicate Add, Add+Remove cancel out, refcounts, a Remove queued while paused) |
 | `react/client.test.tsx` | construct; optimistic updates and "Already specified…" (`e2e-react/react.test.tsx`) | G-C9 a SyntheticEvent passed to a mutation; G-C10 the async-optimistic-update warning; G-C11 `BunvexReactClient.query()` from an optimistic or local value |
