@@ -65,7 +65,14 @@ unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys
 | `scheduling` | **built** (`examples/scheduling`) | a countdown of `runAfter` steps in an internal mutation, followed live |
 | `cron-jobs` | **built** (`examples/cron-jobs`) | a 10-second `crons.interval` clearing the messages; the test waits for it |
 | `nextjs-app-router` | **built** (`examples/nextjs-app-router`) | `preloadQuery` in a Server Component, `usePreloadedQuery` live, a Server Action; `next build` in the test (Next 16.3.8, `transpilePackages`) |
-| `typescript`, `args-validation`, `custom-errors`, `relational-data-modeling`, `system-tables`, `vector-search`, `file-storage-with-http`, `http`, `prewarming`, `nextjs-pages-router`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
+| `typescript` | **built** (`examples/typescript`) | a schema typing `Doc<"messages">` in a query's return and the client's results; the test deploys with the typecheck on |
+| `args-validation` | **built** (`examples/args-validation`) | `args` with an optional array, `returns`; the test checks a missing field, a wrong type and an extra field are refused and nothing is written |
+| `custom-errors` | **built** (`examples/custom-errors`) | `BunvexError` of a string from a mutation, of an object from a query; the test reads both errors' data, the query's on a live subscription |
+| `relational-data-modeling` | **built** (`examples/relational-data-modeling`) | `v.id("channels")` and a `by_channel` index, the channel joined in; the test checks each channel's live list and refuses another table's id |
+| `system-tables` | **built** (`examples/system-tables`) | `db.system` over `_storage` (size, sha256, content type) and `_scheduled_functions`; the test cancels a scheduled send and follows another to `success`, live |
+| `prewarming` | **built** (`examples/prewarming`) | `prewarmQuery` on hover; the test checks a prewarmed result is in the client and live before any view reads it, and the subscription ends after `extendSubscriptionFor` |
+| `nextjs-pages-router` | **built** (`examples/nextjs-pages-router`) | `BunvexProvider` in `_app.tsx`, a live counter, an API route with `fetchQuery`; the test runs `next build` and `next start` and reads the page and the API route (the demo's Auth0 sign-in left out) |
+| `vector-search`, `file-storage-with-http`, `http`, `users-and-clerk`, `giphy-action`, `dall-e-storage-action` | later batches | ready; the last two need an API key (their test stubs the external call) |
 | `node` | waits | Node actions (`"use node"`) |
 | `python-quickstart` | waits | a Python client |
 | `zod-validation-ts`, `sessions`, `presence-facepile`, `presence-typing-indicator` | waits | `convex-helpers` or components |

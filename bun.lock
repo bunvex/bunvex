@@ -79,8 +79,42 @@
         "bunvex": "workspace:*",
       },
     },
+    "examples/args-validation": {
+      "name": "bunvex-example-args-validation",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
     "examples/cron-jobs": {
       "name": "bunvex-example-cron-jobs",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
+    "examples/custom-errors": {
+      "name": "bunvex-example-custom-errors",
       "version": "0.0.0",
       "dependencies": {
         "bunvex": "workspace:*",
@@ -130,8 +164,42 @@
         "typescript": "^5.9.0",
       },
     },
+    "examples/nextjs-pages-router": {
+      "name": "bunvex-example-nextjs-pages-router",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "next": "16.3.8",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/node": "26.6.3",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+      },
+    },
     "examples/pagination": {
       "name": "bunvex-example-pagination",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
+    "examples/prewarming": {
+      "name": "bunvex-example-prewarming",
       "version": "0.0.0",
       "dependencies": {
         "bunvex": "workspace:*",
@@ -153,6 +221,23 @@
       "dependencies": {
         "@bunvex/react-query": "workspace:*",
         "@tanstack/react-query": "5.104.1",
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
+    "examples/relational-data-modeling": {
+      "name": "bunvex-example-relational-data-modeling",
+      "version": "0.0.0",
+      "dependencies": {
         "bunvex": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
@@ -200,8 +285,42 @@
         "vite": "^8.3.1",
       },
     },
+    "examples/system-tables": {
+      "name": "bunvex-example-system-tables",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
     "examples/tutorial": {
       "name": "bunvex-example-tutorial",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
+    "examples/typescript": {
+      "name": "bunvex-example-typescript",
       "version": "0.0.0",
       "dependencies": {
         "bunvex": "workspace:*",
@@ -1197,21 +1316,35 @@
 
     "bunvex": ["bunvex@workspace:packages/bunvex"],
 
+    "bunvex-example-args-validation": ["bunvex-example-args-validation@workspace:examples/args-validation"],
+
     "bunvex-example-cron-jobs": ["bunvex-example-cron-jobs@workspace:examples/cron-jobs"],
+
+    "bunvex-example-custom-errors": ["bunvex-example-custom-errors@workspace:examples/custom-errors"],
 
     "bunvex-example-file-storage": ["bunvex-example-file-storage@workspace:examples/file-storage"],
 
     "bunvex-example-nextjs-app-router": ["bunvex-example-nextjs-app-router@workspace:examples/nextjs-app-router"],
 
+    "bunvex-example-nextjs-pages-router": ["bunvex-example-nextjs-pages-router@workspace:examples/nextjs-pages-router"],
+
     "bunvex-example-pagination": ["bunvex-example-pagination@workspace:examples/pagination"],
 
+    "bunvex-example-prewarming": ["bunvex-example-prewarming@workspace:examples/prewarming"],
+
     "bunvex-example-react-query": ["bunvex-example-react-query@workspace:examples/react-query"],
+
+    "bunvex-example-relational-data-modeling": ["bunvex-example-relational-data-modeling@workspace:examples/relational-data-modeling"],
 
     "bunvex-example-scheduling": ["bunvex-example-scheduling@workspace:examples/scheduling"],
 
     "bunvex-example-search": ["bunvex-example-search@workspace:examples/search"],
 
+    "bunvex-example-system-tables": ["bunvex-example-system-tables@workspace:examples/system-tables"],
+
     "bunvex-example-tutorial": ["bunvex-example-tutorial@workspace:examples/tutorial"],
+
+    "bunvex-example-typescript": ["bunvex-example-typescript@workspace:examples/typescript"],
 
     "bunvex-examples-harness": ["bunvex-examples-harness@workspace:examples/_harness"],
 
