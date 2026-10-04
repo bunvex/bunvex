@@ -325,9 +325,16 @@ export class ImportService {
 
   /** Drop the hidden tables a failed or canceled import created. */
   private async dropHidden(id: string) {
-    const row = await this.row(id);
-    const tablets = (row?.hidden_tables ?? []).map((h) => Number(h.tablet));
-    if (tablets.length) await this.engine.dropHiddenTables(tablets).catch(() => {});
+    // Best effort, never thrown (the worker calls it from its loop): tables a failure leaves behind are
+    // dropped later by `cleanup()`, as a crash's are.
+    try {
+      const row = await this.row(id);
+      const tablets = (row?.hidden_tables ?? []).map((h) => Number(h.tablet));
+      if (tablets.length) await this.engine.dropHiddenTables(tablets);
+    } catch (e) {
+      if (!this.engine.committer.stopped)
+        console.error(`bunvex: import ${id}: dropping its tables failed, left to the cleanup: ${(e as Error).message}`);
+    }
   }
 
   /** Wait until the import is waiting for confirmation, completed or failed (Convex's `wait_for_import_worker`). */
@@ -377,14 +384,35 @@ export class ImportService {
 
   private async loop() {
     let failures = 0;
+    let readFailures = 0;
     while (!this.stopped) {
-      const next = await this.sys(async (db) => {
-        const rows = (await db.query(SNAPSHOT_IMPORTS_TABLE).collect()) as unknown as ImportRow[];
-        // As Convex's worker: a new upload first, then an import to run.
-        return (
-          rows.find((r) => r.state.state === "uploaded") ?? rows.find((r) => r.state.state === "in_progress") ?? null
-        );
-      }).catch(() => null);
+      let next: ImportRow | null;
+      try {
+        next = await this.sys(async (db) => {
+          const rows = (await db.query(SNAPSHOT_IMPORTS_TABLE).collect()) as unknown as ImportRow[];
+          // As Convex's worker: a new upload first, then an import to run.
+          return (
+            rows.find((r) => r.state.state === "uploaded") ?? rows.find((r) => r.state.state === "in_progress") ?? null
+          );
+        });
+        readFailures = 0;
+      } catch (e) {
+        // As Convex's worker loop: logged, retried with backoff; never out of the loop (an unhandled rejection
+        // would end the process).
+        if (this.stopped || this.engine.committer.stopped) return;
+        const delay =
+          Math.min(this.backoff.initial * 2 ** readFailures++, this.backoff.max) * (0.5 + Math.random() / 2);
+        console.error(`bunvex: imports: finding the next import failed, retrying: ${(e as Error).message}`);
+        // Woken early by a request or a stop.
+        await Promise.race([
+          Bun.sleep(delay),
+          new Promise<void>((done) => {
+            this.wake = done;
+          }),
+        ]);
+        this.wake = null;
+        continue;
+      }
       if (!next) {
         await new Promise<void>((done) => {
           this.wake = done;

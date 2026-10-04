@@ -4,7 +4,7 @@
 // must have different keys. bunvex has no key decoder, so injectivity stands in for the round trip.
 import { describe, expect, test } from "bun:test";
 import fc from "fast-check";
-import { valuesToKey } from "../src/sorting.ts";
+import { keyBytesLength, valuesToKey } from "../src/sorting.ts";
 import { compareValues } from "../src/value.ts";
 import { bytes, float64, int64, keyPart, runs, text, value } from "./arbitraries.ts";
 
@@ -86,4 +86,15 @@ describe("sort keys are injective and self-delimiting", () => {
       { numRuns: runs(500) },
     );
   });
+});
+
+// What usage metering charges for an index key read (STUDY-71) is the encoded key's length, computed
+// without encoding it.
+test("keyBytesLength is the encoded key's length", () => {
+  fc.assert(
+    fc.property(fc.array(keyPart, { maxLength: 4 }), (parts) => {
+      expect(keyBytesLength(parts)).toBe(valuesToKey(parts).length);
+    }),
+    { numRuns: runs(2000) },
+  );
 });

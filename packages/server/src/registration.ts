@@ -4,7 +4,9 @@
 // the runtime is functions.ts, which hands every handler the same objects whatever the types say.
 import type {
   GenericDatabaseReader,
+  GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
   GenericDataModel,
   TableNamesInDataModel,
 } from "@bunvex/core";
@@ -102,6 +104,19 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
     options?: { transactionLimits?: TransactionLimits },
   ): Promise<any>;
 }
+
+/** Convex's `GenericQueryCtxWithTable`: a query's context with the table-scoped database (STUDY-66 §2). */
+export type GenericQueryCtxWithTable<DataModel extends GenericDataModel> = Omit<GenericQueryCtx<DataModel>, "db"> & {
+  db: GenericDatabaseReaderWithTable<DataModel>;
+};
+
+/** Convex's `GenericMutationCtxWithTable`: a mutation's context with the table-scoped database. */
+export type GenericMutationCtxWithTable<DataModel extends GenericDataModel> = Omit<
+  GenericMutationCtx<DataModel>,
+  "db"
+> & {
+  db: GenericDatabaseWriterWithTable<DataModel>;
+};
 
 /**
  * An action's context: no `db`, but the functions it runs. A reference's arguments and result are typed;
@@ -252,6 +267,34 @@ export type MutationBuilder<DataModel extends GenericDataModel, Visibility exten
   OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
 >(
   mutation: Definition<GenericMutationCtx<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
+) => RegisteredMutation<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
+
+/** Convex's `QueryBuilderWithTable`: `query` for a data model, its handler typed with the table-scoped API. */
+export type QueryBuilderWithTable<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
+  ArgsValidator extends PropertyValidators | RequiredValidator | void,
+  ReturnsValidator extends PropertyValidators | RequiredValidator | void,
+  // biome-ignore lint/suspicious/noExplicitAny: inferred from the handler; any when it cannot be
+  ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
+  OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+>(
+  query: Definition<GenericQueryCtxWithTable<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
+) => RegisteredQuery<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
+
+/** Convex's `MutationBuilderWithTable`. */
+export type MutationBuilderWithTable<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
+  ArgsValidator extends PropertyValidators | RequiredValidator | void,
+  ReturnsValidator extends PropertyValidators | RequiredValidator | void,
+  // biome-ignore lint/suspicious/noExplicitAny: inferred from the handler; any when it cannot be
+  ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
+  OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+>(
+  mutation: Definition<
+    GenericMutationCtxWithTable<DataModel>,
+    ArgsValidator,
+    ReturnsValidator,
+    OneOrZeroArgs,
+    ReturnValue
+  >,
 ) => RegisteredMutation<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
 /** `action` / `internalAction` for a data model (Convex's `ActionBuilder`). */

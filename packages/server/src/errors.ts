@@ -8,7 +8,7 @@
 // A `BunvexError`'s data always goes to the client (`errorData`), redacted or not: it is the app's own
 // answer, not an internal detail.
 import { randomBytes } from "node:crypto";
-import { CommitterStoppedError, OutOfRetentionError, PersistenceReadError } from "@bunvex/core";
+import { CommitterStoppedError, OutOfRetentionError, PersistenceReadError, QueryCursorError } from "@bunvex/core";
 import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 
 /** The message a client gets for a failure that is not the function's (Convex's INTERNAL_SERVER_ERROR_MSG). */
@@ -23,7 +23,10 @@ export const newRequestId = () => randomBytes(8).toString("hex");
  * (Convex's `OutOfRetention`, STUDY-06 D10).
  */
 export const isSystemError = (e: unknown) =>
-  e instanceof CommitterStoppedError || e instanceof OutOfRetentionError || e instanceof PersistenceReadError;
+  e instanceof CommitterStoppedError ||
+  e instanceof OutOfRetentionError ||
+  e instanceof PersistenceReadError ||
+  e instanceof QueryCursorError;
 
 /**
  * A system failure the client should simply retry: Convex's `ErrorCode::OutOfRetention` answers HTTP 503 and
@@ -52,8 +55,21 @@ export class FunctionPathError extends Error {
   override name = "FunctionPathError";
 }
 
+/**
+ * An argument or result that misses its validator: Convex checks both in Rust, around the run
+ * (`ArgsValidator::check_args`, `ReturnsValidator::check_output`), so the error is a message alone — no
+ * `Uncaught`, no frames — and its message is the `JsError`'s display, newline included, for the client and
+ * for a function that called this one alike. `ArgumentValidationError: <check>` wraps the check's own
+ * `JsError`, so it ends with two newlines (STUDY-67 H6).
+ */
+export class ValidatorError extends Error {
+  static args = (check: string) => new ValidatorError(`ArgumentValidationError: ${check}\n\n`);
+  static returns = (check: string) => new ValidatorError(`ReturnsValidationError: ${check}\n`);
+}
+
 export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof FunctionPathError) return { message: `${e.message}\n` };
+  if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
     return { message: `Uncaught ${what}\n` };

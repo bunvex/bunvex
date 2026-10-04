@@ -76,7 +76,12 @@ async function setup(sinkFetch: typeof fetch) {
     const text = await r.text();
     return text ? JSON.parse(text) : null;
   };
-  const call = (path: string) => fetch(`${api}/mutation`, { method: "POST", body: JSON.stringify({ path, args: {} }) });
+  const call = (path: string) =>
+    fetch(`${api}/mutation`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {} }),
+    });
   const create = async (body: object) => {
     const { id } = await req("create_log_stream", body);
     const status = await until(async () => {

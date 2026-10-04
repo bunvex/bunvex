@@ -224,6 +224,17 @@ It runs in the process that owns the committer (one per deployment, STUDY-24).
 - **Registration (S1):** bunvex has no push yet (CLI and codegen are Phase 3 item 7), so crons are passed
   to the server and diffed against `_cron_jobs` **at startup**, Convex's `CronModel::apply` with startup as
   the push.
+- **A failed registration is retried, never fatal.** In Convex the diff runs in the push's transaction
+  (`crates/model/src/config/mod.rs` `ConfigModel::apply` → `CronModel::apply`), so a store error fails that
+  push request and the process stays up; the executor itself is a spawned task
+  (`crates/application/src/lib.rs`, `CronJobExecutor::run`) whose loop logs every error and backs off
+  (`INITIAL_BACKOFF` 500 ms to `MAX_BACKOFF` 15 s, `crates/application/src/cron_jobs/mod.rs` L97-170). With
+  startup as the push (S1) there is no request to fail, so bunvex retries the diff with that same backoff,
+  logging each failure, until it commits; only then does the executor start, so the crons that run are the
+  ones this process declared. `cronsReady` resolves with the diff once it commits (or with `undefined` if the
+  server stops first) and never rejects. Before this, a read error during the startup diff (seed 2252 of the
+  Jepsen "all" nemesis) was an unhandled rejection: the process exited with code 1 and no message. The
+  executor loop backs off the same way (it waited a fixed second).
 
 ### 3.5 Dashboard
 
@@ -278,7 +289,9 @@ finished job as a no-op. That matches Convex, so it needs no decision.
   - missed runs skipped (a `canceled` log for intervals);
   - no overlap;
   - the startup diff (added, updated with the 30 s rule, deleted with its logs);
-  - 5 logs kept, truncation at 1000.
+  - 5 logs kept, truncation at 1000;
+  - a store read failing during the startup diff: logged and retried, no unhandled rejection, the crons
+    registered and run once the store recovers; a stop during the backoff ends it at once.
 - **Through the official client:** a public mutation that schedules, and a subscription seeing the
   scheduled mutation's write.
 - **Sabotage** of the transactional write, the exactly-once write, the at-most-once commit and the skip
