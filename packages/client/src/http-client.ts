@@ -141,7 +141,7 @@ export class BunvexHttpClient {
     const response = await this.localFetch()(`${this.address}/api/${endpoint}`, {
       ...this.fetchOptions,
       // As Convex's client: results in the encoded form whatever the server's default (STUDY-67 H3).
-      body: JSON.stringify({ ...body, format: "convex_encoded_json" }),
+      body: JSON.stringify({ ...body, format: "encoded_json" }),
       method: "POST",
       headers: this.headers(),
     });

@@ -254,7 +254,7 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
       res = await fetch(`${target.url}/api/function`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bunvex ${auth}` },
-        body: JSON.stringify({ path, args: fnArgs, format: "convex_encoded_json" }),
+        body: JSON.stringify({ path, args: fnArgs, format: "encoded_json" }),
       });
     } catch (e) {
       throw new RunFailure(`could not reach ${target.url}: ${(e as Error).message}`);
