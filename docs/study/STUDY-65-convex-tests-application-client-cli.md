@@ -136,7 +136,7 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
 | `lib/config.test.ts` | `convex.json` defaults, validation, unknown keys kept with a warning | `deploy.ts` reads `functions` and `codegen.fileType` | partial. Gap G-L2: a `bunvex.json` that is `null` throws a `TypeError`, invalid JSON the raw parse error; Convex prints "Expected … to contain an object" / `Parsing "…" failed`. Node, static codegen, WorkOS and AI-files keys are n/a (DV-173, DV-174) |
 | `lib/run.test.ts` | `parseFunctionName` forms | `cli/test/run.test.ts` "Convex's function name forms" | covered; G-L7: a nested functions directory, `.ts` without a colon |
 | `lib/indexes.test.ts` | `formatIndex` for database, text and vector indexes | `cli/src/index-checks.ts`, reached only through the deploy prompts | gap G-L3 (see M6) |
-| `lib/deployment.test.ts` | `CONVEX_DEPLOYMENT=` replaced or appended; `.gitignore` additions (null, empty, `.env`, comment, `!.env.local`, CRLF, patterns that cover it) | `cli/test/local-deployment.test.ts` (replace, first write, `.env*.local`) | partial; G-L5 (M7) |
+| `lib/deployment.test.ts` | `CONVEX_DEPLOYMENT=` replaced or appended; `.gitignore` additions (null, empty, `.env`, comment, `!.env.local`, CRLF, patterns that cover it) | `cli/test/local-deployment.test.ts` (replace, first write, `.env*.local`; Convex's cases for both functions, #PR) | covered (G-L5, M7) |
 | `lib/localDeployment/run.test.ts` | the latest version: a non-200, a missing field, a network error each reported | `latestVersion` returns `null` for all three | gap G-L6 |
 | `lib/components.test.ts` (`partitionModulesByChanges`) | changed / unchanged / deleted modules; env and source map in the hash | `cli/test/deploy.test.ts` "a push sends only the changed modules" | partial: source map and deletion cases |
 | `lib/codegen.test.ts`, `codegen_templates/*` | `--init` files; stale `_generated` entries removed; import paths and identifiers | `cli/test/codegen.test.ts` | covered; the README written by `--init` is not asserted |
@@ -161,7 +161,9 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   `formatIndex`. The server sends names only (`server/src/push.ts`), not the index configs.
 - **M7. `.gitignore`.** bunvex treats only `*.local` as covering `.env.local`, where Convex accepts any
   `*.local` line; no blank line before the appended block. `writeEnvLocal` also matches only `^NAME=`, so an
-  `export NAME=` line gets a duplicate.
+  `export NAME=` line gets a duplicate. Fixed in #PR: Convex's `changesToGitIgnore` and `changedEnvVarFile`
+  (its test cases pass), so each variable is added after a blank line and an `export NAME=` line is left as
+  it is, as Convex leaves it.
 - **M8. `bunvex.json` validation** (G-L2 above).
 
 ## 6. Prioritized gap list
