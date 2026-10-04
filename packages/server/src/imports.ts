@@ -163,6 +163,28 @@ export class ImportService {
   private running: Promise<void> | null = null;
   private stopped = false;
   private wake: (() => void) | null = null;
+  /**
+   * A wake with no worker waiting yet (it was reading the store): the worker's next sleep returns at once.
+   * Without it, a request or a stop that races the worker's read is lost, and the worker sleeps for good.
+   */
+  private woken = false;
+
+  /** Wake the worker, now or at its next sleep. */
+  private signal() {
+    if (this.wake) this.wake();
+    else this.woken = true;
+  }
+
+  /** The worker waits for a signal (one already given returns at once). */
+  private sleep(): Promise<void> {
+    if (this.woken) {
+      this.woken = false;
+      return Promise.resolve();
+    }
+    return new Promise<void>((done) => {
+      this.wake = done;
+    });
+  }
   /** Resolved whenever a row changes, for `waitStable`. */
   private changed: { promise: Promise<void>; resolve: () => void } = Promise.withResolvers<void>();
   private readonly tokenKey: Buffer;
@@ -290,7 +312,7 @@ export class ImportService {
         requestor: { type: "snapshotImport" },
       });
     });
-    this.wake?.();
+    this.signal();
     return id;
   }
 
@@ -305,7 +327,7 @@ export class ImportService {
           checkpoint_messages: [],
         }));
     });
-    this.wake?.();
+    this.signal();
   }
 
   /** Convex's `cancel_import`. */
@@ -379,7 +401,7 @@ export class ImportService {
   async stop() {
     this.stopped = true;
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-    this.wake?.();
+    this.signal();
     await this.running;
   }
 
@@ -405,19 +427,12 @@ export class ImportService {
           Math.min(this.backoff.initial * 2 ** readFailures++, this.backoff.max) * (0.5 + Math.random() / 2);
         console.error(`bunvex: imports: finding the next import failed, retrying: ${(e as Error).message}`);
         // Woken early by a request or a stop.
-        await Promise.race([
-          Bun.sleep(delay),
-          new Promise<void>((done) => {
-            this.wake = done;
-          }),
-        ]);
+        await Promise.race([Bun.sleep(delay), this.sleep()]);
         this.wake = null;
         continue;
       }
       if (!next) {
-        await new Promise<void>((done) => {
-          this.wake = done;
-        });
+        await this.sleep();
         this.wake = null;
         continue;
       }
@@ -440,12 +455,7 @@ export class ImportService {
           console.error(`bunvex: import ${next._id} failed, retrying: ${(e as Error).message}`);
           // Not running while it waits: a cancellation meanwhile drops its tables itself.
           this.current = null;
-          await Promise.race([
-            Bun.sleep(delay),
-            new Promise<void>((done) => {
-              this.wake = done;
-            }),
-          ]);
+          await Promise.race([Bun.sleep(delay), this.sleep()]);
           this.wake = null;
           continue;
         }

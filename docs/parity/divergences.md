@@ -229,6 +229,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-325 | Without `--http-proxy`, bunvex screens the same requests itself (STUDY-80 P1): a proxy in the process resolves each target, refuses it with the proxy's 407 (`Request to <url> forbidden`) when an address is denied, and connects to the address it checked (DNS-rebinding safe). `--deny-addresses metadata` (the default: link-local and the cloud metadata endpoints), `private` (also loopback, RFC 1918, CGNAT, ULA, …) or `none` | nothing of its own: with no proxy every address is reachable (`crates/local_backend/src/lib.rs` only warns, "UDF `fetch` requests are unrestricted!") | yes: an action's `fetch` to `169.254.169.254` (and, with `private`, to loopback or a private network) fails | Self-hosted operators rarely run a proxy, and a cloud metadata endpoint hands out the host's credentials; loopback and private networks stay open by default for local services and other containers | owner, 2026-10-04 (#381): C | [STUDY-80 P1](../study/STUDY-80-outbound-requests.md#4-divergences) |
 | DV-310 | An index range ends a complete value at `key + [0xFF]`: `eq(f, "")` selects only `""`, `gt(f, "")` includes `"\0…"` | `End::after_prefix` / `BinaryKey::increment` (crates/common/src/query.rs `IndexRange::compile`, interval/bounds.rs): `eq(f, "")` also returns `"\0…"`, `{}` also `{"": x}`, empty bytes also `[0x00…]`; `gt(f, "")`, `lte`, `gt` skip or add them the same way | yes, rarely (values that begin with another value then a NUL / an empty field name) | An index range must select what the same comparison selects; found by a property test (TEST-01, `core/test/index-range.property.test.ts`, counterexample `[["\0", null], "", "eq"]`) | owner, 2026-10-03 (#256): fix | [TEST-01 §5](../specs/TEST-01-test-strategy.md#5-bugs-the-property-tests-found) |
 | DV-340 | `bunvex dev` appends the local backend's stdout and stderr to `.bunvex/local/default/backend.log` (a marked line per run; started over past 10 MiB); an early exit's error names the log and shows its last 20 lines; a push the deployment fails on its own side ("Your request couldn't be completed") points to it | the local backend's output is discarded (`stdio: "ignore"`, `lib/localDeployment/run.ts`); its errors go to Convex's Sentry | yes (a file, more output) | a failing local push could not be investigated; bunvex has no Sentry | owner, 2026-10-04 (as recommended; whether bunvex reports errors to a service of its own, as Convex's Sentry, is open: STUDY-40 L8) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
+| DV-345 | A function error's frame names the function as JavaScriptCore does: a name the bundler changed shows changed (`assertShort2`), an inline handler `<anonymous>`, and a strict-mode tail call has no caller frame | V8 with esbuild `keepNames`: the original names, every caller | yes (stack text) | the engine: JavaScriptCore names a frame by its declared identifier and implements proper tail calls | owner, 2026-10-04 (as recommended) | [STUDY-95 S1](../study/STUDY-95-error-stacks.md#4-divergences) |
+| DV-346 | A frame's line and column are the original 1-based position its source map defines | the frame's 1-based position passed to a 0-based lookup, the token's 0-based position printed: usually the right line on esbuild's output, a 0-based column | yes (positions) | over Bun's output, Convex's arithmetic shows wrong lines; the right line is what Convex's users see | owner, 2026-10-04 (as recommended) | [STUDY-95 S2](../study/STUDY-95-error-stacks.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -337,6 +339,7 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).
 
@@ -392,6 +395,8 @@ DV-321 was accepted as recommended (owner, 2026-10-04, #332: an engine object lo
 DV-322 was decided by the owner (2026-10-04, #340: option (a), the logger factories exported from `@bunvex/client` marked `@internal`) and is in [Decided divergences](#decided-divergences).
 
 DV-340 (STUDY-40 L8) was accepted as recommended (owner, 2026-10-04) and is in [Decided divergences](#decided-divergences).
+
+DV-345 and DV-346 (STUDY-95 S1, S2) were accepted as recommended (owner, 2026-10-04) and are in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 

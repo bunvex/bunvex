@@ -17,6 +17,7 @@ import {
 } from "@bunvex/core";
 import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import { ActionTimeoutError } from "./action-timeout.ts";
+import { mapStack } from "./stack-map.ts";
 
 /** The message a client gets for a failure that is not the function's (Convex's INTERNAL_SERVER_ERROR_MSG). */
 export const INTERNAL_SERVER_ERROR_MESSAGE = "Your request couldn't be completed. Try again later.";
@@ -82,7 +83,9 @@ export function describeUncaught(e: unknown): UncaughtError {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
     return { message: `Uncaught ${what}\n` };
   }
-  const frames = (e.stack ?? "")
+  // The app's frames only, mapped to its sources (STUDY-95), from the stack after the message (a message may
+  // hold a nested function's frames, which are part of the message).
+  const frames = mapStack(stackAfterMessage(e))
     .split("\n")
     .filter((l) => /^\s+at /.test(l))
     .map((l) => `${l.replace(/^\s+/, "    ")}\n`)
@@ -97,6 +100,13 @@ export function describeUncaught(e: unknown): UncaughtError {
     }
   }
   return data === undefined ? { message: `${head}\n${frames}` } : { message: `${head}\n${frames}`, data };
+}
+
+/** An error's stack without its first lines, `<name>: <message>`, when the stack starts with them. */
+function stackAfterMessage(e: Error): string {
+  const stack = e.stack ?? "";
+  const head = e.message ? `${e.name}: ${e.message}` : e.name;
+  return stack.startsWith(head) ? stack.slice(head.length) : stack;
 }
 
 function uncaughtLine(name: string | undefined, message: string | undefined): string {

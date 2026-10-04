@@ -1857,7 +1857,12 @@ export function createServer(opts: ServerOptions) {
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
     shutdown: async () => {
+      // Every background task that reads or writes the store stops before it closes: after this resolves,
+      // nothing of the server touches the store (a caller may delete its files).
       usageGauges.stop();
+      logManager.stop();
+      await usageLimitWorker.stop();
+      stopCleanup();
       await exportService?.stop();
       await importService?.stop();
       await scheduler.stop();
@@ -1867,6 +1872,7 @@ export function createServer(opts: ServerOptions) {
       server?.stop(true);
       stopFileSweeps();
       builtinScreen?.stop();
+      functionLog.close();
       await engine.close();
     },
   };

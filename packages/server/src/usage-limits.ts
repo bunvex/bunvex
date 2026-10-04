@@ -329,6 +329,7 @@ export async function usageLimitRoute(
 export class UsageLimitWorker {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
+  private stopped = false;
   private again = false;
   /** Per limit id: the window it was reported in and the highest limit reported. */
   private reported = new Map<string, { window: string; limit: bigint }>();
@@ -346,13 +347,17 @@ export class UsageLimitWorker {
     this.wake();
   }
 
-  stop() {
+  /** No evaluation starts after this; it resolves once the one under way, if any, ends. */
+  stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    return this.running ?? Promise.resolve();
   }
 
   /** Evaluate now (serialized). */
   wake(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
     if (this.running) {
       this.again = true;
       return this.running;
@@ -362,7 +367,7 @@ export class UsageLimitWorker {
         do {
           this.again = false;
           await this.evaluate();
-        } while (this.again);
+        } while (this.again && !this.stopped);
       } catch (e) {
         console.error("usage limits: evaluation failed", e);
       } finally {
