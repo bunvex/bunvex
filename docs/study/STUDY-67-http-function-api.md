@@ -174,7 +174,7 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 | H4 | Content-Type not required; `args` optional; body error messages | gap | fix to match (#295) |
 | H5 | `/api/function` open to non-admins; `componentPath` ignored; 404 for a wrong method | gap | fix to match (#295) |
 | H6 | Argument errors rendered as an uncaught JS error, other messages, extra args accepted | gap | fix to match (#298) |
-| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **pending owner** (DV-312, draft #302): recommended, a wire-name exception as DV-307 |
+| H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **owner, 2026-10-03: option B** (DV-312, #302): a 400 with bunvex's code `BadBunvexFunctionIdentifier` ("the client used has to be bunvex's"), Convex's reasons, the sentence in bunvex's words |
 | H8 | `/api/run/{path}` missing | gap | add (#299) |
 | H9 | `/api/query_batch` missing | gap | add (#301) |
 | H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **owner, 2026-10-03: option A** (DV-313, #303): a working route, `args` as the arguments' JSON text |
