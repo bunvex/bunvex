@@ -78,6 +78,15 @@ export function resolveTarget(flags: TargetFlags, io: Io): Target | null {
 }
 
 /** A request to the deployment with its admin key; the JSON answer (or null for an empty one), or throws its message. */
+/**
+ * A function call's body asks for the encoded form, as Convex's CLI (through its HTTP client) does: the
+ * server's default is clean JSON (STUDY-67 H3), which loses int64 and bytes.
+ */
+const withFormat = (path: string, body: object) =>
+  /^\/api\/(query|mutation|action|function|query_at_ts)$/.test(path) && !("format" in body)
+    ? { ...body, format: "convex_encoded_json" }
+    : body;
+
 export async function adminRequest(
   target: Target,
   path: string,
@@ -88,7 +97,7 @@ export async function adminRequest(
     r = await fetch(`${target.url}${path}`, {
       method: body === undefined ? "GET" : "POST",
       headers: { "content-type": "application/json", authorization: `Bunvex ${target.adminKey}` },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { body: JSON.stringify(withFormat(path, body)) }),
     });
   } catch (e) {
     throw new Error(`could not reach ${target.url}: ${(e as Error).message}`);
