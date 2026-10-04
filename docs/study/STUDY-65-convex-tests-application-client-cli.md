@@ -101,7 +101,7 @@ Short paths: `client/` = `packages/client/test/`, `e2e/` = `packages/sync-e2e/te
 | `react/client.test.tsx` | construct; optimistic updates and "Already specified…" (`e2e-react/react.test.tsx`) | G-C9 a SyntheticEvent passed to a mutation; G-C10 the async-optimistic-update warning; G-C11 `BunvexReactClient.query()` from an optimistic or local value |
 | `react/queries_observer.test.ts`, `react/use_queries.test.ts` | — | **G-C12**: `QueriesObserver` / `useQueries` swap, unsubscribe, destroy, local results on first render, journals carried to a new client |
 | `react/react_node.test.ts` | — | G-C13: no callback after `close()` |
-| `react/use_paginated_query.test.tsx` | skip, first page, loadMore, a page updating, a page split, `insertAtTop` (`e2e-react/pagination.test.tsx`, `paginated-experimental.test.tsx`) | G-C14 `initialNumItems` refused for the classic hook (4 inputs); G-C15 restart on a new name or args, not on equal args; G-C16 `insertAtTop` edge cases and G-C17 `insertAtPosition` (10 cases): covered by `e2e-react/insert-at.test.ts` (#PR: Convex's cases plus a differential run against the official package); F5 |
+| `react/use_paginated_query.test.tsx` | skip, first page, loadMore, a page updating, a page split, `insertAtTop` (`e2e-react/pagination.test.tsx`, `paginated-experimental.test.tsx`) | G-C14 `initialNumItems` refused for the classic hook (4 inputs); G-C15 restart on a new name or args, not on equal args; G-C16 `insertAtTop` edge cases and G-C17 `insertAtPosition` (10 cases): covered by `e2e-react/insert-at.test.ts` (#334: Convex's cases plus a differential run against the official package); F5 |
 | `react/use_query.test.ts` | types | n/a |
 | `browser/http_client.test.ts` | the mutation queue and `skipQueue` (`e2e/http-client.test.ts`) | G-C18 a failed mutation does not block the queue; G-C19 `fetch` override precedence |
 | `browser/query_options.test.ts` | — | n/a: `convexQueryOptions` missing (client-sync §11); types only |
@@ -178,7 +178,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | |
 | 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
 | 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
-| 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | #PR (tests; bunvex matched) |
+| 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | #334 (tests; bunvex matched) |
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
 | 12 | F5 the React client's `logger` | `logger: false` not honoured | `react/src/client.ts`, the paginated hooks | S | |
