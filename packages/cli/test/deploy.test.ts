@@ -323,7 +323,8 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
 
   test("a non-staged index on a large table asks; the answer decides; a dry run only warns", async () => {
     const { app, env } = await setup();
-    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body"])'));
+    // Two indexes on the same fields are refused, as Convex: by_other adds a field.
+    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body", "other"])'));
     const no = io(app, env);
     no.it.prompt = () => "n";
     expect(await main(["deploy", "--typecheck=disable"], no.it)).toBe(1);
@@ -340,7 +341,7 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
     write(
       app,
       schema(
-        '.index("by_body", ["body"]).index("by_other", ["body"]).index("later", { fields: ["body"], staged: true })',
+        '.index("by_body", ["body"]).index("by_other", ["body", "other"]).index("later", { fields: ["other"], staged: true })',
       ),
     );
     const staged = io(app, env);

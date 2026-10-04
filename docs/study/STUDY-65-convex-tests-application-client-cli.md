@@ -150,6 +150,10 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   valid index field. To load documents by ID, use `db.get(id)`."), `IndexFieldsContainCreationTime`
   ("`_creationTime` is automatically added…") and `IndexFieldNameReserved`. bunvex throws one message
   (`core/src/schema.ts`), although STUDY-05 cites Convex's codes. Matching is the default: a fix, no decision.
+  Fixed in #PR, with the other database-index checks Convex makes at push (too many fields, a repeated field,
+  an empty index, two indexes on the same fields, reserved and repeated names), in its order and with its
+  messages. Two behaviours changed with them: an index of 16 fields is refused (Convex appends `_creationTime`
+  before its last count), and so are two database indexes on the same fields.
 - **M2. Module count.** The message differs from Convex's "Too many function files (N > maximum 4096)…",
   and there is no total cap counting `_deps` (`server/src/code-version.ts`).
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
@@ -182,7 +186,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
 | 11 | G-C12 `QueriesObserver` / `useQueries` | subscription leaks, lost journals | `react/src/queries-observer.ts`, `hooks.ts` | S | |
 | 12 | F5 the React client's `logger` | `logger: false` not honoured | `react/src/client.ts`, the paginated hooks | S | |
-| 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | |
+| 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | M1: #PR; G-L2: #342 |
 | 14 | G-A7 disabled state; G-A10 returns validation of actions and extra fields; G-A11 an HTTP action commits after a disconnect | | `server` | S each | |
 | 15 | M6 index diff printing in Convex's format | operator output | `cli/src/deploy.ts`, `server/src/push.ts` | M | |
 | 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | |
