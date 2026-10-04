@@ -205,3 +205,50 @@ export const worse = action({ args: {}, handler: (ctx) => ctx.runMutation(api.me
     expect(await main(["codegen", "--typecheck", "sometimes"], io(app).it)).toBe(2);
   });
 });
+
+describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
+  // Each expected message is what Convex 1.46's CLI prints for the same convex.json, with the file's name
+  // changed (run once against its `cli.bundle.cjs`; not at test time).
+  const cases: [string, string][] = [
+    ["null", "Expected `bunvex.json` to contain an object"],
+    ["[]", "Expected `bunvex.json` to contain an object"],
+    ["5", "Expected `bunvex.json` to contain an object"],
+    ['"x"', "Expected `bunvex.json` to contain an object"],
+    ['{"functions":5}', "`functions` in `bunvex.json`: Expected string, received number"],
+    ['{"functions":null}', "`functions` in `bunvex.json`: Expected string, received null"],
+    ['{"functions":[]}', "`functions` in `bunvex.json`: Expected string, received array"],
+    ['{"codegen":"x"}', "`codegen` in `bunvex.json`: Expected object, received string"],
+    ['{"codegen":null}', "`codegen` in `bunvex.json`: Expected object, received null"],
+    [
+      '{"codegen":{"fileType":"invalid"}}',
+      "`codegen.fileType` in `bunvex.json`: Invalid enum value. Expected 'ts' | 'js/dts', received 'invalid'",
+    ],
+    ['{"codegen":{"fileType":5}}', "`codegen.fileType` in `bunvex.json`: Expected 'ts' | 'js/dts', received number"],
+    ['{"codegen":{"fileType":null}}', "`codegen.fileType` in `bunvex.json`: Expected 'ts' | 'js/dts', received null"],
+    // The first issue, in the schema's order.
+    ['{"functions":1,"codegen":{"fileType":"x"}}', "`functions` in `bunvex.json`: Expected string, received number"],
+  ];
+  for (const [json, message] of cases)
+    test(`${json} → ${message}`, async () => {
+      const app = tmp();
+      write(app, { "bunvex.json": json });
+      expect(() => codegenConfig(app)).toThrow(message);
+      const { err, it } = io(app);
+      expect(await main(["codegen", "--typecheck", "disable"], it)).toBe(1);
+      expect(err).toEqual([`bunvex codegen: ${message}`]);
+    });
+
+  test("JSON that does not parse: Convex's line, then the parse error", async () => {
+    const app = tmp();
+    write(app, { "bunvex.json": "{bad json" });
+    const { err, it } = io(app);
+    expect(await main(["codegen", "--typecheck", "disable"], it)).toBe(1);
+    expect(err[0]).toStartWith('bunvex codegen: Parsing "bunvex.json" failed\nSyntaxError: JSON Parse error:');
+  });
+
+  test("valid settings and other keys are read as before", () => {
+    const app = tmp();
+    write(app, { "bunvex.json": '{"functions":"src/fns","codegen":{"fileType":"ts"},"node":{"externalPackages":[]}}' });
+    expect(codegenConfig(app).fileType).toBe("ts");
+  });
+});

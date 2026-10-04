@@ -15,6 +15,7 @@ import {
   notRunningMessage,
   OccError,
   observeTime,
+  opaqueToInspect,
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -31,6 +32,7 @@ import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,
   checkValue,
+  copyValue,
   displayValue,
   type GenericValidator,
   hasCommitTs,
@@ -44,6 +46,15 @@ import {
   v,
   valueSize,
 } from "@bunvex/values";
+
+/**
+ * A nested call's result as its caller gets it: Convex's crosses a JSON boundary (`runUdf` and the action
+ * calls return `jsonToConvex` of the callee's `convexToJson(result === undefined ? null : result)`), so it is
+ * a copy, `undefined` is `null`, `undefined` fields are gone and object fields come sorted (`copyValue`: the
+ * same as that round trip, without building the JSON).
+ */
+const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
+
 import {
   ActionPermits,
   type ConcurrencyLimiter,
@@ -547,9 +558,21 @@ function identityTypeOf(caller: Caller | undefined): IdentityType {
   return caller?.identity ? "user" : "unknown";
 }
 
+/**
+ * An HTTP action's client went away before the response head could be sent: Convex's
+ * `ErrorMetadata::client_disconnect` ("Client disconnected"), which its function log records as the result.
+ */
+class ClientDisconnectedError extends Error {
+  constructor() {
+    super("Client disconnected");
+  }
+}
+
 /** An error as the log shows it: a function's as Convex's `JsError` display, the server's own as its message. */
 const errorText = (e: unknown) =>
-  e instanceof OccError || isSystemError(e) ? (e as Error).message : describeUncaught(e).message;
+  e instanceof OccError || isSystemError(e) || e instanceof ClientDisconnectedError
+    ? (e as Error).message
+    : describeUncaught(e).message;
 
 /** Convex's vector filter builder: `q.eq(field, value)` and `q.or(...)`, as the expression JSON it sends. */
 const VECTOR_FILTER_BUILDER = {
@@ -1400,7 +1423,7 @@ export class Functions {
       } catch (e) {
         throw this.nestedError(e, timer);
       }
-      return this.checkReturns(f, value);
+      return acrossCall(this.checkReturns(f, value));
     }
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
@@ -1413,7 +1436,7 @@ export class Functions {
       if (sp) db.rollback(sp);
       throw this.nestedError(e, timer);
     }
-    return this.checkReturns(f, value);
+    return acrossCall(this.checkReturns(f, value));
   }
 
   /**
@@ -1812,11 +1835,13 @@ export class Functions {
         },
       },
       runQuery: async (n: FunctionRef, a?: unknown) =>
-        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        acrossCall(await this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runMutation: async (n: FunctionRef, a?: unknown) =>
-        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+        acrossCall(await this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller)),
       runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
+        acrossCall(
+          await this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
+        ),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: makeScheduler(this, {
         engine: this.engine,
@@ -1908,7 +1933,14 @@ export class Functions {
           }
         });
       },
-      (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),
+      // The handler ran to the end, but its client left before the head could be sent: as Convex, the
+      // execution is logged as failed with "Client disconnected" (its writes stay).
+      (r) =>
+        request.signal.aborted
+          ? { error: new ClientDisconnectedError() }
+          : r instanceof Response
+            ? { success: { status: String(r.status) } }
+            : {},
       routePath ?? new URL(request.url).pathname,
       undefined,
       () =>
@@ -1951,3 +1983,6 @@ class MutationAbortedError extends Error {
     super("The mutation was stopped: its time limit passed");
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Functions);
