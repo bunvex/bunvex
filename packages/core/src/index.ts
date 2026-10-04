@@ -131,6 +131,7 @@ export {
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
   setFetchMeter,
+  setFetchSignal,
   type UserTimer,
   userTimeMs,
   wallClock,
@@ -173,6 +174,7 @@ export {
   orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
+export { opaqueToInspect } from "./inspect.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 export {
@@ -280,10 +282,18 @@ export {
   formatBytes,
   ImportIdError,
   isQueryObject,
+  MAX_DOCUMENT_NESTING,
+  MAX_USER_SIZE,
+  OVER_LIMIT_HELP,
   type PaginationOptions,
   type PaginationResult,
   QueryCursorError,
   type Savepoint,
+  TRANSACTION_MAX_NUM_USER_WRITES,
+  TRANSACTION_MAX_READ_SET_INTERVALS,
+  TRANSACTION_MAX_READ_SIZE_BYTES,
+  TRANSACTION_MAX_READ_SIZE_ROWS,
+  TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
   Tx,
   type TxLimits,
   type TxQuery,

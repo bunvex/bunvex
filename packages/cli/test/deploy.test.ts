@@ -141,7 +141,7 @@ describe("bunvex deploy", () => {
     const r = io(app);
     expect(await main(["deploy"], r.it)).toBe(0);
     expect(r.out).toEqual([`✔ Deployed functions to ${d.url}`]);
-    expect(r.err).toContain("  [+] index messages.by_author");
+    expect(r.err).toContain("✔ Added table indexes:\n  [+] messages.by_author   author");
     expect(r.err).toContain("  [+] cron tick");
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["HI"]);
@@ -196,6 +196,42 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8")).toBe(before);
     expect(await main(["deploy", "--codegen=sometimes", ...flags], io(app).it)).toBe(2);
   }, 120_000);
+
+  test("the index diff, as Convex's printDiff: added, staged, enabled, staged again, deleted; a dry run says would", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const env = { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY };
+    const withSchema = (indexes: string) =>
+      write(app, {
+        "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(VALUES)};
+export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(), t: v.string() })${indexes} });`,
+      });
+    const deploy = async (...flags: string[]) => {
+      const r = io(app, env);
+      expect(await main(["deploy", "--typecheck=disable", "--codegen=disable", ...flags], r.it)).toBe(0);
+      return r.err.filter((l) => l.startsWith("✔ ") && l.includes("\n"));
+    };
+    withSchema(
+      '.index("by_a", ["a"]).index("by_ab", { fields: ["a", "b"], staged: true }).searchIndex("search_t", { searchField: "t", filterFields: ["a"] })',
+    );
+    expect(await deploy("--dry-run")).toEqual([
+      "✔ Would add table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Would add staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    expect(await deploy()).toEqual([
+      "✔ Added table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Added staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+    ]);
+    // by_ab enabled, by_a staged again, search_t deleted.
+    withSchema('.index("by_a", { fields: ["a"], staged: true }).index("by_ab", ["a", "b"])');
+    expect(await deploy()).toEqual([
+      "✔ Deleted table indexes:\n  [-] notes.search_t (text)   t, filter on a",
+      "✔ These indexes are now enabled:\n  [*] notes.by_ab   a, b",
+      "✔ These indexes are now staged:\n  [*] notes.by_a   a  (staged)",
+    ]);
+    expect(await deploy()).toEqual([]);
+  });
 
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();
@@ -315,6 +351,64 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     expect(r.unchangedModuleHashes).toEqual([{ path: "a.js", environment: "isolate", sha256: hash(a) }]);
   });
 
+  test("Convex's partitionModulesByChanges cases: source maps, deletions, all of it at once", () => {
+    const m = (path: string, source: string, environment: "isolate" | "node" = "isolate", sourceMap?: string) => ({
+      path,
+      source,
+      environment,
+      ...(sourceMap === undefined ? {} : { sourceMap }),
+    });
+    // Convex's `hash`: the source, then the source map.
+    const hash = (x: { source: string; sourceMap?: string }) =>
+      new Bun.CryptoHasher("sha256")
+        .update(x.source)
+        .update(x.sourceMap ?? "")
+        .digest("hex");
+    const remote = (mods: ReturnType<typeof m>[]) =>
+      mods.map((x) => ({ path: x.path, hash: hash(x), environment: x.environment }));
+    const paths = (r: ReturnType<typeof partitionModules>) => ({
+      changed: r.changedModules.map((x) => x.path).sort(),
+      unchanged: r.unchangedModuleHashes.map((x) => x.path),
+    });
+    // A different source map is a change.
+    expect(
+      paths(
+        partitionModules([m("f.js", "same", "isolate", "new-map")], remote([m("f.js", "same", "isolate", "old-map")])),
+      ),
+    ).toEqual({ changed: ["f.js"], unchanged: [] });
+    // The same source with the same map is unchanged: the map is part of the hash.
+    expect(
+      paths(partitionModules([m("f.js", "same", "isolate", "map")], remote([m("f.js", "same", "isolate", "map")]))),
+    ).toEqual({ changed: [], unchanged: ["f.js"] });
+    // Deleted modules are in neither list (the push leaves them out).
+    expect(
+      paths(
+        partitionModules(
+          [m("a.js", "same1"), m("c.js", "same3")],
+          remote([m("a.js", "same1"), m("b.js", "gone"), m("c.js", "same3")]),
+        ),
+      ),
+    ).toEqual({ changed: [], unchanged: ["a.js", "c.js"] });
+    expect(paths(partitionModules([], remote([m("a.js", "x"), m("b.js", "y")])))).toEqual({
+      changed: [],
+      unchanged: [],
+    });
+    // New, changed, unchanged and deleted together.
+    expect(
+      paths(
+        partitionModules(
+          [m("unchanged.js", "u"), m("changed.js", "new"), m("new.js", "n")],
+          remote([m("unchanged.js", "u"), m("changed.js", "old"), m("deleted.js", "d")]),
+        ),
+      ),
+    ).toEqual({ changed: ["changed.js", "new.js"], unchanged: ["unchanged.js"] });
+    // Nothing deployed yet: every module is sent.
+    expect(paths(partitionModules([m("a.js", "x"), m("b.js", "y")], []))).toEqual({
+      changed: ["a.js", "b.js"],
+      unchanged: [],
+    });
+  });
+
   test(".env files: KEY=value, quotes, comments, export", () => {
     expect(parseEnvFile(`# c\nA=1\nexport B="two words"\nC='3' # trailing\nD = four # note\nbad line`)).toEqual({
       A: "1",
@@ -367,7 +461,8 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
 
   test("a non-staged index on a large table asks; the answer decides; a dry run only warns", async () => {
     const { app, env } = await setup();
-    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body"])'));
+    // Two indexes on the same fields are refused, as Convex: by_other adds a field.
+    write(app, schema('.index("by_body", ["body"]).index("by_other", ["body", "other"])'));
     const no = io(app, env);
     no.it.prompt = () => "n";
     expect(await main(["deploy", "--typecheck=disable"], no.it)).toBe(1);
@@ -384,7 +479,7 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
     write(
       app,
       schema(
-        '.index("by_body", ["body"]).index("by_other", ["body"]).index("later", { fields: ["body"], staged: true })',
+        '.index("by_body", ["body"]).index("by_other", ["body", "other"]).index("later", { fields: ["other"], staged: true })',
       ),
     );
     const staged = io(app, env);
