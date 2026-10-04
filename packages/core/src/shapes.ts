@@ -496,3 +496,64 @@ export function removeValue(shape: Shape, value: Value): Shape {
       return { n, v };
   }
 }
+
+/** A shape as JSON (a table summary checkpoint, STUDY-72): an object's fields as `[name, field]` pairs, in order. */
+export type ShapeJson = { n: number; v: Record<string, unknown> };
+
+export function shapeToJson(s: Shape): ShapeJson {
+  const v = s.v;
+  switch (v.kind) {
+    case "Array":
+      return { n: s.n, v: { kind: v.kind, element: shapeToJson(v.element) } };
+    case "Object":
+      return {
+        n: s.n,
+        v: {
+          kind: v.kind,
+          fields: [...v.fields].map(([name, f]) => [name, { shape: shapeToJson(f.shape), optional: f.optional }]),
+        },
+      };
+    case "Record":
+      return { n: s.n, v: { kind: v.kind, key: shapeToJson(v.key), value: shapeToJson(v.value) } };
+    case "Union":
+      return { n: s.n, v: { kind: v.kind, variants: v.variants.map(shapeToJson) } };
+    default:
+      return { n: s.n, v: { ...v } };
+  }
+}
+
+/** `shapeToJson`'s inverse; throws on anything it did not write. */
+export function shapeFromJson(j: ShapeJson): Shape {
+  if (typeof j?.n !== "number" || typeof j.v?.kind !== "string") throw new Error("not a shape");
+  const v = j.v as Record<string, any>;
+  switch (v.kind) {
+    case "Array":
+      return { n: j.n, v: { kind: "Array", element: shapeFromJson(v.element) } };
+    case "Object":
+      return {
+        n: j.n,
+        v: {
+          kind: "Object",
+          fields: new Map(
+            (v.fields as [string, { shape: ShapeJson; optional: boolean }][]).map(([name, f]) => [
+              name,
+              { shape: shapeFromJson(f.shape), optional: f.optional === true },
+            ]),
+          ),
+        },
+      };
+    case "Record":
+      return { n: j.n, v: { kind: "Record", key: shapeFromJson(v.key), value: shapeFromJson(v.value) } };
+    case "Union":
+      return { n: j.n, v: { kind: "Union", variants: (v.variants as ShapeJson[]).map(shapeFromJson) } };
+    case "StringLiteral":
+      if (typeof v.literal !== "string") throw new Error("not a shape");
+      return { n: j.n, v: { kind: "StringLiteral", literal: v.literal } };
+    case "Id":
+      if (typeof v.table !== "number") throw new Error("not a shape");
+      return { n: j.n, v: { kind: "Id", table: v.table } };
+    default:
+      if (!RANK.includes(v.kind)) throw new Error("not a shape");
+      return { n: j.n, v: { kind: v.kind } as Variant };
+  }
+}

@@ -16,6 +16,7 @@ import { CronJobExecutor } from "../src/cron-executor.ts";
 import { type CronJob, completeRun, currentJob, dueCrons, insertLog } from "../src/cron-model.ts";
 import { computeNextTs } from "../src/cron-next.ts";
 import { action, Functions, internalMutation, mutation, query } from "../src/functions.ts";
+import { captureErrors, failingReads, watchUnhandled } from "./faulty-store.ts";
 
 const stops: (() => unknown)[] = [];
 afterEach(async () => {
@@ -371,6 +372,70 @@ describe("createServer({ crons })", () => {
     stops.push(() => server.stop());
     expect(await server.cronsReady).toEqual({ added: ["tick"], updated: [], deleted: [] });
     await until(async () => (await engine.query((db) => db.query("items").collect())).length === 1);
+  });
+
+  test("a store read failing during the startup registration: retried with backoff, never a crash", async () => {
+    const { createServer } = await import("../src/server.ts");
+    // Reads fail (as an injected store fault that outlived the driver's retries) until `failing` is cleared.
+    const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+    const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), store).init();
+    const functions = new Functions(engine).register("m", {
+      tick: internalMutation(async ({ db }) => {
+        await db.insert("items", {});
+      }),
+    });
+    const crons = cronJobs();
+    crons.interval("tick", { minutes: 1 }, "m:tick");
+    const unhandled = watchUnhandled();
+    stops.push(unhandled.stop);
+    const logged = captureErrors();
+    stops.push(logged.stop);
+    state.failing = true;
+    const server = createServer({ engine, functions, port: 0, crons });
+    stops.push(() => server.stop());
+    let registered: unknown;
+    void server.cronsReady.then((d) => {
+      registered = d;
+    });
+    // A few failed attempts, logged, and nothing escapes.
+    await until(() => state.failed >= 2 && logged.calls.length >= 2, "the registration to be retried");
+    await Bun.sleep(20);
+    expect(unhandled.seen).toEqual([]);
+    expect(registered).toBeUndefined();
+    expect(String(logged.calls[0][0])).toContain("cron jobs: registering the crons failed, retrying in");
+    // The store recovers: the crons are registered, and run.
+    state.failing = false;
+    await until(() => registered !== undefined, "the crons to be registered");
+    expect(registered).toEqual({ added: ["tick"], updated: [], deleted: [] });
+    await until(async () => (await engine.query((db) => db.query("items").collect())).length === 1);
+    expect(unhandled.seen).toEqual([]);
+  });
+
+  test("stopping while the registration is retried ends it at once; nothing registered", async () => {
+    const { store, state } = failingReads(await MemoryPersistence.open(null, { durable: false }));
+    const engine = await new Engine(defineSchema({}), store).init();
+    const functions = new Functions(engine).register("m", { tick: internalMutation(async () => {}) });
+    const crons = cronJobs();
+    crons.interval("tick", { minutes: 1 }, "m:tick");
+    const logged = captureErrors();
+    stops.push(logged.stop);
+    state.failing = true;
+    // A long backoff: the stop must not wait for it.
+    const ex = new CronJobExecutor(
+      engine,
+      functions,
+      cronSpecs(crons, (id, name) => functions.cronTarget(id, name)),
+      {
+        errorInitialBackoffMs: 60_000,
+        errorMaxBackoffMs: 60_000,
+      },
+    );
+    const ready = ex.start();
+    await until(() => logged.calls.length >= 1, "a failed attempt");
+    const t0 = performance.now();
+    await ex.stop();
+    expect(await ready).toBeUndefined();
+    expect(performance.now() - t0).toBeLessThan(1000);
   });
 
   test("an invalid cron fails the start", async () => {

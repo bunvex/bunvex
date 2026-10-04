@@ -56,22 +56,32 @@ const ENCODED = {
 };
 const EXPORT = { b: { $bytes: "AAA=" }, f: 1.5, n: 5, nan: { $float: "AAAAAAAA+H8=" }, s: "x" };
 
-test("each format, by Convex's names and aliases; no format and no client header is clean JSON", async () => {
+test("each format, by bunvex's names (DV-307); no format and no client header is clean JSON", async () => {
   const { call } = await setup();
   const value = async (format?: string) =>
     (await call("query", { path: "m:ok", args: {}, ...(format === undefined ? {} : { format }) })).body.value;
   expect(await value()).toEqual(CLEAN);
   expect(await value("json")).toEqual(CLEAN);
-  expect(await value("convex_clean_json")).toEqual(CLEAN);
-  expect(await value("convex_encoded_json")).toEqual(ENCODED);
-  expect(await value("convex_json")).toEqual(ENCODED);
+  expect(await value("clean_json")).toEqual(CLEAN);
+  expect(await value("encoded_json")).toEqual(ENCODED);
   expect(await value("export_json")).toEqual(EXPORT);
+});
+
+test("Convex's format names are a 400 BadFormat (DV-307)", async () => {
+  const { call } = await setup();
+  for (const format of ["convex_encoded_json", "convex_json", "convex_clean_json"]) {
+    const r = await call("query", { path: "m:ok", args: {}, format });
+    expect([r.status, r.body]).toEqual([
+      400,
+      { code: "BadFormat", message: `format param must be one of [\`json\`]. Got ${format}` },
+    ]);
+  }
 });
 
 test("errorData is in the format too", async () => {
   const { call } = await setup();
   expect((await call("query", { path: "m:cfails", args: {} })).body.errorData).toEqual({ code: "nope", n: "7" });
-  expect((await call("query", { path: "m:cfails", args: {}, format: "convex_encoded_json" })).body.errorData).toEqual({
+  expect((await call("query", { path: "m:cfails", args: {}, format: "encoded_json" })).body.errorData).toEqual({
     code: "nope",
     n: { $integer: "BwAAAAAAAAA=" },
   });
@@ -105,7 +115,7 @@ test("query_at_ts and /api/function take the format as well", async () => {
   expect((await call("query_at_ts", { path: "m:ok", args: {}, ts, format: "export_json" })).body.value).toEqual(EXPORT);
   const admin = { authorization: `Bunvex ${KEY}` };
   expect((await call("function", { path: "m:ok", args: {} }, admin)).body.value).toEqual(CLEAN);
-  expect((await call("function", { path: "m:ok", args: {}, format: "convex_encoded_json" }, admin)).body.value).toEqual(
+  expect((await call("function", { path: "m:ok", args: {}, format: "encoded_json" }, admin)).body.value).toEqual(
     ENCODED,
   );
 });

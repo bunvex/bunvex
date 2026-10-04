@@ -56,7 +56,7 @@ async function server() {
       await fetch(`${api}/api/${kind}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, args, format: "convex_encoded_json" }),
+        body: JSON.stringify({ path, args, format: "encoded_json" }),
       })
     ).json()) as { status: string; value?: unknown; errorMessage?: string; errorData?: unknown };
   return { engine, functions, s, api, call };

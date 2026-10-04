@@ -5,13 +5,23 @@
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { decodeId } from "./id.ts";
 import type { GenericValidator } from "./validators.ts";
-import { compareValues, isBytes, isSimpleObject, type Value } from "./value.ts";
+import { compareValues, isBytes, isSimpleObject, opaque, type Value } from "./value.ts";
 
 /** An id's table name, or undefined when it names no known table (the engine's catalog answers). */
 export type TableOfId = (tableNumber: number) => string | undefined;
 
-/** Display a value as the messages do: `1.0`, `NaN`, `"s"`, `5n`→`5`, `[1, 2]`, `{a: 1}`. */
+/**
+ * Display a value as the messages do: `1.0`, `NaN`, `"s"`, `5n`→`5`, `[1, 2]`, `{a: 1}`.
+ *
+ * Only plain data is opened. What reaches a check before it is converted can be anything a function
+ * returned or passed (Convex converts first, so its check only sees values): a class instance, a `Map` or
+ * an engine object such as `ctx.db` prints as `Name {…}`, never its fields, and a cycle as `[Circular]`.
+ */
 export function displayValue(v: Value | undefined): string {
+  return display(v, new Set());
+}
+
+function display(v: Value | undefined, ancestors: Set<object>): string {
   if (v === undefined) return "undefined";
   if (v === null) return "null";
   if (typeof v === "bigint") return v.toString();
@@ -25,11 +35,17 @@ export function displayValue(v: Value | undefined): string {
   if (typeof v === "boolean") return String(v);
   if (typeof v === "string") return JSON.stringify(v);
   if (isBytes(v)) return `ArrayBuffer(${v.byteLength} bytes)`;
-  if (Array.isArray(v)) return `[${v.map(displayValue).join(", ")}]`;
-  return `{${Object.keys(v)
-    .sort()
-    .map((k) => `${k}: ${displayValue((v as Record<string, Value>)[k])}`)
-    .join(", ")}}`;
+  if (!Array.isArray(v) && !isSimpleObject(v)) return opaque(v);
+  if (ancestors.has(v)) return "[Circular]";
+  ancestors.add(v);
+  const s = Array.isArray(v)
+    ? `[${v.map((e) => display(e, ancestors)).join(", ")}]`
+    : `{${Object.keys(v)
+        .sort()
+        .map((k) => `${k}: ${display((v as Record<string, Value>)[k], ancestors)}`)
+        .join(", ")}}`;
+  ancestors.delete(v);
+  return s;
 }
 
 /** Display a validator as the messages do: `v.string()`, `v.object({a: v.optional(v.float64())})`. */
