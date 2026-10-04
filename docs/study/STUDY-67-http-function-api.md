@@ -177,7 +177,7 @@ Observed with the probe of §5 against a bunvex server on `main` (`packages/serv
 | H7 | A bad path is a function error, not 400 `BadConvexFunctionIdentifier` | the code holds "Convex" (rule 5) | **owner, 2026-10-03: option B** (DV-312, #302): a 400 with bunvex's code `BadBunvexFunctionIdentifier` ("the client used has to be bunvex's"), Convex's reasons, the sentence in bunvex's words |
 | H8 | `/api/run/{path}` missing | gap | add (#299) |
 | H9 | `/api/query_batch` missing | gap | add (#301) |
-| H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **owner, 2026-10-03: option A** (DV-313, #303): a working route, `args` as the arguments' JSON text |
+| H10 | `GET /api/query` missing; Convex's cannot succeed | Convex bug | **owner, 2026-10-03: option A** (DV-313, #303): a working route, `args` as the arguments' JSON text; its path checked as H7's, after the query string's fields and before authentication, as `public_query_get` (#302 and #303 were built in parallel; the check joined the GET route in a follow-up) |
 | H11 | `query_at_ts` with a bad or future `ts` answers 400 | bunvex chose clearer errors; Convex answers 500 | **pending owner** (DV-314, draft #300): recommended, keep 400 |
 | H12 | The client header is not validated (`InvalidClientVersion`, `ClientVersionUnsupported`, deprecation headers) | the deprecation headers' names hold "convex" | **pending owner** (DV-315, draft #300): recommended, validate as Convex (400s), deprecation headers as `x-bunvex-*` |
 | H13 | Error frames | source maps | DV-76 (decided: later) |

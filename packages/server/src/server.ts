@@ -551,6 +551,9 @@ export function createServer(opts: ServerOptions) {
     } catch (e) {
       return bad(`args: ${(e as Error).message}`);
     }
+    // As `public_query_get`: the path is parsed before authentication (`parse_export_path`, STUDY-67 H7).
+    const badPath = badFunctionPath(path);
+    if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
     const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
     const caller = await callerOfRequest(req);
     if (caller instanceof Response) return caller;
