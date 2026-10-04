@@ -7,7 +7,7 @@ import { fetchAction, fetchMutation, fetchQuery, preloadedQueryResult, preloadQu
 import type { BunvexError } from "@bunvex/values";
 import * as oracle from "convex/nextjs";
 import { anyApi as oracleApi } from "convex/server";
-import { startServer } from "./harness.ts";
+import { renameFormat, startServer } from "./harness.ts";
 
 const api = anyApi;
 const cleanup: (() => unknown)[] = [];
@@ -20,7 +20,7 @@ async function setup() {
   cleanup.push(h.stop);
   // Every request the helpers make, as `fetch` saw it.
   const requests: { url: string; init: RequestInit }[] = [];
-  const realFetch = globalThis.fetch;
+  const realFetch = renameFormat(globalThis.fetch); // Convex's clients run here too (DV-307)
   const spy = spyOn(globalThis, "fetch").mockImplementation(((url: string, init: RequestInit) => {
     requests.push({ url: String(url), init });
     return realFetch(url, init);

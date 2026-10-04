@@ -10,6 +10,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  isQueryObject,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -17,9 +18,12 @@ import {
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
+  setFetchMeter,
   stringifyValue,
+  TableReader,
   type Tx,
   type UserTimer,
+  userTimeMs,
   wallClock,
   withUserTimer,
 } from "@bunvex/core";
@@ -40,7 +44,12 @@ import {
   v,
   valueSize,
 } from "@bunvex/values";
-import { ActionPermits } from "./action-permits.ts";
+import {
+  ActionPermits,
+  type ConcurrencyLimiter,
+  type FunctionLimits,
+  functionLimitsFromEnv,
+} from "./action-permits.ts";
 import {
   type AdminKeyIdentity,
   allows,
@@ -51,7 +60,7 @@ import {
 import type { AppMetrics } from "./app-metrics.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-import { describeUncaught, FunctionPathError, isSystemError, newRequestId } from "./errors.ts";
+import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
 import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
@@ -84,7 +93,7 @@ import type {
   VectorSearchQuery,
 } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
-import type { FileStorage } from "./storage.ts";
+import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
 
@@ -242,20 +251,53 @@ const DEFINED = new WeakSet<object>();
 /** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
 export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
 
-export const isFunctionDef = (x: unknown): x is FunctionDef => typeof x === "object" && x !== null && DEFINED.has(x);
+export const isFunctionDef = (x: unknown): x is FunctionDef =>
+  (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);
 
 const KIND_MARKER = { query: "isQuery", mutation: "isMutation", action: "isAction" } as const;
 
 function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
-  const f = defineUnmarked(kind, visibility, def);
+  const spec = defineUnmarked(kind, visibility, def);
+  const builderName = visibility === "public" ? kind : `internal${kind[0]!.toUpperCase()}${kind.slice(1)}`;
+  const f = dontCallDirectly(builderName, spec.handler as (ctx: unknown, args: unknown) => unknown);
+  assertNotBrowser();
   // Convex's markers: what the function is (`ApiFromModules` reads them as types).
-  Object.assign(f, {
+  Object.assign(f, spec, {
     isBunvexFunction: true,
     [KIND_MARKER[kind]]: true,
     [visibility === "public" ? "isPublic" : "isInternal"]: true,
   });
   DEFINED.add(f);
-  return f;
+  return f as unknown as FunctionDef;
+}
+
+/**
+ * A registered function is callable, as Convex's (registration_impl.ts `dontCallDirectly`, STUDY-66 §7): called
+ * directly (`await foo(ctx, args)`), it warns and runs the handler.
+ */
+function dontCallDirectly(builderName: string, handler: (ctx: unknown, args: unknown) => unknown) {
+  return (ctx: unknown, args: unknown) => {
+    console.warn(
+      "bunvex functions should not directly call other bunvex functions. Consider calling a helper function instead. " +
+        `e.g. \`export const foo = ${builderName}(...); await foo(ctx);\` is not supported.`,
+    );
+    return handler(ctx, args);
+  };
+}
+
+/**
+ * Convex's `assertNotBrowser`: functions imported in a real browser (its `window` getter is native code;
+ * JSDOM's is not) log an error. `window.__bunvexAllowFunctionsInBrowser` turns it off.
+ */
+function assertNotBrowser() {
+  const w = (globalThis as { window?: { __bunvexAllowFunctionsInBrowser?: unknown } }).window;
+  if (w === undefined || w.__bunvexAllowFunctionsInBrowser) return;
+  const isRealBrowser =
+    Object.getOwnPropertyDescriptor(globalThis, "window")?.get?.toString().includes("[native code]") ?? false;
+  if (isRealBrowser)
+    console.error(
+      "bunvex functions should not be imported in the browser. This will throw an error in future versions of `bunvex`. If this is a false negative, please report it to bunvex.",
+    );
 }
 
 function defineUnmarked<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, def: unknown): FunctionDef {
@@ -293,6 +335,19 @@ export const internalMutation = internalMutationGeneric;
 export const action = actionGeneric;
 export const internalAction = internalActionGeneric;
 
+/**
+ * Convex's `validateReturnValue` (registration_impl.ts, STUDY-66 §3): a query or mutation that returns a query
+ * object, not its results, fails before its result is validated.
+ */
+async function notAQuery(result: unknown): Promise<unknown> {
+  const value = await result;
+  if (isQueryObject(value))
+    throw new Error(
+      "Return value is a Query. Results must be retrieved with `.collect()`, `.take(n), `.unique()`, or `.first()`.",
+    );
+  return value;
+}
+
 /** What a query's `db` leaves out: writing, and `vars` (Convex gives a query a reader). */
 const WRITER_ONLY = new Set(["insert", "patch", "replace", "delete", "vars"]);
 /**
@@ -303,6 +358,8 @@ function readerView(db: Tx): Tx {
   return new Proxy(db, {
     get(target, prop) {
       if (typeof prop === "string" && WRITER_ONLY.has(prop)) return undefined;
+      // `db.table(name)` gives a reader too (STUDY-66 §2).
+      if (prop === "table") return (name: string) => new TableReader(target, name);
       const value = Reflect.get(target, prop, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -336,6 +393,37 @@ const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/
 function noteTx(db: Tx) {
   const owner = currentOwner();
   if (owner) owner.tx = db;
+}
+
+/** The running action a storage call or `fetch` is charged to (STUDY-71); a Node action's fetch is not. */
+function meteredAction(): Running | null {
+  const r = currentOwner();
+  return r instanceof Running && (r.udfType === "Action" || r.udfType === "HttpAction") ? r : null;
+}
+
+const storageMeter: StorageMeter = ({ read, written }) => {
+  const r = meteredAction();
+  if (!r) return;
+  r.io.storageCalls++;
+  r.io.storageReadBytes += read ?? 0;
+  r.io.storageWriteBytes += written ?? 0;
+};
+
+// Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
+// counter, 0 when self-hosted (STUDY-71 U2).
+setFetchMeter(() => {
+  const r = meteredAction();
+  if (!r || r.environment !== "isolate") return null;
+  return (bytes) => {
+    r.io.networkEgressBytes += bytes;
+  };
+});
+
+/** A query's or mutation's timer, for the log's user execution time (STUDY-71). */
+function timed(timer: UserTimer): UserTimer {
+  const owner = currentOwner();
+  if (owner) owner.timer = timer;
+  return timer;
 }
 
 /** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
@@ -509,7 +597,9 @@ export class Functions {
     args?: unknown,
   ): Promise<T> {
     const log = this.functionLog;
-    if (!log || isSystemPath(name)) return run();
+    // System functions are not logged, as in Convex, but their compute and bandwidth are metered.
+    const system = isSystemPath(name);
+    if (!log || (system && !this.usageMeter)) return run();
     const up = currentOwner();
     const parent = up instanceof Running ? up : null;
     const r = new Running(
@@ -525,7 +615,7 @@ export class Functions {
     );
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
     r.ip = caller?.request?.ip ?? null;
-    if (udfType === "Action" || udfType === "HttpAction")
+    if (!system && (udfType === "Action" || udfType === "HttpAction"))
       r.onLine = (line) => {
         log.append({
           kind: "Progress",
@@ -556,19 +646,14 @@ export class Functions {
         r.argsBytes = null; // arguments that are no value fail the run anyway
       }
     }
-    const inflight = udfType === "Query" || udfType === "Mutation" ? this.inflight[udfType] : null;
-    if (inflight) {
-      inflight.running++;
-      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
-    }
     const res = await withOwner(r, run);
-    if (inflight) {
-      inflight.running--;
-      this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
-    }
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
-    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, retried), o.error);
+    if (!o.skip) {
+      const c = this.completion(r, res.lines, o, retried);
+      if (system) this.meterCompletion(r, c, false);
+      else this.logCompletion(log, r, c, o.error);
+    }
     if (retried) r.retries.n++;
     if (!res.ok) throw res.error;
     return res.value;
@@ -604,7 +689,6 @@ export class Functions {
   /** The app metrics (STUDY-58); set by `createServer`. */
   appMetrics: AppMetrics | null = null;
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
-  private inflight = { Query: { running: 0 }, Mutation: { running: 0 } };
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
   /** Where an event of `r` comes from (Convex's `FunctionEventSource`). */
@@ -622,13 +706,14 @@ export class Functions {
 
   /** Running and queued executions per kind, for the log streams' `concurrency_stats`. */
   concurrency() {
-    const p = this.actionPermits.outstanding;
+    const l = this.limits;
     return {
-      query: { running: this.inflight.Query.running, queued: 0 },
-      mutation: { running: this.inflight.Mutation.running, queued: 0 },
-      action: { ...p.Action },
-      nodeAction: { running: 0, queued: 0 },
-      httpAction: { ...p.HttpAction },
+      query: { ...l.query.outstanding },
+      mutation: { ...l.mutation.outstanding },
+      action: { ...l.action.outstanding },
+      nodeAction: { ...l.nodeAction.outstanding },
+      // HTTP actions share the action limiter, which reports as actions (Convex has no HTTP action gauge).
+      httpAction: { running: 0, queued: 0 },
     };
   }
 
@@ -688,6 +773,22 @@ export class Functions {
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
 
+  /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */
+  private meterCompletion(r: Running, c: Completion, tracked: boolean) {
+    this.usageMeter?.recordExecution({
+      udfType: c.udfType,
+      environment: c.environment,
+      executionTime: c.cachedResult ? 0 : c.executionTime,
+      userExecutionTime: c.userExecutionTime,
+      memoryMb: c.usageStats.memoryUsedMb,
+      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
+      dataEgressBytes: r.io.networkEgressBytes + r.io.storageReadBytes,
+      searchQueryBytes: c.usageStats.textIndexQueryBytes + c.usageStats.vectorIndexReadQueryBytes,
+      storageCalls: r.io.storageCalls,
+      tracked,
+    });
+  }
+
   private logCompletion(log: FunctionLog, r: Running, c: Completion, error?: unknown) {
     log.append(c);
     if (this.logManager?.active) this.streamCompletion(r, c, error);
@@ -700,20 +801,14 @@ export class Functions {
       executionTime: c.executionTime,
       ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
     });
-    this.usageMeter?.recordExecution({
-      udfType: c.udfType,
-      environment: c.environment,
-      executionTime: c.cachedResult ? 0 : c.executionTime,
-      userExecutionTime: c.userExecutionTime,
-      memoryMb: c.usageStats.memoryUsedMb,
-      databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
-    });
+    this.meterCompletion(r, c, true);
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
     const end = wallClock();
     const e = o.error;
-    const used = (r.tx as Tx | null)?.usage;
+    // A mutation's writes count once it committed (Convex meters them in `track_commit`).
+    const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
     const seconds = (end - r.start) / 1000;
     return {
       kind: "Completion",
@@ -725,8 +820,10 @@ export class Functions {
       caller: r.caller,
       parentExecutionId: r.parent?.executionId ?? null,
       executionTime: seconds,
-      // bunvex does not split user from system time in the log (DV-252).
-      userExecutionTime: seconds,
+      // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
+      // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
+      // Never above the wall time, which bunvex reads from a coarser clock.
+      userExecutionTime: r.timer ? Math.min(userTimeMs(r.timer as UserTimer) / 1000, seconds) : seconds,
       success: e === undefined ? (o.success ?? null) : null,
       // An attempt that lost an OCC conflict and runs again has no error, as Convex logs it before it fails
       // the outcome (only `occInfo` and `willRetry` tell it apart; STUDY-74).
@@ -734,12 +831,17 @@ export class Functions {
       requestId: r.requestId,
       executionId: r.executionId,
       usageStats: {
-        ...(used
-          ? usageStats(
-              { bytes: used.bytesRead, documents: used.documentsRead },
-              { bytes: used.bytesWritten, documents: used.documentsWritten },
-            )
-          : NO_USAGE),
+        ...(used ? usageStats(used) : NO_USAGE),
+        storageReadBytes: r.io.storageReadBytes,
+        storageWriteBytes: r.io.storageWriteBytes,
+        networkEgressBytes: r.io.networkEgressBytes,
+        // An action's vector searches (a transaction has none): Convex's v1 database egress includes their
+        // results, its v2 (`databaseIo*`) does not.
+        vectorIndexReadQueryBytes: r.io.vectorQueryBytes,
+        vectorIndexReadBytes: r.io.vectorReadBytes,
+        ...(r.io.vectorReadBytes > 0 && {
+          databaseReadBytes: (used?.readBytes ?? 0) + r.io.vectorReadBytes,
+        }),
         // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
         // cached query (STUDY-61).
         memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
@@ -771,13 +873,17 @@ export class Functions {
   fileStorage: FileStorage | null = null;
 
   /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
-  readonly actionPermits: ActionPermits;
+  /** How many functions of each kind run at once (STUDY-68). */
+  readonly limits: FunctionLimits;
+  /** The action limiter (STUDY-31), `limits.action`. */
+  readonly actionPermits: ConcurrencyLimiter;
 
   constructor(
     private engine: Engine,
-    opts: { actionPermits?: ActionPermits } = {},
+    opts: { actionPermits?: ConcurrencyLimiter; limits?: FunctionLimits } = {},
   ) {
-    this.actionPermits = opts.actionPermits ?? ActionPermits.fromEnv();
+    this.limits = opts.limits ?? functionLimitsFromEnv(process.env, opts.actionPermits ?? ActionPermits.fromEnv());
+    this.actionPermits = this.limits.action;
   }
 
   register(module: string, fns: Record<string, FunctionDef>) {
@@ -883,9 +989,13 @@ export class Functions {
    * it (Convex's rules and order: `ValidatedPathAndArgs` in crates/udf/src/validation.rs).
    */
   private checkArgs(f: FunctionDef, args: unknown): AnyArgs {
-    const a = args ?? {};
-    if (!isSimpleObject(a))
-      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+    // Without a validator, Convex hands the handler whatever came (a number, null); with one, the single
+    // argument must be an object (`check_args`).
+    const a = args === undefined ? {} : args;
+    if (f.args && !isSimpleObject(a))
+      throw ValidatorError.args(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
+      );
     // Convex measures the positional args array, `[args]` (`validate_udf_args_size`, crates/udf/src/helpers.rs).
     const size = valueSize([a as Value]);
     if (size > this.maxArgsSize)
@@ -894,7 +1004,7 @@ export class Functions {
       );
     if (f.args) {
       const msg = checkValue(f.args, a as Value, this.tableOf);
-      if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+      if (msg) throw ValidatorError.args(msg);
     }
     return a as AnyArgs;
   }
@@ -913,7 +1023,7 @@ export class Functions {
       );
     if (f.returns) {
       const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
-      if (msg) throw new Error(`ReturnsValidationError: ${msg}`);
+      if (msg) throw ValidatorError.returns(msg);
     }
     return value;
   }
@@ -944,8 +1054,9 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0));
-      return this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0));
+      // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
+      return this.limits.query.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
     };
   }
 
@@ -966,10 +1077,13 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(this.newTimer(), () => this.invoke(f, db, a, 0, job));
-      const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
-      checkDeadline(deadline);
-      return value;
+      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0, job));
+      // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
+      return this.limits.mutation.run(async () => {
+        const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
+        checkDeadline(deadline);
+        return value;
+      });
     });
   }
 
@@ -1035,8 +1149,10 @@ export class Functions {
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    return inHandleScope({ db, engine: this.engine }, () =>
-      (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+    return notAQuery(
+      inHandleScope({ db, engine: this.engine }, () =>
+        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+      ),
     );
   }
 
@@ -1240,13 +1356,29 @@ export class Functions {
     return `${module}.js:${fn}`;
   }
 
+  /**
+   * Arguments sent as an array of other than one (Convex's `UdfArgsJson`: each element an argument): a
+   * function with a validator refuses them (`check_args`), after its path resolves as the run's would; one
+   * without takes the first, as Convex's handler does (STUDY-67 H6).
+   */
+  checkArity(name: string, kind: FunctionDef["kind"], args: Value[], caller?: Caller): void {
+    if (args.length === 1 || isSystemPath(name)) return;
+    const f = this.fnLater(name, kind, true, caller)();
+    if (f.args)
+      throw ValidatorError.args(
+        `Expected to receive a single object as the function's argument. Instead received ${args.length} arguments: ${displayValue(args)}`,
+      );
+  }
+
   /** A system function's arguments, checked as Convex's validators. */
   private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
-    const a = args ?? {};
+    const a = args === undefined ? {} : args;
     if (!isSimpleObject(a))
-      throw new Error(`ArgumentValidationError: Arguments must be an object, got ${displayValue(a as Value)}.`);
+      throw ValidatorError.args(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
+      );
     const msg = checkValue(v.object(validators), a as Value, this.tableOf);
-    if (msg) throw new Error(`ArgumentValidationError: ${msg}`);
+    if (msg) throw ValidatorError.args(msg);
     return a as never;
   }
 
@@ -1280,7 +1412,10 @@ export class Functions {
     if (fromClient) this.systemAccess(n, q, "ViewData", caller);
     else if (!q) throw notFound(n);
     const a = this.systemArgs(args, q!.args);
-    return (db: Tx) => q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    return (db: Tx) => {
+      noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      return q!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    };
   }
 
   private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
@@ -1289,7 +1424,10 @@ export class Functions {
     if (fromClient) this.systemAccess(n, m, "WriteData", caller);
     else if (!m) throw notFound(n);
     const a = this.systemArgs(args, m!.args);
-    return (db: Tx) => m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    return (db: Tx) => {
+      noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      return m!.handler(db, a, { files: this.fileStorage, functions: this, caller });
+    };
   }
 
   /** A dashboard system query, in process (as the system: no key involved). */
@@ -1473,7 +1611,8 @@ export class Functions {
     name: string,
     args: unknown,
     caller?: Caller,
-    opts: { job?: string; internal?: boolean } = {},
+    /** `authError`: the calling action's token failed verification (an HTTP action's), passed on. */
+    opts: { job?: string; internal?: boolean; authError?: Error | null; waitForPermit?: boolean } = {},
   ): Promise<unknown> {
     return this.logged(
       "Action",
@@ -1482,12 +1621,16 @@ export class Functions {
       async () => {
         await this.failActionWhileNotRunning();
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-        const ctx = this.actionCtx(caller, null, opts.job, f);
+        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
-        return this.actionPermits.run(() =>
-          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then((r) =>
-            this.checkReturns(f, r),
-          ),
+        // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
+        const limiter = NODE_FUNCTIONS.has(f) ? this.limits.nodeAction : this.limits.action;
+        return limiter.run(
+          () =>
+            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then(
+              (r) => this.checkReturns(f, r),
+            ),
+          { wait: opts.waitForPermit === true },
         );
       },
       returned,
@@ -1498,7 +1641,8 @@ export class Functions {
 
   /**
    * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
-   * as in Convex): `getUserIdentity()` throws it, and the functions it calls run with no identity.
+   * as in Convex): `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity.
+   * The actions it calls get the error too, as Convex passes them the same identity (STUDY-66 §5).
    */
   private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
@@ -1514,13 +1658,13 @@ export class Functions {
       runMutation: async (n: FunctionRef, a?: unknown) =>
         this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
       runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true }),
+        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: makeScheduler(this, {
         engine: this.engine,
         job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
       }),
-      storage: this.fileStorage?.actionWriter() ?? noStorage,
+      storage: this.fileStorage?.actionWriter(storageMeter) ?? noStorage,
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
@@ -1531,11 +1675,22 @@ export class Functions {
         if (!Array.isArray(query.vector) || query.vector.length === 0)
           throw new Error("`vector` must be a non-empty Array in vectorSearch");
         const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
-        return this.engine.vectorSearch(tableName, indexName, {
-          vector: query.vector,
-          ...(query.limit === undefined ? {} : { limit: query.limit }),
-          ...(filter === undefined ? {} : { filter }),
-        });
+        const r = meteredAction();
+        const results = this.engine.vectorSearch(
+          tableName,
+          indexName,
+          {
+            vector: query.vector,
+            ...(query.limit === undefined ? {} : { limit: query.limit }),
+            ...(filter === undefined ? {} : { filter }),
+          },
+          (bytes) => {
+            if (r) r.io.vectorQueryBytes += bytes;
+          },
+        );
+        // Each result is Convex's vector egress: its id's 33 bytes and its 4-byte score.
+        if (r) r.io.vectorReadBytes += results.length * 37;
+        return results;
       },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx;
@@ -1559,10 +1714,9 @@ export class Functions {
       caller,
       async () => {
         await this.failActionWhileNotRunning();
-        return this.actionPermits.run(
-          async () =>
-            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
-          "HttpAction",
+        // HTTP actions share the action limiter, as in Convex.
+        return this.limits.action.run(async () =>
+          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
         );
       },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),

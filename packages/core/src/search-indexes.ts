@@ -4,6 +4,7 @@
 // after it undone from a short log — with its own pending writes on top, as Convex's memory index and
 // transaction overlay do.
 import { type IndexedDoc, type TextHit, TextIndex, type TextQuery, tokenize } from "@bunvex/search";
+import { keyBytesLength, type Value } from "@bunvex/values";
 import { OutOfRetentionError, type SearchDoc } from "./committer.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
 import { type Doc, fieldValue, type SearchIndexDef, type TableDef } from "./schema.ts";
@@ -63,13 +64,29 @@ export type SearchIndexEntry = {
 export function indexedDoc(def: SearchIndexDef, doc: Doc): IndexedDoc {
   const text = fieldValue(doc, def.searchField);
   const filters: Record<string, string> = {};
-  for (const f of def.filterFields) filters[f] = filterKey(fieldValue(doc, f));
+  let bytes = typeof text === "string" ? Buffer.byteLength(text) : 0;
+  for (const f of def.filterFields) {
+    filters[f] = filterKey(fieldValue(doc, f));
+    bytes += filterValueBytes(filters[f]);
+  }
   return {
     tokens: typeof text === "string" ? tokenize(text) : [],
     filters,
     creationTime: doc._creationTime as number,
+    bytes,
   };
 }
+
+/** `indexedDoc(def, doc).bytes` without tokenizing or encoding (a write's text index bytes, STUDY-71). */
+export function indexedDocBytes(def: SearchIndexDef, doc: Doc): number {
+  const text = fieldValue(doc, def.searchField);
+  let bytes = typeof text === "string" ? Buffer.byteLength(text) : 0;
+  for (const f of def.filterFields) bytes += Math.min(keyBytesLength([fieldValue(doc, f) as Value | undefined]), 32);
+  return bytes;
+}
+
+/** A filter value's stored bytes, as Convex's `FilterValue`: its sort key, or a 32-byte hash from 32 bytes on. */
+export const filterValueBytes = (key: string) => Math.min(key.length / 2, 32);
 
 export class SearchIndexes {
   private entries = new Map<string, SearchIndexEntry>();

@@ -31,7 +31,7 @@ export type LogLine = { level: LogLevel; messages: string[]; isTruncated: boolea
  * execution starts its own. `onLine` sees each line as it is logged (an action's lines stream out as
  * they come); `cached` is set when a cached query result answered it; `tx` is the transaction it ran in.
  */
-export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown };
+export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown; timer?: unknown };
 
 /**
  * The lines of one execution. A mutation re-run after a conflict replaces its previous attempt's lines (an

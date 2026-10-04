@@ -57,7 +57,13 @@ async function deployment() {
   stops.push(() => s.shutdown());
   const url = `http://127.0.0.1:${s.server.port}`;
   const query = async (path: string) =>
-    (await (await fetch(`${url}/api/query`, { method: "POST", body: JSON.stringify({ path, args: {} }) })).json()) as {
+    (await (
+      await fetch(`${url}/api/query`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args: {} }),
+      })
+    ).json()) as {
       status: string;
       value?: unknown;
     };
@@ -118,7 +124,9 @@ describe("bunvex dev", () => {
     expect(w.ready()).toBe(2);
     w.stop();
     expect(await w.done).toBe(0);
-  });
+    // 3 s of sleeps by design, two pushes (each `until` allows 10 s): 3.6 s in CI's coverage job, close to
+    // the default 5 s
+  }, 30_000);
 
   test("--until-success: an app error waits for the change that fixes it", async () => {
     const d = await deployment();

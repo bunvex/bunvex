@@ -5,7 +5,7 @@ import { BunvexError } from "@bunvex/values";
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi as convexApi } from "convex/server";
 import { ConvexError } from "convex/values";
-import { startServer, until } from "./harness.ts";
+import { renameFormat, startServer, until } from "./harness.ts";
 
 const api = anyApi;
 const cleanup: (() => unknown)[] = [];
@@ -38,6 +38,17 @@ describe("BunvexHttpClient", () => {
     await expect(http.query(api.messages.nope)).rejects.toThrow("Could not find public function for 'messages:nope'.");
   });
 
+  test("a path that does not parse is the server's 400, its code and reason as given (DV-312)", async () => {
+    const { http } = await setup();
+    const e = (await http.query("messages:li-st").catch((x) => x)) as Error;
+    expect(e).not.toBeInstanceOf(BunvexError);
+    expect(JSON.parse(e.message)).toEqual({
+      code: "BadBunvexFunctionIdentifier",
+      message:
+        "messages:li-st is not a valid path to a bunvex function. Identifier li-st has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
+    });
+  });
+
   test("mutations run one at a time, in order; skipQueue does not wait", async () => {
     const { h, http } = await setup();
     const open = h.gate("first");
@@ -68,6 +79,7 @@ describe("BunvexHttpClient", () => {
     expect(lines.flat().join(" ")).toContain("[BUNVEX M(messages:logged)] [LOG]");
     const r = await fetch(`${h.url}/api/query_at_ts`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "messages:count", args: [{}], ts: v1.encodeU64(2n ** 62n) }),
     });
     expect(r.status).toBe(400);
@@ -78,7 +90,11 @@ describe("BunvexHttpClient", () => {
 describe("the official ConvexHttpClient against bunvex", () => {
   test("query, mutation, consistentQuery and errors with data", async () => {
     const { h } = await setup();
-    const c = new ConvexHttpClient(h.url, { skipConvexDeploymentUrlCheck: true, logger: false });
+    const c = new ConvexHttpClient(h.url, {
+      skipConvexDeploymentUrlCheck: true,
+      logger: false,
+      fetch: renameFormat(globalThis.fetch),
+    });
     expect(await c.mutation(convexApi.messages.send, { body: "x" })).toBe("X");
     expect(await c.query(convexApi.messages.list, {})).toEqual(["x"]);
     expect(await c.consistentQuery(convexApi.messages.count, {})).toBe(1);
@@ -90,5 +106,13 @@ describe("the official ConvexHttpClient against bunvex", () => {
     }>;
     expect(e).toBeInstanceOf(ConvexError);
     expect(e.data).toEqual({ code: "nope", n: 7n });
+  });
+
+  test("as it is, it asks for Convex's format name, which bunvex refuses (DV-307)", async () => {
+    const { h } = await setup();
+    const c = new ConvexHttpClient(h.url, { skipConvexDeploymentUrlCheck: true, logger: false });
+    await expect(c.query(convexApi.messages.list, {})).rejects.toThrow(
+      "format param must be one of [`json`]. Got convex_encoded_json",
+    );
   });
 });

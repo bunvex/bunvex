@@ -78,7 +78,11 @@ async function setup(opts: { maxRetries?: number } = {}) {
   } as never;
   const api = `http://127.0.0.1:${s.server.port}`;
   const call = (kind: string, path: string, args: unknown = {}) =>
-    fetch(`${api}/api/${kind}`, { method: "POST", body: JSON.stringify({ path, args }) }).then((r) => r.json());
+    fetch(`${api}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args }),
+    }).then((r) => r.json());
   const of = (path: string) => events.filter((e) => e.function.path === path);
   const until = async <T>(f: () => T | undefined | false) => {
     for (let i = 0; i < 400; i++) {

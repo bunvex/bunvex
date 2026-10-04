@@ -18,6 +18,7 @@ import {
   type GenericValidator,
   isCommitTsPlaceholder,
   isSimpleObject,
+  keyBytesLength,
   MAX_COMMIT_TS,
   toJsonValue,
   type Value,
@@ -38,8 +39,8 @@ import {
 } from "./catalog.ts";
 import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
-import { type ExpressionOrValue, type FilterBuilder, filterBuilder, passes } from "./filter.ts";
+import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
   DanglingReferenceError,
@@ -48,18 +49,23 @@ import {
   type Persistence,
   type ScanDocs,
 } from "./persistence/index.ts";
+import { checkOps, MAX_QUERY_OPERATORS, Pipeline, type QueryOp, TOO_MANY_OPERATORS } from "./query-ops.ts";
 import {
   checkIdentifier,
   type Doc,
   type IndexDef,
   indexKey,
+  indexKeySize,
   indexKeyValues,
+  isReservedIndex,
   maintainedIndexes,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { filterKey, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
-import { SystemReader } from "./system-reader.ts";
+import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
+import { ProjectedQuery, SystemReader } from "./system-reader.ts";
+import { TableReader, TableWriter } from "./table-scope.ts";
+import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
 
@@ -172,7 +178,7 @@ export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
 export function formatBytes(n: number): string {
-  const units = ["B", "KiB", "MiB", "GiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let i = 0;
   let x = n;
   while (x >= 1024 && i < units.length - 1) {
@@ -198,7 +204,8 @@ type QState = {
   range: Range;
   desc: boolean;
   orderSet: boolean;
-  filters: ExpressionOrValue[];
+  /** The operators (`filter`, `limit`) in chain order (STUDY-66 §1). */
+  ops: QueryOp[];
   stage: "initializer" | "query";
   closed: boolean;
   iterated: boolean;
@@ -221,6 +228,8 @@ export type TxQuery = {
   fullTableScan(): TxQuery;
   order(dir: "asc" | "desc"): TxQuery;
   filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery;
+  /** Convex's `limit(n)` (internal in its published types): at most `n` documents from here on. */
+  limit(n: number): TxQuery;
   take(n: number): Promise<Doc[]>;
   first(): Promise<Doc | null>;
   unique(): Promise<Doc | null>;
@@ -362,6 +371,96 @@ export class Tx {
   /** Functions scheduled by this transaction and their arguments' bytes (`scheduled-jobs.ts`). */
   scheduledCount = 0;
   scheduledBytes = 0;
+  /** The index key bytes the user's reads were metered (STUDY-71), beside their documents' `bytesRead`. */
+  private keyBytesRead = 0;
+  /** The bytes this transaction's text searches were charged (STUDY-71). */
+  private textQueryBytes = 0;
+
+  /**
+   * One document handed out of a `get`, an index range or a search, as Convex's
+   * `ReadSet::record_read_document` (STUDY-71): a user table's document counts its size and one row toward
+   * the read limits (checked here, the count growing even when it throws) and the metered egress, plus its
+   * index key's bytes when a user-defined index returned it. A system table's is kept apart and never
+   * limited (Convex's `system_tx_size`).
+   */
+  private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
+    if (t.name.startsWith("_")) return;
+    this.docsRead++;
+    this.bytesRead += valueSize(doc as unknown as Value);
+    if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
+    if (this.systemTx) return;
+    if (this.docsRead > this.limits.documentsRead)
+      throw new Error(
+        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
+      );
+    if (this.bytesRead > this.limits.bytesRead)
+      throw new Error(
+        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
+      );
+  }
+
+  /**
+   * The database I/O Convex meters for this transaction (STUDY-71): what it read, and — once it committed —
+   * what it wrote, as Convex's `Committer::track_commit`: per written document of a user table one row, the
+   * index entries it changed (a delete's too), and the bytes of its new version and of each user-defined
+   * index entry it adds (`IndexKey::size`). A delete adds no bytes.
+   */
+  io(committed: boolean): {
+    readBytes: number;
+    readDocuments: number;
+    writeBytes: number;
+    writeDocuments: number;
+    writeIndexRows: number;
+    textQueryBytes: number;
+    textWriteBytes: number;
+    vectorWriteBytes: number;
+    vectorWriteQueryBytes: number;
+  } {
+    let writeBytes = 0;
+    let textWriteBytes = 0;
+    let vectorWriteBytes = 0;
+    let vectorWriteQueryBytes = 0;
+    let writeDocuments = 0;
+    let writeIndexRows = 0;
+    if (committed)
+      for (const { table: t, old, next } of this.writes.values()) {
+        if (t.name.startsWith("_") || (!old && !next)) continue;
+        writeDocuments++;
+        for (const ix of maintainedIndexes(t)) {
+          const oldKey = old && indexKey(ix, old);
+          const newKey = next && indexKey(ix, next);
+          writeIndexRows +=
+            oldKey && newKey && compareKeys(oldKey, newKey) === 0 ? 1 : (oldKey ? 1 : 0) + (newKey ? 1 : 0);
+          if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
+        }
+        if (!next) continue;
+        const size = valueSize(next as unknown as Value);
+        writeBytes += size;
+        // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
+        // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
+        // then the document's size once.
+        for (const e of this.searchIndexes?.forTablet(t.id) ?? []) textWriteBytes += indexedDocBytes(e.def, next);
+        let vectors = 0;
+        for (const e of this.vectorIndexes?.forTablet(t.id) ?? [])
+          if (inVectorIndex(e.def, next)) vectors += e.def.dimensions * 4 + 33;
+        if (vectors > 0) {
+          vectorWriteQueryBytes += vectors;
+          vectorWriteBytes += size;
+        }
+      }
+    return {
+      readBytes: this.bytesRead + this.keyBytesRead,
+      readDocuments: this.docsRead,
+      writeBytes,
+      writeDocuments,
+      writeIndexRows,
+      textQueryBytes: this.textQueryBytes,
+      textWriteBytes,
+      vectorWriteBytes,
+      vectorWriteQueryBytes,
+    };
+  }
+
   /** What has been read, written and scheduled so far, against the limits. */
   get usage(): TxLimits {
     return {
@@ -506,6 +605,14 @@ export class Tx {
   }
 
   /**
+   * Convex's `db.table(name)` (STUDY-66 §2): this database scoped to one table — a writer in a mutation, a
+   * reader in a query.
+   */
+  table(name: string): TableReader | TableWriter {
+    return this.writable ? new TableWriter(this, name) : new TableReader(this, name);
+  }
+
+  /**
    * A read of a table that does not exist yet: nothing, but the read depends on `_tables`, so a cached
    * query or a subscription re-runs when the table is created.
    */
@@ -619,21 +726,6 @@ export class Tx {
     this.uncountedReads++;
   }
 
-  /** Count one document read (its JSON), as Convex's `record_read_document`: the count grows even when it throws. */
-  private recordDoc(json: string) {
-    this.docsRead++;
-    this.bytesRead += json.length;
-    if (this.systemTx) return;
-    if (this.docsRead > this.limits.documentsRead)
-      throw new Error(
-        `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
-      );
-    if (this.bytesRead > this.limits.bytesRead)
-      throw new Error(
-        `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
-      );
-  }
-
   /**
    * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
    * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
@@ -699,14 +791,19 @@ export class Tx {
     this.countRowsRead(t.name, 1);
     const w = this.writes.get(id);
     // A copy: mutating what `get` returned must not change what this transaction wrote.
-    if (w) return w.next && structuredClone(w.next);
+    if (w) {
+      if (w.next) this.countEgress(t, w.next, null);
+      return w.next && structuredClone(w.next);
+    }
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
     this.retention?.check(this.snapshot);
-    if (json) this.recordDoc(json);
-    return json ? decodeDoc(json) : null;
+    if (!json) return null;
+    const doc = decodeDoc(json);
+    this.countEgress(t, doc, null);
+    return doc;
   }
 
   /**
@@ -723,7 +820,7 @@ export class Tx {
       range: FULL,
       desc: false,
       orderSet: false,
-      filters: [],
+      ops: [],
       stage: "initializer",
       closed: false,
       iterated: false,
@@ -743,7 +840,7 @@ export class Tx {
       range: FULL,
       desc: false,
       orderSet: false,
-      filters: [],
+      ops: [],
       stage: "initializer",
       closed: false,
       iterated: false,
@@ -806,18 +903,26 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async *iterate(st: QState): AsyncGenerator<Doc> {
+    const pipe = new Pipeline(st.ops);
+    if (pipe.done) return;
     if (st.search) {
       if (!st.t) return;
-      for await (const { doc } of this.searchDocs(st)) if (st.filters.every((f) => passes(f, doc))) yield doc;
+      for await (const { doc } of this.searchDocs(st)) {
+        if (pipe.offer(doc)) yield doc;
+        if (pipe.done) return;
+      }
       return;
     }
     if (!st.t || !st.ix) return;
     const reads = new ScanReads(this, st);
     for await (const d of this.stream(st)) {
       reads.reached(d);
-      if (!st.filters.every((f) => passes(f, d))) continue;
-      reads.handOut();
-      yield this.handOut(d);
+      if (pipe.offer(d)) {
+        reads.handOut();
+        yield this.handOut(d);
+      }
+      // A full limit: the scan stops at the document that filled it, which ends its read-set.
+      if (pipe.done) return;
     }
     reads.exhausted();
   }
@@ -851,7 +956,6 @@ export class Tx {
           throw e;
         }
       });
-      for (const j of rows) this.recordDoc(j);
       this.countRowsRead(t.name, rows.length);
       return rows.map(decodeDoc);
     }
@@ -861,7 +965,6 @@ export class Tx {
       const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
       // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
       if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
-      this.recordDoc(json);
       out.push(decodeDoc(json));
     }
     this.countRowsRead(t.name, out.length);
@@ -892,7 +995,10 @@ export class Tx {
     let n = 64;
     for (;;) {
       const docs = await this.page(st, lo, hi, n);
-      for (const d of docs) yield d;
+      for (const d of docs) {
+        this.countEgress(st.t!, d, st.ix!);
+        yield d;
+      }
       if (docs.length < n) return;
       const last = indexKey(st.ix!, docs[docs.length - 1]);
       if (st.desc) hi = last;
@@ -920,6 +1026,7 @@ export class Tx {
         "This query or mutation function ran multiple paginated queries. Only a single paginated query is supported in each function.",
       );
     this.paginated = true;
+    const pipe = new Pipeline(st.ops);
     const fp = queryFingerprint({
       tablet: st.t?.id ?? 0,
       index: st.ix?.id ?? 0,
@@ -934,6 +1041,13 @@ export class Tx {
     const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr ? decodeCursor(secret, endStr, fp) : null;
+    // As Convex's `read_page_from_query`: a limit of 0 never reads, so without an end cursor the page has no
+    // cursor at all, and Convex fails with a system error ("Cursor was None").
+    if (pipe.done && !end) {
+      const e = new QueryCursorError();
+      failExecution(e);
+      throw e;
+    }
     const done = (page: Doc[], pos: CursorPosition, status: PaginationResult["pageStatus"], split: string | null) => {
       const continueCursor = encodeCursor(secret, pos, fp);
       this.nextEndCursor = continueCursor;
@@ -949,9 +1063,8 @@ export class Tx {
       for await (const { doc, key } of this.searchDocs(st, start?.after)) {
         if (end && end !== "end" && compareKeys(key, end.after) > 0) break;
         last = key;
-        if (!st.filters.every((f) => passes(f, doc))) continue;
-        page.push(doc);
-        if (!end && page.length >= pageSize) {
+        if (pipe.offer(doc)) page.push(doc);
+        if ((!end && page.length >= pageSize) || pipe.done) {
           exhausted = false;
           break;
         }
@@ -999,7 +1112,7 @@ export class Tx {
       rowsRead++;
       bytesRead += valueSize(d as unknown as Value);
       last = indexKey(st.ix, d);
-      if (st.filters.every((f) => passes(f, d))) {
+      if (pipe.offer(d)) {
         page.push(this.handOut(d));
         keys.push(last);
         // As Convex: a full page stops without looking further, so its cursor is "after the last
@@ -1008,6 +1121,11 @@ export class Tx {
           exhausted = false;
           break;
         }
+      }
+      // A full limit ends the page as Convex's does: not done, the cursor after the last document read.
+      if (pipe.done) {
+        exhausted = false;
+        break;
       }
     }
     // Read-set: the range this page covers (to the end cursor, or to the last key read).
@@ -1034,14 +1152,23 @@ export class Tx {
     return this.systemTx ? 1_000_000 : this.limits.documentsRead - this.docsRead + 1;
   }
 
-  /** @internal (QueryImpl) */
-  async runQuery(st: QState, limit: number): Promise<Doc[]> {
-    if (st.search) return this.searchRun(st, limit);
+  /**
+   * @internal (QueryImpl) The query's results, its operators applied in order. `take`: `n` is the terminal's
+   * limit (`take(n)`, Convex's last operator); else `n` stops the scan early (a `collect()`'s read limit, not
+   * an operator of the query).
+   */
+  async runQuery(st: QState, n: number, take = false): Promise<Doc[]> {
+    const pipe = take ? new Pipeline(st.ops, n) : new Pipeline(st.ops);
+    const cap = take ? Number.POSITIVE_INFINITY : n;
+    if (st.search) return this.searchRun(st, pipe, cap);
     // As Convex's `limit` operator: `take(0)` never pulls from the scan, so it reads nothing.
-    if (limit <= 0 || !st.t || !st.ix) return [];
+    if (pipe.done || cap <= 0 || !st.t || !st.ix) return [];
     const reads = new ScanReads(this, st);
-    if (st.filters.length === 0) {
+    if (pipe.onlyLimits !== null) {
+      // Only limits: the smallest is the page size.
+      const limit = Math.min(pipe.onlyLimits, cap);
       const docs = await this.page(st, st.range.lo, st.range.hi, limit);
+      for (const d of docs) this.countEgress(st.t, d, st.ix);
       // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
       // one ran out of the range.
       if (docs.length < limit) reads.exhausted();
@@ -1051,15 +1178,19 @@ export class Tx {
       }
       return this.commitTs.size ? docs.map((d) => this.handOut(d)) : docs;
     }
-    // With filters: stream until `limit` documents pass (reads count toward the limits as they happen).
-    // Documents the filter drops were scanned all the same: they extend the read-set.
+    // With filters: stream until a limit is full (reads count toward the limits as they happen). Documents
+    // a filter drops were scanned all the same: they extend the read-set.
     const out: Doc[] = [];
+    let stopped = false;
     for await (const d of this.stream(st)) {
       reads.reached(d);
-      if (st.filters.every((f) => passes(f, d))) out.push(d);
-      if (out.length >= limit) break;
+      if (pipe.offer(d)) out.push(d);
+      if (pipe.done || out.length >= cap) {
+        stopped = true;
+        break;
+      }
     }
-    if (out.length < limit) reads.exhausted();
+    if (!stopped) reads.exhausted();
     else reads.handOut();
     return this.commitTs.size ? out.map((d) => this.handOut(d)) : out;
   }
@@ -1354,6 +1485,8 @@ export class Tx {
 
   /** The engine's search indexes (STUDY-45), for `withSearchIndex`. */
   searchIndexes: SearchIndexes | null = null;
+  /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
+  vectorIndexes: VectorIndexes | null = null;
   /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
   tableCount: ((tablet: number) => number) | null = null;
 
@@ -1439,6 +1572,9 @@ export class Tx {
     else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
     const pending = new Map<string, Doc | null>();
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
+    // Convex charges a search its whole index's bytes (DV-317: bunvex's indexed bytes for its segments');
+    // an empty search string, nothing.
+    if (text !== "" && !t.name.startsWith("_")) this.textQueryBytes += e.index.indexedBytes;
     const hits = this.searchIndexes!.search(e, { tokens, prefixLast: true, filters: eqs }, this.snapshot, pending);
     return { hits, full: hits.length >= MAX_CANDIDATE_REVISIONS };
   }
@@ -1455,13 +1591,12 @@ export class Tx {
     if (full) throw new Error(SCANNED_TOO_MANY);
   }
 
-  private async searchRun(st: QState, limit: number): Promise<Doc[]> {
+  private async searchRun(st: QState, pipe: Pipeline, cap: number): Promise<Doc[]> {
     const out: Doc[] = [];
-    if (limit <= 0 || !st.t) return out;
+    if (pipe.done || cap <= 0 || !st.t) return out;
     for await (const { doc } of this.searchDocs(st)) {
-      if (!st.filters.every((f) => passes(f, doc))) continue;
-      out.push(doc);
-      if (out.length >= limit) break;
+      if (pipe.offer(doc)) out.push(doc);
+      if (pipe.done || out.length >= cap) break;
     }
     return out;
   }
@@ -1619,6 +1754,18 @@ export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) 
 const reusedError = () => new Error("This query has been chained with another operator and can't be reused.");
 
 /**
+ * Convex's "Cursor was None" (crates/isolate/src/environment/udf/async_syscall.rs, `read_page_from_query`):
+ * `paginate` over a `limit(0)` never reads, so it has no cursor to return. Convex raises it without error
+ * metadata, a system error: the client gets the internal-error message, and the function cannot catch it.
+ */
+export class QueryCursorError extends Error {
+  constructor() {
+    super("Cursor was None. This should be impossible if `.next` was called on the query.");
+    this.name = "QueryCursorError";
+  }
+}
+
+/**
  * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
  * allocated per query: this is the hot path of every read).
  */
@@ -1662,6 +1809,14 @@ export class SearchFilterBuilder {
   }
 }
 
+/**
+ * Whether `value` is a query object (`db.query(…)` and its operators, `db.system.query(…)`): what Convex's
+ * `validateReturnValue` refuses as a function's result (STUDY-66 §3).
+ */
+export function isQueryObject(value: unknown): boolean {
+  return value instanceof QueryImpl || value instanceof ProjectedQuery;
+}
+
 class QueryImpl implements TxQuery {
   constructor(
     private readonly tx: Tx,
@@ -1674,15 +1829,24 @@ class QueryImpl implements TxQuery {
     if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
     if (st.closed) throw reusedError();
     st.closed = true;
-    const next: QState = { ...st, filters: [...st.filters], closed: false, iterated: false, stage: "query" };
+    const next: QState = { ...st, ops: [...st.ops], closed: false, iterated: false, stage: "query" };
     change(next);
     return new QueryImpl(this.tx, this.table, next);
   }
 
-  private results(limit: number) {
+  /**
+   * Run the query to its end: `take(n)` (and `first`, `unique`) adds its limit as Convex's (`limit(n).collect()`),
+   * then the start's checks (Convex's backend parses the query here).
+   */
+  private results(take: number | null): Promise<Doc[]> {
     if (this.st.closed || this.st.iterated) throw reusedError();
     this.st.closed = true;
-    return this.tx.runQuery(this.st, limit);
+    try {
+      checkOps(this.st.ops, "queryStream", take !== null);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return take === null ? this.tx.runQuery(this.st, this.tx.collectLimit()) : this.tx.runQuery(this.st, take, true);
   }
 
   private onlyInitializer(what: string) {
@@ -1729,7 +1893,17 @@ class QueryImpl implements TxQuery {
   filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
     if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
     return this.chain((n) => {
-      n.filters.push(predicate(filterBuilder));
+      // Convex checks on the client, in `filter` only; `limit` and the start count too (`checkOps`).
+      if (n.ops.length >= MAX_QUERY_OPERATORS) throw new Error(TOO_MANY_OPERATORS);
+      n.ops.push({ filter: predicate(filterBuilder) });
+    });
+  }
+
+  /** Convex's `limit(n)`: `n` is checked when the query starts, as its backend does. */
+  limit(n: number): TxQuery {
+    if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `limit`");
+    return this.chain((next) => {
+      next.ops.push({ limit: n });
     });
   }
 
@@ -1755,19 +1929,24 @@ class QueryImpl implements TxQuery {
   collect(): Promise<Doc[]> {
     // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
     // enough to raise Convex's error).
-    return this.results(this.tx.collectLimit());
+    return this.results(null);
   }
 
   paginate(opts: PaginationOptions): Promise<PaginationResult> {
     if (this.st.closed || this.st.iterated) throw reusedError();
     this.st.closed = true;
-    return this.tx.paginate(this.table, this.st, opts);
+    return (async () => {
+      checkOps(this.st.ops, "queryPage");
+      return this.tx.paginate(this.table, this.st, opts);
+    })();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<Doc> {
     if (this.st.iterated) throw new Error("Iteration can only begin on a query once.");
     if (this.st.closed) throw reusedError();
     this.st.iterated = true;
+    // Convex starts the stream here, synchronously: its checks throw from this call.
+    checkOps(this.st.ops, "queryStream");
     return this.tx.iterate(this.st);
   }
 }
