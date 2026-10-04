@@ -1,0 +1,25 @@
+{
+  "name": "bunvex-example-nextjs-app-router",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Next.js App Router: a counter preloaded by a Server Component, then live in a Client Component.",
+  "type": "module",
+  "scripts": {
+    "dev": "bunvex dev --start 'next dev'",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "bunvex": "workspace:*",
+    "next": "16.3.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "bunvex-examples-harness": "workspace:*",
+    "typescript": "^5.9.0"
+  }
+}

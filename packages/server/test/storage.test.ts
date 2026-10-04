@@ -4,9 +4,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
-import { v } from "@bunvex/values";
+import { type GenericId, v } from "@bunvex/values";
 import { type RequestDestination, setCanonicalUrl } from "../src/canonical-urls.ts";
-import { action, Functions, mutation, query } from "../src/functions.ts";
+import { action, Functions, mutation, query, type StorageActionWriter } from "../src/functions.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
 import { FileStorage } from "../src/storage.ts";
@@ -16,6 +16,12 @@ const stops: (() => unknown)[] = [];
 afterEach(async () => {
   for (const s of stops.splice(0).reverse()) await s();
 });
+
+// Types (checked by the typecheck): an action's `ctx.storage.store()` resolves to `Id<"_storage">`, as Convex's,
+// so the id passes to a `v.id("_storage")` argument as is.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+const check = <T extends true>(_: T) => {};
+check<Equal<Awaited<ReturnType<StorageActionWriter["store"]>>, GenericId<"_storage">>>(true);
 
 const sha256b64 = (s: string) => Buffer.from(new Bun.CryptoHasher("sha256").update(s).digest()).toString("base64");
 const msg = async (p: Promise<unknown>) =>
@@ -71,6 +77,12 @@ async function setup(opts: { maxRequestBodySize?: number } = {}) {
     path: "/echo",
     method: "POST",
     handler: httpAction(async (_ctx, req) => new Response(await req.text())),
+  });
+  // Store the request's body (Convex's file-storage-with-HTTP pattern): the blob carries its Content-Type.
+  http.route({
+    path: "/store",
+    method: "POST",
+    handler: httpAction(async (ctx, req) => new Response(await ctx.storage.store(await req.blob()))),
   });
   const server = createServer({
     engine,
@@ -338,6 +350,19 @@ describe("ctx.storage", () => {
     const id = await storeText("served by http");
     expect(await (await fetch(`${server.siteUrl}/file?id=${id}`)).text()).toBe("served by http");
     expect((await fetch(`${server.siteUrl}/file?id=${crypto.randomUUID()}`)).status).toBe(404);
+  });
+
+  test("an HTTP action storing `await request.blob()` keeps the request's Content-Type, and serves it back", async () => {
+    const { functions, server } = await setup();
+    const r = await fetch(`${server.siteUrl}/store`, {
+      method: "POST",
+      headers: { "content-type": "image/png" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    const id = await r.text();
+    expect(((await functions.runQuery("m:doc", { id })) as { contentType: unknown }).contentType).toBe("image/png");
+    const served = await fetch(`${server.siteUrl}/file?id=${id}`);
+    expect(served.headers.get("content-type")).toBe("image/png");
   });
 });
 

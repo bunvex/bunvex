@@ -69,6 +69,36 @@ function io(cwd: string, env: Record<string, string | undefined> = {}) {
   return { it, out, err };
 }
 
+/** A source map's segments: generated line and column, source index, original line and column. */
+function segments(mappings: string): number[][] {
+  const out: number[][] = [];
+  const acc = [0, 0, 0, 0];
+  mappings.split(";").forEach((group, line) => {
+    let genCol = 0;
+    for (const seg of group.split(",").filter(Boolean)) {
+      const f: number[] = [];
+      let value = 0;
+      let shift = 0;
+      for (const c of seg) {
+        const d = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".indexOf(c);
+        value += (d & 31) << shift;
+        shift += 5;
+        if (d & 32) continue;
+        f.push(value & 1 ? -(value >> 1) : value >> 1);
+        value = 0;
+        shift = 0;
+      }
+      genCol += f[0]!;
+      if (f.length < 4) continue;
+      acc[1]! += f[1]!;
+      acc[2]! += f[2]!;
+      acc[3]! += f[3]!;
+      out.push([line, genCol, acc[1]!, acc[2]!, acc[3]!]);
+    }
+  });
+  return out;
+}
+
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
@@ -283,6 +313,99 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     expect(b.modules.some((m) => m.path.startsWith("_deps/"))).toBe(true); // lib/format shared by two modules
     expect(b.modules.every((m) => !m.source.startsWith("// @bun"))).toBe(true);
     expect(b.modules.find((m) => m.path === "messages.js")?.sourceMap).toBeDefined();
+    // Each source map still matches its module once the `// @bun` line is dropped (the server reads the
+    // functions' positions from it, STUDY-65 M5): a string literal is at the same place in both.
+    let checked = 0;
+    for (const m of b.modules.filter((x) => x.sourceMap)) {
+      const map = JSON.parse(m.sourceMap!) as { mappings: string; sourcesContent: string[] };
+      const lines = m.source.split("\n");
+      const strings = segments(map.mappings).filter(([l, c]) => lines[l!]?.[c!] === '"');
+      checked += strings.length;
+      for (const [l, c, src, sl, sc] of strings) {
+        const original = map.sourcesContent[src!]!.split("\n")[sl!]!.slice(sc!, sc! + 6);
+        expect([m.path, lines[l!]!.slice(c!, c! + 6)]).toEqual([m.path, original]);
+      }
+    }
+    expect(checked).toBeGreaterThan(3);
+  });
+
+  test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-83)', async () => {
+    const d = await deployment();
+    const app = tmp();
+    // The real package throws outside React server components: the stub must win over it.
+    write(app, {
+      "node_modules/server-only/package.json": JSON.stringify({ name: "server-only", main: "index.js" }),
+      "node_modules/server-only/index.js": `throw new Error("This module cannot be imported from a Client Component module.");`,
+      "bunvex/guarded.ts": `import "server-only";
+import { query } from ${JSON.stringify(SERVER)};
+import { secret } from "./lib/secret";
+export const read = query(async () => secret());`,
+      "bunvex/lib/secret.ts": `import "server-only";
+export const secret = () => "kept on the server";`,
+      "bunvex/maths.ts": `import { query } from ${JSON.stringify(SERVER)};
+import addModule from "./add.wasm";
+export const add = query(async (_ctx, { a, b }: { a: number; b: number }) =>
+  (new WebAssembly.Instance(addModule).exports.add as (a: number, b: number) => number)(a, b));
+export const isModule = query(async () => addModule instanceof WebAssembly.Module);`,
+    });
+    // (module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))
+    writeFileSync(
+      join(app, "bunvex/add.wasm"),
+      Uint8Array.from([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09, 0x01, 0x07, 0x00, 0x20,
+        0x00, 0x20, 0x01, 0x6a, 0x0b,
+      ]),
+    );
+    const b = await bundleFunctions(join(app, "bunvex"));
+    expect(b.modules.map((m) => m.source).join("\n")).not.toContain("Client Component");
+    write(app, { ".env.local": `BUNVEX_SELF_HOSTED_URL=${d.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY="${KEY}"\n` });
+    const r = io(app);
+    expect(await main(["deploy", "--typecheck=disable"], r.it)).toBe(0);
+    expect((await d.call("query", "guarded:read")).value).toBe("kept on the server");
+    expect((await d.call("query", "maths:isModule")).value).toBe(true);
+    expect((await d.call("query", "maths:add", { a: 2, b: 40 })).value).toBe(42);
+  });
+
+  test("--cmd runs first, with the deployment's URLs in the framework's variables; a failure stops the deploy (STUDY-81)", async () => {
+    const d = await deployment();
+    const urls = (await (
+      await fetch(`${d.url}/api/v1/get_canonical_urls`, { headers: { authorization: `Bunvex ${KEY}` } })
+    ).json()) as { bunvexCloudUrl: string; bunvexSiteUrl: string };
+    const app = tmp();
+    write(app, APP);
+    write(app, {
+      "package.json": JSON.stringify({ dependencies: { vite: "^7.0.0" } }),
+      ".env.local": `BUNVEX_SELF_HOSTED_URL=${d.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY="${KEY}"\n`,
+    });
+    const deployWith = async (...args: string[]) => {
+      const r = io(app);
+      return { code: await main(["deploy", "--typecheck=disable", ...args], r.it), ...r };
+    };
+    // A dry run says what it would run, and runs nothing.
+    const dry = await deployWith("--dry-run", "--cmd", "echo ran > ran.txt");
+    expect(dry.code).toBe(0);
+    expect(dry.err).toContain(
+      `Running 'echo ran > ran.txt' with environment variables "VITE_BUNVEX_URL" and "VITE_BUNVEX_SITE_URL" set... [dry run]`,
+    );
+    expect(dry.out[0]).toBe(
+      `✔ Would have run "echo ran > ran.txt" with environment variables "VITE_BUNVEX_URL" and "VITE_BUNVEX_SITE_URL" set`,
+    );
+    expect(existsSync(join(app, "ran.txt"))).toBe(false);
+    // A failing command: nothing is pushed.
+    const failed = await deployWith("--cmd", "exit 3");
+    expect(failed.code).toBe(1);
+    expect(failed.err).toContain("bunvex deploy: 'exit 3' failed");
+    expect((await d.call("query", "messages:list")).status).toBe("error");
+    // The build sees the URLs, in the framework's variables or the one asked for; then the push.
+    const ok = await deployWith("--cmd", 'printf "%s %s" "$VITE_BUNVEX_URL" "$VITE_BUNVEX_SITE_URL" > urls.txt');
+    expect(ok.code).toBe(0);
+    expect(readFileSync(join(app, "urls.txt"), "utf8")).toBe(`${urls.bunvexCloudUrl} ${urls.bunvexSiteUrl}`);
+    expect(ok.out.at(-1)).toBe(`✔ Deployed functions to ${d.url}`);
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+    const named = await deployWith("--cmd", 'printf "%s" "$MY_URL" > mine.txt', "--cmd-url-env-var-name", "MY_URL");
+    expect(named.code).toBe(0);
+    expect(readFileSync(join(app, "mine.txt"), "utf8")).toBe(urls.bunvexCloudUrl);
   });
 
   test("a push sends only the changed modules (Convex's partitionModulesByChanges)", () => {

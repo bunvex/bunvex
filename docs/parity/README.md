@@ -6,13 +6,13 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 206 | 10 | 23 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 136 | 10 | 14 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 136 | 49 | 61 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 222 | 8 | 13 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 156 | 5 | 4 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 185 | 39 | 27 |
 
-These counts were taken on 2026-10-03 (main at #245; server-api.md rechecked against the code) from each row's status column: a row counts as done,
-partial or missing by the word its status starts with. A few rows have no single status and are not
-counted.
+These counts were recounted on 2026-10-04 (with #370–#385) from each row's status column: a row counts as done,
+partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
+are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
 
 ## How to use it
 
@@ -148,8 +148,11 @@ divergences and cloud-only items are not gaps.
 
 2. **Action timeout:** none (Convex: 1800 s for V8 actions, 600 s for Node). A hung action runs forever and
    holds one of the 64 action permits.
-3. **Search and vector indexes after a restart:** while they rebuild (DV-227, DV-270), their queries fail
-   with `IndexBackfillingError`; Convex skips them and the client retries (client-sync, the temporarily-unavailable features row).
+3. **Search and vector indexes after a restart:** while they rebuild (DV-227, DV-270), their queries now get
+   Convex's bootstrapping answer and sync skips and retries them (STUDY-79). What is left is the window's
+   length: the whole table (about 20 µs a document) where Convex replays only the writes since its last
+   segment. **Planned (owner, 2026-10-04, STUDY-79 §6):** option D, a snapshot of the in-memory indexes at a
+   clean shutdown, loaded at start with the log replayed since; then persisted segments (E).
 4. **Bundling `server-only` (and wasm):** shared code importing `server-only`, common in Next.js apps,
    fails to bundle (platform §14).
 5. **Auth helpers:** no Convex Auth (`@convex-dev/auth`) or WorkOS AuthKit equivalent (platform §1).

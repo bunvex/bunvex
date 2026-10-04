@@ -106,12 +106,20 @@ to a spec.
 | [STUDY-72](STUDY-72-table-summary-checkpoints.md) | Table summary checkpoints: the `table_summary_v2` global, Convex's worker pacing, a restore from the document log (DV-300) | implemented; C1 accepted as recommended (owner, 2026-10-03), DV-318 |
 | [STUDY-73](STUDY-73-storage-usage-gauges.md) | Storage usage gauges: the hourly `current_storage_usage` event, the 1 TiB export limit on files | implemented; G1 accepted as recommended (owner, 2026-10-03), DV-317 extended |
 | [STUDY-74](STUDY-74-function-execution-fields.md) | The `function_execution` fields DV-305 left out: `run_reason` of sync reruns, `scheduler_info`, arguments' bytes, retry counts, the mutation queue | implemented; F1 accepted as recommended (owner, 2026-10-03), DV-320 |
+| [STUDY-80](STUDY-80-outbound-requests.md) | Outbound requests: the schemes and options an action's `fetch` takes, the SSRF proxy (`--convex-http-proxy`), what goes through it | PR 1 (#377), PR 2 (#379) and P1 (#381; DV-325 decided: C, owner, 2026-10-04) implemented |
 | [STUDY-76](STUDY-76-limit-warnings.md) | Approaching-limit warnings: WARN system lines past 80 % of a limit, for queries, mutations, actions, HTTP actions and system functions | implemented; DV-323 resolved in the next PR (owner, 2026-10-04) |
 | [STUDY-75](STUDY-75-sync-cache-hit-logs.md) | A sync query served from another session's run logs a cache hit, as Convex's query cache | implemented, no divergence |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
 | [STUDY-55](STUDY-55-react-query.md) | TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up |
+| [STUDY-91](STUDY-91-isomorphic-server.md) | `bunvex/server` in a browser bundle and in Node, as `convex/server`: the builders moved to `builders.ts`, an isomorphic entry under the non-`bun` conditions | implemented; no divergence (the owner chose full parity, 2026-10-04) |
+| [STUDY-82](STUDY-82-log-audit.md) | The `log` export: `log.audit(body)` and `log.vars`, audit log lines, their limits and the `custom_audit` topic | implemented |
+| [STUDY-81](STUDY-81-deploy-cmd.md) | `bunvex deploy --cmd` and `--cmd-url-env-var-name`: a build command run first with the deployment's URLs, as Convex's `runCommand` | implemented |
+| [STUDY-83](STUDY-83-bundling-server-only-and-wasm.md) | Bundling `import "server-only"` (an empty module) and `.wasm` imports (a `WebAssembly.Module`), as Convex's bundler plugins | implemented |
+| [STUDY-79](STUDY-79-search-index-bootstrapping.md) | Search and vector indexes while they are rebuilt after a start: Convex's bootstrapping answer, the sync skip and retry; options for the window | implemented; window decided (owner, 2026-10-04: A now, D planned) |
+| [STUDY-78](STUDY-78-write-throughput-limit.md) | The write throughput limit: 4 MiB/s per deployment, `TooManyWrites`, who waits and who fails | implemented |
+| [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler | implemented |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

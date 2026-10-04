@@ -1,0 +1,26 @@
+{
+  /* How bunvex typechecks the functions in this directory (`bunvex deploy`, `bunvex codegen`).
+   * You can change it, but bunvex needs the settings in the second group.
+   */
+  "compilerOptions": {
+    /* Settings bunvex does not need: change them freely. */
+    "allowJs": true,
+    "strict": true,
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* Settings bunvex needs. */
+    "target": "ESNext",
+    "lib": ["ES2023", "dom"],
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "isolatedModules": true,
+    "noEmit": true,
+    /* bunvex's packages are TypeScript sources, which import each other by `.ts` paths. */
+    "allowImportingTsExtensions": true
+  },
+  "include": ["./**/*"],
+  "exclude": ["./_generated"]
+}
