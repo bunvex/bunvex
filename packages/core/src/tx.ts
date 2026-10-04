@@ -34,6 +34,7 @@ import {
   type IndexMeta,
   IndexStagedError,
   planCatalog,
+  searchIndexesUnavailable,
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
@@ -41,6 +42,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
   DanglingReferenceError,
@@ -195,7 +197,7 @@ export const TRANSACTION_MAX_READ_SET_INTERVALS = 4096;
 /** Convex's TRANSACTION_MAX_NUM_SCHEDULED and TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES. */
 export const TRANSACTION_MAX_NUM_SCHEDULED = 1000;
 export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
-const OVER_LIMIT_HELP =
+export const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
 type QState = {
@@ -373,6 +375,26 @@ export class Tx {
   scheduledBytes = 0;
   /** The index key bytes the user's reads were metered (STUDY-71), beside their documents' `bytesRead`. */
   private keyBytesRead = 0;
+  /** The largest single scheduled function's arguments (Convex's `max_args_size`, a limit warning's). */
+  scheduledMaxBytes = 0;
+
+  /**
+   * The largest and the most nested document this transaction writes (Convex's `biggest_document_writes`, for
+   * the limit warnings, STUDY-76): over its final versions in user tables; none when it writes nothing.
+   */
+  biggestWrites(): { maxSize: [string, number]; maxNesting: [string, number] } | null {
+    let maxSize: [string, number] | null = null;
+    let maxNesting: [string, number] | null = null;
+    for (const [id, { table, next, measured }] of this.writes) {
+      if (!next || table.name.startsWith("_")) continue;
+      // Measured when it was written (the write limits' check), else now.
+      const size = measured?.size ?? valueSize(next as unknown as Value);
+      const nesting = measured?.nesting ?? valueNesting(next as unknown as Value);
+      if (!maxSize || size > maxSize[1]) maxSize = [id, size];
+      if (!maxNesting || nesting > maxNesting[1]) maxNesting = [id, nesting];
+    }
+    return maxSize && maxNesting ? { maxSize, maxNesting } : null;
+  }
   /** The bytes this transaction's text searches were charged (STUDY-71). */
   private textQueryBytes = 0;
 
@@ -473,7 +495,10 @@ export class Tx {
       scheduledFunctionArgsBytes: this.scheduledBytes,
     };
   }
-  private writes = new Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>();
+  private writes = new Map<
+    string,
+    { table: TableDef; old: Doc | null; next: Doc | null; measured?: { size: number; nesting: number } }
+  >();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
   /**
@@ -1248,7 +1273,8 @@ export class Tx {
   }
 
   /** Convex's per-document and per-transaction write limits (crates/common/src/document.rs, knobs.rs). */
-  private checkWriteLimits(next: Doc | null) {
+  private checkWriteLimits(next: Doc | null): { size: number; nesting: number } | undefined {
+    let measured: { size: number; nesting: number } | undefined;
     if (next) {
       const v = next as unknown as Value;
       const nesting = valueNesting(v);
@@ -1260,6 +1286,7 @@ export class Tx {
       if (size > MAX_USER_SIZE)
         throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
       this.bytesWritten += size;
+      measured = { size, nesting };
     }
     this.docsWritten++;
     if (this.docsWritten > this.limits.documentsWritten)
@@ -1268,6 +1295,7 @@ export class Tx {
       throw new Error(
         `Too many bytes written in a single function execution (limit: ${formatBytes(this.limits.bytesWritten)})`,
       );
+    return measured;
   }
 
   /** Validators of the declared tables' documents; set by the engine for mutations (STUDY-14). */
@@ -1289,7 +1317,7 @@ export class Tx {
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
-    if (!t.name.startsWith("_")) this.checkWriteLimits(next);
+    const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
     if (dv) {
       const msg = checkValue(
@@ -1325,7 +1353,7 @@ export class Tx {
       if (curKey && (!newKey || compareKeys(curKey, newKey) !== 0)) tree.set(curKey, null);
       if (newKey && next) tree.set(newKey, next);
     }
-    this.writes.set(id, { table: t, old: prev ? prev.old : old, next });
+    this.writes.set(id, { table: t, old: prev ? prev.old : old, next, ...(measured ? { measured } : {}) });
   }
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
@@ -1534,8 +1562,21 @@ export class Tx {
         throw new Error(`Index ${label} is not a search index`);
       throw new Error(`Index ${label} not found.`);
     }
+    // An empty search string finds nothing, whatever the index's state (Convex's `Search::is_empty`, checked
+    // before the index is): no read, no charge.
+    const searchFilter = spec.filters.find((f) => f.type === "Search");
+    if (searchFilter?.value === "") return { hits: [], full: false };
     if (e.staged) throw new IndexStagedError(label);
-    if (!e.ready) throw new IndexBackfillingError(label);
+    if (!e.ready) {
+      if (!e.bootstrapping) throw new IndexBackfillingError(label);
+      // Rebuilding after a start (STUDY-79): a search with no terms still finds nothing (Convex skips empty
+      // compiled queries before its bootstrapping check); any other is Convex's system error, which the
+      // function cannot catch.
+      if (searchFilter && tokenize(searchFilter.value).length === 0) return { hits: [], full: false };
+      const unavailable = searchIndexesUnavailable();
+      failExecution(unavailable);
+      throw unavailable;
+    }
     let text: string | undefined;
     const eqs: [string, string][] = [];
     for (const f of spec.filters) {
@@ -1950,3 +1991,6 @@ class QueryImpl implements TxQuery {
     return this.tx.iterate(this.st);
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(Tx, QueryImpl, ScanReads);

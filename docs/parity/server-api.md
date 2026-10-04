@@ -61,7 +61,7 @@ Key bunvex facts behind the statuses:
 | Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | done (#40) | Reusing or rechaining throws Convex's "This query has been chained with another operator and can't be reused."; iteration only once. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | done (STUDY-66) | Convex's message, for the top-level result of a query or mutation (`db.query` and its operators, `db.system.query`), before `returns` is checked. |
-| `.count()` (internal, not public) | impl/query_impl.ts | missing | Low priority. |
+| `.count()` (internal, not public) | impl/query_impl.ts | partial | The engine's count exists, for system functions only (`Tx.countTable`, `tableSize`); not on the query builder (Convex's `1.0/count`). |
 | `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | done (STUDY-45) | `SearchFilterBuilder` (`search` then `eq`s, single use), Convex's checks of the index and filters; the index is in memory, rebuilt at start (DV-227, DV-228). |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | done (STUDY-45) | BM25 ranking in relevance order, `order()` refused; the last term also matches as a prefix (DV-231). Reactive, with Convex's search read set (DV-230). |
 | Search limits: 16 query terms, 32-char term max, ≤8 filter conditions, ≤1024 results | crates/search/src/constants.rs | done (STUDY-45) | 16 query terms, tokens of 32+ bytes dropped (DV-229), ≤8 `eq` conditions, ≤1024 candidates ("Search query scanned too many documents"). |
@@ -77,7 +77,7 @@ Key bunvex facts behind the statuses:
 | `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts | done (#42) | See STUDY-17 §4. |
 | Only one paginated query per query or mutation (`MultiplePaginatedDatabaseQueries`) | async_syscall.rs | done (#42) | A second `paginate()` in one function throws Convex's message. |
-| `paginate()` isn't supported inside components | async_syscall.rs | missing | Components are phase 4. |
+| `paginate()` isn't supported inside components | async_syscall.rs | missing (DV-55) | Nothing to enforce until components exist (STUDY-62). |
 | `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | done (#42) | See STUDY-17 §4. |
 
 ### 4. Database writer: `ctx.db` in mutations
@@ -108,7 +108,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | `query`, `mutation`, `action` (public) | impl/registration_impl.ts | done (#25) | A handler, or `{ args, returns, handler }`; args typed from the validators. |
 | `internalQuery`, `internalMutation`, `internalAction` | impl/registration_impl.ts | done (#25) | |
-| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | |
+| Object form `{ args, returns, handler }` | server/registration.ts (`ValidatedFunction`) | done (#25) | `returns` is checked for queries, mutations and actions (a mutation that fails it writes nothing), extra object fields included, with Convex's `ReturnsValidationError` (`server/test/returns-validation.test.ts`, STUDY-65 G-A10). |
 | `args` validation (an object of validators, or `v.object`), with extra fields rejected | impl/registration_impl.ts (`exportArgs`); runtime in crates | done (#25) | As Convex's `check_args` (STUDY-67 H6): the error is the message alone (no `Uncaught`, no frames, two trailing newlines), for a caller function too; a validated function refuses a non-object (`Instead received: 5.0`) and, over HTTP, an `args` array of other than one; a function without a validator gets whatever came. Over the sync protocol, extra array elements are still dropped. |
 | `returns` validation | impl/registration_impl.ts (`exportReturns`) | done (#25) | An object of validators is `v.object` of them, as for `args` (STUDY-36). Its error is Convex's `ReturnsValidationError: …` alone, no `Uncaught`, no frames (STUDY-67 H6). |
 | Args are always a single object (defaults to `{}`) | server/registration.ts | done | `args ?? {}`. |
@@ -128,9 +128,9 @@ Key bunvex facts behind the statuses:
 | QueryCtx `{ db, auth, storage (reader), runQuery, meta }` | server/registration.ts | done | `db`, `auth`, `storage`, `runQuery` (STUDY-41), `meta` (STUDY-44). |
 | MutationCtx `{ db, auth, storage (writer), scheduler, runQuery, runMutation, meta }` | server/registration.ts | done | `db`, `auth`, `storage`, `scheduler`, `runQuery`, `runMutation` (STUDY-41), `meta` (STUDY-44). |
 | ActionCtx `{ runQuery, runMutation, runAction, scheduler, auth, storage (action writer), vectorSearch, meta }` | server/registration.ts | done | `runQuery`, `runMutation`, `runAction` (by reference or name, internal ones included), `auth`, `scheduler`, `storage`, `vectorSearch` (STUDY-51), `meta` (STUDY-44). |
-| `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | done (STUDY-41) | In the caller's transaction (its writes, identity, time; reads joining its read set), after the path, kind and arguments are checked with Convex's messages; internal functions allowed; returns checked after; errors catchable, as Convex's `JsError` display ("Uncaught Error: …" and the nested frames; `BunvexError` data kept), a store failure not catchable (DV-205, DV-209 resolved). Nested calls from one function run one at a time (DV-207). |
+| `ctx.runQuery` from a query or mutation: same transaction, with validation | impl/registration_impl.ts | done (STUDY-41) | In the caller's transaction (its writes, identity, time; reads joining its read set), after the path, kind and arguments are checked with Convex's messages; internal functions allowed; returns checked after; errors catchable, as Convex's `JsError` display ("Uncaught Error: …" and the nested frames; `BunvexError` data kept), a store failure not catchable (DV-205, DV-209 resolved). Nested calls from one function run one at a time (DV-207). The result crosses a JSON boundary, as Convex's: a copy, `null` for `undefined`, `undefined` fields dropped, fields sorted, and a non-value fails (`server/test/nested-results.test.ts`). |
 | `ctx.runMutation` from a mutation: a sub-transaction that rolls back if it throws | impl/registration_impl.ts | done (STUDY-41) | `Tx.begin` / `rollback` (copy-on-write index trees): a failed nested mutation's writes and created tables are undone, its reads kept; the caller may catch and commit. A failed returns check keeps the writes, as Convex. |
-| `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Each its own transaction; by reference or name, internal functions allowed. |
+| `ctx.runQuery` / `ctx.runMutation` from an action: each is its own transaction | impl/actions_impl.ts | done | Each its own transaction; by reference or name, internal functions allowed. Results (and `runAction`'s) as Convex's `jsonToConvex`: a copy, `null` for `undefined`. |
 | `ctx.runAction` from an action | impl/actions_impl.ts | done (STUDY-31) | By reference or name; internal functions allowed. |
 | `runQuery` option `useStaleSnapshot` (mutations only) | server/registration.ts (`AdvancedRunQueryOptions`) | done (STUDY-41) | A query at the transaction's snapshot, without its pending writes, its reads discarded; refused from a query with Convex's message. |
 | `transactionLimits` option on `runQuery` / `runMutation` (bytesRead, documentsRead/Written, databaseQueries, functionsScheduled, files…) | server/meta.ts, registration.ts | done (STUDY-41) | Documents and bytes read and written, database queries (read-set intervals), functions scheduled and their argument bytes, as Convex (usage so far plus the budget, never above the current limit; restored after; scheduling usage not given back by a rollback, as Convex). The file limits are accepted and never reached, as in Convex, which does not count them (DV-206 resolved). |
@@ -140,7 +140,7 @@ Key bunvex facts behind the statuses:
 | `ctx.meta.getDeploymentMetadata()` | server/meta.ts | done (STUDY-44) | As self-hosted Convex: the instance name, `region: null`, `class: "s16"`. |
 | `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | done (STUDY-44) | Mutations and actions (HTTP actions too), not queries; `ip` the first `x-forwarded-for` entry else the connection's address, over HTTP and the sync protocol; a new request id per call, shared with the functions it calls; a scheduled function's id down its call tree; the user's raw token (null for an admin key). |
 | `ctx.meta.getSnapshotTs()` (bigint, on the same clock as commitTs) | server/meta.ts; isolate syscall.rs | done (STUDY-44) | The snapshot in nanoseconds, synchronous, shared with nested calls; it makes a query time-dependent, as `Date.now()`. `commitTs` is STUDY-53. |
-| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); no bootstrap retries (DV-271). |
+| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); `VectorIndexesUnavailable` while rebuilt after a start, as Convex (STUDY-79; DV-271 resolved). |
 
 ### 7. Deterministic runtime and execution environment
 
@@ -154,7 +154,7 @@ Key bunvex facts behind the statuses:
 | Actions run with the real globals (`fetch`, timers) | isolate/src/environment/action | done | |
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | partial (STUDY-35) | Deployed code runs in one `vm` context per code version (DV-164): its own globals and deterministic `Date`/`Math`, imports limited to `bunvex/*` and the bundle (Node builtins only in `"use node"`), freed when superseded. Not a security boundary; no heap cap. Module state lasts the version (DV-165). |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | done (STUDY-37) | Pushed code reads the deployment's variables, each read in the read set; see [platform §env](platform.md). Managed over HTTP; the CLI's `bunvex env` comes next. |
-| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Cached query results carry no lines (STUDY-20 D2). |
+| `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Engine objects (`ctx.db`, a query, `ctx.db.system`, a table scope) print as `Name {…}`, never their state (STUDY-20 D9, DV-321). Cached query results carry no lines (STUDY-20 D2). |
 | `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | done (STUDY-82) | `log` from `bunvex/server`: Convex's body checks (`$` keys, unknown variables), a query's or mutation's lines (nested calls' included) resolved when it ends and sent as `custom_audit` events, Convex's limits (500 lines, 100 KB a line, 4 MB in all, 4 MB held; HTTP 400 with the code), refused in actions. `log.vars.bunvexActor` for `convexActor` (DV-03), null on a self-hosted deployment. No sink can subscribe to `custom_audit` without an entitlement, as Convex self-hosted (DV-304). A cached query's hit does not replay its lines (unobservable until a sink can take them). |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | done (STUDY-35) | **Divergence (DV-87, DV-169):** the directive is accepted and those modules run in Bun itself, with Node builtins; Convex's rules for them enforced (only actions; not `http`, `crons`). No separate Node action timeout (§19). |
@@ -195,7 +195,7 @@ Key bunvex facts behind the statuses:
 | Only plain objects allowed (class instances rejected) | values/value.ts (`isSimpleObject`) | done (#21) | Class instances, `Map` and `Set` refused ("… is not a supported value type", Convex's message structure without "Convex"). The message names a class instance (`Point {…}`) without opening it (DV-316, decided by the owner 2026-10-03). |
 | Wire encoding `convexToJson` / `jsonToConvex` (`$integer`, `$bytes`, `$float`) | values/value.ts | done (#21) | As `toJsonValue` / `fromJsonValue` (no "convex" in bunvex's public names). |
 | `Id<T>` / `GenericId` branded string type | values/value.ts | done (STUDY-36) | `GenericId<T>` in `@bunvex/values`; `v.id(t)` infers it; `_generated/dataModel` names it `Id<T>` (codegen PR). |
-| `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | partial (#21) | `compareValues` and `valueSize` (Convex's `getConvexSize`) are exported by `@bunvex/values`; `getDocumentSize` and `Base64` are missing. |
+| `compareValues`, `getConvexSize`, `getDocumentSize`, `Base64` utilities | values/compare.ts, size.ts, base64.ts | partial (#21) | `compareValues` and `valueSize` (Convex's `getConvexSize`) are exported by `@bunvex/values`; `getDocumentSize` and `Base64` are missing, and so is the name `getConvexSize` (an import of it fails). |
 | `ConvexError(data)`: `data` is any Convex value and reaches the client as `errorData` | values/errors.ts; registration_impl.ts | done (STUDY-20) | As `BunvexError` (owner's decision). HTTP `errorData`, WebSocket `d`. |
 
 ### 9. Value ordering (index order and filter comparisons)
@@ -239,9 +239,9 @@ Key bunvex facts behind the statuses:
 | Pushing a schema validates existing documents against it | crates/model / schema worker | done (STUDY-35) | A pushed schema is pending until existing documents are checked: the first that does not match fails the push, named as Convex's; writes meanwhile fail the pending schema. |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | done (STUDY-29) | In the background, as Convex: a worker, `backfilling` → `backfilled` → `enabled`, checkpoints and resume (DV-54 resolved; DV-126, DV-127). |
 | Table names: identifier ≤64, starts with a letter, `[A-Za-z0-9_]`; `_` prefix reserved | sync_types/identifier.rs; index_validation_error.rs | done (#6) | Convex's identifier rule; a leading `_` is reserved for system tables. |
-| Index names: identifier; not `by_id` / `by_creation_time` / `_`-prefixed; unique per table | index_validation_error.rs | done (#6) | |
-| Index fields: ≥1 field, ≤16 fields, unique, no `_id` / `_creationTime`, no `_`-prefixed fields | index_validation_error.rs; bootstrap_model/index/mod.rs | partial (#10) | Every check exists, in `.index()`, but with bunvex's messages, not Convex's (e.g. "has more than 16 fields" for "Indexes may have up to 16 fields."). |
-| No two indexes with identical fields on a table | index_validation_error.rs | partial (STUDY-45, STUDY-51) | Checked for search indexes (same `searchField` and filter fields) and vector indexes, with Convex's messages; not for database indexes. |
+| Index names: identifier; not `by_id` / `by_creation_time` / `_`-prefixed; unique per table | index_validation_error.rs | done (#6) | Reserved and repeated names of database indexes fail in `defineSchema` with Convex's messages, naming the table (STUDY-65 M1). |
+| Index fields: ≥1 field, ≤16 fields, unique, no `_id` / `_creationTime`, no `_`-prefixed fields | index_validation_error.rs; bootstrap_model/index/mod.rs | done (STUDY-65 M1) | In `defineSchema`, in Convex's order and with its messages (`IndexFieldsContainId`, `IndexFieldsContainCreationTime` without its docs link, `IndexFieldNameReserved`, `FieldsNotUniqueWithinIndex`, `IndexTooManyFields`, `EmptyIndex`). As Convex, 16 fields are refused too: `_creationTime` is appended before the last count. |
+| No two indexes with identical fields on a table | index_validation_error.rs | done (STUDY-45, STUDY-51, STUDY-65 M1) | Checked for search indexes (same `searchField` and filter fields), vector indexes and database indexes (staged ones included), with Convex's messages. |
 | ≤64 indexes per table (`MAX_INDEXES_PER_TABLE`) and ≤10,000 tables | common/src/schemas/mod.rs; database/src/bootstrap_model/table.rs | partial (STUDY-45) | ≤64 indexes per table (database, search and vector together) checked in `defineSchema`; no 10,000-table limit. |
 | Vector dimensions between 2 and 4096; ≤16 filter fields for search and vector indexes | common/src/bootstrap_model/index | done (STUDY-45, STUDY-51) | 2–4096 dimensions, ≤16 filter fields, with Convex's messages. |
 | `DataModelFromSchemaDefinition` typed data model | server/schema.ts | done (STUDY-36) | Each table's document (system fields on every union branch; `v.any()` tables are `any`), field paths (nested object fields dotted, not into arrays or records) and indexes (`_creationTime` appended, plus `by_id` / `by_creation_time`); `defineTable` / `.index` / `defineSchema` keep their types. The typed database is `database-types.ts`. |
@@ -298,7 +298,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | done (STUDY-31) | Served on `/http/*` and the site port. |
+| `httpAction(async (ctx, request) => Response)` with an ActionCtx | impl/registration_impl.ts (`httpActionGeneric`) | done (STUDY-31) | Served on `/http/*` and the site port. A handler whose client went away runs to the end (its writes commit); before the head, its Completion fails with "Client disconnected", as Convex's (STUDY-65 G-A11). Not yet: the `[INFO] Client disconnected` line when the client leaves while the body streams. |
 | `httpRouter()` + `http.route({ path, method, handler })` in `http.ts` | server/router.ts | done (STUDY-31) | The default export of the pushed `http.ts` (STUDY-35), or `createServer({ http })` (H1, DV-143). |
 | `http.route({ pathPrefix: "/x/", … })` prefix routes, longest prefix wins | server/router.ts | done (STUDY-31) | |
 | Methods GET / POST / PUT / DELETE / OPTIONS / PATCH; HEAD maps to GET | server/router.ts (`normalizeMethod`) | done (STUDY-31) | |
@@ -310,10 +310,10 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | missing | |
-| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing | |
-| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing | |
-| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing | New. |
+| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
+| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
+| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing (DV-55, DV-174) | `components` is generated as `{}` until components exist (STUDY-62). |
+| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |
 | Isolated per-component tables, functions and data | crates (component registry) | missing | |
 
@@ -341,8 +341,9 @@ Key bunvex facts behind the statuses:
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | done (#12) | 4096, Convex's message. |
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
 | Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | done (STUDY-41) | User time is wall time minus the time awaiting the store and nested calls (each nested call has its own budget); Convex's message ("Function execution timed out (maximum duration: 1s)"), not catchable, a mutation commits nothing; the 15 s system budget with Convex's message; `DATABASE_UDF_USER_TIMEOUT_SECONDS` / `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS`. Checked at store calls and at the end: a synchronous loop that never reaches the store is not interrupted (DV-208). |
-| Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
-| Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | missing | |
+| Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | done (STUDY-77) | Same knobs and messages; awaited calls count; after it, `ctx` calls and `fetch` are refused and in-flight fetches aborted. |
+| The `N unawaited operations: [...]` warning for an action's pending calls when it ends or times out | isolate/src/environment/action/mod.rs (`add_warnings_to_log_lines`) | missing | STUDY-77 A3. |
+| Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | n/a (DV-164) | No isolates: deployed code runs in `vm` contexts in the server's process. |
 | Log lines ≤ 256 per execution, ≤ 32 KiB each | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | See §7. |
 | Scheduling: 1000 per transaction, 4 MiB per job, 16 MiB total | knobs.rs | done (STUDY-30) | 1000 per transaction and 16 MiB total enforced; the 4 MiB per job is only a warning in Convex, and bunvex does not warn yet. |
 | Files per transaction: 10 read / 10 written, 16 MiB each way | knobs.rs | done (STUDY-32) | As Convex: declared but never enforced, so none here (§13). |
@@ -356,7 +357,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 213 |
-| partial | 9 |
-| missing | 18 |
+| done | 218 |
+| partial | 8 |
+| missing | 13 |
+| n/a (a decided divergence) | 1 |
 | **total** | **240** |

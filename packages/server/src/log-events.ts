@@ -91,6 +91,8 @@ export type StructuredLogEvent =
   | { topic: "scheduler_stats"; lagSeconds: number; numRunningJobs: number }
   | { topic: "scheduled_job_lag"; lagSeconds: number }
   | ({ topic: "current_storage_usage" } & StorageUsage)
+  /** A file download over HTTP, once it ended or the client left: the bytes actually sent. */
+  | { topic: "storage_api_bandwidth"; storageId: string; egressBytes: number }
   | {
       topic: "concurrency_stats";
       query: Concurrency;
@@ -175,7 +177,7 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         log_level: ev.line.level,
         message: ev.line.messages.join(" "),
         is_truncated: ev.line.isTruncated,
-        system_code: null,
+        system_code: ev.line.systemCode ?? null,
       };
     case "function_execution": {
       const u = ev.usage;
@@ -273,6 +275,8 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         total_backup_storage_bytes: ev.backupBytes,
         total_system_table_document_size_bytes: ev.systemTableDocumentBytes,
       };
+    case "storage_api_bandwidth":
+      return { timestamp: ms, topic: "storage_api_bandwidth", storage_id: ev.storageId, egress_bytes: ev.egressBytes };
     case "concurrency_stats":
       return {
         timestamp: ms,

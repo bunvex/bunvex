@@ -10,6 +10,7 @@
 // built when missing, as `indexes_by_ts`); prunes are `ts <= X` per key, Convex's SQLite statements;
 // globals are `persistence_globals` rows.
 import { Database } from "bun:sqlite";
+import { opaqueToInspect } from "../inspect.ts";
 import type {
   DocLogRow,
   DocPrune,
@@ -356,3 +357,6 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lock = null;
   }
 }
+
+// Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
+opaqueToInspect(SqlitePersistence);
