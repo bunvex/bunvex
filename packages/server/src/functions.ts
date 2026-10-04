@@ -51,6 +51,15 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  actionTimeoutError,
+  checkActionAlive,
+  cutOffWithAction,
+  NODE_ACTION_USER_TIMEOUT_MS,
+  nodeActionTimeoutError,
+  V8_ACTION_USER_TIMEOUT_MS,
+  withActionTimeout,
+} from "./action-timeout.ts";
+import {
   type AdminKeyIdentity,
   allows,
   BadDeployKeyError,
@@ -108,6 +117,15 @@ const registryKey = (name: string) => {
   const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
 };
+
+/** A duration knob in seconds from the environment (Convex's `env_config`), in ms; else `fallbackMs`. */
+function secondsKnob(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallbackMs;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name}: not a positive number of seconds: ${raw}`);
+  return n * 1000;
+}
 
 /** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
 export const MAX_NESTED_CALL_DEPTH = 8;
@@ -647,6 +665,9 @@ export class Functions {
       }
     }
     const res = await withOwner(r, run);
+    // Its lines end with it: an action cut off by its timeout (STUDY-77) logs nothing more, as Convex's
+    // terminated isolate.
+    r.onLine = null;
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
     if (!o.skip) {
@@ -1124,6 +1145,9 @@ export class Functions {
   userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
   systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
   private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs);
+  /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
+  actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS);
+  nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS);
 
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
@@ -1624,12 +1648,18 @@ export class Functions {
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
-        const limiter = NODE_FUNCTIONS.has(f) ? this.limits.nodeAction : this.limits.action;
+        const node = NODE_FUNCTIONS.has(f);
+        const limiter = node ? this.limits.nodeAction : this.limits.action;
+        // The timeout runs from when the action holds its permit (STUDY-77).
+        const ms = node ? this.nodeActionTimeoutMs : this.actionTimeoutMs;
+        const timeout = node
+          ? () => nodeActionTimeoutError(registryKey(name).slice(registryKey(name).lastIndexOf(":") + 1), ms)
+          : () => actionTimeoutError(ms);
         return limiter.run(
           () =>
-            this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))).then(
-              (r) => this.checkReturns(f, r),
-            ),
+            withActionTimeout(ms, timeout, () =>
+              this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))),
+            ).then((r) => this.checkReturns(f, r)),
           { wait: opts.waitForPermit === true },
         );
       },
@@ -1653,19 +1683,29 @@ export class Functions {
           return copy(identity);
         },
       },
-      runQuery: async (n: FunctionRef, a?: unknown) =>
-        this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
-      runMutation: async (n: FunctionRef, a?: unknown) =>
-        this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
-      runAction: async (n: FunctionRef, a?: unknown) =>
-        this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
+      // Once the action timed out, nothing it calls starts (STUDY-77).
+      runQuery: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller);
+      },
+      runMutation: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller);
+      },
+      runAction: async (n: FunctionRef, a?: unknown) => {
+        checkActionAlive();
+        return this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError });
+      },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
-      scheduler: makeScheduler(this, {
-        engine: this.engine,
-        job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
-      }),
-      storage: this.fileStorage?.actionWriter(storageMeter) ?? noStorage,
+      scheduler: cutOffWithAction(
+        makeScheduler(this, {
+          engine: this.engine,
+          job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+        }),
+      ),
+      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+        checkActionAlive();
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
         const argNames = ["tableName", "indexName", "query"];
@@ -1714,9 +1754,14 @@ export class Functions {
       caller,
       async () => {
         await this.failActionWhileNotRunning();
-        // HTTP actions share the action limiter, as in Convex.
+        // HTTP actions share the action limiter and the action timeout, as in Convex.
+        const ms = this.actionTimeoutMs;
         return this.limits.action.run(async () =>
-          this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+          withActionTimeout(
+            ms,
+            () => actionTimeoutError(ms),
+            () => this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+          ),
         );
       },
       (r) => (r instanceof Response ? { success: { status: String(r.status) } } : {}),

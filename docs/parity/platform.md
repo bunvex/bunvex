@@ -158,7 +158,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `"use node"` directive and a separate runtime for those modules | `npm/convex/bundler`; `crates/node_executor`; `npm-packages/node-executor` | missing | **Divergence (owner, 2026-10-01, DV-87):** the directive is accepted and those modules run in Bun itself, which has the Node APIs; no separate Node runtime. |
 | Only actions allowed in "use node" files; not allowed in http, crons, schema or auth.config | `node_executor/executor.rs`; `bundler/index.ts` `mustBeIsolate` | missing | An app written for Convex expects these errors. |
 | `node.externalPackages` (installed server-side, `_external_deps_packages`) | `bundler/external.ts`; `crates/model/external_packages` | missing | |
-| Node action timeout 600 s vs V8 action 1800 s | knobs `NODE_ACTION_USER_TIMEOUT_SECS`, `V8_ACTION_USER_TIMEOUT_SECS` | missing | bunvex actions have no timeout at all. |
+| Node action timeout 600 s vs V8 action 1800 s | knobs `NODE_ACTION_USER_TIMEOUT_SECS`, `V8_ACTION_USER_TIMEOUT_SECS` | done (STUDY-77) | Same knobs and messages (`Function execution timed out (maximum duration: 1800s)`; ``Action `name` execution timed out (maximum duration 600s)``), from when the action holds its permit, awaited calls included. The cut-off handler can no longer call `ctx` or `fetch` (STUDY-77 A1, as STUDY-41 N5). |
 
 ### 10. Environment variables
 
@@ -391,7 +391,7 @@ bunvex enforces almost none of these. Matching them matters so an app that works
 | Bytes read per transaction | 16 MiB (`TRANSACTION_MAX_READ_SIZE_BYTES`) | done (#12; STUDY-71) | Documents' sizes (Convex's `Size`), not their JSON. |
 | Read-set intervals | 4096, warning at 3072 (`TRANSACTION_MAX_READ_SET_INTERVALS`) | partial (#12) | The limit and its error; the warning is not emitted. |
 | Query / mutation user time | 1 s (`DATABASE_UDF_USER_TIMEOUT_SECONDS`); syscall time 15 s | missing | bunvex has no timeouts. |
-| Action timeout | V8 1800 s (docs say 10 min for cloud); Node 600 s | missing | |
+| Action timeout | V8 1800 s (docs say 10 min for cloud); Node 600 s | done (STUDY-77) | Convex's knobs and messages; a user error (caller, function log, a `failed` scheduled job, an HTTP action's 500); the permit freed; nothing the action started runs further. |
 | Arguments / return value size | 16 MiB each (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64) | Same knobs. |
 | Document size / nesting | 1 MiB / 16 (`crates/common/document.rs`) | missing | |
 | Object fields / array length | 1024 / 8192 (`crates/value`) | missing | |

@@ -131,6 +131,7 @@ export {
   runImportPhase,
   SYSTEM_TIMEOUT_MESSAGE,
   setFetchMeter,
+  setFetchSignal,
   type UserTimer,
   userTimeMs,
   wallClock,
