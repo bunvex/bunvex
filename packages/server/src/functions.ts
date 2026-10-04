@@ -15,6 +15,7 @@ import {
   notRunningMessage,
   OccError,
   observeTime,
+  outsideExecution,
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -72,6 +73,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
+import { collectingAuditLines, resolveAuditLines } from "./log-audit.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
@@ -1054,7 +1056,7 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0));
+      const run = () => this.withAudit(db, () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0)));
       // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
       return this.limits.query.run(async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
     };
@@ -1077,7 +1079,8 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       const env = await this.txEnv(db);
-      const run = () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0, job));
+      const run = () =>
+        this.withAudit(db, () => withUserTimer(timed(this.newTimer()), () => this.invoke(f, db, a, 0, job)));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => {
         const value = this.checkReturns(f, await (env ? withEnv(env, run) : run()));
@@ -1085,6 +1088,41 @@ export class Functions {
         return value;
       });
     });
+  }
+
+  /**
+   * Run a top-level query or mutation (one attempt) collecting its `log.audit` lines (STUDY-82); when it ends,
+   * whether it succeeded or not, they are resolved with the request's variables and sent to the log streams
+   * as `custom_audit` events, as Convex's function runner does. Over the limits, the run fails with that.
+   */
+  private async withAudit<T>(db: Tx, fn: () => Promise<T>): Promise<T> {
+    const { lines, result } = collectingAuditLines(fn);
+    let value: T;
+    try {
+      value = await result;
+    } catch (e) {
+      if (lines.lines.length) this.emitAudit(lines, db);
+      throw e;
+    }
+    if (lines.lines.length) this.emitAudit(lines, db);
+    return value;
+  }
+
+  private emitAudit(lines: Parameters<typeof resolveAuditLines>[0], db: Tx) {
+    const request = db.request;
+    const now = wallClock();
+    const bodies = resolveAuditLines(lines, {
+      requestId: request?.requestId ?? "",
+      ip: request?.ip ?? null,
+      userAgent: request?.userAgent ?? null,
+      now: Math.floor(now),
+      // Convex's `convex_actor_var`: a member's or an access token's; a self-hosted admin key is neither.
+      bunvexActor: null,
+    });
+    if (this.logManager?.active)
+      outsideExecution(() =>
+        this.logManager!.send(bodies.map((body) => ({ timestamp: now, event: { topic: "custom_audit", body } }))),
+      );
   }
 
   /**

@@ -86,6 +86,8 @@ export type StructuredLogEvent =
       runtime: "default" | "node";
     }
   | { topic: "audit_log"; action: string; metadata: unknown }
+  /** A function's `log.audit` line, its variables resolved (STUDY-82). */
+  | { topic: "custom_audit"; body: unknown }
   | { topic: "scheduler_stats"; lagSeconds: number; numRunningJobs: number }
   | { topic: "scheduled_job_lag"; lagSeconds: number }
   | ({ topic: "current_storage_usage" } & StorageUsage)
@@ -248,6 +250,8 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         audit_log_action: ev.action,
         audit_log_metadata: JSON.stringify(ev.metadata),
       };
+    case "custom_audit":
+      return { timestamp: ms, topic: "custom_audit", body: ev.body };
     case "scheduler_stats":
       return {
         topic: "scheduler_stats",

@@ -79,6 +79,7 @@ import {
   UDF_POST_WITH_COMPONENT,
   UDF_POST_WITH_TS,
 } from "./json-body.ts";
+import { AuditLogLimitError } from "./log-audit.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -519,6 +520,8 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // Audit log lines over Convex's limits (STUDY-82): a bad request, as Convex's `resolve_bodies`.
+    if (!r.ok && r.error instanceof AuditLogLimitError) return requestError(400, r.error.code, r.error.message);
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
     if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
       return requestError(429, r.error.code, r.error.message);
