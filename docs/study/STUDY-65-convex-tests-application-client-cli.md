@@ -75,7 +75,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `scheduled_jobs.rs` `test_scheduled_jobs_race_condition`, `cron_jobs.rs` `test_cron_jobs_race_condition` | a job canceled (a cron deleted) after the executor picked it is not run | `unchanged()` in `server/src/scheduler.ts` and `cron-executor.ts` | gap (G-A6) |
 | `scheduled_jobs.rs` `test_disable_scheduled_jobs`, `cron_jobs.rs` `test_disable_cron_jobs` | a *disabled* backend runs no jobs or crons, then resumes | `isStopped` (`core/src/backend-state.ts`); only *paused* is tested | gap (G-A7) |
 | `cron_jobs.rs` `test_cron_occ_gets_logged`, `scheduled_jobs.rs` OCC logging | a lost OCC attempt of a cron or scheduled mutation is in the function log | tested for a client mutation only (`function-log.test.ts`) | gap (G-A8) |
-| `storage.rs` `test_storage_get_url`, `test_storage_generate_upload_url` | user `getUrl` (query, action) and `generateUploadUrl` (mutation, action) follow the canonical cloud URL | only a system mutation is tested (`audit-log.test.ts`) | gap (G-A4) |
+| `storage.rs` `test_storage_get_url`, `test_storage_generate_upload_url` | user `getUrl` (query, action) and `generateUploadUrl` (mutation, action) follow the canonical cloud URL | `server/test/storage.test.ts`: all four, the site URL ignored, unset, and a subscribed `getUrl` re-run on a change | covered (G-A4, #PR) |
 | `storage.rs` `test_storage_api_bandwidth_log_events` | one bandwidth event per download, with the bytes actually streamed | the event is never emitted; egress counts `content-length` | n/a (DV-309 covers metering) — M3 |
 | `returns_validation.rs` `test_action_bad_output`, `test_mutation_extra_fields` | an action's bad return, an extra field in a returned object | `server/src/functions.ts` `checkReturns` | gap (G-A10) |
 | `http_action.rs` disconnect before head / while streaming / continues after | the action finishes and its writes commit; the log records the disconnect | the signal is tested, not the commit nor the log line | gap (G-A11), M4 |
@@ -176,7 +176,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 4 | F2 repeated names in an env batch | the dashboard's rename and swap fail | `core/src/environment-variables.ts` | S | #278 |
 | 5 | G-C8, G-C24, G-C25, G-C26: pause/resume of the query set, outstanding state after a restart, optimistic stacking, incomplete requests | a duplicate Add or an Add+Remove is a base-version mismatch, a fatal client error; wrong rollback order is wrong UI | `client/src/{local-state,optimistic-updates,request-manager}.ts` | S | #282 |
 | 6 | G-C23 backoff reset only after a real resync | thundering-herd reconnects, or a backoff that never resets | `client/src/web-socket-manager.ts`, `local-state.ts` | M | |
-| 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | |
+| 7 | G-A4 canonical URL in user `getUrl` / `generateUploadUrl` | wrong file URLs behind a proxy | `server/src/storage.ts` | S | #PR (tests; bunvex matched) |
 | 8 | G-A6 executor races (a job canceled, a cron deleted after pickup) | exactly-once | `server/src/scheduler.ts`, `cron-executor.ts` | S | |
 | 9 | G-C17, G-C16 `insertAtPosition`, `insertAtTop` | an optimistic item flickers or lands on the wrong page | `react/src/use-paginated-query.ts` | S | |
 | 10 | G-C2–G-C7 auth races | wrongly signed out, or a socket never restarted | `client/src/authentication-manager.ts` | M | |
