@@ -677,6 +677,8 @@ export class SyncHub {
         hash: "",
         identityObserved: false,
         generation,
+        // A session that joined this run logs it as the failure it was (STUDY-75).
+        logged: { lines: [], returnBytes: null, error: failure },
       };
     // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
     // fails with it; STUDY-20 D8).
