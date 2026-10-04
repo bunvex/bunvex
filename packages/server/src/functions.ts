@@ -370,7 +370,23 @@ function sizeOfResult(value: unknown): number {
 const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
 
 /** A caller with who runs the call, for the function log (STUDY-47); `HttpApi` when unset. */
-export type SourcedCaller = Caller & { source?: CallerName };
+export type SourcedCaller = Caller & {
+  source?: CallerName;
+  /** A sync query's reason to run (Convex's `QueryInvocation`): its first run, a data or an identity change. */
+  runReason?: RunReason;
+  /** A WebSocket mutation's queue: the mutations waiting before it when it arrived (Convex's). */
+  mutationQueueLength?: number;
+  /**
+   * The failed attempts of the job this run belongs to, counted across its loop's runs (a scheduled or cron
+   * mutation retried after an OCC conflict escaped the engine's retries): Convex counts every attempt.
+   */
+  retries?: { n: number };
+  /** Its caller runs it again when it loses an OCC conflict (the scheduler's and crons' loops): `willRetry`. */
+  retriesOcc?: boolean;
+};
+
+/** Convex's `function_args_bytes`: the length of the arguments' JSON array, as the client sent it. */
+const argsBytesOf = (args: unknown) => JSON.stringify([toJsonValue((args ?? {}) as Value)]).length;
 
 /** What a logged execution's result tells the log. `skip`: nothing ran (a replayed session request). */
 type Outcome = { returnBytes?: number | null; success?: { status: string } | null; error?: unknown; skip?: boolean };
@@ -489,6 +505,8 @@ export class Functions {
     outcome?: (value: T) => Outcome,
     /** An HTTP action's route path, its name in the app metrics. */
     routePath?: string,
+    /** The arguments, for `function_args_bytes` (none for an HTTP action, as Convex's). */
+    args?: unknown,
   ): Promise<T> {
     const log = this.functionLog;
     if (!log || isSystemPath(name)) return run();
@@ -526,6 +544,18 @@ export class Functions {
           ]);
       };
     r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
+    const sourced = caller as SourcedCaller | undefined;
+    r.runReason = sourced?.runReason ?? null;
+    r.mutationQueueLength = sourced?.mutationQueueLength ?? null;
+    r.retries = sourced?.retries ?? { n: 0 };
+    if (sourced?.source === "Scheduler") r.schedulerJobId = caller?.request?.scheduledFunctionId ?? null;
+    if (udfType !== "HttpAction") {
+      try {
+        r.argsBytes = argsBytesOf(args);
+      } catch {
+        r.argsBytes = null; // arguments that are no value fail the run anyway
+      }
+    }
     const inflight = udfType === "Query" || udfType === "Mutation" ? this.inflight[udfType] : null;
     if (inflight) {
       inflight.running++;
@@ -537,7 +567,9 @@ export class Functions {
       this.appMetrics?.recordOutstanding("isolate", udfType, inflight.running, 0);
     }
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
-    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, false), o.error);
+    const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
+    if (!o.skip) this.logCompletion(log, r, this.completion(r, res.lines, o, retried), o.error);
+    if (retried) r.retries.n++;
     if (!res.ok) throw res.error;
     return res.value;
   }
@@ -550,8 +582,11 @@ export class Functions {
   /** The current mutation attempt lost an OCC conflict and runs again: log it (the engine's `onOccRetry`). */
   logOccRetry(error: OccError) {
     const r = currentOwner();
-    if (this.functionLog && r instanceof Running)
+    if (this.functionLog && r instanceof Running) {
       this.logCompletion(this.functionLog, r, this.completion(r, currentOwnLines(), { error }, true), error);
+      // The next attempt's `mutation_retry_count` (Convex's `backoff.failures()`).
+      r.retries.n++;
+    }
   }
 
   private metricsNames = new Map<string, string>();
@@ -579,7 +614,9 @@ export class Functions {
       udfType: r.udfType,
       cached,
       requestId: r.requestId,
-      mutationRetryCount: null,
+      // Every mutation's, 0 on its first attempt (Convex's `backoff.failures()`); none for the rest.
+      mutationRetryCount: r.udfType === "Mutation" ? r.retries.n : null,
+      mutationQueueLength: r.udfType === "Mutation" ? r.mutationQueueLength : null,
     };
   }
 
@@ -615,12 +652,12 @@ export class Functions {
         executionTime: c.executionTime,
         userExecutionTime: c.userExecutionTime,
         usage: c.usageStats,
-        argsBytes: null,
+        argsBytes: r.argsBytes,
         returnBytes: c.returnBytes,
         occInfo: c.occInfo,
         willRetry: c.willRetry,
-        schedulerJobId: null,
-        runReason: runReason(c.caller, c.udfType),
+        schedulerJobId: r.schedulerJobId,
+        runReason: (r.runReason as RunReason | null) ?? runReason(c.caller, c.udfType),
       },
     });
     if (c.error !== null) {
@@ -691,7 +728,9 @@ export class Functions {
       // bunvex does not split user from system time in the log (DV-252).
       userExecutionTime: seconds,
       success: e === undefined ? (o.success ?? null) : null,
-      error: e === undefined ? null : errorText(e),
+      // An attempt that lost an OCC conflict and runs again has no error, as Convex logs it before it fails
+      // the outcome (only `occInfo` and `willRetry` tell it apart; STUDY-74).
+      error: e === undefined || (willRetry && e instanceof OccError) ? null : errorText(e),
       requestId: r.requestId,
       executionId: r.executionId,
       usageStats: {
@@ -705,7 +744,12 @@ export class Functions {
         // cached query (STUDY-61).
         memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
       },
-      returnBytes: e === undefined ? (o.returnBytes ?? null) : null,
+      returnBytes:
+        e === undefined
+          ? (o.returnBytes ?? null)
+          : willRetry && e instanceof OccError && e.attempt
+            ? sizeOfResult(e.attempt.value ?? null)
+            : null,
       occInfo:
         e instanceof OccError
           ? {
@@ -1309,6 +1353,8 @@ export class Functions {
           caller,
         ),
       returned,
+      undefined,
+      args,
     );
   }
   /** A query's result as JSON, for the HTTP API (a cache hit is sent as stored, with its log lines). */
@@ -1325,6 +1371,8 @@ export class Functions {
           caller,
         ),
       returnedJson,
+      undefined,
+      args,
     );
   }
 
@@ -1343,6 +1391,8 @@ export class Functions {
       caller,
       () => this.engine.queryJson(body, this.cacheKey(name, args), cachedQueryLogs, caller, ts),
       returnedJson,
+      undefined,
+      args,
     );
   }
 
@@ -1376,6 +1426,8 @@ export class Functions {
           caller,
         ),
       (r) => returned(r.value),
+      undefined,
+      args,
     );
   }
 
@@ -1402,7 +1454,15 @@ export class Functions {
         caller,
       );
     // A replayed request did not run: nothing to log.
-    return this.logged("Mutation", name, caller, run, (r) => ("value" in r ? returned(r.value) : { skip: true }));
+    return this.logged(
+      "Mutation",
+      name,
+      caller,
+      run,
+      (r) => ("value" in r ? returned(r.value) : { skip: true }),
+      undefined,
+      args,
+    );
   }
 
   /**
@@ -1431,6 +1491,8 @@ export class Functions {
         );
       },
       returned,
+      undefined,
+      args,
     );
   }
 

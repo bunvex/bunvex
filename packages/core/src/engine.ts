@@ -155,6 +155,11 @@ export const occBackoffMs = (failures: number, initialMs: number, maxMs: number,
  */
 export class OccError extends Error {
   readonly code = "OptimisticConcurrencyControlFailure";
+  /**
+   * What the lost attempt returned (its commit-ts placeholders unresolved): Convex logs an attempt that will
+   * retry before it fails it, so its `function_returns_bytes` is that value's (STUDY-74).
+   */
+  attempt?: { value: unknown };
   constructor(
     message: string,
     /** `retries`: how many times the mutation had already been re-run. */
@@ -1811,9 +1816,10 @@ export class Engine {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
         // is a system error, as in Convex's `run_mutation`, which retries `occ_info()` errors only.
         if (!(e instanceof ConflictError)) throw e;
-        if (failures >= maxRetries) throw this.occError(e.conflict, source, failures);
+        const lost = Object.assign(this.occError(e.conflict, source, failures), { attempt: { value: raw } });
+        if (failures >= maxRetries) throw lost;
         const sleep = occBackoffMs(failures, initialMs, maxMs);
-        this.onOccRetry?.(this.occError(e.conflict, source, failures), failures + 1);
+        this.onOccRetry?.(lost, failures + 1);
         failures++;
         this.stats.retries++;
         await new Promise((r) => setTimeout(r, sleep));

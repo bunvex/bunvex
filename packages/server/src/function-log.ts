@@ -129,6 +129,17 @@ export class Running implements LogOwner {
   tokenIdentifier: string | null = null;
   ip: string | null = null;
   tx: unknown = null;
+  /**
+   * What the log streams' `function_execution` carries beside the function log (STUDY-74, DV-305): why it ran
+   * (a sync query's rerun reason; else from the caller), the scheduled job it runs, its arguments' JSON
+   * bytes, a WebSocket mutation's queue length, and a mutation's failed attempts before this one.
+   */
+  runReason: string | null = null;
+  schedulerJobId: string | null = null;
+  argsBytes: number | null = null;
+  mutationQueueLength: number | null = null;
+  /** A mutation's failed attempts so far, shared by the runs of one scheduled or cron job's loop. */
+  retries = { n: 0 };
   constructor(
     readonly executionId: string,
     readonly requestId: string,

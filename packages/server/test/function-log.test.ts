@@ -229,7 +229,8 @@ test("a lost OCC attempt is its own Completion with occInfo and willRetry", asyn
     logLines: ["[LOG] 'attempt 0'"],
     occInfo: { tableName: "items", documentId: id, writeSource: "m:rival", componentPath: null, retryCount: 0 },
   });
-  expect(lost.error).toContain("changed while this mutation was being run");
+  // As Convex logs it before it fails the outcome: no error, only `occInfo` and `willRetry` (STUDY-74).
+  expect(lost.error).toBeNull();
   expect(won).toMatchObject({ willRetry: false, occInfo: null, error: null, logLines: ["[LOG] 'attempt 1'"] });
   expect(won.executionId).toBe(lost.executionId);
 });

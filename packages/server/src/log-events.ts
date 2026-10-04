@@ -34,6 +34,7 @@ export type FunctionSource = {
   cached: boolean | null;
   requestId: string;
   mutationRetryCount: number | null;
+  mutationQueueLength: number | null;
 };
 
 /** Convex's `FunctionRunReason`. */
@@ -138,7 +139,7 @@ const functionJson = (s: FunctionSource) => ({
   type: { Query: "query", Mutation: "mutation", Action: "action", HttpAction: "http_action" }[s.udfType],
   cached: s.udfType === "Query" ? s.cached : null,
   request_id: s.requestId,
-  mutation_queue_length: null,
+  mutation_queue_length: s.mutationQueueLength,
   mutation_retry_count: s.mutationRetryCount,
 });
 

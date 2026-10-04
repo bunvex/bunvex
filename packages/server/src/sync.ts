@@ -37,6 +37,7 @@ import { BadAdminKeyError } from "./admin-keys.ts";
 import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
+import type { RunReason } from "./log-events.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 
 /**
@@ -262,6 +263,8 @@ type SessionQuery = {
   exec: Execution | null;
   hash: string | null;
   validAt: number;
+  /** Why its next run happens (Convex's `QueryInvocation`, the log streams' `run_reason`; STUDY-74). */
+  runReason?: RunReason;
 };
 
 /**
@@ -572,17 +575,25 @@ export class SyncHub {
     this.stats.executions++;
     const generation = this.generation;
     const { engine, functions, fromWire } = this.deps;
+    let args: unknown;
+    try {
+      args = fromWire(q.args, q.udfPath);
+    } catch {
+      args = undefined; // the run reports it
+    }
     const r = await collectLogs(() =>
       functions.logged(
         "Query",
         q.udfPath,
-        { ...caller, source: "SyncWorker" } as SourcedCaller,
+        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
           const body = functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller);
           return engine.queryTracked(body, parseJournal(q.journal), ts, caller);
         },
         (run) => (run.ok ? { returnBytes: valueSize((run.value ?? null) as Value) } : { error: run.error }),
+        undefined,
+        args,
       ),
     );
     // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
@@ -980,6 +991,8 @@ export class SyncSession {
     const modifications = new Map<number, string>();
     const querySet = this.received.querySet;
     const identity = this.received.identity;
+    // Convex's `begin_update_queries`: an identity change reruns every query that ran before as `identityChange`.
+    const identityRerun = this.identityChanged;
     if (this.identityChanged) {
       // A new identity may change every result: all queries run again (Convex does the same).
       this.identityChanged = false;
@@ -1024,6 +1037,10 @@ export class SyncSession {
       stale = [...this.queries].filter(
         ([, q]) => !q.exec || engine.committer.changedBetween(q.exec.reads, q.validAt, at),
       );
+      // A query never answered is its initial subscription; one answered before reruns for the identity
+      // change, else for a data change (an invalidated read, a pushed module).
+      for (const [, q] of stale)
+        q.runReason = q.hash === null ? "initialSubscription" : identityRerun ? "identityChange" : "dataChange";
       try {
         // At most UPDATE_QUERY_CONCURRENCY at a time, as Convex's `buffer_unordered` (STUDY-64 §1.4).
         results = await mapLimit(stale, UPDATE_QUERY_CONCURRENCY, ([, q]) => this.hub.resultAt(q, at, caller, this));
@@ -1114,7 +1131,9 @@ export class SyncSession {
   }
 
   private mutation(m: v1.MutationRequest) {
-    if (this.pendingMutations - (this.mutationRunning ? 1 : 0) >= MAX_PENDING_MUTATIONS)
+    // Convex's `mutation_queue_length`: the mutations still waiting when this one arrives (not the running one).
+    const queued = this.pendingMutations - (this.mutationRunning ? 1 : 0);
+    if (queued >= MAX_PENDING_MUTATIONS)
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyConcurrentMutations" });
     this.pendingMutations++;
     // Queued before any await, so the queue order is the order frames arrived (STUDY-22).
@@ -1124,8 +1143,9 @@ export class SyncSession {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
         const { functions, fromWire } = this.hub.deps;
-        const caller = this.requestCaller(m.requestId);
-        if (caller === null) return;
+        const requested = this.requestCaller(m.requestId);
+        if (requested === null) return;
+        const caller: SourcedCaller = { ...requested, mutationQueueLength: queued };
         let component: string | null;
         try {
           component = componentOf(m.componentPath, caller);

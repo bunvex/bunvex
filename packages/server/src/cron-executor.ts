@@ -221,6 +221,7 @@ export class CronJobExecutor {
 
   private async runMutation(job: CronJob) {
     const body = this.functions.scheduledMutationBody(job.cronSpec.udfPath, job.cronSpec.udfArgs[0]);
+    const retries = { n: 0 };
     for (let occ = 0; ; ) {
       const t0 = performance.now();
       let value: unknown;
@@ -228,7 +229,7 @@ export class CronJobExecutor {
         this.functions.logged(
           "Mutation",
           job.cronSpec.udfPath,
-          NO_ONE,
+          { ...NO_ONE, retries, retriesOcc: true } as SourcedCaller,
           () =>
             this.engine.mutation(
               async (db) => {
@@ -245,6 +246,8 @@ export class CronJobExecutor {
             ),
           // A cron that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
+          undefined,
+          job.cronSpec.udfArgs[0],
         ),
       );
       if (r.ok) {

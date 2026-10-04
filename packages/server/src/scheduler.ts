@@ -378,10 +378,11 @@ export class ScheduledJobExecutor {
 
   private async runMutation(job: JobDoc) {
     const body = this.functions.scheduledMutationBody(job.name, job.args[0], job._id);
+    const retries = { n: 0 };
     for (let occFailures = 0; ; ) {
       try {
         // Exactly once: the job is finished in the transaction that commits the mutation's writes.
-        const caller = asJob(job._id);
+        const caller: SourcedCaller = { ...asJob(job._id), retries, retriesOcc: true };
         let value: unknown;
         const ran = await this.functions.logged(
           "Mutation",
@@ -403,6 +404,8 @@ export class ScheduledJobExecutor {
             ),
           // A job that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
+          undefined,
+          job.args[0],
         );
         if (ran) this.stats.succeeded++;
         return;
