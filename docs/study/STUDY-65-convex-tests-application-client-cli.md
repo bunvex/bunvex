@@ -79,7 +79,7 @@ bunvex paths are relative to `packages/`. Convex file names are relative to `cra
 | `storage.rs` `test_storage_api_bandwidth_log_events` | one bandwidth event per download, with the bytes actually streamed | the event is never emitted; egress counts `content-length` | n/a (DV-309 covers metering) — M3 |
 | `returns_validation.rs` `test_action_bad_output`, `test_mutation_extra_fields` | an action's bad return, an extra field in a returned object | `server/src/functions.ts` `checkReturns` | gap (G-A10) |
 | `http_action.rs` disconnect before head / while streaming / continues after | the action finishes and its writes commit; the log records the disconnect | the signal is tested, not the commit nor the log line | gap (G-A11), M4 |
-| `push.rs` `test_max_size_push` | 4096 modules + 4096 `_deps`, pushed twice | `server/test/push.test.ts` (about 0.3 s, then 0.7 s); M2 fixed with it | covered (G-A9, #PR) |
+| `push.rs` `test_max_size_push` | 4096 modules + 4096 `_deps`, pushed twice | `server/test/push.test.ts` (about 0.3 s, then 0.7 s); M2 fixed with it | covered (G-A9, #348) |
 | `analyze.rs` `test_analyze_with_source_map` | each function's source line | `AnalyzedFunction` has no `pos` | gap, M5 (dashboard only) |
 | components.rs `test_component_status_skips_staged_index` | the schema status counts no staged index | `core/src/engine.ts` | gap (G-A5), cosmetic |
 
@@ -151,7 +151,7 @@ AI files, version checks. They are n/a ([platform §21](../parity/platform.md), 
   ("`_creationTime` is automatically added…") and `IndexFieldNameReserved`. bunvex throws one message
   (`core/src/schema.ts`), although STUDY-05 cites Convex's codes. Matching is the default: a fix, no decision.
 - **M2. Module count.** The message differs from Convex's "Too many function files (N > maximum 4096)…",
-  and there is no total cap counting `_deps` (`server/src/code-version.ts`). Fixed in #PR (and an unexpected
+  and there is no total cap counting `_deps` (`server/src/code-version.ts`). Fixed in #348 (and an unexpected
   push failure is a 500 `InternalServerError`, as Convex's, instead of an unhandled error).
 - **M3. Storage egress** counts the `content-length` header, not the bytes streamed; no
   `storage_api_bandwidth` event (DV-309 territory).
@@ -186,7 +186,7 @@ Effort: S under an hour, M a few hours. "Done" links the PR from this round.
 | 13 | G-L2 `bunvex.json` validation, M1 index-field messages | Convex's messages | `cli/src/deploy.ts`, `core/src/schema.ts` | S | |
 | 14 | G-A7 disabled state; G-A10 returns validation of actions and extra fields; G-A11 an HTTP action commits after a disconnect | | `server` | S each | |
 | 15 | M6 index diff printing in Convex's format | operator output | `cli/src/deploy.ts`, `server/src/push.ts` | M | |
-| 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | #PR |
+| 16 | G-A9 a 4096 + 4096 module push | push time and limits | `server/src/code-version.ts` | M | #348 |
 | 17 | the rest of §2–§4 | characterisation, messages | | S each | |
 
 ## 7. Owner decisions
