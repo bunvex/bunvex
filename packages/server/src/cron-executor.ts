@@ -11,6 +11,7 @@ import {
   OccError,
   readBackendState,
   stringifyValue,
+  TooManyWritesError,
   type Tx,
   wallClock,
 } from "@bunvex/core";
@@ -32,7 +33,7 @@ import {
   truncateLogLines,
 } from "./cron-model.ts";
 import { describeUncaught } from "./errors.ts";
-import type { Functions, SourcedCaller } from "./functions.ts";
+import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 import { collectLogs, currentLogLines } from "./logs.ts";
 
 export type CronExecutorOptions = NextOpts & {
@@ -288,6 +289,7 @@ export class CronJobExecutor {
               },
               job.cronSpec.udfPath,
               NO_ONE,
+              THROTTLED,
             ),
           // A cron that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
@@ -299,7 +301,8 @@ export class CronJobExecutor {
         if (r.value) this.stats.runs++;
         return;
       }
-      if (r.error instanceof OccError) {
+      // A lost conflict, or the write throughput limit (STUDY-78): run again later, as Convex's loop does.
+      if (r.error instanceof OccError || r.error instanceof TooManyWritesError) {
         await Bun.sleep(backoff(++occ, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
         continue;
       }

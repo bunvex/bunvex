@@ -9,9 +9,13 @@
 //   files"), as Convex's browser-platform bundle would fail;
 // - `bunvex`, `bunvex/*` and `@bunvex/*` stay external: the server links them to its own modules;
 // - ESM, code splitting into `_deps/[hash].js` chunks, source maps, `process.env.NODE_ENV` "production";
-// - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`).
+// - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`);
+// - `import "server-only"` (Next.js's guard) is an empty module, and `import m from "./x.wasm"` is a compiled
+//   `WebAssembly.Module` with the file's bytes inlined, as Convex's `serverOnlyPlugin` and `wasmPlugin`
+//   (STUDY-83).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import type { BunPlugin } from "bun";
 
 /** A pushed module, as Convex's `ModuleConfig`. */
 export type ModuleConfig = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
@@ -27,6 +31,45 @@ export class BundleError extends Error {
 }
 
 const posix = (p: string) => p.split(sep).join("/");
+
+/**
+ * Convex's `serverOnlyPlugin` (STUDY-83): `server-only` resolves to an empty module, whether the package is
+ * installed or not (its real entry throws outside React server components), so shared code guarded by it
+ * bundles and runs.
+ */
+const serverOnly: BunPlugin = {
+  name: "bunvex-server-only",
+  setup(build) {
+    build.onResolve({ filter: /^server-only$/ }, (args) => ({ path: args.path, namespace: "server-only-stub" }));
+    build.onLoad({ filter: /.*/, namespace: "server-only-stub" }, () => ({ contents: "", loader: "js" }));
+  },
+};
+
+/**
+ * Convex's `wasmPlugin` (STUDY-83): a `.wasm` import's default export is a `WebAssembly.Module` compiled from
+ * the file's bytes, which the bundle carries (esbuild's binary loader there; inlined as base64 here).
+ */
+const wasm: BunPlugin = {
+  name: "bunvex-wasm",
+  setup(build) {
+    build.onResolve({ filter: /\.wasm$/ }, (args) => {
+      if (!args.resolveDir) return undefined;
+      return { path: isAbsolute(args.path) ? args.path : join(args.resolveDir, args.path), namespace: "wasm-stub" };
+    });
+    build.onLoad({ filter: /.*/, namespace: "wasm-stub" }, (args) => {
+      const base64 = readFileSync(args.path).toString("base64");
+      return {
+        contents:
+          `const bytes = Uint8Array.from(atob(${JSON.stringify(base64)}), (c) => c.charCodeAt(0));\n` +
+          "export default new WebAssembly.Module(bytes);\n",
+        loader: "js",
+      };
+    });
+  },
+};
+
+/** The plugins every bundle runs, in Convex's order: `server-only` first, `.wasm` after. */
+const PLUGINS = [serverOnly, wasm];
 
 /** Convex's `entryPoints`: the files of `dir` that are modules, sorted. */
 export function entryPoints(dir: string): string[] {
@@ -80,6 +123,7 @@ async function build(dir: string, entries: string[], node: boolean): Promise<Mod
     minify: { syntax: true },
     external: EXTERNAL,
     define: { "process.env.NODE_ENV": '"production"' },
+    plugins: PLUGINS,
     naming: { entry: "[dir]/[name].js", chunk: node ? "_deps/node/[hash].js" : "_deps/[hash].js" },
     throw: false,
   });
@@ -99,12 +143,28 @@ async function build(dir: string, entries: string[], node: boolean): Promise<Mod
   for (const o of result.outputs) {
     if (o.kind === "sourcemap") continue;
     const path = posix(o.path.replace(/^\.\//, ""));
-    const map = maps.get(o.path);
-    // Bun marks its output pre-transpiled (`// @bun`): meaningless to the server's loader, so dropped.
-    const source = (await o.text()).replace(/^\/\/ @bun[^\n]*\n/, "");
+    let map = maps.get(o.path);
+    // Bun marks its output pre-transpiled (`// @bun`): meaningless to the server's loader, so dropped, and its
+    // line with it from the source map, which must match the source (the server reads positions from it).
+    const text = await o.text();
+    const source = text.replace(/^\/\/ @bun[^\n]*\n/, "");
+    if (map && source !== text) map = withoutFirstLine(map);
     out.push({ path, source, ...(map ? { sourceMap: map } : {}), environment: node ? "node" : "isolate" });
   }
   return out;
+}
+
+/** A source map with its first generated line dropped (that line's mappings, up to the first `;`). */
+export function withoutFirstLine(map: string): string {
+  try {
+    const m = JSON.parse(map) as { mappings?: unknown };
+    if (typeof m.mappings !== "string") return map;
+    const i = m.mappings.indexOf(";");
+    m.mappings = i === -1 ? "" : m.mappings.slice(i + 1);
+    return JSON.stringify(m);
+  } catch {
+    return map;
+  }
 }
 
 export type Bundled = { modules: ModuleConfig[]; schema: ModuleConfig | null };
@@ -133,6 +193,7 @@ export async function bundleFunctions(dir: string): Promise<Bundled> {
       format: "esm",
       target: "browser",
       external: EXTERNAL,
+      plugins: PLUGINS,
       throw: false,
     });
     if (!r.success) throw new BundleError(r.logs.map(String).join("\n"));

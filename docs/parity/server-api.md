@@ -140,7 +140,7 @@ Key bunvex facts behind the statuses:
 | `ctx.meta.getDeploymentMetadata()` | server/meta.ts | done (STUDY-44) | As self-hosted Convex: the instance name, `region: null`, `class: "s16"`. |
 | `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | done (STUDY-44) | Mutations and actions (HTTP actions too), not queries; `ip` the first `x-forwarded-for` entry else the connection's address, over HTTP and the sync protocol; a new request id per call, shared with the functions it calls; a scheduled function's id down its call tree; the user's raw token (null for an admin key). |
 | `ctx.meta.getSnapshotTs()` (bigint, on the same clock as commitTs) | server/meta.ts; isolate syscall.rs | done (STUDY-44) | The snapshot in nanoseconds, synchronous, shared with nested calls; it makes a query time-dependent, as `Date.now()`. `commitTs` is STUDY-53. |
-| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); no bootstrap retries (DV-271). |
+| `ctx.vectorSearch(table, index, { vector, limit, filter })` returns `[{ _id, _score }]` (actions only) | server/vector_search.ts | done (STUDY-51) | Convex's checks and messages (limit ≤256, filter on `filterFields`, ≤64 conditions, dimensions). Exact search in memory, rebuilt at start (DV-269, DV-270); `VectorIndexesUnavailable` while rebuilt after a start, as Convex (STUDY-79; DV-271 resolved). |
 
 ### 7. Deterministic runtime and execution environment
 
@@ -157,7 +157,7 @@ Key bunvex facts behind the statuses:
 | Function isolation (per-function V8 isolate, memory cap `ISOLATE_MAX_USER_HEAP_SIZE` = 64 MiB) | knobs.rs; isolate | partial (STUDY-35) | Deployed code runs in one `vm` context per code version (DV-164): its own globals and deterministic `Date`/`Math`, imports limited to `bunvex/*` and the bundle (Node builtins only in `"use node"`), freed when superseded. Not a security boundary; no heap cap. Module state lasts the version (DV-165). |
 | `process.env` environment variables available to functions (name ≤ 256, value ≤ 8 KiB) | common/src/types/environment_variables.rs | done (STUDY-37) | Pushed code reads the deployment's variables, each read in the read set; see [platform §env](platform.md). Managed over HTTP; the CLI's `bunvex env` comes next. |
 | `console.log` / `info` / `warn` / `error` captured as function logs (≤256 lines, ≤32 KiB each) | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | Also `debug`, `trace`, `time`/`timeLog`/`timeEnd`, rendered with object-inspect as Convex does. A retried mutation keeps only the committed attempt's lines. Engine objects (`ctx.db`, a query, `ctx.db.system`, a table scope) print as `Name {…}`, never their state (STUDY-20 D9, DV-321). Cached query results carry no lines (STUDY-20 D2). |
-| `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | missing | New Convex feature. |
+| `log.audit(body)` + `log.vars` (requestId, ip, userAgent, now, convexActor) | server/log.ts, audit_logging.ts, logVars.ts | done (STUDY-82) | `log` from `bunvex/server`: Convex's body checks (`$` keys, unknown variables), a query's or mutation's lines (nested calls' included) resolved when it ends and sent as `custom_audit` events, Convex's limits (500 lines, 100 KB a line, 4 MB in all, 4 MB held; HTTP 400 with the code), refused in actions. `log.vars.bunvexActor` for `convexActor` (DV-03), null on a self-hosted deployment. No sink can subscribe to `custom_audit` without an entitlement, as Convex self-hosted (DV-304). A cached query's hit does not replay its lines (unobservable until a sink can take them). |
 | `getServiceToken("ai-gateway")` / `getServiceUrl` | impl/actions_impl.ts | missing | Convex-cloud specific, probably out of scope. |
 | Node runtime actions (`"use node"`) | CLI / node-executor | done (STUDY-35) | **Divergence (DV-87, DV-169):** the directive is accepted and those modules run in Bun itself, with Node builtins; Convex's rules for them enforced (only actions; not `http`, `crons`). No separate Node action timeout (§19). |
 | Query result caching keyed by args and identity, invalidated by read-set | crates/application cache | done (STUDY-08 §3.6) | As Convex (DV-63): keyed by name, canonical args and (when read) identity; an LRU bounded by bytes (`UDF_CACHE_MAX_SIZE`, 100 MiB); identical concurrent calls coalesced, HTTP included; validated against the write log when looked up, at any later ts (`query_at_ts` too); clock readers expire after 17 s. Sync subscriptions keep their own shared executions (DV-09). Decided, internal: a hit writes its token back (DV-153). |
@@ -343,7 +343,8 @@ Key bunvex facts behind the statuses:
 | Read-set intervals (database queries) ≤ 4096 per transaction | knobs.rs (`TRANSACTION_MAX_READ_SET_INTERVALS`) | done (#12) | 4096, Convex's message. |
 | Writes per transaction ≤ 16,000 docs and ≤ 16 MiB | knobs.rs (`TRANSACTION_MAX_NUM_USER_WRITES`, `…WRITE_SIZE_BYTES`) | done (#35) | |
 | Query/mutation user execution time ≤ 1 s (`DATABASE_UDF_USER_TIMEOUT`) | knobs.rs | done (STUDY-41) | User time is wall time minus the time awaiting the store and nested calls (each nested call has its own budget); Convex's message ("Function execution timed out (maximum duration: 1s)"), not catchable, a mutation commits nothing; the 15 s system budget with Convex's message; `DATABASE_UDF_USER_TIMEOUT_SECONDS` / `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS`. Checked at store calls and at the end: a synchronous loop that never reaches the store is not interrupted (DV-208). |
-| Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | missing | |
+| Action timeout (V8 1800 s knob default here; Node 600 s; Convex cloud documents 10 min) | knobs.rs (`V8_ACTION_USER_TIMEOUT`, `NODE_ACTION_USER_TIMEOUT`) | done (STUDY-77) | Same knobs and messages; awaited calls count; after it, `ctx` calls and `fetch` are refused and in-flight fetches aborted. |
+| The `N unawaited operations: [...]` warning for an action's pending calls when it ends or times out | isolate/src/environment/action/mod.rs (`add_warnings_to_log_lines`) | missing | STUDY-77 A3. |
 | Isolate heap ≤ 64 MiB; ArrayBuffers ≤ 64 MiB | knobs.rs | n/a (DV-164) | No isolates: deployed code runs in `vm` contexts in the server's process. |
 | Log lines ≤ 256 per execution, ≤ 32 KiB each | isolate/src/environment/helpers/mod.rs | done (STUDY-20) | See §7. |
 | Scheduling: 1000 per transaction, 4 MiB per job, 16 MiB total | knobs.rs | done (STUDY-30) | 1000 per transaction and 16 MiB total enforced; the 4 MiB per job is only a warning in Convex, and bunvex does not warn yet. |
@@ -358,8 +359,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 217 |
-| partial | 10 |
-| missing | 14 |
+| done | 221 |
+| partial | 8 |
+| missing | 13 |
 | n/a (a decided divergence) | 1 |
-| **total** | **242** |
+| **total** | **243** |

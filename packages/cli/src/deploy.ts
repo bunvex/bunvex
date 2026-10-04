@@ -5,6 +5,7 @@
 // `{ "functions": "…" }`; the deployment is `--url` / `--admin-key`, else BUNVEX_SELF_HOSTED_URL /
 // BUNVEX_SELF_HOSTED_ADMIN_KEY, read from the environment, then `.env.local`, then `.env` (as Convex's CLI
 // reads CONVEX_SELF_HOSTED_*).
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -22,7 +23,7 @@ import {
   type SchemaEvaluation,
 } from "./index-checks.ts";
 import type { Io } from "./io.ts";
-import { acquireTarget } from "./local-deployment.ts";
+import { acquireTarget, urlVariables } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
 
 export { parseEnvFile } from "./target.ts";
@@ -42,6 +43,11 @@ ${TARGET_OPTIONS}
                        staging it instead so it backfills in the background)
   --codegen <mode>     enable (default) or disable: regenerate _generated/
   --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
+  --cmd <command>      a command to run first, as part of deploying your app (e.g. \`vite build\`), with the
+                       deployment's URL in an environment variable (see --cmd-url-env-var-name)
+  --cmd-url-env-var-name <name>
+                       the variable that gets the deployment's URL when using --cmd (e.g. VITE_BUNVEX_URL;
+                       default: the one your framework reads)
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
@@ -147,6 +153,8 @@ type Flags = TargetFlags & {
   allowDeletingLargeIndexes: boolean;
   codegen: boolean;
   typecheck: TypecheckMode;
+  cmd?: string;
+  cmdUrlEnvVarName?: string;
 };
 function parseFlags(all: string[]): Flags | string {
   const taken = takeTargetFlags(all);
@@ -171,6 +179,11 @@ function parseFlags(all: string[]): Flags | string {
       const v = inline ?? args[++i];
       if (v === undefined) return "--message needs a value";
       f.message = v;
+    } else if (name === "--cmd" || name === "--cmd-url-env-var-name") {
+      const v = inline ?? args[++i];
+      if (v === undefined) return `${name} needs a value`;
+      if (name === "--cmd") f.cmd = v;
+      else f.cmdUrlEnvVarName = v;
     } else if (name === "--codegen" || name === "--typecheck") {
       const v = inline ?? args[++i];
       if (name === "--codegen") {
@@ -207,6 +220,8 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     return 1;
   }
   try {
+    // Convex's step 1: the build command first, with the deployment's URLs in the environment (STUDY-81).
+    if (flags.cmd !== undefined && !(await runCommand(acquired.target, flags.cmd, flags, io))) return 1;
     // As Convex's `deploy`: the large-index checks ask unless a flag allows it; the message defaults to the
     // CI platform and commit.
     const message = flags.message ?? defaultDeployMessage(io.env) ?? undefined;
@@ -229,6 +244,47 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
   } finally {
     await acquired.release();
   }
+}
+
+/**
+ * Convex's `runCommand` (STUDY-81): run `cmd` in a shell, from the project, with the deployment's canonical
+ * URLs in the variables the framework reads (or `--cmd-url-env-var-name` for the first). Whether it succeeded;
+ * a dry run only says what it would run.
+ */
+async function runCommand(
+  target: Target,
+  cmd: string,
+  flags: { dryRun: boolean; cmdUrlEnvVarName?: string },
+  io: Io,
+): Promise<boolean> {
+  const suggested = urlVariables(io.cwd);
+  const urlVar = flags.cmdUrlEnvVarName ?? suggested.url;
+  const siteVar = suggested.site;
+  const vars = `environment variables "${urlVar}" and "${siteVar}" set`;
+  io.err(`Running '${cmd}' with ${vars}...${flags.dryRun ? " [dry run]" : ""}`);
+  if (!flags.dryRun) {
+    let urls: { bunvexCloudUrl?: string; bunvexSiteUrl?: string | null };
+    try {
+      const r = await fetch(`${target.url}/api/v1/get_canonical_urls`, {
+        headers: { authorization: `Bunvex ${target.adminKey}` },
+      });
+      if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+      urls = (await r.json()) as typeof urls;
+    } catch (e) {
+      io.err(`bunvex deploy: could not read the deployment's URLs: ${(e as Error).message}`);
+      return false;
+    }
+    const env: Record<string, string | undefined> = { ...process.env, ...io.env };
+    if (urls.bunvexCloudUrl) env[urlVar] = urls.bunvexCloudUrl;
+    if (urls.bunvexSiteUrl) env[siteVar] = urls.bunvexSiteUrl;
+    const result = spawnSync(cmd, { cwd: io.cwd, env, stdio: "inherit", shell: true });
+    if (result.status !== 0) {
+      io.err(`bunvex deploy: '${cmd}' failed`);
+      return false;
+    }
+  }
+  io.out(`✔ ${flags.dryRun ? "Would have run" : "Ran"} "${cmd}" with ${vars}`);
+  return true;
 }
 
 /**

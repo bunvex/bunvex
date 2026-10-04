@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
-import { IndexBackfillingError, IndexStagedError } from "../src/catalog.ts";
+import { IndexBackfillingError, IndexesUnavailableError, IndexStagedError } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
@@ -226,7 +226,7 @@ test("pagination; at most 1024 candidates", async () => {
   await e.close();
 });
 
-test("a restart backfills the index; queries meanwhile get IndexBackfillingError", async () => {
+test("a restart rebuilds the index; searches meanwhile are Convex's SearchIndexesUnavailable (STUDY-79)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-search-"));
   dirs.push(dir);
   // The backfill waits for `release` before its first page: the test runs while it is pending.
@@ -246,7 +246,15 @@ test("a restart backfills the index; queries meanwhile get IndexBackfillingError
   const last = (await first.query((db) => db.query("messages").withIndex("by_id").order("desc").first()))!;
   await first.close();
   const e = await open(true);
-  await expect(e.query((db) => search(db, "needle").collect())).rejects.toBeInstanceOf(IndexBackfillingError);
+  // Convex's bootstrapping answer (a function cannot catch it: server/test/search-bootstrap.test.ts).
+  await expect(e.query((db) => search(db, "needle").collect())).rejects.toMatchObject({
+    code: "SearchIndexesUnavailable",
+    message: "Search indexes bootstrapping and not yet available for use",
+  });
+  await expect(e.query((db) => search(db, "needle").collect())).rejects.toBeInstanceOf(IndexesUnavailableError);
+  // A search with no terms finds nothing, as Convex's, even now.
+  expect(await e.query((db) => search(db, "").collect())).toEqual([]);
+  expect(await e.query((db) => search(db, "  \t ").collect())).toEqual([]);
   // Writes while the backfill runs are not lost, nor overwritten by its older copies.
   await add(e, { body: "needle too" });
   await e.mutation((db) => db.patch("messages", last._id as string, { body: "changed" }));
@@ -258,5 +266,54 @@ test("a restart backfills the index; queries meanwhile get IndexBackfillingError
   // match it as a prefix).
   const byNumber = await e.query((db) => search(db, (last.body as string).split(" ")[1]!).collect());
   expect(byNumber.some((d) => d._id === last._id)).toBe(false);
+  await e.close();
+});
+
+test("an index a push adds is backfilled, not bootstrapping: IndexBackfillingError, an empty search [] (STUDY-79)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bunvex-search-"));
+  dirs.push(dir);
+  let release = () => {};
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  const plain = defineSchema({ notes: defineTable(v.any()) });
+  const searchable = defineSchema({ notes: defineTable(v.any()).searchIndex("search_text", { searchField: "text" }) });
+  const e = await new Engine(plain, new SqlitePersistence(join(dir, "db.sqlite"), { durable: true }), {
+    storedSchema: true,
+    beforeSearchBackfillPage: () => held,
+  }).init();
+  const pushed = async (schema: typeof plain) => {
+    const p = await e.startSchemaPush(schema);
+    for (let i = 0; i < 400 && (await e.schemaPushStatus(p.schemaId)).type !== "complete"; i++) await Bun.sleep(5);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+  };
+  await pushed(plain);
+  await e.mutation((db) => db.insert("notes", { text: "hello world" }));
+  await pushed(searchable);
+  const find = (text: string) =>
+    e.query((db) =>
+      db
+        .query("notes")
+        .withSearchIndex("search_text", (q) => q.search("text", text))
+        .collect(),
+    );
+  await expect(find("hello")).rejects.toBeInstanceOf(IndexBackfillingError);
+  // A user error the query may catch, as Convex's bad request.
+  expect(
+    await e.query(async (db) => {
+      try {
+        await db
+          .query("notes")
+          .withSearchIndex("search_text", (q) => q.search("text", "hello"))
+          .collect();
+      } catch (err) {
+        return (err as Error).message;
+      }
+    }),
+  ).toBe("Index notes.search_text is currently backfilling and not available to query yet.");
+  expect(await find("")).toEqual([]);
+  release();
+  await e.searchReady();
+  expect((await find("hello")).map((d) => d.text)).toEqual(["hello world"]);
   await e.close();
 });

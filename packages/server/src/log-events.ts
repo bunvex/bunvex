@@ -86,9 +86,13 @@ export type StructuredLogEvent =
       runtime: "default" | "node";
     }
   | { topic: "audit_log"; action: string; metadata: unknown }
+  /** A function's `log.audit` line, its variables resolved (STUDY-82). */
+  | { topic: "custom_audit"; body: unknown }
   | { topic: "scheduler_stats"; lagSeconds: number; numRunningJobs: number }
   | { topic: "scheduled_job_lag"; lagSeconds: number }
   | ({ topic: "current_storage_usage" } & StorageUsage)
+  /** A file download over HTTP, once it ended or the client left: the bytes actually sent. */
+  | { topic: "storage_api_bandwidth"; storageId: string; egressBytes: number }
   | {
       topic: "concurrency_stats";
       query: Concurrency;
@@ -248,6 +252,8 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         audit_log_action: ev.action,
         audit_log_metadata: JSON.stringify(ev.metadata),
       };
+    case "custom_audit":
+      return { timestamp: ms, topic: "custom_audit", body: ev.body };
     case "scheduler_stats":
       return {
         topic: "scheduler_stats",
@@ -269,6 +275,8 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
         total_backup_storage_bytes: ev.backupBytes,
         total_system_table_document_size_bytes: ev.systemTableDocumentBytes,
       };
+    case "storage_api_bandwidth":
+      return { timestamp: ms, topic: "storage_api_bandwidth", storage_id: ev.storageId, egress_bytes: ev.egressBytes };
     case "concurrency_stats":
       return {
         timestamp: ms,

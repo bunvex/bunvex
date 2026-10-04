@@ -11,6 +11,7 @@ import {
   type Engine,
   EnvironmentVariableError,
   type EnvVarChange,
+  IndexesUnavailableError,
   insertAuditLogEvents,
   OccError,
   orderEnvVarChanges,
@@ -20,6 +21,7 @@ import {
   setUserStopState,
   stringifyValue,
   TableSummariesUnavailableError,
+  TooManyWritesError,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -82,6 +84,7 @@ import {
   UDF_POST_WITH_COMPONENT,
   UDF_POST_WITH_TS,
 } from "./json-body.ts";
+import { AuditLogLimitError } from "./log-audit.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
@@ -548,8 +551,13 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // Audit log lines over Convex's limits (STUDY-82): a bad request, as Convex's `resolve_bodies`.
+    if (!r.ok && r.error instanceof AuditLogLimitError) return requestError(400, r.error.code, r.error.message);
+    // An index still being rebuilt after a start (STUDY-79): Convex's 503 with the feature's code and message.
+    if (!r.ok && r.error instanceof IndexesUnavailableError) return requestError(503, r.error.code, r.error.message);
     // Too many actions at once: Convex's rate-limited answer (429), not the function's error.
-    if (!r.ok && r.error instanceof TooManyConcurrentRequestsError)
+    // So is the write throughput limit (STUDY-78), once its retries are spent.
+    if (!r.ok && (r.error instanceof TooManyConcurrentRequestsError || r.error instanceof TooManyWritesError))
       return requestError(429, r.error.code, r.error.message);
     // An access check (an admin's operation, a key where one is required) is the request's error (403).
     if (!r.ok) {
@@ -708,16 +716,22 @@ export function createServer(opts: ServerOptions) {
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
     try {
-      // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
+      // Each one a call for usage limits, a download's bytes egress as they are sent (Convex's `StorageCall`,
+      // `StorageBandwidth`), and once it ends a `storage_api_bandwidth` event (Convex's `get_file`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
         return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
-        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
+        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)), {
+          chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
+          done: (storageId, egressBytes) =>
+            logManager.send([
+              { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
+            ]),
+        });
         usageMeter.record("functionCalls", 1);
-        if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
         return r;
       }
       return new Response(null, { status: 405 });

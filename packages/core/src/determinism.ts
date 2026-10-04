@@ -335,6 +335,11 @@ export function installDeterminism() {
     (...args: Parameters<typeof fetch>) => {
       const e = executions.getStore();
       if (e) return Promise.reject(notAllowed("fetch()", e.kind));
+      const signal = fetchSignal?.();
+      if (signal) {
+        if (signal.aborted) return Promise.reject(signal.reason);
+        args = withSignal(signal, args);
+      }
       const send = fetchSender?.() ?? realFetch;
       const meter = fetchMeter?.();
       return meter ? meteredFetch(send, meter, ...args) : send(...args);
@@ -525,6 +530,21 @@ export function setFetchSender(s: typeof fetchSender) {
 
 /** The process's own `fetch`, never refused nor metered: what a fetch sender sends with. */
 export const directFetch: typeof fetch = realFetch;
+
+/**
+ * The signal a `fetch` outside a query or mutation ends with (STUDY-77): set by the server, it returns the
+ * running action's, aborted once the action timed out; null when no action runs.
+ */
+let fetchSignal: (() => AbortSignal | null) | null = null;
+export function setFetchSignal(s: typeof fetchSignal) {
+  fetchSignal = s;
+}
+
+/** `fetch`'s arguments with `signal` added to the request's own, if any. */
+function withSignal(signal: AbortSignal, [input, init]: Parameters<typeof fetch>): Parameters<typeof fetch> {
+  const own = init?.signal ?? (input instanceof Request ? input.signal : null);
+  return [input, { ...init, signal: own ? AbortSignal.any([own, signal]) : signal }];
+}
 
 /** A body's bytes when they can be known without reading it; null for a stream or form data. */
 function knownBodySize(body: unknown): number | null {
