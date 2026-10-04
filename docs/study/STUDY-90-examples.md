@@ -1,6 +1,6 @@
 # STUDY-90 — Examples, demos and templates
 
-- **Status:** first batch built (eight examples); templates and a public mirror later. `examples/` at the root
+- **Status:** two batches built (21 examples); templates and a public mirror later. `examples/` at the root
   (owner, 2026-10-04)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/demos`,
   `npm-packages/private-demos`); github.com/get-convex/templates and github.com/get-convex/convex-demos
@@ -83,20 +83,24 @@ unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys
 | `zod-validation-ts`, `sessions`, `presence-facepile`, `presence-typing-indicator` | waits | `convex-helpers` or components |
 | `html` | waits | a browser bundle of the client for `<script>` |
 | `convex-test` | waits | `@bunvex/testing` |
-| `users-and-auth`, `clerk`, `users-and-clerk-webhooks`, `react-native`, `tour-chat`, `giphy`… | later batches | to check one by one |
+| `users-and-auth`, `clerk`, `users-and-clerk-webhooks`, `react-native`, `tour-chat` | later batches | to check one by one |
 
 **Templates** (`bun create bunvex`): a second step, once the first examples are in; each template is close to
 a lean example, and they are worth most once the packages are published (STUDY-40: `@bunvex/*` today, `bunvex`
 pending npm).
 
-### What the first batch found
+### What the examples found
 
-Two bunvex bugs no unit test had caught, each fixed in its own PR:
+Bugs no unit test had caught, each fixed in its own PR:
 
 - **`bunvex/server` did not load outside Bun** (STUDY-91, #382): every front end importing `_generated/api`
   failed to bundle (Vite, webpack) or to load in Node (Next.js). Found by the tutorial's first `vite build`.
 - **`@bunvex/file-storage`'s `env` parameters were typed `NodeJS.ProcessEnv`** (#383), which Next.js's types make
   stricter: `next build`'s typecheck failed in any Next.js app. Found by `nextjs-app-router`.
+- **An action's `ctx.storage.store()` was typed `Promise<string>`** (#386), not `Id<"_storage">`: its id did not
+  pass to a `v.id("_storage")` argument without a cast. Found by `dall-e-storage-action`.
+- **HTTP actions lost the Content-Type** (#387) of a stored `request.blob()` and of a served `new Response(blob)`
+  (two Bun behaviours). Found by `file-storage-with-http`.
 
 ## 4. Divergences
 
