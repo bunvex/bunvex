@@ -42,6 +42,7 @@ export {
   USAGE_LIMITS_TABLE,
 } from "./catalog.ts";
 export {
+  CommitListenerError,
   Committer,
   CommitterStoppedError,
   type Conflict,
@@ -221,8 +222,10 @@ export {
   checkIdentifier,
   type DeclaredTable,
   type Doc,
+  type DocValidator,
   defineSchema,
   defineTable,
+  docValidator,
   type Expand,
   type FieldValue,
   type GenericSchema,
@@ -234,7 +237,9 @@ export {
   MAX_SEARCH_FILTER_FIELDS,
   referencedTables,
   type SchemaDefinition,
+  type SchemaValidators,
   type SearchIndexDef,
+  type SystemFieldValidators,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";

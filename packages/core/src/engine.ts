@@ -298,7 +298,7 @@ export class Engine {
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
-    this.committer.onCommit((entries) => this.backendState.observe(entries));
+    this.committer.onCommit((entries) => this.backendState.observe(entries), "backend state");
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
     });
