@@ -178,6 +178,33 @@ describe("bunvex dev", () => {
     expect(quiet.err.some((l) => l.includes("[BUNVEX "))).toBe(false);
   }, 30_000);
 
+  test("an auth config reading an unset variable: Convex's message, then a push once the variable is set", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, {
+      "bunvex/hello.ts": hello("authed"),
+      "bunvex/auth.config.ts": `export default { providers: [{ domain: process.env.ISSUER_DOMAIN, applicationID: "app" }] };`,
+    });
+    const w = dev(app, d.url);
+    await w.until(() => w.err.some((l) => l.startsWith("bunvex deploy:")));
+    expect(w.err.find((l) => l.startsWith("bunvex deploy:"))).toBe(
+      "bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo set it in the dashboard or using `bunvex env set`",
+    );
+    expect(w.ready()).toBe(0);
+    // No file changes: setting the variable is what makes dev push again (Convex's env var watch).
+    await Bun.sleep(300);
+    const set = await fetch(`${d.url}/api/update_environment_variables`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+      body: JSON.stringify({ changes: [{ name: "ISSUER_DOMAIN", value: "https://issuer.example" }] }),
+    });
+    expect(set.status).toBe(200);
+    await w.until(() => w.ready() === 1);
+    expect((await d.query("hello:hi")).value).toBe("authed");
+    w.stop();
+    expect(await w.done).toBe(0);
+  }, 30_000);
+
   test("an unreachable deployment: backoff and retry; with --once, exit 1", async () => {
     const app = tmp();
     write(app, { "bunvex/hello.ts": hello("x") });

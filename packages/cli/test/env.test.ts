@@ -176,7 +176,8 @@ describe("bunvex env", () => {
     expect((await ro("set", "A", "2")).code).toBe(1);
     const err: string[] = [];
     expect(await main(["env", "list"], { env: {}, cwd: dir, out: () => {}, err: (l) => err.push(l) })).toBe(1);
-    expect(err[0]).toMatch(/^bunvex env: no deployment/);
+    // Convex's message, pointing to `bunvex dev` (which creates the project's local deployment).
+    expect(err[0]).toBe("bunvex env: No BUNVEX_DEPLOYMENT set, run `bunvex dev` to configure a bunvex project");
   });
 
   test("list quotes values as a .env file needs them (Convex's formatEnvValueForDotfile)", () => {

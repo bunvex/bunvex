@@ -255,7 +255,7 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     write(app, { "bunvex/a.ts": `export const x = 1;` });
     const none = io(app);
     expect(await main(["deploy"], none.it)).toBe(1);
-    expect(none.err[0]).toMatch(/no deployment: set BUNVEX_SELF_HOSTED_URL/);
+    expect(none.err[0]).toBe("bunvex deploy: No BUNVEX_DEPLOYMENT set, run `bunvex dev` to configure a bunvex project");
     write(app, {
       "bunvex/a.ts": `import { query } from ${JSON.stringify(SERVER)}; throw new Error("broken"); export const q = query(async () => 1);`,
     });
