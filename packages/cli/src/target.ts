@@ -66,15 +66,58 @@ export function takeTargetFlags(args: string[]): { flags: TargetFlags; rest: str
   return { flags, rest };
 }
 
-/** The target from the flags, else the environment, else the env files; null when either part is missing. */
+/**
+ * The deployment variables as Convex's CLI reads them (`resolveBaseDeploymentSelection`,
+ * cli/lib/deploymentSelection.ts): with `--env-file`, that file alone (it must exist); otherwise the
+ * environment, then `.env.local`, then `.env`, each filling only what is still unset (dotenv's `config`). An empty
+ * value is no value.
+ */
+export function deploymentVariables(flags: TargetFlags, io: Io): (name: string) => string | null {
+  if (flags.envFile) {
+    const path = resolve(io.cwd, flags.envFile);
+    if (!existsSync(path)) throw new Error("env file does not exist");
+    const config = parseEnvFile(readFileSync(path, "utf8"));
+    return (name) => config[name] || null;
+  }
+  const files = [join(io.cwd, ".env.local"), join(io.cwd, ".env")]
+    .filter((f) => existsSync(f))
+    .map((f) => parseEnvFile(readFileSync(f, "utf8")));
+  return (name) => {
+    const set = io.env[name] !== undefined ? io.env[name] : files.find((c) => name in c)?.[name];
+    return set || null;
+  };
+}
+
+/**
+ * The self-hosted target, as Convex's `_getDeploymentSelection` and `getDeploymentSelectionFromEnv` choose it:
+ * `--url` with `--admin-key` (both, or neither counts), else `BUNVEX_SELF_HOSTED_URL` with
+ * `BUNVEX_SELF_HOSTED_ADMIN_KEY`; null when neither (a local deployment, `BUNVEX_DEPLOYMENT`, may be next).
+ * Convex's checks: those variables and `BUNVEX_DEPLOYMENT` may not be set together, and an `--env-file` must
+ * name a deployment.
+ */
 export function resolveTarget(flags: TargetFlags, io: Io): Target | null {
-  const files = flags.envFile ? [resolve(io.cwd, flags.envFile)] : [join(io.cwd, ".env.local"), join(io.cwd, ".env")];
-  const fromFiles: Record<string, string> = {};
-  for (const f of files.reverse()) if (existsSync(f)) Object.assign(fromFiles, parseEnvFile(readFileSync(f, "utf8")));
-  const get = (k: string) => io.env[k] || fromFiles[k] || undefined;
-  const url = (flags.url ?? get("BUNVEX_SELF_HOSTED_URL"))?.replace(/\/$/, "");
-  const adminKey = flags.adminKey ?? get("BUNVEX_SELF_HOSTED_ADMIN_KEY");
-  return url && adminKey ? { url, adminKey } : null;
+  if (flags.url !== undefined && flags.adminKey !== undefined)
+    return { url: flags.url.replace(/\/$/, ""), adminKey: flags.adminKey };
+  const get = deploymentVariables(flags, io);
+  const deployment = get("BUNVEX_DEPLOYMENT");
+  const url = get("BUNVEX_SELF_HOSTED_URL");
+  const adminKey = get("BUNVEX_SELF_HOSTED_ADMIN_KEY");
+  if (url !== null && adminKey !== null) {
+    if (deployment !== null)
+      throw new Error(
+        "BUNVEX_DEPLOYMENT must not be set when BUNVEX_SELF_HOSTED_URL and BUNVEX_SELF_HOSTED_ADMIN_KEY are set",
+      );
+    return { url: url.replace(/\/$/, ""), adminKey };
+  }
+  if (deployment !== null && (url !== null || adminKey !== null))
+    throw new Error(
+      "BUNVEX_SELF_HOSTED_URL and BUNVEX_SELF_HOSTED_ADMIN_KEY must not be set when BUNVEX_DEPLOYMENT is set",
+    );
+  if (flags.envFile && deployment === null)
+    throw new Error(
+      `env file \`${flags.envFile}\` did not contain environment variables for a bunvex deployment. Expected \`BUNVEX_DEPLOYMENT\`, or both \`BUNVEX_SELF_HOSTED_URL\` and \`BUNVEX_SELF_HOSTED_ADMIN_KEY\` to be set.`,
+    );
+  return null;
 }
 
 /** A request to the deployment with its admin key; the JSON answer (or null for an empty one), or throws its message. */

@@ -164,6 +164,8 @@ export class Running implements LogOwner {
    * An action's metered calls (STUDY-71), as Convex's function usage tracker: its `fetch` request bodies,
    * and its file storage calls with the bytes they read and wrote.
    */
+  /** An action's operations started and not settled yet, by Convex's names (STUDY-76). */
+  readonly pendingOps = new Map<string, number>();
   readonly io = {
     networkEgressBytes: 0,
     storageCalls: 0,
@@ -268,7 +270,8 @@ export class FunctionLog {
 /** A line as an endpoint sends it: structured for the CLI and dashboard, else Convex's pretty string. */
 const lineJson = (l: LogLine, structured: boolean) =>
   structured
-    ? { messages: l.messages, isTruncated: l.isTruncated, timestamp: l.timestamp, level: l.level }
+    ? // Convex's `LogLineJson` always has `systemMetadata`, null at these endpoints (`include_system_metadata`).
+      { messages: l.messages, isTruncated: l.isTruncated, timestamp: l.timestamp, level: l.level, systemMetadata: null }
     : prettyLogLine(l);
 
 /**

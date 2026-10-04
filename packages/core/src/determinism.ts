@@ -509,7 +509,7 @@ export function installDeterminismIn(g: { Date: DateConstructor; Math: Math }) {
  * Who a `fetch` outside a query or mutation is charged to (STUDY-71): set by the server, it returns the
  * running action's counter, or null when nothing meters this call.
  */
-let fetchMeter: (() => ((bytes: number) => void) | null) | null = null;
+let fetchMeter: (() => ((bytes: number | null) => void) | null) | null = null;
 export function setFetchMeter(m: typeof fetchMeter) {
   fetchMeter = m;
 }
@@ -542,24 +542,28 @@ function knownBodySize(body: unknown): number | null {
  */
 async function meteredFetch(
   send: typeof fetch,
-  charge: (bytes: number) => void,
+  charge: (bytes: number | null) => void,
   ...args: Parameters<typeof fetch>
 ): Promise<Response> {
-  const [input, init] = args;
-  let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
-  if (size === null) {
-    const req =
-      typeof input === "string" || input instanceof URL
-        ? new Request(input.toString(), init)
-        : new Request(input, init);
-    size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
-    const res = await send(req);
-    charge(size);
+  // `charge` hears once that the request settled: its body's bytes when it went out, null when it failed.
+  let charged: number | null = null;
+  try {
+    const [input, init] = args;
+    let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
+    let res: Response;
+    if (size === null) {
+      const req =
+        typeof input === "string" || input instanceof URL
+          ? new Request(input.toString(), init)
+          : new Request(input, init);
+      size = req.body ? (await req.clone().arrayBuffer()).byteLength : 0;
+      res = await send(req);
+    } else res = await send(...args);
+    charged = size;
     return res;
+  } finally {
+    charge(charged);
   }
-  const res = await send(...args);
-  charge(size);
-  return res;
 }
 
 export function outsideExecution<T>(fn: () => T): T {
