@@ -10,6 +10,7 @@
   "workspaces": [
     "packages/*",
     "apps/*",
+    "examples/*",
     "bench"
   ],
   "scripts": {
@@ -23,7 +24,8 @@
     "build:dashboard": "bun run --cwd apps/dashboard build",
     "e2e": "bun run --cwd apps/dashboard e2e",
     "build:site": "bun run --cwd apps/site build",
-    "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard && bun run build:site"
+    "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard && bun run build:site",
+    "test:examples": "cd examples && bun test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

@@ -1,0 +1,3 @@
+[test]
+# Each example deploys a backend of its own: give them time.
+timeout = 120000

@@ -1,0 +1,14 @@
+{
+  "name": "bunvex-examples-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The examples' end-to-end helper (STUDY-90): deploy an example to a bunvex-local-backend, then build it. Never published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "bunvex": "workspace:*"
+  }
+}
