@@ -134,10 +134,11 @@ export const cachedQueryLogs = {
       capture: () => (own ? capped(allLines(own)) : []),
     };
   },
-  replay(extra: unknown) {
+  /** A cached run's lines into the current invocation; `hit`: it is served from the cache (the default). */
+  replay(extra: unknown, hit = true) {
     const parent = current.getStore();
     if (!parent) return;
-    if (parent.owner) parent.owner.cached = true;
+    if (parent.owner && hit) parent.owner.cached = true;
     if (Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as LogLine[]));
   },
 };

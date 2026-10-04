@@ -99,6 +99,7 @@ to a spec.
 | [STUDY-65](STUDY-65-convex-tests-application-client-cli.md) | What Convex tests in `crates/application`, the React / browser / Next.js clients and the CLI, mapped to bunvex's tests; the bugs it found and the gaps left | draft; F1–F4 fixed (#277, #278, #279, #281), client tests #282 |
 | [STUDY-70](STUDY-70-provider-sinks.md) | Provider log stream sinks: Datadog, Axiom, Sentry, PostHog Logs and PostHog Error Tracking, as Convex's | implemented (DV-303 resolved; names under DV-304, owner, 2026-10-03) |
 | [STUDY-74](STUDY-74-function-execution-fields.md) | The `function_execution` fields DV-305 left out: `run_reason` of sync reruns, `scheduler_info`, arguments' bytes, retry counts, the mutation queue | implemented; F1 accepted as recommended (owner, 2026-10-03), DV-320 |
+| [STUDY-75](STUDY-75-sync-cache-hit-logs.md) | A sync query served from another session's run logs a cache hit, as Convex's query cache | implemented, no divergence |
 | [STUDY-43](STUDY-43-data-command.md) | `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) |
 | [STUDY-46](STUDY-46-nextjs.md) | Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) |
 | [STUDY-54](STUDY-54-react-clerk-auth0.md) | React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) |
