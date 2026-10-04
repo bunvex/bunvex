@@ -3,9 +3,43 @@
 import { describe, expect, test } from "bun:test";
 import { nemesisByName } from "../src/nemesis.ts";
 import { describe as summary } from "../src/report.ts";
-import { run } from "../src/runner.ts";
+import { type RunResult, run } from "../src/runner.ts";
 
 const seed = Number(process.env.JEPSEN_SEED ?? Math.floor(Math.random() * 2 ** 31));
+
+/** The workload's operations: what the runner's worker invokes (src/runner.ts). */
+const FUNCTIONS = ["bank:all", "bank:transfer", "log:append", "reg:cas", "reg:read", "reg:write", "set:add"];
+
+/**
+ * The run did real work, whatever the runner's speed: a count of operations does not prove it (a run is
+ * time-boxed, so a slow runner does fewer — 393 instead of thousands under the coverage job, #303), so
+ * this checks what the checks need. Every client completed operations, operations of different clients
+ * overlapped (the linearizability and snapshot checks have concurrency to judge), and, with `everyKind`,
+ * every function of the workload succeeded at least once.
+ */
+function didRealWork(result: RunResult, clients: number, everyKind: boolean) {
+  const ok = result.history.filter((op) => op.status === "ok");
+  const perClient = Array.from({ length: clients }, (_, c) => ok.filter((op) => op.client === c).length);
+  expect({ seed, clientsWithoutAnyOk: perClient.flatMap((n, c) => (n > 0 ? [] : [c])) }).toEqual({
+    seed,
+    clientsWithoutAnyOk: [],
+  });
+  const byStart = [...ok].sort((a, b) => a.start - b.start);
+  let concurrent = false;
+  let open = byStart[0];
+  for (const op of byStart.slice(1)) {
+    if (op.start < open.end && op.client !== open.client) {
+      concurrent = true;
+      break;
+    }
+    if (op.end > open.end) open = op;
+  }
+  expect({ seed, concurrent }).toEqual({ seed, concurrent: true });
+  if (everyKind) {
+    const kinds = new Set(ok.map((op) => op.f));
+    expect({ seed, missing: FUNCTIONS.filter((f) => !kinds.has(f)) }).toEqual({ seed, missing: [] });
+  }
+}
 
 describe("Jepsen-style short run", () => {
   for (const store of ["memory", "sqlite"])
@@ -13,9 +47,9 @@ describe("Jepsen-style short run", () => {
       const result = await run({ seed, store, clients: 5, durationMs: 1500 });
       if (!result.ok) console.error(summary(result));
       expect({ seed, store, violations: result.violations }).toEqual({ seed, store, violations: [] });
-      // the run did real work: thousands of operations, every kind of them
-      expect(result.stats.ops).toBeGreaterThan(500);
-      expect(Object.keys(result.stats.byFunction).length).toBe(7);
+      // the run did real work: every client, concurrently, every kind of operation
+      didRealWork(result, 5, true);
+      expect(Object.keys(result.stats.byFunction).sort()).toEqual(FUNCTIONS);
     }, 60_000);
 
   // faults too (STUDY-57 §4): connections cut, the server killed and restarted, the store slow and failing
@@ -24,7 +58,8 @@ describe("Jepsen-style short run", () => {
     if (!result.ok) console.error(summary(result));
     expect({ seed, violations: result.violations }).toEqual({ seed, violations: [] });
     expect(result.events.length).toBeGreaterThan(0);
-    expect(result.stats.ops).toBeGreaterThan(100);
+    // faults may starve a kind of operation on a slow runner; every client still got answers, concurrently
+    didRealWork(result, 5, false);
   }, 60_000);
 });
 

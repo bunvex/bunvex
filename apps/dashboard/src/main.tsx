@@ -14,7 +14,7 @@ import "./app.css";
 import { forgetDevKnob, takeDevKnobs } from "./knobs.ts";
 import { AccountEntry } from "./login/account-entry.tsx";
 import { type AdminCredentials, capabilitiesOf, deploymentNameOf, mockVerifier } from "./login/credentials.ts";
-import { listenForEmbeddedCredentials } from "./login/embedded.ts";
+import { listenForEmbeddedCredentials, readAllowedOrigins } from "./login/embedded.ts";
 import { type HostSession, initialSession, rememberDemo } from "./login/host-session.ts";
 
 // ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data (knobs.ts);
@@ -62,8 +62,8 @@ function App() {
       });
     return check;
   }, []);
-  // an embedding page may hand the credentials over (embedded.ts)
-  useEffect(() => listenForEmbeddedCredentials(window, (c) => void signIn(c)), [signIn]);
+  // an embedding page at an allowed origin may hand the credentials over (embedded.ts; none allowed by default)
+  useEffect(() => listenForEmbeddedCredentials(window, readAllowedOrigins(document), (c) => void signIn(c)), [signIn]);
 
   const signOut = () => {
     rememberDemo(sessionStorage, false);
