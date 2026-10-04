@@ -47,11 +47,17 @@ export function normalized(v: ArrayLike<number>): Float32Array {
  * document is written all the same.
  */
 export function vectorEntry(def: VectorIndexDef, doc: Doc): Entry | null {
-  const v = fieldValue(doc, def.vectorField) as unknown;
-  if (!Array.isArray(v) || v.length !== def.dimensions || !v.every((x) => typeof x === "number")) return null;
+  if (!inVectorIndex(def, doc)) return null;
+  const v = fieldValue(doc, def.vectorField) as number[];
   const filters: Record<string, string> = {};
   for (const f of def.filterFields) filters[f] = filterKey(fieldValue(doc, f));
   return { vector: normalized(v as number[]), filters };
+}
+
+/** Whether `vectorEntry` keeps the document: its field an array of `dimensions` float64s. */
+export function inVectorIndex(def: VectorIndexDef, doc: Doc): boolean {
+  const v = fieldValue(doc, def.vectorField) as unknown;
+  return Array.isArray(v) && v.length === def.dimensions && v.every((x) => typeof x === "number");
 }
 
 /** A filter: per field, the values (their sort keys) any of which matches; fields are ORed, as Convex's. */
