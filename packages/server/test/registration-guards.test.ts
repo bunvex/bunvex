@@ -58,6 +58,7 @@ describe("calling a registered function directly", () => {
     await functions.runMutation("m:add", {});
     const r = await fetch(`http://127.0.0.1:${server!.port}/api/query`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: "m:direct", args: {} }),
     });
     expect(await r.json()).toEqual({ status: "success", value: 1, logLines: [`[WARN] '${warning("query")}'`] });
