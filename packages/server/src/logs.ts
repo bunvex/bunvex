@@ -13,6 +13,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { wallClock } from "@bunvex/core";
 import inspect from "object-inspect";
+import { mapStack } from "./stack-map.ts";
 
 /** At most this many lines per invocation; the last one is the overflow notice (Convex's MAX_LOG_LINES). */
 export const MAX_LOG_LINES = 256;
@@ -295,8 +296,9 @@ export function installLogCapture() {
   c.trace = (...args: unknown[]) => {
     const e = current.getStore();
     if (e) {
-      // The frames below this wrapper, under the message, as a browser prints them.
-      const frames = (new Error().stack ?? "").split("\n").slice(2).join("\n");
+      // The frames below this wrapper, under the message, as a browser prints them: the app's, mapped to its
+      // sources (STUDY-95).
+      const frames = mapStack((new Error().stack ?? "").split("\n").slice(2).join("\n"));
       emit(e, "LOG", [...render(args), `\n${frames}`]);
     } else originalTrace(...args);
   };

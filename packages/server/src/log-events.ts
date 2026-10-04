@@ -3,6 +3,7 @@
 
 import type { OccInfo, UsageStats } from "./function-log.ts";
 import type { LogLine } from "./logs.ts";
+import { mapStack } from "./stack-map.ts";
 
 /** Convex's `LogTopic`, as sinks subscribe to them. */
 export const LOG_TOPICS = [
@@ -116,7 +117,8 @@ export type StackFrame = {
 export function stackFrames(stack: string | undefined): StackFrame[] | null {
   if (!stack) return null;
   const frames: StackFrame[] = [];
-  for (const raw of stack.split("\n")) {
+  // The app's frames, mapped to its sources (STUDY-95), as Convex's `JsError::from_frames`.
+  for (const raw of mapStack(stack).split("\n")) {
     const line = raw.trim();
     if (!line.startsWith("at ")) continue;
     const body = line.slice(3);

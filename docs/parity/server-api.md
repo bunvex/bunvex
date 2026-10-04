@@ -328,6 +328,7 @@ Key bunvex facts behind the statuses:
 | Non-ConvexError errors redacted in production ("Server Error") | crates/application | done (STUDY-20) | `[Request ID: …] Server Error`, with the details unless `REDACT_LOGS_TO_CLIENT` / `redactLogsToClient` (off by default, as self-hosted Convex). |
 | Typed error codes for limits (e.g. `ValueTooLargeError`, `TooManyWrites`) | crates/common/src/document.rs, database | missing | |
 | `unique()` error when there are multiple results; errors for misuse of closed/chained queries | impl/query_impl.ts | done (#40) | |
+| An uncaught error's stack: the app's frames only, each mapped through its module's source map to the original file, line and column, for the client, logs, `run`, a failed push and a nested call's caller | crates/common/src/errors.rs (`JsError::from_frames`); udf-runtime/src/errors.ts | done (STUDY-95) | Frames name sources as Convex's bundler does (`../bunvex/messages.ts`); the server's frames are dropped. Function names are JavaScriptCore's (DV-345); positions as the map defines them (DV-346). A function reading `error.stack` itself still sees the raw frames. |
 
 ### 19. Limits
 

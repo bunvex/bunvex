@@ -338,6 +338,8 @@ Each row's study still says *owner*, *open* or *awaits*. Until decided, the defa
 
 | ID | bunvex | Convex | Observable | Why | Recommendation | Source |
 |---|---|---|---|---|---|---|
+| DV-345 | A function error's frame names the function as JavaScriptCore does: a name the bundler changed shows changed (`assertShort2`), an inline handler `<anonymous>`, and a strict-mode tail call has no caller frame | V8 with esbuild `keepNames`: the original names, every caller | yes (stack text) | the engine: JavaScriptCore names a frame by its declared identifier and implements proper tail calls | accept now; map names through the source map's `names` later | [STUDY-95 S1](../study/STUDY-95-error-stacks.md#4-divergences) |
+| DV-346 | A frame's line and column are the original 1-based position its source map defines | the frame's 1-based position passed to a 0-based lookup, the token's 0-based position printed: usually the right line on esbuild's output, a 0-based column | yes (positions) | over Bun's output, Convex's arithmetic shows wrong lines; the right line is what Convex's users see | map as the source map defines | [STUDY-95 S2](../study/STUDY-95-error-stacks.md#4-divergences) |
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).
