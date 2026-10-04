@@ -2108,7 +2108,9 @@ writes when on), the screen and the editor.
   opens it directly (the e2e suite does).
 - The header's account entry (`account-entry.tsx`: a plain button until first used, then the menu is
   fetched, so the first load does not grow) shows the deployment or "Demo data" and signs out.
-- An embedding page can hand credentials over (`embedded.ts`, Convex's message shapes).
+- An embedding page can hand credentials over (`embedded.ts`, Convex's message shapes), only from a parent origin
+  the operator allowed (`VITE_BUNVEX_EMBED_ORIGINS` / `<meta name="bunvex-embed-origins">`; none by default:
+  STUDY-12 LG3, DV-319).
 - Next: the real verifier (`GET /api/check_admin_key`) and a real data source.
 
 ## 32. The command palette (STUDY-12 §20; 2 Oct 2026)

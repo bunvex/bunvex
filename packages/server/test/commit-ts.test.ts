@@ -32,7 +32,8 @@ test("a mutation's result resolves on the wire; a query cannot return it", async
     (await (
       await fetch(`http://127.0.0.1:${s.server!.port}/api/${kind}`, {
         method: "POST",
-        body: JSON.stringify({ path, args }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args, format: "encoded_json" }),
       })
     ).json()) as { status: string; value?: any; errorMessage?: string };
   const w = await call("mutation", "m:write");
@@ -73,7 +74,8 @@ test("Convex's refusals (STUDY-53 PR 2): the token in client args, the placehold
     (await (
       await fetch(`http://127.0.0.1:${s.server!.port}/api/mutation`, {
         method: "POST",
-        body: JSON.stringify({ path, args }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args, format: "encoded_json" }),
       })
     ).json()) as { status: string; value?: any; errorMessage?: string };
   const token = await call("m:echo", { x: { $commitTs: null } });

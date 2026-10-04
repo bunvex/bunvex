@@ -1,7 +1,8 @@
 // Deterministic execution for queries and mutations, as Convex does in its isolate: inside a transaction
 // body, `Date.now()` / `new Date()` are frozen at the transaction's start, `performance.now()` is fixed in
-// queries and counts up from that start in mutations, `Math.random()` comes from a PRNG seeded per
-// execution, and `fetch` / `crypto.getRandomValues` throw. A result is then a function of what
+// queries and counts up from that start in mutations, `Math.random()`, `crypto.getRandomValues()` and
+// `crypto.randomUUID()` come from a PRNG seeded per execution, and `fetch`, timers and `crypto.subtle`'s
+// randomness are refused (STUDY-66 §4). A result is then a function of what
 // the transaction read, which the query cache and subscriptions rely on. Every execution (every mutation
 // retry included) gets a fresh time and seed, as in Convex. Actions run outside and see the real globals.
 //
@@ -12,6 +13,7 @@
 // gets from its isolate. This is not a sandbox: code that captured `Date.now` before
 // `installDeterminism()`, or that reaches a non-global API, still escapes.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createCipheriv, createHash } from "node:crypto";
 
 /** `import`: a code version's modules being evaluated (Convex's import phase, STUDY-35). */
 export type ExecutionKind = "query" | "mutation" | "import";
@@ -19,6 +21,11 @@ type Execution = {
   kind: ExecutionKind;
   now: number;
   random: () => number;
+  /**
+   * Fills an array for `crypto.getRandomValues` / `crypto.randomUUID`: a stream fixed per execution, as
+   * Convex's seeded ChaCha12 is, and cryptographically strong as that is (apps make tokens with it).
+   */
+  cryptoBytes: (out: Uint8Array) => void;
   /** `performance.now()` at the start: the execution's start time relative to `performance.timeOrigin`. */
   perfStart: number;
   /** The real monotonic clock at the start, to count a mutation's elapsed time from. */
@@ -160,7 +167,18 @@ export async function storeCall<T>(fn: () => T | Promise<T>): Promise<T> {
 export type Observed = {
   /** `Date.now()`, `new Date()`, `Date()` or `performance.now()` (Convex's `observed_time`). */
   time: boolean;
+  /**
+   * A failure the body cannot catch, which fails it once it has ended (`settled`): a timer's, when no user
+   * timer runs (one that does keeps it in `timer.failed`, STUDY-66 §4).
+   */
+  failure?: Error;
 };
+
+/** The body's value, or the failure it could not catch (see `Observed.failure`). */
+export function settled<T>(observed: Observed, value: T): T {
+  if (observed.failure) throw observed.failure;
+  return value;
+}
 
 const executions = new AsyncLocalStorage<Execution>();
 
@@ -169,6 +187,7 @@ const realNow = Date.now;
 const realRandom = Math.random;
 const realFetch = globalThis.fetch;
 const realGetRandomValues = crypto.getRandomValues.bind(crypto);
+const realRandomUUID = crypto.randomUUID.bind(crypto);
 const realSetTimeout = globalThis.setTimeout;
 const realSetInterval = globalThis.setInterval;
 
@@ -207,11 +226,69 @@ export const preciseClock = (): number => {
   return t;
 };
 
+/**
+ * Convex's refusal of an async op (crates/isolate/src/environment/udf/mod.rs `not_allowed_in_udf`; at import
+ * time, analyze.rs `No<Op>DuringImport`): the same words for queries and mutations, without Convex's docs link.
+ */
 function notAllowed(what: string, kind: ExecutionKind): Error {
-  // At import time Convex refuses every syscall the same way (`No<Op>DuringImport`, isolate analyze.rs).
   if (kind === "import") return new Error(`${what} unsupported at import time`);
-  return new Error(`Can't use ${what} in ${kind === "query" ? "queries" : "mutations"}. Use an action instead.`);
+  return new Error(`Can't use ${what} in queries and mutations. Please consider using an action.`);
 }
+
+/** Convex's refusal of cryptographic randomness (`crypto_rng`): only `crypto.subtle` asks for it. */
+function noCryptoRandomness(kind: ExecutionKind): Error {
+  if (kind === "import") return new Error("Cannot use cryptographic randomness at import time");
+  return notAllowed("cryptographic randomness", kind);
+}
+
+/**
+ * A timer in a query or mutation (Convex's `02_timers.ts`): `setTimeout` returns its id, its sleep op is
+ * refused, and that rejection, unhandled, fails the function — which a `try` around `setTimeout` cannot stop.
+ * Here: the callback never runs, and the error fails the execution at its next store call or when it ends.
+ */
+function refuseTimer(e: Execution, name: string): number {
+  const err = notAllowed(name, e.kind);
+  if (e.timer) {
+    if (!e.timer.failed) e.timer.failed = err;
+  } else if (!e.observed.failure) e.observed.failure = err;
+  return 0;
+}
+
+const INTEGER_ARRAYS = new Set([
+  "Int8Array",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "Int16Array",
+  "Uint16Array",
+  "Int32Array",
+  "Uint32Array",
+  "BigInt64Array",
+  "BigUint64Array",
+]);
+/** Convex's cap on one `getRandomValues` call (crates/isolate/src/ops/crypto.rs). */
+const MAX_RANDOM_BYTES = 65536;
+
+/**
+ * A deterministic, cryptographically strong byte stream from a 32-byte key: AES-256-CTR's keystream. Convex's
+ * `getRandomValues` draws from its seeded ChaCha12 (a CSPRNG); sfc32, bunvex's `Math.random`, is not one.
+ */
+function keystream(key: Uint8Array): (out: Uint8Array) => void {
+  const cipher = createCipheriv("aes-256-ctr", key, new Uint8Array(16));
+  return (out) => out.set(cipher.update(new Uint8Array(out.length)));
+}
+
+/** A stream keyed on first use, from the real CSPRNG (most executions never draw). */
+function lazyKeystream(): (out: Uint8Array) => void {
+  let stream: ((out: Uint8Array) => void) | undefined;
+  return (out) => {
+    if (!stream) stream = keystream(realGetRandomValues(new Uint8Array(32)));
+    stream(out);
+  };
+}
+
+/** The algorithm's name, upper-cased (WebCrypto matches names case-insensitively). */
+const algorithmName = (a: unknown) =>
+  String(typeof a === "string" ? a : ((a as { name?: unknown } | null)?.name ?? "")).toUpperCase();
 
 let installed = false;
 /** Replace the globals (idempotent). The engine calls it; apps never need to. */
@@ -243,6 +320,7 @@ export function installDeterminism() {
       return new target(e.now).toString();
     },
   });
+  // `fetch` is async in Convex's runtime: the refusal is a rejected promise the app can catch.
   globalThis.fetch = Object.assign(
     (...args: Parameters<typeof fetch>) => {
       const e = executions.getStore();
@@ -254,12 +332,12 @@ export function installDeterminism() {
   // Convex refuses timers in queries and mutations too: a transaction cannot wait on the clock.
   globalThis.setTimeout = Object.assign((...args: Parameters<typeof setTimeout>) => {
     const e = executions.getStore();
-    if (e) throw notAllowed("setTimeout()", e.kind);
+    if (e) return refuseTimer(e, "setTimeout");
     return realSetTimeout(...args);
   }, realSetTimeout) as typeof setTimeout;
   globalThis.setInterval = Object.assign((...args: Parameters<typeof setInterval>) => {
     const e = executions.getStore();
-    if (e) throw notAllowed("setInterval()", e.kind);
+    if (e) return refuseTimer(e, "setInterval");
     return realSetInterval(...args);
   }, realSetInterval) as typeof setInterval;
   // Convex (`performance_now_fixed` / `performance_now_incrementing`, crates/isolate/src/environment/udf):
@@ -274,12 +352,58 @@ export function installDeterminism() {
     const elapsed = e.kind === "mutation" ? realPerformanceNow() - e.monotonicStart : 0;
     return toTenthMs(e.perfStart + elapsed);
   };
-  crypto.getRandomValues = (<T extends ArrayBufferView | null>(array: T): T => {
+  // Convex's `crypto.getRandomValues` and `crypto.randomUUID` draw from the seeded PRNG, as `Math.random`
+  // does (crates/isolate/src/ops/crypto.rs `provider.rng()`): allowed, and deterministic per execution.
+  crypto.getRandomValues = function getRandomValues<T extends ArrayBufferView | null>(array: T): T {
     const e = executions.getStore();
-    if (e?.kind === "import") throw new Error("Cannot use cryptographic randomness at import time");
-    if (e) throw notAllowed("crypto.getRandomValues()", e.kind);
-    return realGetRandomValues(array as never) as T;
-  }) as typeof crypto.getRandomValues;
+    if (!e) return realGetRandomValues(array as never) as T;
+    if (arguments.length < 1)
+      throw new TypeError("Failed to execute 'getRandomValues' on 'Crypto': 1 argument required, but only 0 present.");
+    // By tag, not `instanceof`: a code version's arrays come from its own realm.
+    const tag = ArrayBuffer.isView(array) ? Object.prototype.toString.call(array).slice(8, -1) : "";
+    if (!INTEGER_ARRAYS.has(tag))
+      throw new DOMException("The provided ArrayBufferView is not an integer array type", "TypeMismatchError");
+    const view = array as unknown as ArrayBufferView;
+    if (view.byteLength > MAX_RANDOM_BYTES)
+      throw new TypeError(
+        `Byte length (${view.byteLength}) exceeds the number of bytes of entropy available via this API (${MAX_RANDOM_BYTES})`,
+      );
+    e.cryptoBytes(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+    return array;
+  } as typeof crypto.getRandomValues;
+  crypto.randomUUID = (() => {
+    const e = executions.getStore();
+    if (!e) return realRandomUUID();
+    const b = new Uint8Array(16);
+    e.cryptoBytes(b);
+    b[6] = (b[6]! & 0x0f) | 0x40; // version 4
+    b[8] = (b[8]! & 0x3f) | 0x80; // RFC 4122 variant
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }) as typeof crypto.randomUUID;
+  // Cryptographic randomness is refused (Convex's `crypto_rng`, crates/webcrypto/src/lib.rs): every
+  // `generateKey`, `encrypt` with RSA-OAEP, `sign` with RSA-PSS or ECDSA. A rejected promise, as the
+  // methods are async.
+  const subtle = crypto.subtle;
+  const realGenerateKey = subtle.generateKey.bind(subtle);
+  const realEncrypt = subtle.encrypt.bind(subtle);
+  const realSign = subtle.sign.bind(subtle);
+  subtle.generateKey = ((...args: Parameters<SubtleCrypto["generateKey"]>) => {
+    const e = executions.getStore();
+    if (e) return Promise.reject(noCryptoRandomness(e.kind));
+    return realGenerateKey(...(args as [never, never, never]));
+  }) as SubtleCrypto["generateKey"];
+  subtle.encrypt = ((...args: Parameters<SubtleCrypto["encrypt"]>) => {
+    const e = executions.getStore();
+    if (e && algorithmName(args[0]) === "RSA-OAEP") return Promise.reject(noCryptoRandomness(e.kind));
+    return realEncrypt(...args);
+  }) as SubtleCrypto["encrypt"];
+  subtle.sign = ((...args: Parameters<SubtleCrypto["sign"]>) => {
+    const e = executions.getStore();
+    const name = algorithmName(args[0]);
+    if (e && (name === "RSA-PSS" || name === "ECDSA")) return Promise.reject(noCryptoRandomness(e.kind));
+    return realSign(...args);
+  }) as SubtleCrypto["sign"];
 }
 
 /**
@@ -302,6 +426,7 @@ export function runDeterministic<T>(
     kind,
     now: Math.floor(now),
     random,
+    cryptoBytes: lazyKeystream(),
     perfStart: now - origin,
     monotonicStart: realPerformanceNow(),
     observed,
@@ -313,17 +438,23 @@ export function runDeterministic<T>(
  * Run a code version's import phase (Convex's: `Math.random` seeded and `Date.now()` fixed by the
  * deployment, `performance.now()` 0; no fetch, timers or cryptographic randomness).
  */
-export function runImportPhase<T>(seed: Uint32Array, now: number, fn: () => T): T {
+export function runImportPhase<T>(seed: Uint32Array, now: number, fn: () => T): Promise<Awaited<T>> {
   const rng = seededRandom(seed);
   const execution: Execution = {
     kind: "import",
     now: Math.floor(now),
     random: rng,
+    // Keyed by the deployment's seed, so an import draws the same bytes every time it is loaded.
+    cryptoBytes: keystream(
+      createHash("sha256")
+        .update(new Uint8Array(seed.buffer, seed.byteOffset, seed.byteLength))
+        .digest(),
+    ),
     perfStart: 0,
     monotonicStart: realPerformanceNow(),
     observed: { time: false },
   };
-  return executions.run(execution, fn);
+  return executions.run(execution, async (): Promise<Awaited<T>> => settled(execution.observed, await fn()));
 }
 
 /**

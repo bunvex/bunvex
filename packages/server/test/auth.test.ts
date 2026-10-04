@@ -40,7 +40,7 @@ async function setup() {
   });
   stops.push(stop);
   const call = async (kind: string, path: string, token?: string | null, header?: string) => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { "content-type": "application/json" };
     if (token) headers.authorization = `Bearer ${token}`;
     if (header) headers.authorization = header;
     const r = await fetch(`http://127.0.0.1:${server.port}/api/${kind}`, {

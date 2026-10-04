@@ -3,6 +3,8 @@
 // The data model and database as types, as Convex's `convex/server` exports them (`_generated/` imports them).
 export type {
   AnyDataModel,
+  BaseTableReader,
+  BaseTableWriter,
   DataModelFromSchemaDefinition,
   DocumentByInfo,
   DocumentByName,
@@ -10,7 +12,9 @@ export type {
   FieldPaths,
   FilterBuilder,
   GenericDatabaseReader,
+  GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
   GenericDataModel,
   GenericDocument,
   GenericFieldPaths,
@@ -33,7 +37,14 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "@bunvex/core";
-export { defineSchema, defineTable } from "@bunvex/core";
+export {
+  type DocValidator,
+  defineSchema,
+  defineTable,
+  docValidator,
+  type SchemaValidators,
+  type SystemFieldValidators,
+} from "@bunvex/core";
 // Function references, as Convex's `convex/server` exports them (STUDY-26 C3).
 export {
   type AnyApi,
@@ -120,10 +131,14 @@ export type {
   ArgsArrayToObject,
   GenericActionCtx,
   GenericMutationCtx,
+  GenericMutationCtxWithTable,
   GenericQueryCtx,
+  GenericQueryCtxWithTable,
   HttpActionBuilder,
   MutationBuilder,
+  MutationBuilderWithTable,
   QueryBuilder,
+  QueryBuilderWithTable,
   RegisteredAction,
   RegisteredMutation,
   RegisteredQuery,

@@ -42,10 +42,13 @@ function table(head: string[], rows: string[][]): string {
 async function runTests(): Promise<{ lcov: string; ok: boolean }> {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-coverage-"));
   try {
-    const p = Bun.spawn(["bun", "test", "--coverage", "--coverage-reporter=lcov", `--coverage-dir=${dir}`], {
-      stdout: "inherit",
-      stderr: "inherit",
-    });
+    const p = Bun.spawn(
+      ["bun", "test", "--isolate", "--coverage", "--coverage-reporter=lcov", `--coverage-dir=${dir}`],
+      {
+        stdout: "inherit",
+        stderr: "inherit",
+      },
+    );
     const ok = (await p.exited) === 0;
     return { lcov: readFileSync(join(dir, "lcov.info"), "utf8"), ok };
   } finally {
