@@ -67,9 +67,17 @@ const sortKeys = (v: unknown): unknown =>
         : v;
 
 /** Convex's `CronModel::apply`: the declared crons against the stored ones, by name. */
-export async function applyCrons(db: Tx, specs: Map<string, CronSpec>, now: number, o: NextOpts = {}) {
+/** What a push changed, by cron name. */
+export type CronDiff = { added: string[]; updated: string[]; deleted: string[] };
+
+export async function applyCrons(
+  db: Tx,
+  specs: Map<string, CronSpec>,
+  now: number,
+  o: NextOpts = {},
+): Promise<CronDiff> {
   const old = await listJobs(db);
-  const diff = { added: [] as string[], updated: [] as string[], deleted: [] as string[] };
+  const diff: CronDiff = { added: [], updated: [], deleted: [] };
   for (const [name, spec] of specs) {
     const job = old.get(name);
     if (!job) {

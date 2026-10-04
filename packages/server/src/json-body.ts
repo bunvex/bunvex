@@ -57,6 +57,14 @@ export const UDF_POST_WITH_COMPONENT: BodyShape = {
 
 export const QUERY_BATCH: BodyShape = { name: "QueryBatchArgs", fields: [["queries", { seqOf: UDF_POST }]] };
 
+export const UDF_POST_ARGS_ONLY: BodyShape = {
+  name: "UdfPostRequestArgsOnly",
+  fields: [
+    ["args", "value"],
+    ["format", "optString"],
+  ],
+};
+
 /** The body of a request, checked as Convex checks it; a `BadJsonBody` when it is not one. */
 export async function readJsonBody<T>(req: Request, text: () => Promise<string>, shape: BodyShape): Promise<T> {
   if (!isJsonContentType(req.headers.get("content-type"))) throw new BadJsonBody(CONTENT_TYPE_ERROR);

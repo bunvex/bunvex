@@ -456,6 +456,36 @@ describe("deploy2 over HTTP", () => {
     expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
   });
 
+  test("auth.config sees the canonical site URL, also when another variable changes (Convex: test_evaluate_auth_config_has_custom_system_env_var)", async () => {
+    const issuer = await startIssuer();
+    stops.push(issuer.stop);
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const who = mod(
+      "who.js",
+      `import { query } from "@bunvex/server"; export const me = query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null);`,
+    );
+    const auth = mod(
+      "auth.config.js",
+      `export default { providers: [{ domain: process.env.BUNVEX_SITE_URL, applicationID: "app" }] };`,
+    );
+    // The built-in site URL, overridden by its canonical URL (here: the issuer's).
+    const canonical = await d.post("/api/v1/update_canonical_url", {
+      requestDestination: "bunvexSite",
+      url: issuer.url,
+    });
+    expect(canonical.status).toBe(200);
+    const r = await d.push([who, auth]);
+    expect(r.start.body.appAuth).toEqual([{ domain: issuer.url, applicationID: "app" }]);
+    const me = async () => (await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value;
+    expect(await me()).toBe("user-1");
+    // An unrelated variable changes: auth.config is re-evaluated, still with the canonical URL.
+    expect((await d.post("/api/update_environment_variables", { changes: [{ name: "X", value: "1" }] })).status).toBe(
+      200,
+    );
+    expect(await me()).toBe("user-1");
+  });
+
   test("crons come with the push, in its commit", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
@@ -664,7 +694,7 @@ describe("environment variables (STUDY-37)", () => {
     stops.push(() => d.s.shutdown());
     await d.push([envMod]);
     const values: unknown[] = [];
-    const ws = new WebSocket(`${d.api.replace("http", "ws")}/api/1.0/sync`);
+    const ws = new WebSocket(`${d.api.replace("http", "ws")}/api/1.46.0/sync`);
     await new Promise((r) => ws.addEventListener("open", r));
     ws.addEventListener("message", (ev) => {
       const m = JSON.parse(String(ev.data));

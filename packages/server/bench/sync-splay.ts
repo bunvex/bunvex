@@ -37,6 +37,7 @@ async function run(splay: boolean) {
       send: (f: string) => {
         if (f.startsWith('{"type":"Transition"')) transitions++;
       },
+      getBufferedAmount: () => 0,
       close() {},
     } as never);
     s.message(

@@ -226,7 +226,7 @@ export class ScheduledJobExecutor {
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
-    });
+    }, "scheduler");
     this.loop = this.run();
     this.scheduleGc(1000);
   }
@@ -431,7 +431,11 @@ export class ScheduledJobExecutor {
     if (!started) return;
     let state: JobDoc["state"];
     try {
-      await this.functions.runAction(job.name, job.args[0], asJob(job._id), { job: job._id, internal: true });
+      await this.functions.runAction(job.name, job.args[0], asJob(job._id), {
+        job: job._id,
+        internal: true,
+        waitForPermit: true,
+      });
       state = { kind: "success" };
     } catch (e) {
       state = { kind: "failed", error: describeUncaught(e).message };

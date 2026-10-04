@@ -49,8 +49,10 @@ WebSocket client sends each mutation at once and relies on the server's order.
 - A `mut` frame is appended to the chain **synchronously in the message handler**, before any `await`.
   Queue order is therefore the order Bun delivers frames, which is the order they were sent. The chain
   runs them one at a time.
-- `MAX_PENDING_MUTATIONS = 1000`. The next one closes the socket with 1013 and the reason
+- `MAX_PENDING_MUTATIONS = 1000` may wait behind the running one (STUDY-64 §1.2: the running mutation has
+  left Convex's channel). The next one closes the socket with 1013 and the reason
   `TooManyConcurrentMutations`.
+- A mutation that runs for more than 60 s closes the socket with 1011 (STUDY-64 §1.1).
 - On close, the connection is marked closed. Queued mutations that have not started are skipped, and a
   running one finishes without sending a response.
 - Subscriptions are unaffected: `sub`/`unsub` are still handled as they arrive.
@@ -72,8 +74,9 @@ outside this queue, as in Convex.
   order, while the first is held open;
 - a second connection's mutation completes while the first connection's is blocked;
 - a failing mutation (unknown function) does not stall the queue;
-- the 1001st pending mutation closes the socket with 1013 `TooManyConcurrentMutations`, and the queued
-  ones never start.
+- the 1001st mutation waiting behind a running one closes the socket with 1013
+  `TooManyConcurrentMutations`, and the queued ones never start (`packages/server/test/sync-timeout.test.ts`
+  since STUDY-64).
 
 Sabotage:
 

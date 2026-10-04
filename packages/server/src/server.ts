@@ -2,6 +2,7 @@
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
 import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
+  applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
@@ -11,6 +12,7 @@ import {
   type EnvVarChange,
   insertAuditLogEvents,
   OccError,
+  orderEnvVarChanges,
   parseValue,
   readBackendState,
   SchemaEnforcementError,
@@ -44,8 +46,10 @@ import {
   setCanonicalUrl,
   withCanonical,
 } from "./canonical-urls.ts";
+import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
 import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
+import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import {
@@ -60,6 +64,7 @@ import {
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
+import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -69,6 +74,7 @@ import {
   QUERY_BATCH,
   readJsonBody,
   UDF_POST,
+  UDF_POST_ARGS_ONLY,
   UDF_POST_WITH_COMPONENT,
   UDF_POST_WITH_TS,
 } from "./json-body.ts";
@@ -223,7 +229,18 @@ export type ServerOptions = {
    * Convex's values (200 subscriptions, 5 ms). Tests inject `random` and `timers`.
    */
   subscriptionSplay?: Partial<SplayOptions>;
+  /**
+   * Bytes a WebSocket may have waiting to be sent before it is closed (STUDY-64 W1, DV-311). Default and most:
+   * Bun's largest, 2³² − 1. For tests.
+   */
+  wsBackpressureLimit?: number;
 };
+
+/**
+ * Bun's largest `backpressureLimit` (a 32-bit count). Past it Bun either drops frames or closes the socket;
+ * bunvex closes it (STUDY-64 W0/W1): Convex buffers without limit and never drops a frame.
+ */
+export const WS_BACKPRESSURE_LIMIT = 2 ** 32 - 1;
 
 /**
  * Arguments arrive in Convex's JSON form ($integer, $float, $bytes); functions receive Convex values. As in
@@ -231,7 +248,9 @@ export type ServerOptions = {
  */
 const fromWire = (args: unknown, path: string) => {
   try {
-    return parseValue(JSON.stringify((Array.isArray(args) ? args[0] : args) ?? {}));
+    // `null` is an argument (a validated function refuses it); nothing at all is `{}`.
+    const one = Array.isArray(args) ? args[0] : args;
+    return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
     // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
     throw new FunctionPathError(
@@ -239,6 +258,29 @@ const fromWire = (args: unknown, path: string) => {
     );
   }
 };
+
+/** Convex's message for a function `/api/function` or `/api/run` cannot find. */
+const anyFunctionNotFound = (path: string) =>
+  new FunctionPathError(
+    `Could not find function for '${path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
+  );
+
+/**
+ * `/api/run/messages/list` → `messages:list` (Convex's `public_function_post_with_path`): the segments, each
+ * URL-decoded; the last one is the function's name. Fewer than two segments, or one that does not decode,
+ * is null (Convex's `MissingIdentifier`).
+ */
+export function runPath(identifier: string): string | null {
+  let parts: string[];
+  try {
+    parts = identifier.split("/").map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  if (parts.length < 2) return null;
+  const name = parts.pop()!;
+  return `${parts.join("/")}:${name}`;
+}
 
 /** As Convex's self-hosted entry script (`[ -n "$REDACT_LOGS_TO_CLIENT" ]`): any non-empty value turns it on. */
 const envFlag = (v: string | undefined) => v !== undefined && v !== "";
@@ -269,10 +311,18 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
-  functions.actionPermits.onChange = (kind) => {
-    const o = functions.actionPermits.outstanding[kind];
-    appMetrics.recordOutstanding("isolate", kind, o.running, o.queued);
-  };
+  // Each limiter reports its running and queued functions (Convex's `Limiter::report_metrics`), from start.
+  for (const [limiter, env, kind] of [
+    [functions.limits.query, "isolate", "Query"],
+    [functions.limits.mutation, "isolate", "Mutation"],
+    [functions.limits.action, "isolate", "Action"],
+    [functions.limits.nodeAction, "node", "Action"],
+  ] as const) {
+    const report = () =>
+      appMetrics.recordOutstanding(env, kind, limiter.outstanding.running, limiter.outstanding.queued);
+    limiter.onChange = report;
+    report();
+  }
   // Usage limits (STUDY-61): this process's usage, and the worker that enforces the limits.
   const usageMeter = new UsageMeter();
   functions.usageMeter = usageMeter;
@@ -508,12 +558,45 @@ export function createServer(opts: ServerOptions) {
           if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
           throw e;
         }
+      // Each entry's path is parsed after its format, and fails the whole batch (Convex's `parse_export_path`).
+      const badPath = badFunctionPath(q.path);
+      if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
       const r = await collectLogs(async () => functions.runQueryAtJson(q.path, fromWire(q.args, q.path), at, caller));
       const b = udfBody(r, "query", { format: q.format, client });
       if (typeof b !== "string") return b;
       results.push(b);
     }
     return jsonText(`{"results":[${results.join(",")}]}`);
+  };
+
+  /**
+   * `GET /api/query` (Convex's `public_query_get`): the query string's `path`, `args` (JSON text) and `format`,
+   * answered as `POST /api/query`. Convex declares this route but cannot read `args` from a query string, so
+   * every request there is a 400 (STUDY-67 §1.7); bunvex's works (DV-313, decided by the owner).
+   */
+  const getQuery = async (url: URL, req: Request): Promise<Response> => {
+    const badHeader = authHeaderSyntaxError(req);
+    if (badHeader) return badHeader;
+    const q = url.searchParams;
+    const path = q.get("path");
+    const argsText = q.get("args");
+    const bad = (why: string) => requestError(400, "BadQueryArgs", `Failed to deserialize query string: ${why}`);
+    if (path === null) return bad("missing field `path`");
+    if (argsText === null) return bad("missing field `args`");
+    let args: unknown;
+    try {
+      args = JSON.parse(argsText);
+    } catch (e) {
+      return bad(`args: ${(e as Error).message}`);
+    }
+    const formatRequest = { format: q.get("format") ?? undefined, client: req.headers.get("bunvex-client") };
+    const caller = await callerOfRequest(req);
+    if (caller instanceof Response) return caller;
+    return udfResponse(
+      await collectLogs(async () => functions.runQueryJson(path, fromWire(args, path), caller)),
+      "query",
+      formatRequest,
+    );
   };
 
   const sync = new SyncHub({
@@ -587,26 +670,24 @@ export function createServer(opts: ServerOptions) {
   // ---------------------------------------------------------------- file storage (STUDY-32)
   let files: FileStorage | null = null;
   const serveStorage = async (fs: FileStorage, req: Request, url: URL): Promise<Response> => {
-    if (req.method === "OPTIONS") return fs.preflight(req);
     try {
       // Each one a call for usage limits, a download's bytes egress (Convex's `StorageCall`, `StorageBandwidth`).
       if (url.pathname === "/api/storage/upload" && req.method === "POST") {
         const r = await fs.upload(req, url);
         usageMeter.record("functionCalls", 1);
-        return fs.cors(req, r);
+        return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
         const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)));
         usageMeter.record("functionCalls", 1);
         if (req.method === "GET") usageMeter.record("dataEgressGb", Number(r.headers.get("content-length") ?? 0));
-        return fs.cors(req, r);
+        return r;
       }
-      return fs.cors(req, new Response(null, { status: 405 }));
+      return new Response(null, { status: 405 });
     } catch (e) {
-      if (e instanceof StorageError) return fs.cors(req, requestError(e.status, e.code, e.message));
-      if (e instanceof BackendIsNotRunningError) return fs.cors(req, requestError(400, e.code, e.message));
-      if (isSystemError(e))
-        return fs.cors(req, requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE));
+      if (e instanceof StorageError) return requestError(e.status, e.code, e.message);
+      if (e instanceof BackendIsNotRunningError) return requestError(400, e.code, e.message);
+      if (isSystemError(e)) return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       throw e;
     }
   };
@@ -881,15 +962,21 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
-  server = Bun.serve<WsData, never>({
+  // Convex's CORS layer on `/api` (STUDY-67 H2).
+  const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
     ...(opts.hostname ? { hostname: opts.hostname } : {}),
     idleTimeout: 120,
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
-      maxPayloadLength: 8 * 1024 * 1024,
+      maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
       idleTimeout: 960,
+      // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
+      // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
+      // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
+      backpressureLimit: Math.min(opts.wsBackpressureLimit ?? WS_BACKPRESSURE_LIMIT, WS_BACKPRESSURE_LIMIT),
+      closeOnBackpressureLimit: true,
       open(ws) {
         ws.data.session.open(ws);
       },
@@ -898,6 +985,9 @@ export function createServer(opts: ServerOptions) {
       },
       close(ws) {
         ws.data.session.close();
+      },
+      drain(ws) {
+        ws.data.session.drained();
       },
     },
     async fetch(req, srv) {
@@ -909,7 +999,10 @@ export function createServer(opts: ServerOptions) {
           ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
           userAgent: req.headers.get("user-agent"),
         };
-        if (srv.upgrade(req, { data })) return undefined as never;
+        // A deprecated client's upgrade carries the deprecation headers (a refused one never gets here).
+        const verdict = requestVerdict(req);
+        const headers = verdict?.status === 200 ? verdict.headers : undefined;
+        if (srv.upgrade(req, { data, ...(headers ? { headers } : {}) })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
       if (url.pathname === "/version") return new Response("bunvex");
@@ -979,11 +1072,15 @@ export function createServer(opts: ServerOptions) {
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
         return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
-      const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function)$/.exec(url.pathname);
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
+      if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
+      const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
       if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
-      let kind = route[1]!;
+      // `/api/run/<module path>/<name>` (Convex's `public_function_post_with_path`, STUDY-67 H8).
+      const runIdentifier = route[1]!.startsWith("run/") ? route[1]!.slice(4) : null;
+      let kind = runIdentifier === null ? route[1]! : "run";
       // Convex's extractors, in order: the auth header's syntax, then the body (STUDY-67 H4).
       const badHeader = authHeaderSyntaxError(req);
       if (badHeader) return badHeader;
@@ -1011,20 +1108,57 @@ export function createServer(opts: ServerOptions) {
               ? UDF_POST_WITH_COMPONENT
               : kind === "query_batch"
                 ? QUERY_BATCH
-                : UDF_POST,
+                : kind === "run"
+                  ? UDF_POST_ARGS_ONLY
+                  : UDF_POST,
         );
       } catch (e) {
         if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
         throw e;
       }
-      const formatRequest = { format: body.format, client: req.headers.get("bunvex-client") };
+      // Convex parses the path before it authenticates (`parse_export_path`); `/api/function`, after its admin
+      // check, and `/api/run`'s after its identifier (STUDY-67 H7).
+      const badPath = () => {
+        const bad = badFunctionPath(body.path);
+        return bad && requestError(bad.status, bad.code, bad.message);
+      };
+      if (kind !== "function" && kind !== "run" && kind !== "query_batch") {
+        const bad = badPath();
+        if (bad) return bad;
+      }
+      // `/api/run` answers clean JSON by default, whatever the client (Convex's `ConvexCleanJSON` default there).
+      const formatRequest = { format: body.format, client: kind === "run" ? null : req.headers.get("bunvex-client") };
       // Convex takes the batch's timestamp before it authenticates.
       const batchTs = engine.committer.visibleTs;
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
       if (kind === "query_batch") return queryBatch(body.queries!, batchTs, caller, formatRequest.client);
+      if (runIdentifier !== null) {
+        const path = runPath(runIdentifier);
+        if (path === null)
+          return requestError(
+            400,
+            "MissingIdentifier",
+            "Path or function name not provided in path, e.g. /api/run/messages/list",
+          );
+        body.path = path;
+        const bad = badPath();
+        if (bad) return bad;
+      }
       // Convex's `/api/function` (`execute_any_function`): an admin's (`must_be_admin`: not a system key, not
       // a user), on the root component; the function's own kind, internal ones included.
+      // `/api/run`: any kind on the root component, as `/api/function`, but open to everyone: an internal
+      // function is found for an admin only.
+      if (kind === "run") {
+        const found = functions.kindOf(body.path);
+        if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
+          return udfResponse(
+            { ok: false, error: anyFunctionNotFound(body.path), logLines: [] } as never,
+            kind,
+            formatRequest,
+          );
+        kind = found;
+      }
       if (kind === "function") {
         if ((caller as AdminCaller).admin?.kind !== "admin") {
           const denied = new BadDeployKeyError();
@@ -1033,14 +1167,14 @@ export function createServer(opts: ServerOptions) {
         // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
         if (typeof body.componentPath === "string" && body.componentPath !== "")
           return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        const bad = badPath();
+        if (bad) return bad;
         const found = functions.kindOf(body.path);
         if (!found)
           return udfResponse(
             {
               ok: false,
-              error: new FunctionPathError(
-                `Could not find function for '${body.path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
-              ),
+              error: anyFunctionNotFound(body.path),
               logLines: [],
             } as never,
             kind,
@@ -1061,6 +1195,13 @@ export function createServer(opts: ServerOptions) {
       }
       return udfResponse(
         await collectLogs(async () => {
+          if (Array.isArray(body.args) && body.args.length !== 1)
+            functions.checkArity(
+              body.path,
+              kind === "query_at_ts" ? "query" : (kind as "query" | "mutation" | "action"),
+              body.args.map((a) => fromWire(a, body.path) as Value),
+              caller,
+            );
           const args = fromWire(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(body.path, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);
@@ -1074,7 +1215,9 @@ export function createServer(opts: ServerOptions) {
         formatRequest,
       );
     },
-  });
+  };
+  // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
+  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1101,18 +1244,20 @@ export function createServer(opts: ServerOptions) {
   const site =
     sitePort === null
       ? null
-      : Bun.serve({
-          port: sitePort,
-          ...(opts.hostname ? { hostname: opts.hostname } : {}),
-          idleTimeout: 120,
-          ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-          fetch(req, srv) {
-            const url = new URL(req.url);
-            if (url.pathname === "/version") return new Response("bunvex");
-            srv.timeout(req, 0);
-            return serveHttpAction(req, url.pathname, url.search);
-          },
-        });
+      : Bun.serve(
+          withClientVersionCheck({
+            port: sitePort,
+            ...(opts.hostname ? { hostname: opts.hostname } : {}),
+            idleTimeout: 120,
+            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+            fetch(req, srv) {
+              const url = new URL(req.url);
+              if (url.pathname === "/version") return new Response("bunvex");
+              srv.timeout(req, 0);
+              return serveHttpAction(req, url.pathname, url.search);
+            },
+          } as Bun.Serve.Options<undefined, never>),
+        );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
     ? (opts.siteOrigin ?? process.env.BUNVEX_SITE_ORIGIN ?? `http://127.0.0.1:${site.port}`)
@@ -1490,37 +1635,39 @@ export function createServer(opts: ServerOptions) {
       // deployment's (else it starts over).
       let providers: unknown[] | null = null;
       for (let attempt = 0; ; attempt++) {
-        const base = await engine.query((db) => engine.environment.list(db));
-        const after = new Map(base.map((v) => [v.name, v.value]));
-        for (const c of changes) if (c.value === null) after.delete(c.name);
-        for (const c of changes) if (c.value !== null) after.set(c.name, c.value);
+        const [base, canonical] = await engine.query(
+          async (db) => [await engine.environment.list(db), await readCanonicalUrls(db)] as const,
+        );
+        const after = applyEnvVarChanges(new Map(base.map((v) => [v.name, v.value])), changes);
         // The batch's own checks first, so that a bad name is reported as such, not as an auth config error.
         await engine.query(async (db) => engine.environment.check(db, changes, Object.keys(builtinEnv)));
         if (authModule)
           providers = await evaluateAuthConfig(
             engine,
             authModule,
-            { ...builtinEnv, ...Object.fromEntries(after) },
+            // The built-ins as every other evaluation sees them: overridden by their canonical URLs.
+            { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
           );
         const same = await engine.mutation(async (db) => {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
-          // Convex's events (lib.rs `update_environment_variables`): a set creates or updates, an unset
-          // of an existing variable deletes; in the update's transaction.
+          // Convex's events (lib.rs `update_environment_variables`), one per change in the order it is applied:
+          // a set creates or updates, an unset of an existing variable deletes (so an unset and a set of one
+          // name are a delete and a create); in the update's transaction.
           const existing = new Set(now.map((x) => x.name));
-          const events = changes.flatMap((c) =>
-            c.value === null
-              ? existing.has(c.name)
-                ? [auditEvents.deleteEnvironmentVariable(c.name)]
-                : []
-              : [
-                  existing.has(c.name)
-                    ? auditEvents.updateEnvironmentVariable(c.name)
-                    : auditEvents.createEnvironmentVariable(c.name),
-                ],
-          );
+          const events = orderEnvVarChanges(changes).flatMap((c) => {
+            const had = existing.has(c.name);
+            if (c.value === null) {
+              existing.delete(c.name);
+              return had ? [auditEvents.deleteEnvironmentVariable(c.name)] : [];
+            }
+            existing.add(c.name);
+            return [
+              had ? auditEvents.updateEnvironmentVariable(c.name) : auditEvents.createEnvironmentVariable(c.name),
+            ];
+          });
           await insertAuditLogEvents(db, events, auditActor(caller));
           return true;
         }, "update_env_vars");

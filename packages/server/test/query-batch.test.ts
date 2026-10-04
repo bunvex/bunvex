@@ -100,3 +100,23 @@ test("a bad format fails the batch; so does a body of the wrong shape", async ()
     },
   });
 });
+
+test("an entry's path that does not parse fails the batch, after that entry's format (STUDY-67 H7)", async () => {
+  const { batch } = await setup();
+  expect(
+    await batch({
+      queries: [
+        { path: "m:ok", args: {} },
+        { path: "m:o-k", args: {} },
+      ],
+    }),
+  ).toEqual({
+    status: 400,
+    body: {
+      code: "BadBunvexFunctionIdentifier",
+      message:
+        "m:o-k is not a valid path to a bunvex function. Identifier o-k has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
+    },
+  });
+  expect((await batch({ queries: [{ path: "m:o-k", args: {}, format: "bogus" }] })).body.code).toBe("BadFormat");
+});

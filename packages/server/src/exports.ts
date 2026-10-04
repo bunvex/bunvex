@@ -220,17 +220,39 @@ export class ExportService {
 
   private async loop() {
     let backoff = 1000;
+    // A store failure outside an export's own run (finding the next one, recording a failure): logged and
+    // retried with the same backoff, never let out of the loop — an unhandled rejection would end the process
+    // (Convex's export worker retries every error with backoff, crates/application/src/exports/worker.rs).
+    const retry = async (what: string, e: unknown) => {
+      console.error(`bunvex: exports: ${what} failed, retrying: ${(e as Error).message}`);
+      // Woken early by a request or a stop.
+      await Promise.race([
+        Bun.sleep(backoff),
+        new Promise<void>((done) => {
+          this.wake = done;
+        }),
+      ]);
+      this.wake = null;
+      backoff = Math.min(backoff * 2, 15 * 60 * 1000);
+    };
     while (!this.stopped) {
-      const next = await this.sys(async (db) => {
-        for (const state of ["in_progress", "requested"]) {
-          const r = await db
-            .query(EXPORTS_TABLE)
-            .withIndex("by_state_and_ts", (q) => q.eq("state", state))
-            .first();
-          if (r) return r as unknown as ExportRow;
-        }
-        return null;
-      }).catch(() => null);
+      let next: ExportRow | null;
+      try {
+        next = await this.sys(async (db) => {
+          for (const state of ["in_progress", "requested"]) {
+            const r = await db
+              .query(EXPORTS_TABLE)
+              .withIndex("by_state_and_ts", (q) => q.eq("state", state))
+              .first();
+            if (r) return r as unknown as ExportRow;
+          }
+          return null;
+        });
+      } catch (e) {
+        if (this.stopped || this.engine.committer.stopped) return;
+        await retry("finding the next export", e);
+        continue;
+      }
       if (!next) {
         // Every request goes through `request()`, which wakes the worker: nothing to poll.
         await new Promise<void>((done) => {
@@ -244,7 +266,12 @@ export class ExportService {
         backoff = 1000;
       } catch (e) {
         if (e instanceof ExportError) {
-          await this.patch(next._id, { state: "failed", failed_ts: this.nowNs(), progress_message: undefined });
+          try {
+            await this.patch(next._id, { state: "failed", failed_ts: this.nowNs(), progress_message: undefined });
+          } catch (pe) {
+            if (this.stopped || this.engine.committer.stopped) return;
+            await retry(`recording export ${next._id} as failed`, pe);
+          }
           continue;
         }
         if (this.stopped) return;

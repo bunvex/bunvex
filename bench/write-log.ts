@@ -7,7 +7,8 @@
 // Env: W (default 64), SECS (default 10), LAG_MS (default 500), RATE (lag: noise commits/s, default as fast
 // as possible), COMMITTER (module exporting `Committer`,
 // default @bunvex/core: point it at another build to compare), PERSIST (`memory`, default, or `null`: a
-// driver that keeps nothing, so the RSS is the committer's own), HARD_MAX_MB (the hard cap, default 256; 0 turns it off).
+// driver that keeps nothing, so the RSS is the committer's own), HARD_MAX_MB (the hard cap, default 256; 0 turns it off),
+// LISTENERS (throughput: that many no-op commit listeners, as the server registers about 8; default 0).
 import { encodeKey, type IndexWrite, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 
@@ -44,6 +45,11 @@ type Stats = { logLength?: number; logBytes?: number; outOfRetention?: number; c
 
 async function throughput() {
   const c = new Committer(await open(), retention);
+  let notified = 0;
+  for (let i = 0; i < Number(process.env.LISTENERS ?? 0); i++)
+    c.onCommit((entries) => {
+      notified += entries.length;
+    });
   let ok = 0;
   const t0 = performance.now();
   const end = t0 + SECS * 1000;
@@ -67,6 +73,7 @@ async function throughput() {
       secs: SECS,
       commits_per_s: Math.round(ok / secs),
       commits: ok,
+      notified,
       log_entries: s.logLength ?? null,
       log_estimate_mb: s.logBytes === undefined ? null : mb(s.logBytes),
       heap_mb: mb(process.memoryUsage().heapUsed),
