@@ -1,6 +1,6 @@
 # STUDY-65 — What Convex tests in the application, the clients and the CLI, and what bunvex covers
 
-- **Status:** draft (inventory done; F1–F4 fixed in #277, #278, #279, #281; client tests in #282)
+- **Status:** draft (inventory done; F1–F4 fixed in #277, #278, #279, #281; F6 in #PR; client tests in #282)
 - **Convex source read:** the last snapshots with tests, `bea52bde0` (Rust, 2026-04-09) and `c358201e1`
   (TypeScript, 2026-04-08), compared with the current source (`4577b9031`) where they differ
 - **Related:** [TEST-01](../specs/TEST-01-test-strategy.md) §3 (the first round: values, database,
@@ -34,6 +34,7 @@ a sabotage check, and its parity or study rows.
 | F3 | `application/tests/auth_config.rs` `test_evaluate_auth_config_has_custom_system_env_var` | an environment-variable update re-evaluated `auth.config` with the raw built-ins, without the canonical URL overrides that a push, a restart and a canonical-URL change apply | with a canonical site URL and `domain: process.env.BUNVEX_SITE_URL`, changing **any** variable reinstalled the provider with the raw origin, and the issuer's tokens were refused until the next push or restart | #279 |
 | F4 | `application/tests/scheduled_jobs.rs` `test_cancel_recursively_scheduled_job` | "born canceled" only looked at the job of the function that scheduled; the mutations and actions a scheduled action calls (`ctx.runMutation`, `ctx.runAction`) ran without it. Convex propagates `parent_scheduled_job` down the call tree | the common "action → runMutation(schedule the next step)" loop kept running after the job was canceled | #281 |
 | F5 | `react/use_paginated_query.test.tsx` (the reset path), `ConvexReactClient.logger` | `BunvexReactClient.logger` returned the raw option (`Logger \| boolean \| undefined`), and the paginated hooks warned with `console.warn` | `logger: false` did not silence the pagination reset warning, and a custom logger never got it | open (§6 #12): Convex builds the `Logger` in the React client with `instantiateDefaultLogger` / `instantiateNoopLogger`, which `@bunvex/client` does not export; the fix needs that export or another way in |
+| F6 | `cron_jobs.rs` `test_cron_jobs_race_condition` (an executor handed a cron deleted after it picked it) | `CronJobExecutor.execute` looked the function up before checking the cron; a missing function was a system error, retried without end | a push that removed a cron and its function while the executor held the cron: "Cron trying to execute missing function" logged every 15 s, forever, and one of the 8 run slots never freed. Convex's `run_function` checks the job first and drops it | #PR |
 
 ## 2. `crates/application/src/tests`
 

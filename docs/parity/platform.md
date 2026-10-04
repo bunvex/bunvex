@@ -107,7 +107,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` tables | `crates/model/cron_jobs` | done (STUDY-30) | Convex's three tables and indexes; not visible to apps. |
 | Diff on push (added / updated / deleted) | `CronModel::apply` | done (STUDY-30) | At start (S1). A new interval cron runs at once; a schedule change moves the next run under the 30 s rule. |
 | Splay (`CRON_SPLAY_SECONDS` 60) | `crates/model/cron_jobs/next_ts.rs` | done (STUDY-30) | As Convex (DV-85), `CRON_SPLAY_SECONDS` (0 turns it off). |
-| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. |
+| No overlapping runs; missed runs skipped, not replayed | `crates/application/cron_jobs` | done (STUDY-30) | An interval's skips are logged as one `canceled` run. As Convex, the executor checks a picked cron before its function: one a push deleted along with its function is dropped, not retried (STUDY-65 F6). |
 | Dashboard: list crons and their run history | `system-udfs/_system/frontend/listCronJobs.ts`, `listCronJobRuns.ts` | done (STUDY-30, STUDY-34) | Both system functions, in Convex's document shapes, for admins with `ViewData`. |
 
 ### 6. Full-text search

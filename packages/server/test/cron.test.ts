@@ -13,7 +13,7 @@ import { makeFunctionReference } from "@bunvex/protocol";
 import { BunvexError, v } from "@bunvex/values";
 import { type Crons, cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
-import { completeRun, currentJob, insertLog } from "../src/cron-model.ts";
+import { type CronJob, completeRun, currentJob, dueCrons, insertLog } from "../src/cron-model.ts";
 import { computeNextTs } from "../src/cron-next.ts";
 import { action, Functions, internalMutation, mutation, query } from "../src/functions.ts";
 
@@ -398,4 +398,36 @@ test("a paused deployment's crons wait; unpausing wakes the executor (STUDY-63)"
   await t.engine.mutation((db) => setUserStopState(db, "none"));
   await until(() => t.ran.length > 0, "the cron to run");
   expect(t.ran).toEqual(["tick"]);
+});
+
+test("a cron deleted with its function after the executor picked it is dropped, not retried (Convex checks the job first)", async () => {
+  // Convex's `run_function` (crates/application/src/cron_jobs/mod.rs) re-reads the job before it looks the
+  // function up: a push that removed both leaves nothing to run, and the executor moves on.
+  const c = cronJobs();
+  c.interval("gone", { seconds: 60 }, "m:tick", { tag: "stale" });
+  const { engine, ran, logs } = await setup(c);
+  await until(async () => (await logs("gone")).length === 1, "the first run");
+  // The next run, as the executor would pick it once due.
+  const [picked] = await engine.query((db) => dueCrons(db, Date.now() + 120_000, 10));
+  expect(picked?.name).toBe("gone");
+
+  // A new code version without the cron and without its function.
+  const next = new Functions(engine).register("m", { other: mutation(async () => {}) });
+  const none = cronSpecs(cronJobs(), (id, n) => next.cronTarget(id, n));
+  const after = new CronJobExecutor(engine, next, none, { cronSplaySeconds: 0, errorInitialBackoffMs: 5 });
+  stops.push(() => after.stop());
+  expect(await after.push(none)).toMatchObject({ deleted: ["gone"] });
+
+  const errors: unknown[][] = [];
+  const consoleError = console.error;
+  console.error = (...a: unknown[]) => errors.push(a);
+  try {
+    const execute = (after as unknown as { execute(j: CronJob): Promise<void> }).execute(picked!);
+    const outcome = await Promise.race([execute.then(() => "done"), Bun.sleep(500).then(() => "still retrying")]);
+    expect(outcome).toBe("done");
+  } finally {
+    console.error = consoleError;
+  }
+  expect(errors).toEqual([]);
+  expect(ran).toEqual(["stale"]);
 });
