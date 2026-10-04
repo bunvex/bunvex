@@ -51,7 +51,7 @@ Each example:
 
 That makes the examples the proof that the product works together (CLI, push, codegen, server, clients, React,
 Next.js), which Convex's demos are not. The examples' tests run in their own CI job, on every PR, next to the
-unit tests (`bun run test:examples`); the root `bun test` ignores `examples/**`.
+unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys a backend); the root `bun test` ignores `examples/**`.
 
 ### Which demos, and when
 
@@ -76,6 +76,15 @@ unit tests (`bun run test:examples`); the root `bun test` ignores `examples/**`.
 **Templates** (`bun create bunvex`): a second step, once the first examples are in; each template is close to
 a lean example, and they are worth most once the packages are published (STUDY-40: `@bunvex/*` today, `bunvex`
 pending npm).
+
+### What the first batch found
+
+Two bunvex bugs no unit test had caught, each fixed in its own PR:
+
+- **`bunvex/server` did not load outside Bun** (STUDY-91, #382): every front end importing `_generated/api`
+  failed to bundle (Vite, webpack) or to load in Node (Next.js). Found by the tutorial's first `vite build`.
+- **`@bunvex/file-storage`'s `env` parameters were typed `NodeJS.ProcessEnv`** (#383), which Next.js's types make
+  stricter: `next build`'s typecheck failed in any Next.js app. Found by `nextjs-app-router`.
 
 ## 4. Divergences
 
