@@ -88,14 +88,16 @@ export function buildSearchSnapshot(
         tablet: e.tablet,
         name: e.name,
         def: e.def,
-        docs: [...e.docs].map(
-          ([id, d]) =>
-            [
-              id,
-              Buffer.from(d.vector.buffer, d.vector.byteOffset, d.vector.byteLength).toString("base64"),
-              d.filters,
-            ] as [string, string, Record<string, string>],
-        ),
+        docs: [...e.index.ids()]
+          .map((id) => [id, e.index.get(id)!] as const)
+          .map(
+            ([id, d]) =>
+              [
+                id,
+                Buffer.from(d.vector.buffer, d.vector.byteOffset, d.vector.byteLength).toString("base64"),
+                d.filters,
+              ] as [string, string, Record<string, string>],
+          ),
       })),
   };
   return gzipSync(JSON.stringify(snapshot));
