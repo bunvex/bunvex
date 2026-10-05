@@ -71,6 +71,7 @@ import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
+import { healthRoute, versionRoute } from "./health.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -1089,9 +1090,10 @@ export function createServer(opts: ServerOptions) {
         if (srv.upgrade(req, { data, ...(headers ? { headers } : {}) })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
-      if (url.pathname === "/version") return new Response("bunvex");
-      // Convex's health route: the deployment's name, as plain text (STUDY-34).
-      if (url.pathname === "/instance_name") return new Response(engine.instanceName);
+      // The meta `/version` and Convex's health routes: `/instance_name` (STUDY-34), `/instance_version`, `/`
+      // and `/echo` (STUDY-112), with no auth and their own body limit.
+      const health = healthRoute(req, url.pathname, engine.instanceName);
+      if (health) return health;
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
@@ -1337,7 +1339,7 @@ export function createServer(opts: ServerOptions) {
             ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
             fetch(req, srv) {
               const url = new URL(req.url);
-              if (url.pathname === "/version") return new Response("bunvex");
+              if (url.pathname === "/version") return versionRoute(req);
               srv.timeout(req, 0);
               return serveHttpAction(req, url.pathname, url.search);
             },

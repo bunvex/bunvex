@@ -179,7 +179,6 @@ gaps.
   - persisted search segments (STUDY-79 option E): a restart restores the clean-shutdown snapshot and replays
     the log since (STUDY-96), but after a crash the replay runs from the last clean shutdown, or the whole
     table without one;
-  - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
   - Prometheus `/metrics`;
   - `_index_worker_metadata`, `_auth`, `_db`;
