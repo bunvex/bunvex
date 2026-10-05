@@ -62,4 +62,5 @@ test("in an engine: a push past the cap is refused; at the cap, a write to a new
   await expect(e.mutation((db) => db.insert("one_more", {}))).rejects.toThrow("Number of tables cannot exceed 10000.");
   await e.mutation((db) => db.insert("t0", {})); // an existing table
   await e.close();
-});
+  // Two pushes of 10 000 tables: about 4.5 s here, past bun's 5 s default under coverage.
+}, 60_000);
