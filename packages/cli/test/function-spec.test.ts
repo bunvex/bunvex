@@ -74,7 +74,7 @@ test("bunvex function-spec: the URL, the functions with their validators, the HT
       functionType: "Mutation",
       visibility: { kind: "internal" },
       args: { type: "any" },
-      returns: { type: "any" },
+      returns: null,
     },
     { functionType: "HttpAction", method: "POST", path: "/hook" },
     { functionType: "HttpAction", method: "GET", path: "/files/*" },
