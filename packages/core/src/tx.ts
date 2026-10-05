@@ -20,7 +20,9 @@ import {
   isSimpleObject,
   keyBytesLength,
   MAX_COMMIT_TS,
+  MAX_VALUE_NESTING,
   rawValueSize,
+  TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   v,
@@ -41,6 +43,7 @@ import {
 import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -312,23 +315,39 @@ export type Savepoint = {
 /** A field's place in a document: object keys and array positions (STUDY-53). */
 type Path = (string | number)[];
 
-/** `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. */
-function extractCommitTs(value: unknown, at: Path = [], paths: Path[] = []): { value: unknown; paths: Path[] } {
+/**
+ * `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. It is
+ * the first walk of a written value, so it checks Convex's nesting limit on it too (STUDY-109): an array or
+ * object deeper than `max` throws ``Invalid argument `value` for `db.<method>`: …`` before going further down.
+ */
+function extractCommitTs(
+  value: unknown,
+  max: number,
+  method: string,
+  at: Path = [],
+  paths: Path[] = [],
+): { value: unknown; paths: Path[] } {
   if (isCommitTsPlaceholder(value)) {
     paths.push(at);
     return { value: MAX_COMMIT_TS, paths };
   }
   if (Array.isArray(value)) {
-    const out = value.map((x, i) => extractCommitTs(x, [...at, i], paths).value);
+    if (at.length >= max) throw tooNestedWrite(method);
+    const out = value.map((x, i) => extractCommitTs(x, max, method, [...at, i], paths).value);
     return { value: out, paths };
   }
   if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    if (at.length >= max) throw tooNestedWrite(method);
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, [...at, k], paths).value;
+    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, max, method, [...at, k], paths).value;
     return { value: out, paths };
   }
   return { value, paths };
 }
+
+/** Convex's message for a written value past the nesting limit (`with_argument_error`, the syscall's `value`). */
+const tooNestedWrite = (method: string) =>
+  new Error(`Invalid argument \`value\` for \`db.${method}\`: ${TOO_NESTED_MESSAGE}`);
 
 /** A copy of `doc` with `by` at each of `paths`. */
 function setAt(doc: Doc, paths: Path[], by: unknown): Doc {
@@ -639,6 +658,14 @@ export class Tx {
   }
 
   /**
+   * How deeply a written value may nest: Convex's value limit, 64 (STUDY-109). The engine's own records are
+   * exempt — a scheduled job keeps its arguments (63 levels) inside its document, which Convex stores as bytes.
+   */
+  private writtenNesting(): number {
+    return this.systemAccess ? Number.POSITIVE_INFINITY : MAX_VALUE_NESTING;
+  }
+
+  /**
    * Run `fn` with access to system tables, inside an app transaction: for the engine's own records that
    * must commit with the app's writes (the sync protocol's `_session_requests`). Not for app code.
    */
@@ -945,7 +972,7 @@ export class Tx {
       creationTime = this.nextCreationTime;
       this.nextCreationTime = nextUp(creationTime);
     }
-    const doc = { ...copyFields(rest, "insert"), _id: id, _creationTime: creationTime };
+    const doc = { ...copyFields(rest, "insert", this.writtenNesting()), _id: id, _creationTime: creationTime };
     checkSystemFields(doc, {}, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     return id;
@@ -1406,6 +1433,9 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
+    engineOwned(old);
+    engineOwned(next);
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
@@ -1460,6 +1490,10 @@ export class Tx {
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     if (!this.writable) throw new Error("queries cannot write");
+    // Validated and copied at the call, as Convex serializes the value: its nesting first, before the table
+    // (Convex's `insert` syscall parses `value`, then `table`); an unsupported type throws below, and mutating
+    // `fields` afterwards cannot change what is written.
+    const x = extractCommitTs(fields, this.writtenNesting(), "insert");
     const t = this.findTable(table) ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
@@ -1471,10 +1505,11 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
-    // mutating `fields` afterwards cannot change what is written.
-    const x = extractCommitTs(fields);
-    const doc = { ...copyFields(x.value as Record<string, unknown>, "insert"), _id: id, _creationTime: creationTime };
+    const doc = {
+      ...copyFields(x.value as Record<string, unknown>, "insert", this.writtenNesting()),
+      _id: id,
+      _creationTime: creationTime,
+    };
     checkSystemFields(doc, fields, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     this.setCommitTs(id, x.paths);
@@ -1497,15 +1532,17 @@ export class Tx {
   }
 
   private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
+    // Convex parses the patch before it reads the document. Each field's value is a value of its own, so the
+    // patch object may be one level deeper than the limit.
+    const x = extractCommitTs(fields, this.writtenNesting() + 1, "patch");
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
-    const x = extractCommitTs(fields);
     const next: Record<string, unknown> = { ...cur };
     for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
-    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch"));
+    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch", this.writtenNesting() + 1));
     checkSystemFields(next, fields, id, cur._creationTime);
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
     // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
@@ -1524,13 +1561,13 @@ export class Tx {
   }
 
   private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
+    const x = extractCommitTs(value, this.writtenNesting(), "replace"); // before the read, as in Convex
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
-    const x = extractCommitTs(value);
     const next: Record<string, unknown> = {
-      ...copyFields(x.value as Record<string, unknown>, "replace"),
+      ...copyFields(x.value as Record<string, unknown>, "replace", this.writtenNesting()),
       _id: id,
       _creationTime: cur._creationTime,
     };
@@ -1855,11 +1892,14 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
   return n;
 }
 
-/** A validated deep copy of a write's fields (Convex serializes values at the call). */
-function copyFields(fields: Record<string, unknown>, method: string): Record<string, unknown> {
+/**
+ * A validated deep copy of a write's fields (Convex serializes values at the call), nested at most
+ * `maxNesting` levels.
+ */
+function copyFields(fields: Record<string, unknown>, method: string, maxNesting: number): Record<string, unknown> {
   if (!isSimpleObject(fields))
     throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
-  return copyValue(fields as Value) as Record<string, unknown>;
+  return copyValue(fields as Value, maxNesting) as Record<string, unknown>;
 }
 
 /**
