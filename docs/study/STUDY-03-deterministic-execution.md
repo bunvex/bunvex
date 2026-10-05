@@ -63,10 +63,16 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| D1 | `Math.random` is sfc32, not ChaCha12 | Neither is cryptographic. A seeded PRNG is enough, and sfc32 is fast in JS. | accepted (#4) |
-| D2 | Not a sandbox: code that captured `Date.now` before the install, or that reaches a non-global API such as `Bun.sleep`, escapes | One process, no isolate | accepted (#4) |
+| D1 | `Math.random` is sfc32, not ChaCha12 | Neither is cryptographic. A seeded PRNG is enough, and sfc32 is fast in JS. | accepted (#4); confirmed by the owner, 2026-10-04 (DV-01) |
+| D2 | Not a sandbox: code that captured `Date.now` before the install, or that reaches a non-global API such as `Bun.sleep`, escapes | One process, no isolate | accepted (#4); confirmed by the owner, 2026-10-04 (DV-02), with a stronger isolation to study later (below) |
 | D3 | `performance.now()` is fixed in queries and incrementing in mutations, rounded down to 0.1 ms, as Convex (implemented, `fix/performance-now`). What remains different: `performance.timeOrigin` is the process's, not a module import time, and there is no import phase where `now()` is 0 | bunvex has no separate import phase (modules are imported once, at server start) | accepted: not possible exactly without isolates (owner, 2026-09-30; DV-52) |
 | D4 | No idempotency key for client resends | Belongs to protocol v1 | open |
+
+**D2, to study later (owner, 2026-10-04).** The determinism is a set of replaced globals in one process, not a
+sandbox: a function can escape it (a `Date.now` captured before the install, `Bun.sleep`, a module-level cache),
+and a synchronous infinite loop blocks the whole process (STUDY-41 N5). Convex gets both from a V8 isolate per
+function. Options to weigh then: a worker per call or per module (isolation and interruption, at a startup and
+copy cost), `ShadowRealm` when Bun ships it, or keeping one process and hardening what can be caught.
 
 ## 5. Tests
 

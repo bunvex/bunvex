@@ -51,7 +51,14 @@ import {
   type Persistence,
   type ScanDocs,
 } from "./persistence/index.ts";
-import { checkOps, MAX_QUERY_OPERATORS, Pipeline, type QueryOp, TOO_MANY_OPERATORS } from "./query-ops.ts";
+import {
+  checkOps,
+  MAX_QUERY_OPERATORS,
+  Pipeline,
+  type QueryOp,
+  serializeOps,
+  TOO_MANY_OPERATORS,
+} from "./query-ops.ts";
 import {
   checkIdentifier,
   type Doc,
@@ -1065,6 +1072,7 @@ export class Tx {
         : st.range.lo,
       hi: st.range.hi,
       desc: st.desc,
+      ops: serializeOps(st.ops),
     });
     const secret = this.cursorCodec();
     const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;

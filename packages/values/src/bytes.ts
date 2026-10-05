@@ -54,8 +54,28 @@ export function utf8Length(s: string): number {
 }
 
 const encoder = new TextEncoder();
-/** Two strings in the order of their UTF-8 bytes. */
+const isSurrogate = (c: number) => c >= 0xd800 && c <= 0xdfff;
+
+/**
+ * Two strings in the order of their UTF-8 bytes. UTF-16 code units order as UTF-8 bytes do, except where the
+ * first differing unit is a surrogate (a pair encodes above U+FFFF, a lone one as U+FFFD): this compares the
+ * units without encoding, and leaves those cases to the encoded bytes. A string that is a prefix of the other
+ * is first either way. It runs for every object key of every HTTP answer (the value formats), so it allocates
+ * nothing on the way.
+ */
 export function compareUtf8(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a.charCodeAt(i);
+    const y = b.charCodeAt(i);
+    if (x === y) continue;
+    if (isSurrogate(x) || isSurrogate(y)) return compareEncoded(a, b);
+    return x < y ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+function compareEncoded(a: string, b: string): number {
   if (NodeBuffer) return NodeBuffer.compare(NodeBuffer.from(a), NodeBuffer.from(b));
   const x = encoder.encode(a);
   const y = encoder.encode(b);

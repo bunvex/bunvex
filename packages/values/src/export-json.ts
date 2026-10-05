@@ -17,6 +17,13 @@ const b64 = toBase64;
 export function formatExportFloat(n: number): string {
   if (Object.is(n, 0)) return "0.0";
   if (Object.is(n, -0)) return "-0.0";
+  // Between 1e-5 and 1e16 ryu writes the digits without an exponent, as JS's `String` does: the same text,
+  // with ".0" after an integer. Most numbers are there; the general layout below handles the rest.
+  const abs = Math.abs(n);
+  if (abs >= 1e-5 && abs < 1e16) {
+    const s = String(n);
+    return Number.isInteger(n) ? `${s}.0` : s;
+  }
   const sign = n < 0 ? "-" : "";
   // JS's shortest round-trip digits, as ryu's: `d.ddde±x`.
   const [mant, expStr] = Math.abs(n).toExponential().split("e") as [string, string];
