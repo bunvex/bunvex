@@ -20,7 +20,9 @@
     "@bunvex/core": "workspace:*",
     "@bunvex/protocol": "workspace:*",
     "@bunvex/server": "workspace:*",
-    "@bunvex/values": "workspace:*"
+    "@bunvex/values": "workspace:*",
+    "@modelcontextprotocol/server": "2.3.1",
+    "zod": "^4.2.0"
   },
   "publishConfig": {
     "access": "public"
