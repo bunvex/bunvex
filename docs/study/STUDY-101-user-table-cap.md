@@ -46,12 +46,13 @@ The table allocation in `planCatalog` (`@bunvex/core` `catalog.ts`) is where all
 The hidden-table path passes the real name's kind. An import's hidden table is planned under a placeholder
 name, so for `_storage` it would otherwise count as a user table.
 
-A push maps the error to a 400 `TooManyTables` `PushError` with the bare message. A mutation surfaces it as
+A push maps the error to a 400 `TooManyTables` `PushError`. The server wraps it as every push error is
+(`Hit an error while pushing:\nNumber of tables cannot exceed 10000.`), as Convex's `start_push` does. A mutation surfaces it as
 its uncaught error.
 
 ## 4. Divergences
 
-None. The push answer's text is not compared with a Convex run.
+None.
 
 ## 5. Tests
 
@@ -66,8 +67,23 @@ None. The push answer's text is not compared with a Convex run.
   - after a push of 10 000, a write to a new table is refused;
   - a write to an existing one still works.
 
-Sabotage checks:
-<!-- filled after the run -->
+`packages/server/test/push.test.ts` covers a push over HTTP of a schema with 10 001 tables: 400
+`TooManyTables`, and the old code keeps serving.
+
+Sabotage checks, each caught:
+
+- off by one (`>`);
+- system names refused;
+- system tables counted;
+- hidden and deleting tables counted;
+- tables of one plan not counted;
+- the hidden-import flag ignored in `planCatalog`;
+- the push not mapping the error.
+
+Not covered by a test: `createHiddenTable` passing that flag for a `_storage` import, since no test imports
+`_storage` into a deployment with 10 000 tables.
+
+The test file runs in about 2.4 s.
 
 ## 6. Open questions
 

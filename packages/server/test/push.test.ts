@@ -381,6 +381,24 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
+  test("a schema past 10 000 tables: Convex's TooManyTables, nothing pushed (STUDY-101)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    const many = mod(
+      "schema.js",
+      `import { defineSchema, defineTable } from "@bunvex/server";
+       import { v } from "@bunvex/values";
+       const tables = { messages: defineTable({ author: v.string(), body: v.string() }).index("by_author", ["author"]) };
+       for (let i = 0; i < 10000; i++) tables["t" + i] = defineTable(v.any());
+       export default defineSchema(tables);`,
+    );
+    const bad = await d.push([messages(1)], many);
+    expect([bad.start.status, bad.start.body.code]).toEqual([400, "TooManyTables"]);
+    expect(bad.start.body.message).toBe("Hit an error while pushing:\nNumber of tables cannot exceed 10000.");
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+  });
+
   test("a schema the existing documents do not match: wait_for_schema answers failed", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
