@@ -135,6 +135,7 @@ import {
 } from "./logs.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import type { ServerMetrics } from "./server-metrics.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
@@ -771,6 +772,8 @@ export class Functions {
 
   /** The app metrics (STUDY-58); set by `createServer`. */
   appMetrics: AppMetrics | null = null;
+  /** The Prometheus metrics (STUDY-114); set by `createServer`. */
+  serverMetrics: ServerMetrics | null = null;
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
@@ -895,6 +898,7 @@ export class Functions {
       executionTime: c.executionTime,
       ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
     });
+    this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
   }
 

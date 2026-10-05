@@ -104,6 +104,7 @@ import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
+import { metricsEndpointDisabled, ServerMetrics } from "./server-metrics.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
@@ -283,6 +284,11 @@ export type ServerOptions = {
    * tests.
    */
   wsHeartbeat?: Partial<WsHeartbeatOptions>;
+  /**
+   * Answer `/metrics` with 404 `MetricsDisabled` instead of the Prometheus metrics (STUDY-114). Default:
+   * `DISABLE_METRICS_ENDPOINT` (only `true` turns it on), else off, as Convex's knob.
+   */
+  disableMetricsEndpoint?: boolean;
 };
 
 /**
@@ -375,6 +381,10 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
+  // The Prometheus metrics (STUDY-114): served at `/metrics` unless DISABLE_METRICS_ENDPOINT is `true`.
+  const serverMetrics = new ServerMetrics();
+  functions.serverMetrics = serverMetrics;
+  const metricsDisabled = opts.disableMetricsEndpoint ?? metricsEndpointDisabled(process.env.DISABLE_METRICS_ENDPOINT);
   // Each limiter reports its running and queued functions (Convex's `Limiter::report_metrics`), from start.
   for (const [limiter, env, kind] of [
     [functions.limits.query, "isolate", "Query"],
@@ -560,6 +570,17 @@ export function createServer(opts: ServerOptions) {
   const requestError = (status: number, code: string, message: string) => json({ code, message }, status);
 
   /**
+   * `/metrics` (Convex's `metrics` meta route): the Prometheus text exposition, with no auth; 404
+   * `MetricsDisabled` when DISABLE_METRICS_ENDPOINT is `true`. A GET route: another method is a 405.
+   */
+  const metricsRoute = (req: Request): Response => {
+    if (req.method !== "GET" && req.method !== "HEAD")
+      return new Response(null, { status: 405, headers: { allow: "GET,HEAD" } });
+    if (metricsDisabled) return requestError(404, "MetricsDisabled", "/metrics endpoint disabled");
+    return new Response(serverMetrics.registry.encode(), { headers: { "content-type": "text/plain; charset=utf-8" } });
+  };
+
+  /**
    * The response to a function call, as Convex's `UdfResponse`: `{status:"success", value, logLines?}`, or
    * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
    * A system failure is a 500 with the fixed internal message. `value` and `errorData` are in the request's
@@ -685,7 +706,9 @@ export function createServer(opts: ServerOptions) {
     // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
     onInvalidations: (events) => {
       const bySource = new Map<string, Map<string, number>>();
+      let total = 0;
       for (const e of events) {
+        total += e.count;
         if (e.source === undefined) continue;
         const source = functions.kindOf(e.source) === null ? e.source : canonicalPath(e.source);
         const m = bySource.get(source) ?? new Map<string, number>();
@@ -693,7 +716,9 @@ export function createServer(opts: ServerOptions) {
         bySource.set(source, m);
       }
       for (const [source, m] of bySource) appMetrics.recordInvalidations(source, m);
+      serverMetrics.invalidations(total);
     },
+    metrics: serverMetrics,
     verifyToken: (token) => verifier.verify(token),
     adminCaller: (key, impersonating) => {
       const admin = adminKeys.check(removeTypePrefix(key));
@@ -706,6 +731,15 @@ export function createServer(opts: ServerOptions) {
   });
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
   scheduler.start();
+  serverMetrics.start({
+    engine,
+    syncSessions: () => sync.sessions.size,
+    syncSubscriptions: () => sync.subscriptionCount(),
+    syncStats: sync.stats,
+    schedulerRunning: () => scheduler.runningJobs,
+    schedulerBacklog: () => scheduler.backlogSeconds(),
+    schedulerStats: scheduler.stats,
+  });
   const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
   const splay = process.env.CRON_SPLAY_SECONDS;
   const cronExecutor = new CronJobExecutor(engine, functions, specs, {
@@ -1208,6 +1242,8 @@ export function createServer(opts: ServerOptions) {
       // and `/echo` (STUDY-112), with no auth and their own body limit.
       const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
       if (health) return health;
+      // Prometheus metrics (STUDY-114): a meta route on both ports, as Convex's, open to anyone.
+      if (url.pathname === "/metrics") return metricsRoute(req);
       // The OpenAPI documents (STUDY-115), with no auth; `/api/v1/` answers only the documented routes.
       const openApiDoc = openApiDocAt(url.pathname);
       if (openApiDoc) return openApiResponse(openApiDoc, req);
@@ -1452,7 +1488,8 @@ export function createServer(opts: ServerOptions) {
   }
   const stopFileSweeps = files ? startFileSweeps(engine, files) : () => {};
 
-  // The site port (Convex's site proxy): HTTP actions at every path; `/version` first, as Convex's meta route.
+  // The site port (Convex's site proxy): HTTP actions at every path; `/version` and `/metrics` first, as Convex's
+  // meta routes.
   const sitePort =
     opts.sitePort === undefined
       ? server.port === undefined
@@ -1475,6 +1512,7 @@ export function createServer(opts: ServerOptions) {
                 fetch(req, srv) {
                   const url = new URL(req.url);
                   if (url.pathname === "/version") return versionRoute(req);
+                  if (url.pathname === "/metrics") return metricsRoute(req);
                   srv.timeout(req, 0);
                   return serveHttpAction(req, url.pathname, url.search);
                 },
@@ -1990,7 +2028,10 @@ export function createServer(opts: ServerOptions) {
     usageLimitWorker,
     /** Storage usage gauges (STUDY-73). */
     usageGauges,
+    /** The Prometheus metrics served at `/metrics` (STUDY-114). */
+    serverMetrics,
     stop: () => {
+      serverMetrics.stop();
       builtinScreen?.stop();
       functionLog.close();
       usageGauges.stop();
@@ -2011,6 +2052,7 @@ export function createServer(opts: ServerOptions) {
     shutdown: async () => {
       // Every background task that reads or writes the store stops before it closes: after this resolves,
       // nothing of the server touches the store (a caller may delete its files).
+      serverMetrics.stop();
       usageGauges.stop();
       logManager.stop();
       await usageLimitWorker.stop();

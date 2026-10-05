@@ -154,6 +154,7 @@ to a spec.
 | [STUDY-109](STUDY-109-value-nesting-limit.md) | The value nesting limit (64): arguments (63, as `[args]`), results, written values; Convex's messages and order, any depth without a stack overflow | implemented; N1 decided by the owner (2026-10-05, DV-363) |
 | [STUDY-111](STUDY-111-search-segments.md) | Persisted search segments (STUDY-79 option E): text and vector segment formats, the memory part and merged queries, the flusher, the paged backfill, the compactor, fast-forward and retention | decided (owner, 2026-10-05: build E); implemented (PRs 1–7: formats, merged queries, flusher and start, backpressure, paged backfill, compactor, `_index` rows, fast-forward); querying from disk not built |
 | [STUDY-102](STUDY-102-query-options.md) | `QueryOptions` and `bunvexQueryOptions` (Convex's `convexQueryOptions`), and `prewarmQuery`'s required `args` | implemented; the name decided by the owner (2026-10-05, DV-348) |
+| [STUDY-114](STUDY-114-prometheus-metrics.md) | Prometheus `/metrics`: Convex's meta route on both ports, `DISABLE_METRICS_ENDPOINT`, bunvex's own series with `le` histograms, the sync argument sizes | implemented; DV-377 and DV-378 (owner, 2026-10-05) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

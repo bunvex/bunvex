@@ -166,7 +166,6 @@ gaps.
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - Prometheus `/metrics`;
   - an upgrade guide.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
