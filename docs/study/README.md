@@ -39,6 +39,7 @@ to a spec.
 
 | Study | Topic | Status |
 |---|---|---|
+| [STUDY-133](STUDY-133-persistence-layout-identical.md) | A persisted layout identical to Convex's on SQLite, Postgres and MySQL (16-byte ids, tablets as `_tables` rows, ns, `prev_ts`, bootstrap globals, system tables and document shapes), so a store cross-opens; the MongoDB analogue; the PR series | accepted (owner, 2026-10-05): DV-411–DV-420 decided; the PR series is being built |
 | [STUDY-01](STUDY-01-document-ids.md) | Document IDs (`_id`) and table numbers | accepted (C: as Convex) |
 | [STUDY-02](STUDY-02-read-own-writes.md) | Read-your-own-writes inside a transaction | implemented (#3), retroactive |
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
