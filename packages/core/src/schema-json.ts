@@ -89,6 +89,41 @@ function vectorJson(t: DeclaredTable): Pick<TableJson, "vectorIndexes" | "staged
   };
 }
 
+/**
+ * What Convex's `DatabaseSchema` equality compares (crates/common/src/schemas/mod.rs, `PartialEq`), as a string:
+ * tables and each kind of index keyed by name (its `BTreeMap`s), an object's fields by name, absent index lists
+ * as empty. Array order that Convex keeps (an index's fields, a union's members) is kept.
+ */
+export function schemaKey(j: SchemaJson): string {
+  const byName = <T>(list: T[] | undefined, name: (x: T) => string) =>
+    [...(list ?? [])].sort((a, b) => (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0));
+  const sorted = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sorted)
+      : x !== null && typeof x === "object"
+        ? Object.fromEntries(
+            Object.keys(x)
+              .sort()
+              .map((k) => [k, sorted((x as Record<string, unknown>)[k])]),
+          )
+        : x;
+  const index = (i: { indexDescriptor: string }) => i.indexDescriptor;
+  return JSON.stringify(
+    sorted({
+      schemaValidation: j.schemaValidation,
+      tables: byName(j.tables, (t) => t.tableName).map((t) => ({
+        ...t,
+        indexes: byName(t.indexes, index),
+        stagedDbIndexes: byName(t.stagedDbIndexes, index),
+        searchIndexes: byName(t.searchIndexes, index),
+        stagedSearchIndexes: byName(t.stagedSearchIndexes, index),
+        vectorIndexes: byName(t.vectorIndexes, index),
+        stagedVectorIndexes: byName(t.stagedVectorIndexes, index),
+      })),
+    }),
+  );
+}
+
 export function schemaFromJson(j: SchemaJson): SchemaDefinition {
   const tables = new Map<string, DeclaredTable>();
   for (const t of j.tables) {

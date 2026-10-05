@@ -457,15 +457,35 @@ describe("deploy2 over HTTP", () => {
     expect((await e.post("/api/get_config_hashes", {})).body.code).toBe("NotDeployable");
   });
 
+  test("a push of the schema already active: start_push answers the active schema's id (STUDY-35 §7)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const first = await d.push([messages(1)], schema);
+    const second = await d.push([messages(2)], schema);
+    expect(second.finish!.status).toBe(200);
+    expect(second.start.body.schemaChange.schemaIds[""]).toBe(first.start.body.schemaChange.schemaIds[""]);
+    const states = (await d.engine.query((db) => db.asSystem(() => db.query("_schemas").collect()))) as unknown as {
+      state: string;
+    }[];
+    expect(states.map((r) => r.state)).toEqual(["active"]);
+    expect((await d.call("query", "messages:list")).value).toEqual([]);
+  });
+
   test("two pushes racing: the older one's finish is RaceDetected", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
-    const body = (n: number) => ({
-      appDefinition: { schema, changedModules: [messages(n)], unchangedModuleHashes: [] },
+    // Two different schemas: the second overwrites the first (a push of the same schema would share it, as
+    // Convex's `submit_pending`).
+    const other = mod(
+      "schema.js",
+      schema.source.replace('.index("by_author", ["author"])', '.index("by_body", ["body"])'),
+    );
+    const body = (n: number, s: ModuleSource) => ({
+      appDefinition: { schema: s, changedModules: [messages(n)], unchangedModuleHashes: [] },
       componentDefinitions: [],
     });
-    const a = await d.post("/api/deploy2/start_push", body(1));
-    const b = await d.post("/api/deploy2/start_push", body(2));
+    const a = await d.post("/api/deploy2/start_push", body(1, schema));
+    const b = await d.post("/api/deploy2/start_push", body(2, other));
     expect((await d.post("/api/deploy2/wait_for_schema", { schemaChange: a.body.schemaChange })).body).toEqual({
       type: "raceDetected",
     });
