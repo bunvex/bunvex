@@ -77,6 +77,8 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   memoryBytes = 0;
   private estimates = new Map<string, number>();
   private seq = 0;
+  /** The commit ts of each change that gave one (a backfill step keeps only the changes after its ts). */
+  private changedAt = new Map<string, number>();
 
   protected abstract open(bytes: Uint8Array): S;
   protected abstract noDeletes(segment: S): D;
@@ -121,10 +123,12 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     }
   }
 
-  /** Put a document's current state (null: deleted). */
-  set(id: string, doc: Doc | null) {
+  /** Put a document's current state (null: deleted), as of commit `ts` when there is one. */
+  set(id: string, doc: Doc | null, ts?: number) {
     if (!this.changed.has(id)) this.deleteFromSegments(id);
     this.changed.set(id, ++this.seq);
+    if (ts === undefined) this.changedAt.delete(id);
+    else this.changedAt.set(id, ts);
     this.memorySet(id, doc);
     const size = this.estimate(doc);
     this.memoryBytes += size - (this.estimates.get(id) ?? 0);
@@ -196,12 +200,68 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
       part = this.part(segment, this.noDeletes(segment), keys);
     }
     for (const [id, seq] of this.changed) {
-      if (seq <= f.seq) {
-        this.memorySet(id, null);
-        this.changed.delete(id);
-        this.memoryBytes -= this.estimates.get(id) ?? 0;
-        this.estimates.delete(id);
-      } else if (part) {
+      if (seq <= f.seq) this.forget(id);
+      else if (part) {
+        const d = part.segment.docOf(id);
+        if (d >= 0 && part.deletes.delete(d)) part.version++;
+      }
+    }
+    if (part) this.segments.push(part);
+    return part;
+  }
+
+  /** Drops a change from the memory part (what it held is in the segments now). */
+  private forget(id: string) {
+    this.memorySet(id, null);
+    this.changed.delete(id);
+    this.changedAt.delete(id);
+    this.memoryBytes -= this.estimates.get(id) ?? 0;
+    this.estimates.delete(id);
+  }
+
+  /** `docs` as a segment of this index (null: none). */
+  buildSegment(docs: [string, Doc][]): Uint8Array | null {
+    return docs.length ? this.build(docs) : null;
+  }
+
+  /** Marks these documents' copies deleted in every segment (a backfill step's updates to earlier pages). */
+  deleteFromAll(ids: Iterable<string>) {
+    for (const id of ids) this.deleteFromSegments(id);
+  }
+
+  /** The deletes of every segment whose deletes changed since they were stored, encoded now. */
+  changedDeletes(): PreparedFlush<S, D>["deletes"] {
+    return this.segments
+      .filter((p) => p.version !== p.persisted)
+      .map((p) => ({ part: p, version: p.version, bytes: p.deletes.encode() }));
+  }
+
+  /**
+   * A backfill step is stored (Convex's incremental backfill): its segment — the table read at `ts` from its
+   * cursor, and the earlier pages' documents changed since the last step — joins the index with the stored
+   * deletes, and the memory part keeps only the changes committed after `ts` (their copies in the new segment
+   * deleted), as Convex truncates its memory index to the step's ts.
+   */
+  commitBackfill(
+    segment: Uint8Array | null,
+    deletes: PreparedFlush<S, D>["deletes"],
+    ts: number,
+    keys?: SegmentPart<S, D>["keys"],
+  ): SegmentPart<S, D> | null {
+    for (const d of deletes) {
+      if (!this.segments.includes(d.part))
+        throw new Error("a backfilled segment was replaced before the step committed");
+      d.part.persisted = d.version;
+    }
+    let part: SegmentPart<S, D> | null = null;
+    if (segment) {
+      const opened = this.open(segment);
+      part = this.part(opened, this.noDeletes(opened), keys);
+    }
+    for (const id of [...this.changed.keys()]) {
+      const at = this.changedAt.get(id);
+      if (at !== undefined && at <= ts) this.forget(id);
+      else if (part) {
         const d = part.segment.docOf(id);
         if (d >= 0 && part.deletes.delete(d)) part.version++;
       }

@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments) and PR 3b (backpressure) implemented
+  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure) and PR 4 (the paged backfill) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),
@@ -303,10 +303,36 @@ DV-228 said there was no unflushed memory part to bound; now there is, so bunvex
 - Measured on the commit path (20 000 single-insert mutations on a table with a search index): 51–54 000
   commits/s before, 52–53 000 after.
 
-### 3.5 The rest of the series (planned; each PR updates this section)
+### 3.5 The paged backfill (PR 4)
 
-- **Backfill (PR 4).** Convex's paged backfill (§1.4): a segment per page of the table at a fresh ts, the log
-  since for the pages before; the cursor in the state.
+With a segment store, a new index (a push, a start with no state for it, a changed definition) is built as
+Convex's incremental backfill (§1.4):
+
+- **A step** takes the visible ts, reads the table by id from the cursor at that ts until the documents read
+  reach the soft limit (Convex's `incremental_multipart_threshold_bytes`: 10 MiB of `estimate_size` for text,
+  the vectors' bytes for vectors), and takes from the document log the documents up to the old cursor changed
+  since the last step, at that ts (Convex's `walk_document_log_for_updates`).
+- They become one segment; their older copies are deleted in the earlier segments. Stored, the state records
+  the segments, the step's ts and the new cursor (Convex's `Backfilling { cursor: { table_scan_cursor,
+  last_segment_ts }, segments }`); then the memory part keeps only the commits after the step's ts (Convex
+  truncates its memory index the same way), so it stays small while the table is read.
+- When the table is read, the state has no cursor: the index is ready at the last step's ts.
+- **A restart** resumes a build from its stored cursor, its earlier segments loaded, if the state can be
+  trusted (as §3.3). Such an index was never ready, so a search meanwhile answers `IndexBackfillingError`, as
+  Convex's `Backfilling` index does, not STUDY-79's bootstrapping answer.
+- Without a store (or a persistence without the document log), indexes are read from their tables in memory, as
+  before.
+
+**Measured** (`bench/search-segments.ts build` / `open`, 220 000 documents, one text and one vector index, each in
+a process of its own):
+
+| | `main` | This PR |
+|---|---|---|
+| Building both indexes from the table | 11.8 s; heap 614 MiB, RSS 1200 MiB once built | 11.6 s, 4 steps; heap 126 MiB, RSS 1797 MiB once built (the steps' garbage, not returned to the system) |
+| A restart, until ready | 1170 ms (the snapshot); heap 548 MiB, RSS 1137 MiB | 25 ms (the segments); heap 125 MiB, RSS 164 MiB |
+
+### 3.6 The rest of the series (planned; each PR updates this section)
+
 - **Compactor (PR 5).** Convex's thresholds (§1.5) and the writer's reconciliation.
 - **Fast-forward, retention, GC (PR 6).** §1.6; a state whose ts is older than `document_min_snapshot_ts` is not
   used.
@@ -397,6 +423,20 @@ surrogates not swapped (segment term order).
 
 Sabotage checks (each made tests fail): no check before the commit; the text or the vector limit never
 reached; the refusal not waking the flusher; the wrong code; refusing without a store.
+
+**PR 4** (`packages/core/test/search-backfill.test.ts`):
+
+- a new index on 120 documents is built in more than 10 steps, with writes between pages (documents already
+  read and not yet read changed, some deleted, new ones inserted); every index has several segments and no
+  cursor once ready; the answers are those of indexing the table at once;
+- a build stopped after three steps by a crash, with writes between the runs to documents it had read: the
+  state has a cursor; the next start resumes both indexes from it (a search meanwhile answers
+  `IndexBackfillingError`), reads fewer documents than the table holds, and answers as indexing the table;
+- an empty table's index is ready at once with no segments.
+
+Sabotage checks (each made a test fail): no log walk for the earlier pages; the memory part truncated past the
+step's ts; no resume; a resumed index answering as bootstrapping; the earlier copies of updated documents kept;
+the cursor not stored; the log walk taking later pages too.
 
 ## 6. Open questions
 

@@ -71,10 +71,28 @@ if (child === "crash") {
   await e.summaryCheckpointer?.tick(true);
   process.exit(0);
 }
+if (child === "build") {
+  // Building the indexes from the table, as for a new index: no stored state or snapshot to start from.
+  const p = new SqlitePersistence(where!, { durable: true });
+  await p.setGlobal("search_segments", null);
+  await p.setGlobal("search_snapshot", null);
+  p.close();
+  const { e, ms } = await open();
+  Bun.gc(true);
+  console.log(
+    `built from the table: ${ms} ms, heap ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${(process.memoryUsage().rss / 2 ** 20).toFixed(0)} MiB ${JSON.stringify(e.searchStats ?? {})}`,
+  );
+  await e.close();
+  process.exit(0);
+}
 if (child === "open") {
   // A start in a process of its own, as a restart is: until the indexes are ready.
   const { e, ms } = await open();
-  console.log(`${ms} ms ${JSON.stringify(e.searchStats ?? {})}`);
+  Bun.gc(true);
+  const rss = (process.memoryUsage().rss / 2 ** 20).toFixed(0);
+  console.log(
+    `${ms} ms, heap ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${rss} MiB ${JSON.stringify(e.searchStats ?? {})}`,
+  );
   await e.close();
   process.exit(0);
 }
@@ -100,7 +118,9 @@ mkdirSync(dir, { recursive: true });
   console.log(`write throughput: ${n} documents in ${s.toFixed(1)} s (${Math.round(Number(n) / s)} documents/s)`);
   await e.searchReady();
   Bun.gc(true);
-  console.log(`heap with the indexes ready: ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB`);
+  console.log(
+    `heap with the indexes ready: ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${(process.memoryUsage().rss / 2 ** 20).toFixed(0)} MiB`,
+  );
   const text: number[] = [];
   for (let i = 0; i < 200; i++) {
     const s0 = performance.now();

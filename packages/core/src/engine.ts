@@ -104,9 +104,10 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
-import { filterKey, indexedDoc, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   canPersistSegments,
+  changedSince,
   type IndexSegmentsState,
   type SearchSegmentLimits,
   SearchSegmentsState,
@@ -728,7 +729,7 @@ export class Engine {
         own?.(ts);
         const final = resolvesLater ? tx.writtenDocs() : writes;
         this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
-        this.vectorIndexes.apply(final);
+        this.vectorIndexes.apply(ts, final);
         this.flushFull(final);
         this.tableSummaries.apply(
           ts,
@@ -789,7 +790,15 @@ export class Engine {
    * How many indexes the last start loaded from their segments (STUDY-111), and restored from an earlier
    * version's snapshot (STUDY-96). Tests and measurements.
    */
-  readonly searchStats = { fromSegments: 0, restored: 0, replayed: 0, flushes: 0 };
+  readonly searchStats = {
+    fromSegments: 0,
+    restored: 0,
+    replayed: 0,
+    flushes: 0,
+    backfillSteps: 0,
+    backfilled: 0,
+    resumed: 0,
+  };
 
   /** Wait until no index is being flushed (tests). */
   async searchFlushed() {
@@ -859,7 +868,8 @@ export class Engine {
     if (!state || !log || !e.bootstrapping) return false;
     try {
       const s = await state.usable(kind, e.tablet, e.name, e.def, log.at);
-      if (!s) return false;
+      // An index whose build was interrupted resumes it instead (`backfillPaged`).
+      if (!s || s.backfill) return false;
       const parts = await state.fetch(s);
       if (!parts) return false;
       load(parts);
@@ -984,6 +994,157 @@ export class Engine {
     if (stored) this.searchStats.flushes++;
   }
 
+  /**
+   * Convex's paged backfill of an index (STUDY-111 PR 4, `search_flusher.rs` `build_multipart_segment`): each
+   * step reads the table by id from the cursor at a fresh ts, up to the soft limit's worth of documents, and
+   * takes the documents of the earlier pages the log changed since the last step; they become one segment (their
+   * old copies deleted in the earlier segments), stored with the new cursor, so a restart resumes from it. When
+   * the table is read, the index is ready at the last step's ts. True once built (false: closed or dropped).
+   */
+  private async backfillPaged<Doc2>(
+    kind: "text" | "vector",
+    e: SearchIndexEntry | VectorIndexEntry,
+    toDoc: (doc: Doc) => Doc2 | null,
+    sizeOf: (doc: Doc) => number,
+  ): Promise<boolean> {
+    const state = this.searchSegments!;
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return false;
+    const index = e.index as unknown as {
+      load(parts: NonNullable<Awaited<ReturnType<SearchSegmentsState["fetch"]>>>): void;
+      buildSegment(docs: [string, Doc2][]): Uint8Array | null;
+      deleteFromAll(ids: Iterable<string>): void;
+      changedDeletes(): { part: unknown; version: number; bytes: Uint8Array }[];
+      commitBackfill(
+        segment: Uint8Array | null,
+        deletes: { part: unknown; version: number; bytes: Uint8Array }[],
+        ts: number,
+        keys?: { segment: string; deletes: string | null },
+      ): unknown;
+      segments: Parameters<typeof segmentRefs>[0];
+    };
+    const threshold = kind === "text" ? this.segmentLimits.textSoftLimitBytes : this.segmentLimits.vectorSoftLimitBytes;
+    // An interrupted build resumes from its stored cursor (Convex's `Backfilling { cursor, segments }`).
+    let cursor: string | null = null;
+    let lastTs: number | null = null;
+    const resume = await state.usable(kind, e.tablet, e.name, e.def, this.committer.visibleTs).catch(() => null);
+    if (resume?.backfill) {
+      const parts = await state.fetch(resume).catch(() => null);
+      if (parts) {
+        try {
+          index.load(parts);
+          cursor = resume.backfill.cursor;
+          lastTs = resume.ts;
+          this.searchStats.resumed++;
+          // Never ready before: a search meanwhile is Convex's `IndexBackfillingError`.
+          e.bootstrapping = false;
+        } catch {
+          cursor = null;
+        }
+      }
+    }
+    for (;;) {
+      const ts = this.committer.visibleTs;
+      // The table from the cursor, at `ts`, up to the threshold.
+      const docs: [string, Doc2][] = [];
+      let size = 0;
+      let next = cursor;
+      let end = false;
+      while (size < threshold) {
+        await this.opts.beforeSearchBackfillPage?.();
+        if (this.closed || !this.isCurrent(kind, e)) return false;
+        const from = next;
+        const page = (await this.query(
+          (db) =>
+            db.asSystem(() =>
+              db
+                .queryDef(t)
+                .withIndex("by_id", (q) => (from === null ? q : q.gt("_id", from)))
+                .take(1000),
+            ),
+          undefined,
+          undefined,
+          undefined,
+          ts,
+        )) as Doc[];
+        let k = 0;
+        for (; k < page.length && size < threshold; k++) {
+          const d = page[k]!;
+          next = d._id as string;
+          const entry = toDoc(d);
+          if (entry) {
+            docs.push([next, entry]);
+            size += sizeOf(d);
+          }
+        }
+        this.searchStats.backfilled += k;
+        if (k === page.length && page.length < 1000) {
+          end = true;
+          break;
+        }
+      }
+      // The earlier pages' documents the log changed since the last step, at `ts`.
+      const updates: [string, Doc | null][] = [];
+      if (cursor !== null && lastTs !== null) {
+        const upTo = cursor;
+        const changed = await changedSince(state.store, e.tablet, lastTs, ts, decodeDoc, (id) => id <= upTo);
+        for (const [id, c] of changed) updates.push([id, c.doc]);
+      }
+      if (this.closed || !this.isCurrent(kind, e)) return false;
+      // Built at once: the new segment, and the earlier segments' deletes.
+      index.deleteFromAll(updates.map(([id]) => id));
+      for (const [id, doc] of updates) {
+        const entry = doc && toDoc(doc);
+        if (entry) docs.push([id, entry]);
+      }
+      const bytes = index.buildSegment(docs);
+      const deletes = index.changedDeletes();
+      const segment = bytes ? await state.blobs.put(bytes) : null;
+      const deleteKeys = await Promise.all(deletes.map((d) => state.blobs.put(d.bytes)));
+      const replaced: (string | null)[] = [];
+      const stored = await state.update(
+        (states) => {
+          if (!this.isCurrent(kind, e)) return false;
+          const refs = segmentRefs(index.segments).map((r, i) => {
+            const at = deletes.findIndex((d) => d.part === index.segments[i]);
+            return at < 0 ? r : { ...r, deletes: deleteKeys[at]! };
+          });
+          if (segment) refs.push({ segment, deletes: null, docs: docs.length, deleted: 0 });
+          const s: IndexSegmentsState = {
+            kind,
+            tablet: e.tablet,
+            name: e.name,
+            def: e.def,
+            ts,
+            segments: refs,
+            ...(end ? {} : { backfill: { cursor: next } }),
+          };
+          states.set(stateKey(kind, e.tablet, e.name), s);
+          return true;
+        },
+        () => {
+          deletes.forEach((d, i) => {
+            const part = d.part as { keys?: { segment: string; deletes: string | null } };
+            replaced.push(part.keys?.deletes ?? null);
+            part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
+          });
+          index.commitBackfill(bytes, deletes, ts, segment ? { segment, deletes: null } : undefined);
+        },
+      );
+      if (!stored) {
+        await state.deleteBlobs([segment, ...deleteKeys]);
+        return false;
+      }
+      await state.deleteBlobs(replaced);
+      this.searchStats.backfillSteps++;
+      if (end) return true;
+      cursor = next;
+      lastTs = ts;
+      // A background job: let the server's own work run between steps.
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+
   /** At a clean shutdown: every ready index flushed, so the next start replays nothing (STUDY-111). */
   private async flushSearchSegments() {
     if (!this.searchSegments || this.committer.stopped) return;
@@ -1048,6 +1209,19 @@ export class Engine {
       this.searchStats.restored++;
       await this.flushIndex("vector", e);
       this.vectorIndexes.done(e);
+      return;
+    }
+    if (this.searchSegments) {
+      const dims = e.def.dimensions;
+      if (
+        await this.backfillPaged(
+          "vector",
+          e,
+          (doc) => vectorEntry(e.def, doc),
+          () => dims * 4,
+        )
+      )
+        this.vectorIndexes.done(e);
       return;
     }
     const at = this.committer.visibleTs;
@@ -1159,6 +1333,18 @@ export class Engine {
       this.searchStats.restored++;
       await this.flushIndex("text", e);
       this.searchIndexes.done(e);
+      return;
+    }
+    if (this.searchSegments) {
+      if (
+        await this.backfillPaged(
+          "text",
+          e,
+          (doc) => indexedDoc(e.def, doc),
+          (doc) => indexedDocBytes(e.def, doc),
+        )
+      )
+        this.searchIndexes.done(e);
       return;
     }
     const at = this.committer.visibleTs;

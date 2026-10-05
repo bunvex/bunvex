@@ -57,15 +57,23 @@ export type SearchSegmentStore = {
 /** A stored segment: its blob, its deletes' blob (null: none), and counts for the compactor and the logs. */
 export type SegmentRef = { segment: string; deletes: string | null; docs: number; deleted: number };
 
-/** One index's stored state: Convex's `SnapshottedAt { ts, segments }`. */
+/**
+ * One index's stored state: Convex's `SnapshottedAt { ts, segments }`, or, while it is built, its
+ * `Backfilling { cursor: { table_scan_cursor, last_segment_ts }, segments }`.
+ */
 export type IndexSegmentsState = {
   kind: "text" | "vector";
   tablet: number;
   name: string;
   def: SearchIndexDef | VectorIndexDef;
-  /** Every commit up to `ts` is in the segments (with their deletes). */
+  /**
+   * Every commit up to `ts` is in the segments (with their deletes); while backfilling, for the documents up to
+   * the cursor only (Convex's `last_segment_ts`).
+   */
   ts: number;
   segments: SegmentRef[];
+  /** While the index is built from its table: the last document id read (null: none yet). */
+  backfill?: { cursor: string | null };
 };
 
 type SegmentsGlobal = { format: number; indexes: IndexSegmentsState[] };
@@ -214,23 +222,38 @@ export class SegmentReplay {
     return out;
   }
 
-  private async read(tablet: number, since: number) {
-    const last = new Map<string, number>();
-    for (let cursor = since; cursor < this.at; ) {
-      const rows: DocLogRow[] = await this.store.readDocumentLog(cursor, this.at, LOG_PAGE);
-      if (!rows.length) break;
-      for (const r of rows) if (r.table === tablet) last.set(r.id, r.ts);
-      cursor = rows[rows.length - 1]!.ts;
-    }
-    const out = new Map<string, { ts: number; doc: Doc | null }>();
-    const ids = [...last.keys()];
-    for (let i = 0; i < ids.length; i += VERSIONS_PAGE) {
-      const page = ids.slice(i, i + VERSIONS_PAGE);
-      const versions = await this.store.getVersions!(tablet, page, this.at);
-      page.forEach((id, k) => {
-        out.set(id, { ts: last.get(id)!, doc: versions[k] ? this.decode(versions[k]!.json) : null });
-      });
-    }
-    return out;
+  private read(tablet: number, since: number) {
+    return changedSince(this.store, tablet, since, this.at, this.decode);
   }
+}
+
+/**
+ * Each document of `tablet` the document log changed in `(since, at]`, with the ts of its last change there and
+ * its state as of `at` (null: deleted).
+ */
+export async function changedSince(
+  store: Store,
+  tablet: number,
+  since: number,
+  at: number,
+  decode: (json: string) => Doc,
+  keep: (id: string) => boolean = () => true,
+): Promise<Map<string, { ts: number; doc: Doc | null }>> {
+  const last = new Map<string, number>();
+  for (let cursor = since; cursor < at; ) {
+    const rows: DocLogRow[] = await store.readDocumentLog(cursor, at, LOG_PAGE);
+    if (!rows.length) break;
+    for (const r of rows) if (r.table === tablet && keep(r.id)) last.set(r.id, r.ts);
+    cursor = rows[rows.length - 1]!.ts;
+  }
+  const out = new Map<string, { ts: number; doc: Doc | null }>();
+  const ids = [...last.keys()];
+  for (let i = 0; i < ids.length; i += VERSIONS_PAGE) {
+    const page = ids.slice(i, i + VERSIONS_PAGE);
+    const versions = await store.getVersions!(tablet, page, at);
+    page.forEach((id, k) => {
+      out.set(id, { ts: last.get(id)!, doc: versions[k] ? decode(versions[k]!.json) : null });
+    });
+  }
+  return out;
 }
