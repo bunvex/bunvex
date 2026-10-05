@@ -72,6 +72,7 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
+import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
@@ -469,7 +470,7 @@ export class Tx {
           if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
         }
         if (!next) continue;
-        const size = rawValueSize(next as unknown as Value);
+        const size = sizeOfVersion(next);
         writeBytes += size;
         // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
         // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
@@ -1295,6 +1296,7 @@ export class Tx {
           `Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`,
         );
       const size = rawValueSize(v);
+      rememberStagedSize(next, size);
       if (size > MAX_USER_SIZE)
         throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
       this.bytesWritten += size;
