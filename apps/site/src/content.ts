@@ -20,24 +20,24 @@ export const HERO = {
 
 export type BenchRow = { metric: string; convex: string; postgres: string; sqlite: string };
 
-/** docs/bench/E2E-VPS-2026-09-29.md — the same 2-vCPU VPS and harness; Convex ran on the Postgres bunvex used. */
+/** docs/bench/E2E-VPS-2026-10-05.md — the same 2-vCPU VPS and harness; Convex ran on the Postgres bunvex used. */
 export const BENCH = {
   rows: [
-    { metric: "cached read, req/s", convex: "4 853", postgres: "8 951", sqlite: "8 140" },
-    { metric: "uncached indexed read, req/s", convex: "298", postgres: "2 119", sqlite: "3 045" },
-    { metric: "durable insert, req/s", convex: "427", postgres: "6 052", sqlite: "4 004" },
-    { metric: "action (query + mutation), req/s", convex: "139", postgres: "2 492", sqlite: "3 395" },
+    { metric: "cached read, req/s", convex: "4 299", postgres: "5 925", sqlite: "6 499" },
+    { metric: "uncached indexed read, req/s", convex: "282", postgres: "1 337", sqlite: "1 787" },
+    { metric: "durable insert, req/s", convex: "406", postgres: "3 281", sqlite: "2 494" },
+    { metric: "action (query + mutation), req/s", convex: "134", postgres: "1 159", sqlite: "1 544" },
     {
-      metric: "10 000 subscribers, delivered · p99",
-      convex: "5 % · 3.2 s",
-      postgres: "100 % · 220 ms",
-      sqlite: "100 % · 227 ms",
+      metric: "10 000 subscribers, splay off, delivered · p99",
+      convex: "OOM (6.7 GB)",
+      postgres: "100 % · 1.57 s",
+      sqlite: "100 % · 825 ms",
     },
   ] satisfies BenchRow[],
   caption:
-    "Same 2-vCPU VPS, same harness. Convex self-hosted ran on Postgres 17 — the same instance as bunvex on Postgres; bunvex on SQLite uses the built-in bun:sqlite.",
+    "Same 2-vCPU VPS, same harness, measured 5 Oct 2026. Convex self-hosted ran on Postgres 17 — the same instance as bunvex on Postgres; bunvex on SQLite uses the built-in bun:sqlite. Both spread wide invalidations by default; the fan-out row compares them with that off (Convex's from 29 Sep).",
   reading: "Higher requests per second and delivery are better; lower p99 latency is better.",
-  report: blob("docs/bench/E2E-VPS-2026-09-29.md"),
+  report: blob("docs/bench/E2E-VPS-2026-10-05.md"),
 } as const;
 
 export const FEATURES = [

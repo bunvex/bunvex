@@ -7,8 +7,11 @@ const COLUMNS = [
   { key: "sqlite", label: "bunvex · SQLite", bar: "bg-info/60" },
 ] as const satisfies { key: keyof BenchRow; label: string; bar: string }[];
 
-/** The leading number of a cell ("2 119" → 2119, "5 % · 3.2 s" → 5). */
-const leading = (cell: string) => Number(cell.split(/[%·]/)[0]!.replaceAll(" ", ""));
+/** The leading number of a cell ("2 119" → 2119, "5 % · 3.2 s" → 5); 0 when it has none ("OOM (6.7 GB)"). */
+const leading = (cell: string) => {
+  const n = Number(cell.split(/[%·]/)[0]!.replaceAll(" ", ""));
+  return Number.isFinite(n) ? n : 0;
+};
 
 export function Benchmarks() {
   return (
