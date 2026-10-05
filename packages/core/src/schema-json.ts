@@ -23,6 +23,8 @@ export type TableJson = {
   vectorIndexes?: VectorIndexJson[];
   stagedVectorIndexes?: VectorIndexJson[];
   documentType: ValidatorJSON | null;
+  /** `.staged()`'s validator (STUDY-106); absent without one, as Convex's export leaves it out. */
+  stagedDocumentType?: ValidatorJSON;
 };
 export type SchemaJson = { tables: TableJson[]; schemaValidation: boolean };
 
@@ -44,6 +46,7 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
         ...searchJson(t),
         ...vectorJson(t),
         documentType: anyJson(t.document),
+        ...(t.stagedDocument === undefined ? {} : { stagedDocumentType: t.stagedDocument.json }),
       };
     }),
     schemaValidation: s.schemaValidation,
@@ -121,6 +124,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
             stagedVector: (t.stagedVectorIndexes ?? []).map((i) => i.indexDescriptor),
           }
         : {}),
+      ...(t.stagedDocumentType == null ? {} : { stagedDocument: validatorFromJson(t.stagedDocumentType) }),
     });
   }
   return { tables, schemaValidation: j.schemaValidation };

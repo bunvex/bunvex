@@ -262,3 +262,44 @@ test("the browser's online event reconnects at once, cancelling the scheduled ba
     delete (globalThis as { window?: unknown }).window;
   }
 });
+
+test("large-transition warnings (STUDY-103): a frame over 20 000 000 characters, else over 20 s, as Convex", () => {
+  const s = setup();
+  last().open();
+  // The skew as a server computes it at Connect: the client's `clientTs` minus the server's clock. The client's
+  // clock is not `Date.now()` (it counts from the process's time origin), so it is not 0.
+  const clientClockSkew = s.opened[0]!.clientTs - Date.now();
+  const warnings = () => s.lines.filter((l) => l.startsWith("received query results"));
+  const ago = (ms: number) => (Date.now() - ms) * 1_000_000;
+  // A Transition frame of exactly `length` characters.
+  const frame = (length: number, serverTs: number) => {
+    const timed = (padding: string) =>
+      v1.encodeServerMessage({ ...transition, clientClockSkew, serverTs, padding } as v1.Transition);
+    const text = timed("x".repeat(length - timed("").length));
+    expect(text.length).toBe(length);
+    return { data: text };
+  };
+  last().onmessage!(frame(20_000_000, ago(0)));
+  expect(warnings()).toEqual([]);
+  expect(s.lines.some((l) => /^received 20MB transition in -?\d+ms at /.test(l))).toBe(true);
+  last().onmessage!(frame(20_000_001, ago(0)));
+  expect(warnings()).toEqual([
+    "received query results totaling more than 20MB (20MB) which will take a long time to download on slower connections",
+  ]);
+  // Both over: only the size warning.
+  last().onmessage!(frame(20_000_001, ago(30_000)));
+  expect(warnings().length).toBe(2);
+  // 19 s on the way: nothing; 21 s: the transit warning.
+  last().onmessage!(frame(1_000, ago(19_000)));
+  expect(warnings().length).toBe(2);
+  last().onmessage!(frame(1_000, ago(21_000)));
+  const slow = /^received query results totaling 0MB which took more than 20s to arrive \((\d+)ms\)$/.exec(
+    warnings()[2]!,
+  );
+  expect(Number(slow![1])).toBeWithin(20_990, 21_500); // the client's clock rounds: a millisecond either way
+  // Without the server's timing: no line at all.
+  const before = s.lines.length;
+  last().receive({ ...transition });
+  expect(s.lines.slice(before).filter((l) => l.startsWith("received"))).toEqual([]);
+  expect(s.received.length).toBe(6);
+});
