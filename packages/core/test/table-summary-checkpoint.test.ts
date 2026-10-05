@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { defineSchema, defineTable, Engine, reduceShape } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { fromJsonInteger, jsonInteger, tsGlobal, tsNanos } from "../src/persistence-globals.ts";
 import { shapeFromJson, shapeOf, shapeToJson, tableShape } from "../src/shapes.ts";
 import { TableSummaries } from "../src/table-summaries.ts";
 import { restoreSummaries, SummaryCheckpointer, TABLE_SUMMARY_GLOBAL } from "../src/table-summary-checkpoint.ts";
@@ -71,7 +72,7 @@ test("the restore uses the checkpoint (not a scan), and drops tablets that no lo
   await e1.close();
   // A checkpoint that says more than the documents do, and knows a tablet the catalog does not.
   const c = (await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as { tables: Record<string, any> };
-  c.tables[tablet]!.totalSize = String(Number(c.tables[tablet]!.totalSize) + 1000);
+  c.tables[tablet]!.totalSize = jsonInteger(fromJsonInteger(c.tables[tablet]!.totalSize) + 1000n);
   c.tables[999_999] = c.tables[tablet];
   await p.setGlobal(TABLE_SUMMARY_GLOBAL, c);
   const e2 = await open(p);
@@ -91,7 +92,7 @@ test("retention passing the checkpoint during the restore makes it fall back", a
   await e1.close();
   const read = p.readDocumentLog.bind(p);
   p.readDocumentLog = (async (...a: Parameters<typeof read>) => {
-    await p.setGlobal("document_min_snapshot_ts", 9e15);
+    await p.setGlobal("document_min_snapshot_ts", tsGlobal(9e15));
     return read(...a);
   }) as unknown as typeof p.readDocumentLog;
   const e2 = await open(p);
@@ -143,15 +144,19 @@ for (const [name, spoil] of [
     async (p: MemoryPersistence) =>
       p.setGlobal(TABLE_SUMMARY_GLOBAL, {
         ...((await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as object),
-        ts: String(Number.MAX_SAFE_INTEGER),
+        ts: jsonInteger(tsNanos(Number.MAX_SAFE_INTEGER)),
       }),
   ],
-  ["outside document retention", async (p: MemoryPersistence) => p.setGlobal("document_min_snapshot_ts", 9e15)],
+  [
+    "outside document retention",
+    async (p: MemoryPersistence) => p.setGlobal("document_min_snapshot_ts", tsGlobal(9e15)),
+  ],
   [
     "a shape it did not write",
     async (p: MemoryPersistence) => {
       const c = (await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as { tables: Record<string, any> };
-      for (const t of Object.values(c.tables)) t.inferredTypeWithOptionalFields = { n: 1, v: { kind: "Nope" } };
+      for (const t of Object.values(c.tables))
+        t.inferredTypeWithOptionalFields = { numValues: 1, variant: { kind: "Nope" } };
       await p.setGlobal(TABLE_SUMMARY_GLOBAL, c);
     },
   ],

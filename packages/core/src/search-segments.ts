@@ -10,6 +10,7 @@
 // bootstrap; a state it cannot trust is not used, and the index is built from its table instead.
 import type { StoredSegment } from "@bunvex/search";
 import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
+import { readTsGlobal } from "./persistence-globals.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
 
 /**
@@ -492,7 +493,7 @@ export class SearchSegmentsState {
     const s = this.get(kind, tablet, name);
     if (!this.store || !this.blobs) return null;
     if (!s || !sameSpec(s.def, def) || !Number.isSafeInteger(s.ts) || this.currentTs(s) > at) return null;
-    if (this.currentTs(s) < Number((await this.store.getGlobal(MIN_DOCUMENT_TS_GLOBAL)) ?? 0)) return null;
+    if (this.currentTs(s) < readTsGlobal(await this.store.getGlobal(MIN_DOCUMENT_TS_GLOBAL))) return null;
     return s;
   }
 
