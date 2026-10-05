@@ -396,7 +396,7 @@ describe("deploy2 over HTTP", () => {
     );
     expect([bad.start.status, bad.start.body.code]).toEqual([400, "SchemaDefinitionError"]);
     expect(bad.start.body.message).toBe(
-      'Hit an error while evaluating your schema:\nIn table "messages" the index "by_title" is invalid because it references the field "title" that does not exist.',
+      'Hit an error while pushing:\nHit an error while evaluating your schema:\nIn table "messages" the index "by_title" is invalid because it references the field "title" that does not exist.',
     );
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });

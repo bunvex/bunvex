@@ -21,8 +21,8 @@ test("without schema validation, or with v.any(), nothing is checked", () => {
 });
 
 test("nested paths: objects, optional fields, unions and any pass; records, arrays and scalars do not", () => {
-  const ok = (doc: Parameters<typeof defineTable>[0], field: string) =>
-    indexReferenceError(defineSchema({ t: defineTable(doc).index("i", [field]) }));
+  const ok = (doc: unknown, field: string) =>
+    indexReferenceError(defineSchema({ t: defineTable(doc as never).index("i", [field]) }));
   expect(ok({ a: v.object({ b: v.string() }) }, "a.b")).toBeNull();
   expect(ok({ a: v.optional(v.object({ b: v.string() })) }, "a.b")).toBeNull();
   expect(ok({ a: v.union(v.string(), v.object({ b: v.number() })) }, "a.b")).toBeNull();
@@ -64,6 +64,13 @@ test("a vector field that cannot hold an array of float64", () => {
     expect(vector(bad)).toBe(
       `In table "t" the vector index "vi" is invalid because it references the field "e" that is neither an array of float64 or optional array of float64.`,
     );
+});
+
+test("a union branch that does not declare the vector field counts as able to hold it (Convex's rule)", () => {
+  const doc = v.union(v.object({ a: v.string() }), v.object({ e: v.string() }));
+  expect(
+    indexReferenceError(defineSchema({ t: defineTable(doc).vectorIndex("vi", { vectorField: "e", dimensions: 2 }) })),
+  ).toBeNull();
 });
 
 test("Convex's order: tables by name; database, staged, search, filter, vector fields; then vector types", () => {

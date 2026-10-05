@@ -11,7 +11,8 @@
 each database index's fields, appending `_creationTime`. It then calls `DatabaseSchema::check_index_references`
 (`crates/common/src/schemas/mod.rs`). `evaluate_schema` wraps any error as
 `Hit an error while evaluating your schema:\n{msg}`. These errors are not `JsError`s, so the push keeps their
-code: 400 `SchemaDefinitionError`. The check runs for the push and for `evaluate_schema`.
+code: 400 `SchemaDefinitionError`. The check runs for the push and for `evaluate_schema`. `start_push` wraps
+the error once more as `Hit an error while pushing:\n{msg}` (`crates/local_backend/src/deploy_config2.rs`).
 
 With `schemaValidation` off it checks nothing. Otherwise, table by table in name order:
 
@@ -42,7 +43,8 @@ The check does not cover a vector index's dimensions or filter fields, or the te
 ## 2. What an app can observe
 
 A push, or `evaluate_schema`, whose schema indexes a field its validators do not have fails with the error
-above (400 `SchemaDefinitionError`), and nothing is pushed.
+above (400 `SchemaDefinitionError`; the push's message starts with `Hit an error while pushing:`), and
+nothing is pushed.
 
 ## 3. How bunvex does it
 
@@ -72,13 +74,27 @@ None.
 - search fields, filter fields and vector fields;
 - vector field types, accepted and refused;
 - Convex's order: tables by name, live indexes before staged ones, database before search before vector;
-- system fields.
+- system fields;
+- a union branch without the vector field counts as able to hold it.
+
+`packages/cli/test/deploy.test.ts` had a fixture indexing an undeclared field (`other`); it now declares it.
+Every `examples/*/bunvex/schema.ts` passes the check.
 
 `packages/server/test/push.test.ts` checks that such a push is a 400 `SchemaDefinitionError` with the
 wrapped message, and that the old code keeps serving.
 
-Sabotage checks:
-<!-- filled after the run -->
+Sabotage checks, each caught:
+
+- validation off not honoured;
+- nested paths not followed;
+- unions not searched;
+- system fields not exempt;
+- staged indexes not after live ones;
+- tables not in name order;
+- filter fields skipped;
+- the vector element type not checked;
+- an undeclared key not counted as eligible;
+- the push not calling the check.
 
 ## 6. Open questions
 
