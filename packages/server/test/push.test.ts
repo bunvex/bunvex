@@ -399,6 +399,51 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
+  test("a staged validator (STUDY-106): a change to it alone is a schema change; Convex's errors at push", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const withStaged = (staged: string) =>
+      mod("schema.js", schema.source.replace('.index("by_author", ["author"])', `$&${staged}`));
+    const schemaDiffs = async () =>
+      (
+        (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+          action: string;
+          metadata: Record<string, any>;
+        }[]
+      )
+        .filter((e) => e.action === "push_config_with_components")
+        .map((e) => e.metadata.component_diffs[0].component_diff.schemaDiff);
+    await d.push([messages(1)], schema);
+    // The same push with only `.staged()` added: the schema changes, and the next schema carries it.
+    const staged = await d.push(
+      [messages(1)],
+      withStaged(".staged({ author: v.array(v.string()), body: v.string() })"),
+    );
+    expect(staged.finish!.status).toBe(200);
+    const diff = (await schemaDiffs())[1];
+    expect(diff).not.toBeNull();
+    expect(JSON.parse(diff.previous_schema).tables[0].stagedDocumentType).toBeUndefined();
+    expect(JSON.parse(diff.next_schema).tables[0].stagedDocumentType).toEqual({
+      type: "object",
+      value: {
+        author: { fieldType: { type: "array", value: { type: "string" } }, optional: false },
+        body: { fieldType: { type: "string" }, optional: false },
+      },
+    });
+    // It is not enforced: writes still follow `defineTable`'s validator.
+    expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
+    // A staged validator a table could not have: Convex's InvalidTopLevelTypeInSchemaError.
+    const bad = await d.push([messages(1)], withStaged(".staged(v.string())"));
+    expect([bad.start.status, bad.start.body.code]).toEqual([400, "InvalidTopLevelTypeInSchemaError"]);
+    expect(bad.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nThe document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    // Two staged validators: the schema does not evaluate.
+    const twice = await d.push([messages(1)], withStaged(".staged({ a: v.string() }).staged({ b: v.string() })"));
+    expect([twice.start.status, twice.start.body.code]).toEqual([400, "InvalidSchema"]);
+    expect(twice.start.body.message).toContain("Table cannot have more than one staged validator.");
+  });
+
   test("an index on a field the schema does not have: Convex's SchemaDefinitionError, nothing pushed (STUDY-100)", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

@@ -25,6 +25,7 @@ import {
   SchemaPushError,
   SYSTEM_ACTOR,
   schemaToJson,
+  stagedDocumentError,
   TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -49,6 +50,11 @@ import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
 function checkIndexReferences(schema: SchemaDefinition) {
+  // Before it, Convex's parse of the schema's JSON refuses a staged validator a table could not have
+  // (`InvalidTopLevelTypeInSchemaError`, STUDY-106).
+  const staged = stagedDocumentError(schema);
+  if (staged)
+    throw new PushError("InvalidTopLevelTypeInSchemaError", `Hit an error while evaluating your schema:\n${staged}`);
   const error = indexReferenceError(schema);
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
