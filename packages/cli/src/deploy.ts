@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
-import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
+import { type CodegenConfig, runCodegen, type TypecheckMode, type TypescriptCompiler, typecheck } from "./codegen.ts";
 import {
   type CheckMode,
   checkLargeIndexBackfill,
@@ -51,7 +51,14 @@ ${TARGET_OPTIONS}
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
-export type ProjectConfig = { functions?: string; codegen?: { fileType?: "ts" | "js/dts" } };
+export type ProjectConfig = {
+  functions?: string;
+  codegen?: { fileType?: "ts" | "js/dts" };
+  /** Convex's `typescriptCompiler`: the typecheck's compiler (STUDY-117). */
+  typescriptCompiler?: TypescriptCompiler;
+  /** Convex's `generateCommonJSApi`: codegen also writes the CommonJS api (STUDY-116). */
+  generateCommonJSApi?: boolean;
+};
 
 /** How Convex's schema validator (zod) names a value's type in "Expected …, received …". */
 function receivedType(v: unknown): string {
@@ -79,7 +86,7 @@ export function readProjectConfig(cwd: string): ProjectConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config))
     throw new Error("Expected `bunvex.json` to contain an object");
   const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
-  const { functions, codegen } = config as Record<string, unknown>;
+  const { functions, codegen, typescriptCompiler, generateCommonJSApi } = config as Record<string, unknown>;
   if (functions !== undefined && typeof functions !== "string")
     throw issue("functions", `Expected string, received ${receivedType(functions)}`);
   if (codegen !== undefined) {
@@ -94,6 +101,21 @@ export function readProjectConfig(cwd: string): ProjectConfig {
           : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
       );
   }
+  if (typescriptCompiler !== undefined && typescriptCompiler !== "tsc" && typescriptCompiler !== "tsgo")
+    throw issue(
+      "typescriptCompiler",
+      typeof typescriptCompiler === "string"
+        ? `Invalid enum value. Expected 'tsc' | 'tsgo', received '${typescriptCompiler}'`
+        : `Expected 'tsc' | 'tsgo', received ${receivedType(typescriptCompiler)}`,
+    );
+  if (generateCommonJSApi !== undefined && typeof generateCommonJSApi !== "boolean")
+    throw issue("generateCommonJSApi", `Expected boolean, received ${receivedType(generateCommonJSApi)}`);
+  // Convex's refinement, checked once the fields are valid.
+  if (generateCommonJSApi === true && (codegen as ProjectConfig["codegen"])?.fileType === "ts")
+    throw issue(
+      "generateCommonJSApi",
+      'Cannot use `generateCommonJSApi: true` with `codegen.fileType: "ts"`. CommonJS modules require JavaScript generation. Either set `codegen.fileType: "js/dts"` or remove `generateCommonJSApi`.',
+    );
   return config as ProjectConfig;
 }
 
@@ -102,10 +124,19 @@ export function functionsDir(cwd: string): string {
   return resolve(cwd, functions ?? "bunvex");
 }
 
-/** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
+/** The typecheck's compiler: bunvex.json's `typescriptCompiler`, else `tsc` (Convex's `resolveTypescriptCompiler`). */
+export function typescriptCompilerOf(cwd: string): TypescriptCompiler {
+  return readProjectConfig(cwd).typescriptCompiler ?? "tsc";
+}
+
+/**
+ * bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`) and
+ * `generateCommonJSApi`.
+ */
 export function codegenConfig(cwd: string): CodegenConfig {
-  const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
-  return { fileType, packages: packagesOf(cwd) };
+  const config = readProjectConfig(cwd);
+  const fileType = config.codegen?.fileType ?? "js/dts";
+  return { fileType, packages: packagesOf(cwd), commonjs: config.generateCommonJSApi === true };
 }
 
 /** Which bunvex the app installs (STUDY-40): `bunvex`, else the scoped `@bunvex/*` packages; `bunvex` by default. */
@@ -305,7 +336,14 @@ export type DeployOptions = {
  * its own side (its log may say why); and whether it waits on the deployment's environment variables
  * (`bunvex dev` pushes again once they change, as Convex's).
  */
-export type DeployResult = { code: number; transient?: boolean; internal?: boolean; envVars?: boolean };
+export type DeployResult = {
+  code: number;
+  transient?: boolean;
+  internal?: boolean;
+  envVars?: boolean;
+  /** Schema validation failed on a document of this table. */
+  table?: string;
+};
 
 /** A deployment's error answer: its message and its code (Convex's `ErrorData`). */
 class DeploymentError extends Error {
@@ -422,13 +460,14 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     const start = await post("/api/deploy2/start_push", request);
     // Convex's final codegen and typecheck, after the push is analyzed and before it is finished.
     if (flags.codegen) runCodegen(dir, codegen);
-    const checked = await typecheck(dir, io.cwd, flags.typecheck);
+    const checked = await typecheck(dir, io.cwd, flags.typecheck, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
       io.err(checked.output);
       io.err("To ignore failing typecheck, use `--typecheck=disable`.");
       return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
+    if (checked.warning) io.err(checked.warning);
     // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
     const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {
@@ -445,8 +484,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       const s = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 10_000 });
       if (s.type === "complete") break;
       if (s.type === "failed") {
-        io.err(`Schema validation failed${s.tableName ? ` in table "${s.tableName}"` : ""}.\n${s.error}`);
-        return { code: 1 };
+        // Convex's words (deploy2.ts `waitForSchema`): the failure, then the error, which names the table and
+        // document. The table is what `bunvex dev` waits on before it pushes again (STUDY-120).
+        io.err(`✖ Schema validation failed.\n${s.error}`);
+        return typeof s.tableName === "string" ? { code: 1, table: s.tableName } : { code: 1 };
       }
       if (s.type === "raceDetected") {
         io.err("Schema was overwritten by another push.");
