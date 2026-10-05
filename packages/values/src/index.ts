@@ -1,6 +1,8 @@
 // Package @bunvex/values — Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.
 
 export * as Base64 from "./base64.ts";
+/** @internal Strings in UTF-8 byte order (Convex orders object keys so); used by the server's value formats. */
+export { compareUtf8 } from "./bytes.ts";
 export { checkValue, displayValidator, displayValue, type TableOfId } from "./check.ts";
 export {
   CommitTsPlaceholder,

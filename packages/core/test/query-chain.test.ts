@@ -47,7 +47,7 @@ describe("query chaining, unique() and async iteration, as Convex (STUDY-16)", (
     expect(seen.first).toBe(1000);
   });
 
-  test("a chained query cannot be reused; order at most once; withIndex only first; iterate once", async () => {
+  test("a chained query cannot be reused; order at most once; iterate once", async () => {
     const e = await engine();
     await e.mutation((db) => db.insert("items", { n: 1 }));
     await expect(
@@ -61,15 +61,6 @@ describe("query chaining, unique() and async iteration, as Convex (STUDY-16)", (
       "Queries may only specify order at most once",
     );
     await expect(
-      e.query((db) =>
-        db
-          .query("items")
-          .filter((q) => q.eq(1, 1))
-          .withIndex("by_n")
-          .collect(),
-      ),
-    ).rejects.toThrow("withIndex() can only be called on db.query(table)");
-    await expect(
       e.query(async (db) => {
         const q = db.query("items");
         for await (const _ of q) break;
@@ -77,6 +68,55 @@ describe("query chaining, unique() and async iteration, as Convex (STUDY-16)", (
       }),
     ).rejects.toThrow("Iteration can only begin on a query once.");
     expect(await e.query((db) => db.query("items").fullTableScan().collect())).toHaveLength(1);
+  });
+
+  // As Convex (DV-06, STUDY-16 D1): `db.query(t)` is a QueryInitializerImpl, and every operator returns a QueryImpl,
+  // which has no withIndex / withSearchIndex / fullTableScan. Calling one there is the engine's own TypeError
+  // (V8, in Convex: "<expr> is not a function"; JavaScriptCore adds "(In '…', '…' is undefined)").
+  test("withIndex, withSearchIndex and fullTableScan exist only before any other operator: a TypeError after", async () => {
+    const e = await engine();
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    const after: [string, (q: any) => any][] = [
+      ["filter", (q) => q.filter((f: any) => f.eq(1, 1))],
+      ["order", (q) => q.order("desc")],
+      ["limit", (q) => q.limit(5)],
+      ["withIndex", (q) => q.withIndex("by_creation_time")],
+      ["fullTableScan", (q) => q.fullTableScan()],
+    ];
+    const initializerOnly: [string, (q: any) => unknown][] = [
+      ["withIndex", (q) => q.withIndex("by_n")],
+      ["withSearchIndex", (q) => q.withSearchIndex("s", (s: any) => s.search("t", "x"))],
+      ["fullTableScan", (q) => q.fullTableScan()],
+    ];
+    for (const source of ["user", "system"] as const)
+      for (const [op, apply] of after)
+        for (const [method, call] of initializerOnly) {
+          const chained = await e.query(async (db) => {
+            const q = source === "user" ? db.query("items") : db.system.query("_storage");
+            const next = apply(q);
+            expect(typeof next[method], `${source} ${op} then ${method}`).toBe("undefined");
+            try {
+              call(next);
+            } catch (err) {
+              return err;
+            }
+            return null;
+          });
+          expect(chained, `${source} ${op} then ${method}`).toBeInstanceOf(TypeError);
+          expect(String(chained)).toContain(`.${method} is not a function`);
+        }
+    // The stage before any operator still has all three, and the valid chains run.
+    expect(
+      await e.query((db) =>
+        db
+          .query("items")
+          .withIndex("by_n")
+          .filter((q) => q.eq(1, 1))
+          .collect(),
+      ),
+    ).toHaveLength(1);
+    expect(await e.query((db) => db.query("items").fullTableScan().order("desc").take(1))).toHaveLength(1);
+    expect(await e.query((db) => db.system.query("_storage").withIndex("by_creation_time").collect())).toEqual([]);
   });
 
   test("a missing table supports the whole chain and yields nothing", async () => {

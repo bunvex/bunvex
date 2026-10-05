@@ -696,9 +696,15 @@ export function createServer(opts: ServerOptions) {
     const n = Number(req.headers.get("content-length") ?? 0);
     return n > cap ? payloadTooLarge() : null;
   };
-  /** The request with its body cut off past the cap (a body sent without a length). */
+  /**
+   * The request with its body cut off past the cap (a body sent without a length). A body whose declared
+   * length is within the cap is taken as is: Bun never reads past the length (and the stream this costs is
+   * most of a small request's handling).
+   */
   const capped = (req: Request): Request => {
     if (!req.body) return req;
+    const declared = req.headers.get("content-length");
+    if (declared !== null && Number(declared) <= cap) return req;
     let seen = 0;
     const body = req.body.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({

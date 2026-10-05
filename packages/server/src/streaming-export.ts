@@ -14,7 +14,7 @@ import {
   type TableDef,
   UnionBuilder,
 } from "@bunvex/core";
-import { formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import { compareUtf8, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 
 /** Convex's knobs. */
 export const SNAPSHOT_LIST_LIMIT = 1024;
@@ -62,7 +62,7 @@ const intBytes = (n: bigint) => {
   new DataView(buf.buffer).setBigInt64(0, n, true);
   return b64(buf);
 };
-const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+const byteOrder = compareUtf8;
 
 /** A value as JSON text in `format` (Convex's export.rs; floats as serde_json with `float_roundtrip`). */
 export function writeValue(v: Value, f: Format): string {
