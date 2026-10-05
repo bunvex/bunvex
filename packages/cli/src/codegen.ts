@@ -152,6 +152,11 @@ export type DatabaseWriter = GenericDatabaseWriter<DataModel>;
 const doc = (s: string) => `/**\n * ${s}\n */`;
 const importList = (names: string[]) => `{\n${names.map((n) => `  ${n},`).join("\n")}\n}`;
 const SERVER_DESCRIPTION = "Generated utilities for implementing server-side bunvex query and mutation functions.";
+/** `v` typed with the app's tables (STUDY-100 T2, a bunvex addition): the value is bunvex's `v`. */
+const V_DOC = doc(
+  "Validators, as `v` from bunvex/values, with `v.id` typed by this app's tables and the system tables: editors\n * complete them, and a misspelled table is a type error (any name, with no schema or `strictTableNameTypes: false`).",
+);
+const V_TYPE = "TableValidators<TableNamesInDataModel<DataModel> | SystemTableNames>";
 
 /** The generated files, by name (Convex's dynamic modes: what the code says, no deployment needed). */
 export function generatedFiles(
@@ -167,13 +172,17 @@ export function generatedFiles(
   const ts = opts.fileType === "ts";
   const dataModel = opts.hasSchema ? dataModelWithSchema(q) : dataModelWithoutSchema(q);
   const serverDts = `${header(SERVER_DESCRIPTION)}
-import type ${importList(SERVER_TYPES)} from ${q.server};
+import type ${importList([...SERVER_TYPES, "SystemTableNames", "TableNamesInDataModel"])} from ${q.server};
+import type { TableValidators } from ${q.values};
 import type { DataModel } from "./dataModel.js";
 
 ${BUILDERS.map(([n, t]) => `${doc(BUILDER_DOCS[n]!)}\nexport declare const ${n}: ${t};`).join("\n\n")}
 
 ${doc("The deployment's environment variables.")}
 export declare const env: Record<string, string | undefined>;
+
+${V_DOC}
+export declare const v: ${V_TYPE};
 
 ${CTX_TYPES}`;
   const serverJs = `${header(SERVER_DESCRIPTION)}
@@ -183,10 +192,14 @@ ${BUILDERS.map(([n, , g]) => `${doc(BUILDER_DOCS[n]!)}\nexport const ${n} = ${g}
 
 ${doc("The deployment's environment variables.")}
 export const env = process.env;
+
+${V_DOC}
+export { v } from ${q.values};
 `;
   const serverTs = `${header(SERVER_DESCRIPTION)}
 import ${importList(GENERIC_BUILDERS)} from ${q.server};
-import type ${importList(SERVER_TYPES)} from ${q.server};
+import type ${importList([...SERVER_TYPES, "SystemTableNames", "TableNamesInDataModel"])} from ${q.server};
+import { type TableValidators, v as untypedV } from ${q.values};
 import type { DataModel } from "./dataModel.js";
 
 ${BUILDERS.map(([n, t, g]) => `${doc(BUILDER_DOCS[n]!)}\nexport const ${n}: ${t} = ${g};`).join("\n\n")}
@@ -195,6 +208,9 @@ ${doc("The deployment's environment variables.")}
 export const env: Record<string, string | undefined> = (
   globalThis as unknown as { process: { env: Record<string, string | undefined> } }
 ).process.env;
+
+${V_DOC}
+export const v: ${V_TYPE} = untypedV;
 
 ${CTX_TYPES}`;
   const imports = paths.length ? `${moduleImports(paths)}\n\n` : "";

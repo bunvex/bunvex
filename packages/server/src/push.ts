@@ -18,6 +18,7 @@ import { parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
   type Engine,
+  indexReferenceError,
   insertAuditLogEvents,
   SCHEMAS_TABLE,
   type SchemaDefinition,
@@ -43,6 +44,15 @@ import { describeUncaught } from "./errors.ts";
 import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
+/**
+ * Convex's `check_index_references`, after the schema evaluates (`_evaluate_schema`): an index naming a field
+ * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
+ */
+function checkIndexReferences(schema: SchemaDefinition) {
+  const error = indexReferenceError(schema);
+  if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
+}
+
 export class PushError extends Error {
   constructor(
     readonly code: string,
@@ -211,6 +221,7 @@ export class PushService {
           "InvalidSchema",
           "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
         );
+      checkIndexReferences(s);
       schema = s;
     }
     const p = await this.deps.engine.evaluateSchema(schema);
@@ -250,6 +261,7 @@ export class PushService {
           "InvalidSchema",
           "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
         );
+      checkIndexReferences(s);
       schema = s;
     }
     const env = await this.deps.deploymentEnv();

@@ -8,7 +8,7 @@ import { opaqueToInspect } from "./inspect.ts";
 import { type JobDoc, publicJob } from "./scheduled-jobs.ts";
 import type { Doc } from "./schema.ts";
 import { TableReader } from "./table-scope.ts";
-import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuery } from "./tx.ts";
+import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuery, TxQueryChained } from "./tx.ts";
 
 const PUBLIC_INDEXES = new Set(["by_id", "by_creation_time"]);
 const VISIBLE: Record<string, (d: Doc) => Doc> = {
@@ -65,7 +65,7 @@ export class SystemReader {
 
   query(table: string): TxQuery {
     const project = visible(table);
-    return new ProjectedQuery(
+    return new ProjectedQueryInitializer(
       table,
       this.tx.asSystemSync(() => this.tx.query(table)),
       project,
@@ -73,33 +73,23 @@ export class SystemReader {
   }
 }
 
-export class ProjectedQuery implements TxQuery {
+/** A system-table query after its first operator (as `QueryImpl`: no index or scan methods). */
+export class ProjectedQuery implements TxQueryChained {
   constructor(
-    private readonly table: string,
-    private readonly q: TxQuery,
-    private readonly project: (d: Doc) => Doc,
+    protected readonly table: string,
+    protected readonly q: TxQueryChained,
+    protected readonly project: (d: Doc) => Doc,
   ) {}
-  private wrap(q: TxQuery) {
+  protected wrap(q: TxQueryChained): TxQueryChained {
     return new ProjectedQuery(this.table, q, this.project);
   }
-  withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery {
-    if (!PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
-    return this.wrap(this.q.withIndex(name, range));
-  }
-  /** System tables have no search indexes. */
-  withSearchIndex(name: string): TxQuery {
-    throw new Error(`Index ${this.table}.${name} not found.`);
-  }
-  fullTableScan(): TxQuery {
-    return this.wrap(this.q.fullTableScan());
-  }
-  order(dir: "asc" | "desc"): TxQuery {
+  order(dir: "asc" | "desc"): TxQueryChained {
     return this.wrap(this.q.order(dir));
   }
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained {
     return this.wrap(this.q.filter(predicate));
   }
-  limit(n: number): TxQuery {
+  limit(n: number): TxQueryChained {
     return this.wrap(this.q.limit(n));
   }
   async take(n: number): Promise<Doc[]> {
@@ -132,5 +122,26 @@ export class ProjectedQuery implements TxQuery {
   }
 }
 
+/** `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. */
+export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery {
+  constructor(table: string, q: TxQuery, project: (d: Doc) => Doc) {
+    super(table, q, project);
+  }
+  private get initial(): TxQuery {
+    return this.q as TxQuery;
+  }
+  withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
+    if (!PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
+    return this.wrap(this.initial.withIndex(name, range));
+  }
+  /** System tables have no search indexes. */
+  withSearchIndex(name: string): TxQueryChained {
+    throw new Error(`Index ${this.table}.${name} not found.`);
+  }
+  fullTableScan(): TxQueryChained {
+    return this.wrap(this.initial.fullTableScan());
+  }
+}
+
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
-opaqueToInspect(SystemReader, ProjectedQuery);
+opaqueToInspect(SystemReader, ProjectedQuery, ProjectedQueryInitializer);

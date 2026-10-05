@@ -9,6 +9,7 @@ import {
   isBytes,
   type ObjectType,
   type PropertyValidators,
+  rawValueSize,
   type Validator,
   type ValidatorJSON,
   type VFloat64,
@@ -16,7 +17,6 @@ import {
   type VObject,
   type VUnion,
   v,
-  valueSize,
 } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
@@ -607,7 +607,7 @@ export const isReservedIndex = (ix: IndexDef) =>
  */
 export function indexKeySize(ix: IndexDef, doc: Doc): number {
   let n = 33;
-  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += valueSize(v);
+  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += rawValueSize(v);
   return n;
 }
 
@@ -632,4 +632,89 @@ export function referencedTables(v: ValidatorJSON, out = new Set<string>()): Set
       break;
   }
   return out;
+}
+
+/**
+ * Convex's `check_index_references` (crates/common/src/schemas/mod.rs), run when a push evaluates its schema:
+ * with `schemaValidation`, every field an index names must be one the table's validator can hold, and a
+ * vector index's field one that can hold an array of float64. Tables in name order; in each, the database
+ * indexes' fields (then the staged ones'), the search fields, the search filter fields and the vector fields,
+ * then the vector fields' types. The first failure's message, or null.
+ */
+export function indexReferenceError(schema: SchemaDefinition): string | null {
+  if (!schema.schemaValidation) return null;
+  const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  for (const [table, t] of [...schema.tables].sort(([a], [b]) => byName(a, b))) {
+    const doc = t.document.json;
+    const staged = new Set(t.staged ?? []);
+    const stagedSearch = new Set(t.stagedSearch ?? []);
+    const stagedVector = new Set(t.stagedVector ?? []);
+    // Each kind's live indexes in name order, then its staged ones (Convex keeps them in two maps).
+    const ordered = <T>(m: Record<string, T> | undefined, isStaged: Set<string>) => {
+      const all = Object.entries(m ?? {}).sort(([a], [b]) => byName(a, b));
+      return [...all.filter(([n]) => !isStaged.has(n)), ...all.filter(([n]) => isStaged.has(n))];
+    };
+    const search = ordered(t.searchIndexes, stagedSearch);
+    const vector = ordered(t.vectorIndexes, stagedVector);
+    const referenced: [string, string][] = [
+      ...ordered(t.indexes, staged).flatMap(([name, fields]) => fields.map((f) => [name, f] as [string, string])),
+      ...search.map(([name, d]) => [name, d.searchField] as [string, string]),
+      ...search.flatMap(([name, d]) => d.filterFields.map((f) => [name, f] as [string, string])),
+      ...vector.map(([name, d]) => [name, d.vectorField] as [string, string]),
+    ];
+    for (const [index, field] of referenced) {
+      const path = field.split(".");
+      // A system field may be named whatever the validator says.
+      if ((path.length === 1 && path[0]!.startsWith("_")) || canContainField(doc, path)) continue;
+      return `In table "${table}" the index "${index}" is invalid because it references the field "${field}" that does not exist.`;
+    }
+    for (const [index, d] of vector)
+      if (!mayHoldVector(doc, d.vectorField.split(".")))
+        return `In table "${table}" the vector index "${index}" is invalid because it references the field "${d.vectorField}" that is neither an array of float64 or optional array of float64.`;
+  }
+  return null;
+}
+
+/** Convex's `Validator::can_contain_field`: whether some value the validator accepts has the field. */
+function canContainField(v: ValidatorJSON, path: string[]): boolean {
+  if (path.length === 0) return true;
+  switch (v.type) {
+    case "any":
+      return true;
+    case "union":
+      return v.value.some((c) => canContainField(c, path));
+    case "object": {
+      const f = Object.hasOwn(v.value, path[0]!) ? v.value[path[0]!] : undefined;
+      return f !== undefined && canContainField(f.fieldType, path.slice(1));
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Convex's `Validator::overlaps_with_array_float64`: whether the field may hold an array of float64. A field
+ * an object does not declare counts as yes (only a missing field fails, and the existence check runs first).
+ */
+function mayHoldVector(v: ValidatorJSON, path: string[]): boolean {
+  if (path.length === 0) return isVectorValidator(v);
+  switch (v.type) {
+    case "any":
+      return true;
+    case "union":
+      return v.value.some((c) => mayHoldVector(c, path));
+    case "object": {
+      const f = Object.hasOwn(v.value, path[0]!) ? v.value[path[0]!] : undefined;
+      return f === undefined || mayHoldVector(f.fieldType, path.slice(1));
+    }
+    default:
+      return false;
+  }
+}
+
+function isVectorValidator(v: ValidatorJSON): boolean {
+  if (v.type === "array") return v.value.type === "number" || v.value.type === "any";
+  if (v.type === "any") return true;
+  if (v.type === "union") return v.value.some(isVectorValidator);
+  return false;
 }

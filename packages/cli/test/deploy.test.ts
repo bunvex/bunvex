@@ -507,7 +507,7 @@ describe("the checks before a push (STUDY-56), as Convex's deploy", () => {
   const schema = (indexes: string, validator = "v.string()") => ({
     "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
 import { v } from ${JSON.stringify(VALUES)};
-export default defineSchema({ notes: defineTable({ body: ${validator} })${indexes} });`,
+export default defineSchema({ notes: defineTable({ body: ${validator}, other: v.optional(v.string()) })${indexes} });`,
     "bunvex/notes.ts": `import { mutation } from ${JSON.stringify(SERVER)};
 export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }));`,
   });

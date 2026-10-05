@@ -2,7 +2,7 @@
 // crates/database/src/query/{filter,limit}.rs): `filter` and `limit`, applied in the order the app chained
 // them. Each wraps the stream before it, so `.limit(5).filter(f)` keeps those of the first five that pass,
 // and a limit that is full ends the whole stream before anything more is read.
-import { type ExpressionOrValue, passes } from "./filter.ts";
+import { type ExpressionOrValue, expressionJson, passes } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
 
@@ -10,6 +10,12 @@ import type { Doc } from "./schema.ts";
 export const MAX_QUERY_OPERATORS = 256;
 
 export type QueryOp = { filter: ExpressionOrValue } | { limit: number };
+
+/** The operators as Convex's query JSON (`{ filter: <expression> }`, `{ limit: n }`); "" when there are none. */
+export const serializeOps = (ops: QueryOp[]): string =>
+  ops.length === 0
+    ? ""
+    : JSON.stringify(ops.map((op) => ("filter" in op ? { filter: expressionJson(op.filter) } : { limit: op.limit })));
 
 /** What `filter` throws when the query already has the most operators (Convex's client-side check). */
 export const TOO_MANY_OPERATORS = `Can't construct query with more than ${MAX_QUERY_OPERATORS} operators`;

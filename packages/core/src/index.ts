@@ -247,6 +247,7 @@ export {
   type GenericTableSearchIndexes,
   type IndexDef,
   indexKey,
+  indexReferenceError,
   isReservedIndex,
   MAX_INDEXES_PER_TABLE,
   MAX_SEARCH_FILTER_FIELDS,
@@ -265,6 +266,7 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
+export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
@@ -305,6 +307,7 @@ export {
   Tx,
   type TxLimits,
   type TxQuery,
+  type TxQueryChained,
 } from "./tx.ts";
 export {
   formatByteCount,

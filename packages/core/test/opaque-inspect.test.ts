@@ -16,7 +16,8 @@ test("an engine, its store and a transaction print by name under Bun.inspect and
       [engine, "Engine"],
       [persistence, "MemoryPersistence"],
       [db, "Tx"],
-      [db.query("t"), "QueryImpl"],
+      [db.query("t"), "QueryInitializerImpl"],
+      [db.query("t").order("asc"), "QueryImpl"],
       [db.system, "SystemReader"],
       [db.table("t"), "TableWriter"],
     ] as const) {

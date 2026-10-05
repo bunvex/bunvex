@@ -3,7 +3,7 @@
 // `CronSpec::from_exported_json`). bunvex has no push yet, so the crons are handed to `createServer`
 // and checked at start (S1).
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
-import { isSimpleObject, toJsonValue, type Value, valueSize } from "@bunvex/values";
+import { isSimpleObject, rawValueSize, toJsonValue, type Value } from "@bunvex/values";
 import { parseCronExpression } from "./cron-expression.ts";
 
 const DAYS_OF_WEEK = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
@@ -247,7 +247,7 @@ export function cronSpecs(crons: Crons, canonical: (id: string, name: string) =>
       default:
         throw new Error("Invalid JSON");
     }
-    const size = valueSize(c.args as unknown as Value);
+    const size = rawValueSize(c.args as unknown as Value);
     if (size > MAX_CRON_ARGS_SIZE)
       throw new Error(`Cron job args too large (${size} > maximum size ${MAX_CRON_ARGS_SIZE})`);
     out.set(id, { udfPath: canonical(id, c.name), udfArgs: c.args, cronSchedule: schedule });

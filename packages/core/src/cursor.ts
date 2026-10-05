@@ -25,17 +25,24 @@ const AAD = Uint8Array.of(CURSOR_VERSION);
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
 
-/** A query's fingerprint: what it reads (table, index, range) and in which order. */
+/**
+ * A query's fingerprint: what it reads (table, index, range), in which order, and its operators (filters and
+ * limits, serialized as Convex's query JSON: `Query::fingerprint`, crates/common/src/query.rs), so a cursor of
+ * another filter is refused (STUDY-17 D3). A query with no operator keeps the fingerprint it always had.
+ */
 export function queryFingerprint(parts: {
   tablet: number;
   index: number;
   lo: Uint8Array;
   hi: Uint8Array;
   desc: boolean;
+  /** The serialized operators, in order (`serializeOps`). */
+  ops?: string;
 }): Uint8Array {
+  const base = `${parts.tablet}:${parts.index}:${b64(parts.lo)}:${b64(parts.hi)}:${parts.desc ? "desc" : "asc"}`;
   return new Uint8Array(
     createHash("sha256")
-      .update(`${parts.tablet}:${parts.index}:${b64(parts.lo)}:${b64(parts.hi)}:${parts.desc ? "desc" : "asc"}`)
+      .update(parts.ops ? `${base}:${parts.ops}` : base)
       .digest(),
   );
 }

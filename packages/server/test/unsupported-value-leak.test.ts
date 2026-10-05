@@ -77,7 +77,7 @@ describe("an unsupported value in a function's result, write or arguments", () =
       [
         "query",
         "m:nestedQuery",
-        'QueryImpl {…} is not a supported value type (present at path .q in original object {"q":QueryImpl {…}}).',
+        'QueryInitializerImpl {…} is not a supported value type (present at path .q in original object {"q":QueryInitializerImpl {…}}).',
       ],
       ["query", "m:db", "Tx {…} is not a supported value type."],
       ["query", "m:ctx", '"db":Tx {…}'],
