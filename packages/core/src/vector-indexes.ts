@@ -72,6 +72,8 @@ function compareInternal(a: string, b: string): number {
   return Buffer.compare(Buffer.from(x), Buffer.from(y));
 }
 
+const NONE: readonly VectorIndexEntry[] = [];
+
 export class VectorIndexes {
   private entries = new Map<string, VectorIndexEntry>();
 
@@ -85,9 +87,14 @@ export class VectorIndexes {
     return this.entries.get(VectorIndexes.key(t.id, name));
   }
 
-  forTablet(tablet: number): VectorIndexEntry[] {
-    return [...this.entries.values()].filter((e) => e.tablet === tablet);
+  /**
+   * The indexes of one table. Every write asks (the usage meter, the commit's index maintenance), so they are
+   * grouped when the set changes, not filtered on each call; a table without any shares one empty list.
+   */
+  forTablet(tablet: number): readonly VectorIndexEntry[] {
+    return this.byTablet.get(tablet) ?? NONE;
   }
+  private byTablet = new Map<number, VectorIndexEntry[]>();
 
   /** Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill. */
   reconcile(
@@ -119,6 +126,12 @@ export class VectorIndexes {
       if (!w.staged) added.push(e);
     }
     this.entries = next;
+    this.byTablet = new Map();
+    for (const e of next.values()) {
+      const list = this.byTablet.get(e.tablet);
+      if (list) list.push(e);
+      else this.byTablet.set(e.tablet, [e]);
+    }
     return added;
   }
 

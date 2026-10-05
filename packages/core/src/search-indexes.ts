@@ -93,6 +93,8 @@ export function indexedDocBytes(def: SearchIndexDef, doc: Doc): number {
 /** A filter value's stored bytes, as Convex's `FilterValue`: its sort key, or a 32-byte hash from 32 bytes on. */
 export const filterValueBytes = (key: string) => Math.min(key.length / 2, 32);
 
+const NONE: readonly SearchIndexEntry[] = [];
+
 export class SearchIndexes {
   private entries = new Map<string, SearchIndexEntry>();
 
@@ -109,9 +111,14 @@ export class SearchIndexes {
     return this.entries.get(SearchIndexes.key(t.id, name));
   }
 
-  forTablet(tablet: number): SearchIndexEntry[] {
-    return [...this.entries.values()].filter((e) => e.tablet === tablet);
+  /**
+   * The indexes of one table. Every write asks (the usage meter, the commit's index maintenance), so they are
+   * grouped when the set changes, not filtered on each call; a table without any shares one empty list.
+   */
+  forTablet(tablet: number): readonly SearchIndexEntry[] {
+    return this.byTablet.get(tablet) ?? NONE;
   }
+  private byTablet = new Map<number, SearchIndexEntry[]>();
 
   /**
    * Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill.
@@ -155,6 +162,12 @@ export class SearchIndexes {
       if (!w.staged) added.push(e);
     }
     this.entries = next;
+    this.byTablet = new Map();
+    for (const e of next.values()) {
+      const list = this.byTablet.get(e.tablet);
+      if (list) list.push(e);
+      else this.byTablet.set(e.tablet, [e]);
+    }
     return added;
   }
 
