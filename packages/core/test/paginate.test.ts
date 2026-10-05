@@ -84,6 +84,34 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
     await expect(page(other, a.continueCursor, 3)).rejects.toThrow("Failed to parse cursor");
   });
 
+  test("a cursor is bound to its filters and limits, as Convex's fingerprint (STUDY-17 D3)", async () => {
+    const e = await engine(20);
+    const filtered = (cursor: string | null, min: number, extra?: (q: unknown) => unknown) =>
+      e.query((db) => {
+        let q = db
+          .query("items")
+          .withIndex("by_n")
+          .filter((f) => f.and(f.gte(f.field("n"), min), f.neq(f.field("odd"), true)));
+        if (extra) q = extra(q) as typeof q;
+        return q.paginate({ numItems: 3, cursor });
+      });
+    const first = await filtered(null, 5);
+    // The same filter, built again from the same values: the same query.
+    const second = await filtered(first.continueCursor, 5);
+    expect(ns(second.page)).toEqual([8, 9, 10]);
+    const different =
+      "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.";
+    // Another literal in the filter, an extra operator, or no filter at all: another query.
+    await expect(filtered(first.continueCursor, 6)).rejects.toThrow(different);
+    await expect(
+      filtered(first.continueCursor, 5, (q) => (q as { limit(n: number): unknown }).limit(10)),
+    ).rejects.toThrow(different);
+    await expect(page(e, first.continueCursor, 3)).rejects.toThrow(different);
+    // A query with no operator keeps its fingerprint: its cursors are what they were.
+    const plain = await page(e, null, 3);
+    expect(ns((await page(e, plain.continueCursor, 3)).page)).toEqual([3, 4, 5]);
+  });
+
   test("argument errors and one paginated query per function", async () => {
     const e = await engine(3);
     await expect(page(e, null, 0)).rejects.toThrow("`options.numItems` must be a positive number. Received `0`.");

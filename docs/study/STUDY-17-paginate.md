@@ -66,8 +66,54 @@ the split fields, and the validators.
 |---|---|---|---|
 | D1 | Cursors are signed (HMAC), not encrypted: the index key position is visible to a client who decodes base64 | Tampering is refused all the same; encryption needs the key broker (admin keys, phase 3) | Decided (owner, 2026-10-01): match Convex. Built: cursors sealed as Convex's keybroker seals them (`cursor.ts`; DV-73 resolved) |
 | D2 | Without `INSTANCE_SECRET`, a random secret is generated on first start and stored with the data (system table `_instance`), as Convex's self-hosted image does (`self-hosted/docker-build/read_credentials.sh`: the env var, else the stored secret, else a new random one that is then saved). Convex saves it in a file of its data directory; bunvex saves it in the store, because the data may live in a remote database | accepted: option D (owner, 2026-09-30) |
-| D3 | The fingerprint covers table, index, range and order, not filter expressions | Filters are closures here, not a serialized expression | accepted |
+| D3 | The fingerprint covered table, index, range and order, not filter expressions | Filters were evaluated as closures, with no serialized form | accepted (#42); re-studied 2026-10-04 (§4.1): proposed to match Convex, **owner** to choose |
 | D4 | `InvalidCursor` errors are plain errors, without Convex's error `data` | The error-data class lands with the errors work (track B, #32) | resolved (STUDY-26 P1): a cursor of another query is a `BunvexError` with `{isBunvexSystemError: true, paginationError: "InvalidCursor"}`; a cursor that does not parse stays a plain error, as in Convex |
+
+### 4.1 D3, re-studied (owner, 2026-10-04)
+
+**Convex.** A paginated query's fingerprint is a SHA-256 of the whole query's JSON (its source: index, range,
+order; and its operators in order: every `filter` expression and `limit`) plus the index's fields
+(`Query::fingerprint`, crates/common/src/query.rs:970-990). It is computed only when paginating
+(crates/database/src/query/mod.rs:362-370) and compared with the start cursor's and the end cursor's
+(mod.rs:381-384, 396-400); a mismatch is `invalid_cursor()` (mod.rs:786): "InvalidCursor: Tried to run a query
+starting from a cursor, but it looks like this cursor is from a different query.", data
+`{isConvexSystemError: true, paginationError: "InvalidCursor"}`. The paginated clients treat it as "start over":
+the page is dropped and pagination restarts from the first page (react/use_paginated_query2.ts:301-307,
+browser/sync/paginated_query_client.ts:206). A `filter` is serialized once, when the query is built: the
+predicate runs against the filter builder and returns an expression tree (`filter_builder_impl.ts`:
+`{ $eq: [{ $field: "n" }, { $literal: … }] }`, literals as Convex JSON), pushed as `{ filter: <tree> }`
+(query_impl.ts:225-240). "The same filter" therefore means the same tree with the same literal values.
+
+**bunvex before.** `filter(predicate)` also runs the predicate once against a builder (tx.ts), but the tree's nodes
+held only an `evaluate(doc)` closure: no serialized form, so the fingerprint (`queryFingerprint`, cursor.ts) covered
+table, index, range and order only.
+
+**How big the gap is.** The arguments of a paginated query are not what this is about: a client paginating with
+new arguments starts a new paginated query (its pages are keyed by the arguments), and a range built from them is
+in the fingerprint already. The gap shows only when the same query, with a cursor, runs with a *different filter*:
+- **a filter computed from data the query reads** (Convex's own example at mod.rs:350-361, for a range): a page
+  re-run after that data changed. Convex answers `InvalidCursor` and the client restarts from the first page;
+  bunvex kept the page's boundaries and filtered them with the new filter;
+- **manual pagination** (`paginate` called by hand, an HTTP client) handing a cursor to a query with another
+  filter: Convex refuses it; bunvex continued from that position.
+In neither case did bunvex return wrong documents: the positions are positions in the same index range, and every
+document returned passed the current filter. What differs is what an app sees: no error, and pages that are not
+restarted.
+
+**Options.**
+- (a) **Accept** the divergence: harmless for correctness (above), but observably different from Convex, and an
+  app (or the paginated clients) never sees the `InvalidCursor` that Convex would give.
+- (b) **Match Convex** (proposed, built in this PR): each filter node also carries its serialized form, built by
+  the filter builder exactly as Convex's (`$field`, `$literal` with Convex JSON values, `$eq` … `$mod`, `$neg`,
+  `$and`, `$or`, `$not`); the fingerprint appends the serialized operators (`{ filter }`, `{ limit }`, in order).
+  A query with no operator keeps the fingerprint it had, so its cursors stay valid after the upgrade; a filtered
+  query's outstanding cursors are refused once, and the clients restart those pages (as for any `InvalidCursor`,
+  DV-250). Cost: 0.67 → 1.08 µs per filtered `paginate` call; each filter node builds a small JSON object.
+- (c) **The predicate's source text** (`predicate.toString()`): cheap, but blind to the values a closure
+  captures (the common case, `q.eq(q.field("channel"), args.channel)`), and changed by minification: it would
+  refuse cursors that are fine and accept ones that are not. Rejected.
+
+**Recommendation:** (b), matching Convex; the owner chooses between (a) and (b).
 
 ## 5. Tests
 
