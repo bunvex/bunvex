@@ -210,7 +210,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
     });
   };
-  // Search index snapshots live in the `search` use case (STUDY-96); its store is made once the engine exists.
+  // Search and vector index segments live in the `search` use case (STUDY-111); its store is made once the engine
+  // exists.
   let searchBlobs: BlobStore | null = null;
   const engine: Engine = new Engine(defineSchema({}), persistence, {
     instanceName: f.instanceName,
