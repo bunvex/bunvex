@@ -86,7 +86,7 @@ async function deployment(dir: string, o: { deployable?: boolean; store?: Memory
           schema,
           changedModules,
           unchangedModuleHashes,
-          udfServerVersion: "1",
+          udfServerVersion: "1.46.0",
         },
         componentDefinitions: [],
         nodeDependencies: [],
@@ -300,6 +300,9 @@ describe("deploy2 over HTTP", () => {
     expect(r.finish!.body.componentDiffs[""].indexDiff).toEqual(r.start.body.schemaChange.indexDiffs[""]);
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["hi v1"]);
+    // `_udf_config.serverVersion` is the version the push sent (Convex: the CLI's package version).
+    const [config] = await d.engine.query((db) => db.asSystem(() => db.query("_udf_config").collect()));
+    expect(config!.serverVersion).toBe("1.46.0");
     // The schema's validator holds.
     expect((await d.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
   });

@@ -119,6 +119,8 @@ type StartPushRequest = {
     schema?: ModuleSource | null;
     changedModules?: ModuleSource[];
     unchangedModuleHashes?: ModuleHash[];
+    /** The CLI's package version, as Convex's: `_udf_config.serverVersion`. */
+    udfServerVersion?: string;
   };
   componentDefinitions?: unknown[];
 };
@@ -285,7 +287,7 @@ export class PushService {
     const all = await this.resolveModules(req);
     const authModule = all.find((m) => m.path === AUTH_CONFIG);
     const modules = all.filter((m) => m.path !== AUTH_CONFIG);
-    const config = await udfConfig(this.deps.engine);
+    const config = await udfConfig(this.deps.engine, req.appDefinition?.udfServerVersion);
     let version: CodeVersion;
     try {
       version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });

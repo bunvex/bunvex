@@ -256,11 +256,11 @@ export default query({ handler: async () => n });`)
     const p = await deployment();
     const [row] = (await p.engine.query((db) =>
       db.asSystem(() => db.query(UDF_CONFIG_TABLE).collect()),
-    )) as unknown as { importPhaseUnixTimestamp: number }[];
+    )) as unknown as { importPhaseUnixTimestamp: bigint }[];
     const at = await p.tester(`import { query } from ${JSON.stringify(WRAPPERS)};
 const t = Date.now();
 export default query({ handler: async () => t });`);
-    expect(at.body.value).toBe(row!.importPhaseUnixTimestamp);
+    expect(at.body.value).toBe(Number(row!.importPhaseUnixTimestamp / 1_000_000n)); // the row holds ns
   });
 
   test("components: bunvex has none (DV-391)", async () => {

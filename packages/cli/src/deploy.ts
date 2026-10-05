@@ -25,6 +25,7 @@ import {
 import type { Io } from "./io.ts";
 import { acquireTarget, urlVariables } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
+import { VERSION } from "./version.ts";
 
 export { parseEnvFile } from "./target.ts";
 
@@ -435,7 +436,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         schema: bundled.schema,
         changedModules,
         unchangedModuleHashes,
-        udfServerVersion: "bunvex",
+        udfServerVersion: VERSION,
       },
       componentDefinitions: [],
       nodeDependencies: [],

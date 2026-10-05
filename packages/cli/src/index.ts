@@ -14,6 +14,7 @@ import { logsCommand } from "./logs.ts";
 import { mcpCommand } from "./mcp.ts";
 import { runCommand } from "./run.ts";
 import { typecheckCommand } from "./typecheck.ts";
+import { VERSION } from "./version.ts";
 
 export type { Io } from "./io.ts";
 
@@ -54,10 +55,7 @@ const COMMANDS: Record<string, (args: string[], io: Io) => Promise<number>> = {
   typecheck: typecheckCommand,
 };
 
-// The version: the standalone executable's (set at build, STUDY-39), else the package's.
-declare const BUNVEX_BUILD_VERSION: string | undefined;
-export const VERSION: string =
-  typeof BUNVEX_BUILD_VERSION === "string" ? BUNVEX_BUILD_VERSION : (await import("../package.json")).version;
+export { VERSION };
 
 /** Run the command line; resolves to the exit code. */
 export async function main(argv: string[], io: Io = processIo()): Promise<number> {

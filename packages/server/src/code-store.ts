@@ -9,6 +9,8 @@
 import { type Engine, MODULES_TABLE, SOURCE_PACKAGES_TABLE, type Tx, UDF_CONFIG_TABLE } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleName } from "./code-version.ts";
+import { cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
+import { SERVER_VERSION } from "./server-version.ts";
 
 /** Convex's unzipped package limit (crates/model/src/source_packages/types.rs). */
 export const MAX_UNZIPPED_PACKAGE_BYTES = 230 * 1024 * 1024;
@@ -23,6 +25,9 @@ export type ModuleRow = {
   analyzeResult: AnalyzedModule | null;
 };
 export type UdfConfig = { serverVersion: string; seed: Uint32Array; timestamp: number };
+
+/** A module's analysis as its `_modules` row holds it: the crons as Convex's `[{identifier, spec}]` (cron-rows.ts). */
+const analysisRow = (a: AnalyzedModule | null) => (a === null ? null : { ...a, cronSpecs: cronSpecsRow(a.cronSpecs) });
 
 /** Store a push's modules as one blob; its key, hash and size. */
 export async function writePackage(store: BlobStore, modules: ModuleSource[]) {
@@ -42,24 +47,35 @@ export async function readPackage(store: BlobStore, storageKey: string): Promise
   return (JSON.parse(new TextDecoder().decode(Bun.gunzipSync(bytes))) as { modules: ModuleSource[] }).modules;
 }
 
-/** The deployment's import-phase seed and time, made once (Convex keeps them unless the server version changes). */
-export async function udfConfig(engine: Engine, serverVersion = "bunvex"): Promise<UdfConfig> {
+/**
+ * The deployment's import-phase seed and time, made once (Convex keeps them unless the server version changes).
+ * The row is Convex's `UdfConfig`: `{serverVersion, importPhaseRngSeed: bytes, importPhaseUnixTimestamp}`, the
+ * time an int64 of nanoseconds. `serverVersion` is what a push sends (`udfServerVersion`: the CLI's package
+ * version, as Convex's); without one, the stored row is used as it is, or made with this server's version.
+ */
+export async function udfConfig(engine: Engine, serverVersion?: string): Promise<UdfConfig> {
   // Drawn outside the transaction: randomness is refused inside one (determinism).
   const fresh = crypto.getRandomValues(new Uint32Array(8));
   return engine.mutation((db) =>
     db.asSystem(async () => {
       const row = (await db.query(UDF_CONFIG_TABLE).first()) as Record<string, unknown> | null;
-      if (row && row.serverVersion === serverVersion)
+      if (row && (serverVersion === undefined || row.serverVersion === serverVersion))
         return {
-          serverVersion,
+          serverVersion: row.serverVersion as string,
           seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
-          timestamp: row.importPhaseUnixTimestamp as number,
+          timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
         };
+      const version = serverVersion ?? SERVER_VERSION;
       const seed = fresh;
-      const fields = { serverVersion, importPhaseRngSeed: seed.buffer.slice(0), importPhaseUnixTimestamp: Date.now() };
+      const timestamp = Date.now();
+      const fields = {
+        serverVersion: version,
+        importPhaseRngSeed: seed.buffer.slice(0),
+        importPhaseUnixTimestamp: nsOfMs(timestamp),
+      };
       if (row) await db.replace(UDF_CONFIG_TABLE, row._id as string, fields);
       else await db.insert(UDF_CONFIG_TABLE, fields);
-      return { serverVersion, seed, timestamp: fields.importPhaseUnixTimestamp };
+      return { serverVersion: version, seed, timestamp };
     }),
   ) as Promise<UdfConfig>;
 }
@@ -82,9 +98,9 @@ export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
     return {
       serverVersion: row.serverVersion as string,
       seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
-      timestamp: row.importPhaseUnixTimestamp as number,
+      timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
     };
-  return { serverVersion: "bunvex", seed: fresh, timestamp: now };
+  return { serverVersion: SERVER_VERSION, seed: fresh, timestamp: now };
 }
 
 /**
@@ -106,7 +122,7 @@ export async function writeCodeRows(
         sourcePackageId,
         environment: l.source.environment,
         sha256: l.hash,
-        analyzeResult: version.analysis[path] ?? null,
+        analyzeResult: analysisRow(version.analysis[path] ?? null),
       };
       const cur = byPath.get(path);
       if (cur) await db.replace(MODULES_TABLE, cur._id, row);

@@ -186,7 +186,7 @@ describe("_system/frontend crons", () => {
       await Bun.sleep(5);
     const jobs = (await sys("_system/frontend/listCronJobs")) as Record<string, never>[];
     const hourly = jobs.find((j) => j.name === "every hour") as Record<string, Record<string, unknown>>;
-    expect(hourly.cronSpec).toMatchObject({ udfPath: "m.js:a", cronSchedule: { type: "interval", seconds: 3600 } });
+    expect(hourly.cronSpec).toMatchObject({ udfPath: "m.js:a", cronSchedule: { type: "interval", seconds: 3600n } });
     expect(JSON.parse(new TextDecoder().decode(hourly.cronSpec.udfArgs as ArrayBuffer))).toEqual([{ n: 1 }]);
     expect(hourly.nextRun).toMatchObject({ cronJobId: hourly._id, state: { type: "pending" } });
     expect(typeof hourly.nextRun.nextTs).toBe("bigint");

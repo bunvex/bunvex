@@ -78,38 +78,6 @@ function scheduledJobDoc(d: JobDoc) {
 }
 
 type Doc = Record<string, unknown> & { _id: string; _creationTime: number };
-const cronJobDoc = (d: Doc) => {
-  const spec = d.cronSpec as { udfPath: string; udfArgs: Value[]; cronSchedule: unknown };
-  return {
-    _id: d._id,
-    _creationTime: d._creationTime,
-    name: d.name,
-    cronSpec: { udfPath: spec.udfPath, udfArgs: argsBytes(spec.udfArgs), cronSchedule: spec.cronSchedule },
-  };
-};
-const cronLogDoc = (d: Doc) => ({
-  _id: d._id,
-  _creationTime: d._creationTime,
-  name: d.name,
-  ts: ns(d.ts as number),
-  udfPath: d.udfPath,
-  udfArgs: argsBytes(d.udfArgs as Value[]),
-  status:
-    (d.status as { type: string }).type === "canceled"
-      ? { type: "canceled", num_canceled: BigInt((d.status as { num_canceled: number }).num_canceled) }
-      : d.status,
-  logLines: d.logLines,
-  executionTime: d.executionTime,
-});
-const cronNextRunDoc = (d: Doc) => ({
-  _id: d._id,
-  _creationTime: d._creationTime,
-  cronJobId: d.cronJobId,
-  state: d.state,
-  prevTs: d.prevTs === null ? null : ns(d.prevTs as number),
-  nextTs: ns(d.nextTs as number),
-});
-
 /** An import's row as Convex's: without bunvex's own `object_size` and `hidden_tables`. */
 const importDoc = (d: Record<string, unknown> | null) => {
   if (!d) return null;
@@ -509,7 +477,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
             .withIndex("by_cron_job_id", (q) => q.eq("cronJobId", job._id))
             .first()) as unknown as Doc | null;
           if (nextRun === null) throw new Error("No next run found for cron job");
-          out.push({ ...cronJobDoc(job), lastRun: lastRun && cronLogDoc(lastRun), nextRun: cronNextRunDoc(nextRun) });
+          // The rows are Convex's already (cron-rows.ts): returned as stored, as Convex's `listCronJobs`.
+          out.push({ ...job, lastRun, nextRun });
         }
         return out;
       }),
@@ -571,8 +540,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   },
   "_system/frontend/listCronJobRuns": {
     args: { componentId },
-    handler: async (db) =>
-      ((await db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect())) as unknown as Doc[]).map(cronLogDoc),
+    handler: async (db) => (await db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect())) as unknown as Doc[],
   },
 };
 

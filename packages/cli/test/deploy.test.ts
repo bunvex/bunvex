@@ -10,7 +10,7 @@ import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
 import { bundleFunctions, entryPoints, usesNode } from "../src/bundle.ts";
 import { parseEnvFile, partitionModules } from "../src/deploy.ts";
-import { type Io, main } from "../src/index.ts";
+import { type Io, main, VERSION } from "../src/index.ts";
 import { memoryStore } from "./memory-store.ts";
 
 const SECRET = "cd".repeat(32);
@@ -147,6 +147,9 @@ describe("bunvex deploy", () => {
     expect((await d.call("query", "messages:list")).value).toEqual(["HI"]);
     expect((await d.call("mutation", "messages:send", { author: "ada" })).status).toBe("error"); // the schema
     expect(await (await fetch(`${d.url}/http/hello`)).text()).toBe("hello from http");
+    // The push sent the CLI's version, as Convex's CLI its package's: `_udf_config.serverVersion`.
+    const [config] = await d.engine.query((db) => db.asSystem(() => db.query("_udf_config").collect()));
+    expect(config!.serverVersion).toBe(VERSION);
     expect((await d.call("action", "files:digest", { text: "x" })).value).toMatch(/^[0-9a-f]{8}$/);
     // The test file and _generated were not pushed.
     const hashes = (await (
