@@ -40,7 +40,7 @@ import {
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
-import { type GenericId, hasCommitTs, isSimpleObject, type Value, valueSize } from "@bunvex/values";
+import { type GenericId, hasCommitTs, isSimpleObject, rawValueSize, type Value } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import { functionNameOf } from "./function-handles.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
@@ -406,7 +406,7 @@ export class ScheduledJobExecutor {
               THROTTLED,
             ),
           // A job that changed meanwhile did not run.
-          (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
+          (ran) => (ran ? { returnBytes: rawValueSize((value ?? null) as Value) } : { skip: true }),
           undefined,
           job.args[0],
         );
