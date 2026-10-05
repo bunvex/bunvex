@@ -9,7 +9,8 @@
       "!bun.lock",
       "!**/routeTree.gen.ts",
       "!**/dist",
-      "!examples/*/bunvex/_generated"
+      "!examples/*/bunvex/_generated",
+      "!packages/server/test/fixtures/openapi"
     ]
   },
   "css": { "parser": { "tailwindDirectives": true } },

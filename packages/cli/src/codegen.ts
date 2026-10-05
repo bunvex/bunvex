@@ -7,20 +7,25 @@
 // - `server` re-exports the `*Generic` builders typed with the app's `DataModel`, and the context types;
 // - `dataModel.d.ts` derives `DataModel`, `Doc`, `Id`, `TableNames` from `schema.ts` (`AnyDataModel`
 //   without one);
-// - `codegen.fileType: "ts"` in bunvex.json writes `.ts` files instead of `.js` + `.d.ts` pairs.
+// - `codegen.fileType: "ts"` in bunvex.json writes `.ts` files instead of `.js` + `.d.ts` pairs;
+// - `--commonjs` or `generateCommonJSApi` in bunvex.json adds `api_cjs.cjs` + `api_cjs.d.cts` (`.js` + `.d.ts`
+//   only, as Convex's), for apps that `require()` the api (STUDY-116).
 //
 // The initial pass (before bundling) writes what is missing, and always `api.js`, so that modules importing
 // `_generated/` bundle; the final pass writes everything. A file is only rewritten when its content changes,
-// and entries of `_generated/` neither pass wrote are removed. The layout is the generator's own, matching
+// and entries of `_generated/` neither pass wrote are removed; `--dry-run` and `--debug` print instead of
+// writing (Convex's writeFormattedFile, STUDY-116). The layout is the generator's own, matching
 // what prettier makes of Convex's templates (G3); `components` is `{}` (G2); `env` is untyped (G4).
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { entryPoints } from "./bundle.ts";
 
 export type CodegenConfig = {
   fileType: "ts" | "js/dts";
   /** Where the generated files import from: `bunvex/*`, or `@bunvex/*` for an app on the scoped packages (STUDY-40). */
   packages?: "bunvex" | "@bunvex";
+  /** Also write the CommonJS api (`api_cjs.cjs`, `api_cjs.d.cts`); ignored with `fileType: "ts"`, as Convex. */
+  commonjs?: boolean;
 };
 
 const posix = (p: string) => p.split(sep).join("/");
@@ -161,7 +166,12 @@ const V_TYPE = "TableValidators<TableNamesInDataModel<DataModel> | SystemTableNa
 /** The generated files, by name (Convex's dynamic modes: what the code says, no deployment needed). */
 export function generatedFiles(
   paths: string[],
-  opts: { hasSchema: boolean; fileType: CodegenConfig["fileType"]; packages?: CodegenConfig["packages"] },
+  opts: {
+    hasSchema: boolean;
+    fileType: CodegenConfig["fileType"];
+    packages?: CodegenConfig["packages"];
+    commonjs?: boolean;
+  },
 ): {
   dataModel: Record<string, string>;
   server: Record<string, string>;
@@ -287,6 +297,15 @@ export const api: AnyApi = anyApi;
 export const internal: AnyApi = anyApi;
 export const components = {};
 `;
+  // The CommonJS api (Convex's `api_cjs`): the same declarations, and `anyApi` through `require()`.
+  const apiCjs = `${apiHeader}
+const { anyApi } = require(${q.server});
+module.exports = {
+  api: anyApi,
+  internal: anyApi,
+};
+`;
+  const cjs = opts.commonjs ? { api: { "api_cjs.cjs": apiCjs, "api_cjs.d.cts": apiDts }, stub: apiStubDts } : null;
   return ts
     ? {
         dataModel: { "dataModel.ts": dataModel },
@@ -297,8 +316,12 @@ export const components = {};
     : {
         dataModel: { "dataModel.d.ts": dataModel },
         server: { "server.js": serverJs, "server.d.ts": serverDts },
-        api: { "api.js": apiJs, "api.d.ts": apiDts },
-        apiStub: { "api.js": apiJs, "api.d.ts": apiStubDts },
+        api: { "api.js": apiJs, "api.d.ts": apiDts, ...cjs?.api },
+        apiStub: {
+          "api.js": apiJs,
+          "api.d.ts": apiStubDts,
+          ...(cjs && { "api_cjs.cjs": apiCjs, "api_cjs.d.cts": cjs.stub }),
+        },
       };
 }
 
@@ -379,18 +402,47 @@ export type DataModel = AnyDataModel;
 
 export type CodegenResult = { written: string[]; removed: string[] };
 
-/** Write `content` to `path` unless it already holds it. */
-function writeIfChanged(path: string, content: string, written: string[], name: string) {
-  if (existsSync(path) && readFileSync(path, "utf8") === content) return;
+/**
+ * How codegen writes (Convex's `writeFormattedFile`): `debug` prints every file as `# <absolute path>` and its
+ * contents, and writes nothing; `dryRun` prints `Command would write file: <path>` for each file whose content
+ * would change, and writes nothing. Both print with `out`; paths are relative to `cwd`.
+ */
+export type WriteMode = { dryRun?: boolean; debug?: boolean; cwd: string; out: (line: string) => void };
+
+/** Write `content` to `path` unless it already holds it; returns whether it was (or would be) written. */
+function writeIfChanged(path: string, content: string, mode?: WriteMode): boolean {
+  if (mode?.debug) {
+    mode.out(`# ${resolve(path)}`);
+    mode.out(content);
+    return false;
+  }
+  if (existsSync(path) && readFileSync(path, "utf8") === content) return false;
+  if (mode?.dryRun) {
+    mode.out(`Command would write file: ${relative(mode.cwd, path)}`);
+    return true;
+  }
   writeFileSync(path, content);
-  written.push(name);
+  return true;
+}
+
+/** Remove a stale entry of `_generated/`, or (dry run) say what would be removed, deepest first, as Convex. */
+function removeEntry(path: string, mode?: WriteMode) {
+  if (!mode?.dryRun) return rmSync(path, { recursive: true, force: true });
+  if (statSync(path).isDirectory()) {
+    for (const entry of readdirSync(path)) removeEntry(join(path, entry), mode);
+    mode.out(`Command would delete directory: ${relative(mode.cwd, path)}`);
+  } else mode.out(`Command would delete file: ${relative(mode.cwd, path)}`);
 }
 
 /**
  * Run codegen in `functionsDir`. `initial`: the pass before bundling (Convex's initial component codegen),
  * which keeps files a final pass wrote and writes stubs for the others; otherwise the final pass.
  */
-export function runCodegen(functionsDir: string, config: CodegenConfig, opts: { initial?: boolean } = {}) {
+export function runCodegen(
+  functionsDir: string,
+  config: CodegenConfig,
+  opts: { initial?: boolean; mode?: WriteMode } = {},
+) {
   const dir = join(functionsDir, "_generated");
   mkdirSync(dir, { recursive: true });
   const hasSchema = existsSync(join(functionsDir, "schema.ts")) || existsSync(join(functionsDir, "schema.js"));
@@ -398,6 +450,7 @@ export function runCodegen(functionsDir: string, config: CodegenConfig, opts: { 
     hasSchema,
     fileType: config.fileType,
     packages: config.packages,
+    commonjs: config.commonjs,
   });
   const result: CodegenResult = { written: [], removed: [] };
   const keep = new Set<string>();
@@ -407,10 +460,10 @@ export function runCodegen(functionsDir: string, config: CodegenConfig, opts: { 
     ? [
         { files: files.dataModel, onlyIfMissing: true },
         { files: files.server, onlyIfMissing: true },
-        // `api.js` always; the typed declarations only when there are none yet.
+        // `api.js` (and `api_cjs.cjs`) always; the typed declarations only when there are none yet.
         ...Object.entries(files.apiStub).map(([name, content]) => ({
           files: { [name]: content },
-          onlyIfMissing: name !== "api.js",
+          onlyIfMissing: name !== "api.js" && name !== "api_cjs.cjs",
         })),
       ]
     : [
@@ -424,11 +477,13 @@ export function runCodegen(functionsDir: string, config: CodegenConfig, opts: { 
     // A pair stands or falls with its first file (`server.js` keeps its `server.d.ts`), as Convex's.
     if (g.onlyIfMissing && existsSync(join(dir, names[0]!))) continue;
     for (const [name, content] of Object.entries(g.files))
-      writeIfChanged(join(dir, name), content, result.written, name);
+      if (writeIfChanged(join(dir, name), content, opts.mode)) result.written.push(name);
   }
+  // `--debug` writes nothing, so it removes nothing either.
+  if (opts.mode?.debug) return result;
   for (const entry of readdirSync(dir)) {
     if (keep.has(entry)) continue;
-    rmSync(join(dir, entry), { recursive: true, force: true });
+    removeEntry(join(dir, entry), opts.mode);
     result.removed.push(entry);
   }
   return result;
@@ -513,48 +568,110 @@ mutate({ first: "Hello!", second: "me" });
  * Convex's `codegen --init`: `tsconfig.json` unless there is one, and `README.md` unless the functions
  * directory existed before. Returns the files written.
  */
-export function initFunctionsDir(functionsDir: string): string[] {
+export function initFunctionsDir(functionsDir: string, mode?: WriteMode): string[] {
   const existed = existsSync(functionsDir);
-  mkdirSync(functionsDir, { recursive: true });
+  // As Convex's, which makes `_generated/` (and so the directory) before deciding, also in a dry run.
+  mkdirSync(join(functionsDir, "_generated"), { recursive: true });
   const written: string[] = [];
-  if (!existed) {
-    writeFileSync(join(functionsDir, "README.md"), README);
-    written.push("README.md");
-  }
-  if (!existsSync(join(functionsDir, "tsconfig.json"))) {
-    writeFileSync(join(functionsDir, "tsconfig.json"), TSCONFIG);
+  if (!existed && writeIfChanged(join(functionsDir, "README.md"), README, mode)) written.push("README.md");
+  if (
+    !existsSync(join(functionsDir, "tsconfig.json")) &&
+    writeIfChanged(join(functionsDir, "tsconfig.json"), TSCONFIG, mode)
+  )
     written.push("tsconfig.json");
-  }
   return written;
 }
 
 export type TypecheckMode = "enable" | "try" | "disable";
-export type TypecheckResult = { ok: true; skipped?: string } | { ok: false; output: string };
+export type TypecheckResult = { ok: true; skipped?: string; warning?: string } | { ok: false; output: string };
+/** Convex's `TypescriptCompiler`: `tsc`, or `tsgo` from `@typescript/native-preview` (STUDY-117). */
+export type TypescriptCompiler = "tsc" | "tsgo";
 
-/**
- * Convex's typecheck step: the app's own `tsc --project <functionsDir>`. `try` skips it when it cannot run
- * (no `tsconfig.json`, no TypeScript installed) and `enable` fails then; both fail on type errors.
- */
-export async function typecheck(functionsDir: string, cwd: string, mode: TypecheckMode): Promise<TypecheckResult> {
-  if (mode === "disable") return { ok: true, skipped: "disabled" };
-  const cantRun = (why: string): TypecheckResult =>
-    mode === "enable" ? { ok: false, output: why } : { ok: true, skipped: why };
-  if (!existsSync(join(functionsDir, "tsconfig.json")))
-    return cantRun(
-      `Found no ${posix(relative(cwd, join(functionsDir, "tsconfig.json")))} to typecheck the functions with, so skipping typecheck. Run \`bunvex codegen --init\` to create one.`,
-    );
-  const tsc = [
-    join(cwd, "node_modules", "@typescript", "native", "bin", "tsc"),
-    join(cwd, "node_modules", "typescript", "bin", "tsc"),
-  ].find(existsSync);
-  if (!tsc) return cantRun("No `tsc` binary found, so skipping typecheck.");
-  // In the standalone executable (STUDY-39) `process.execPath` is bunvex itself: BUN_BE_BUN makes it Bun.
-  const p = Bun.spawn([process.execPath, tsc, "--project", functionsDir], {
+/** Where the app's compiler is, looked for in the project as Convex's `findTypeScriptCompilerPath` does. */
+export function compilerPath(cwd: string, compiler: TypescriptCompiler): string | undefined {
+  const modules = join(cwd, "node_modules");
+  const candidates =
+    compiler === "tsgo"
+      ? // `bin/tsgo` in newer previews, `bin/tsgo.js` before.
+        ["tsgo", "tsgo.js"].map((f) => join(modules, "@typescript", "native-preview", "bin", f))
+      : // TypeScript 7's alias when the TypeScript 6 API is also installed, then TypeScript.
+        [join(modules, "@typescript", "native", "bin", "tsc"), join(modules, "typescript", "bin", "tsc")];
+  return candidates.find((p) => existsSync(p));
+}
+
+/** One typecheck's outcome, as Convex's `TypecheckResult`, with what each prints. */
+export type TypecheckRun =
+  | { kind: "cantTypecheck"; why: string }
+  | { kind: "success"; warning?: string }
+  | { kind: "failed"; output: string };
+
+// In the standalone executable (STUDY-39) `process.execPath` is bunvex itself: BUN_BE_BUN makes it Bun.
+async function spawnCompiler(path: string, args: string[], cwd: string) {
+  const p = Bun.spawn([process.execPath, path, ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, BUN_BE_BUN: "1" },
   });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return code === 0 ? { ok: true } : { ok: false, output: `${out}${err}`.trim() };
+  return { out, err, code };
+}
+
+/** Below Convex's recommended TypeScript (4.8.4). */
+function olderThanRecommended(version: string): boolean {
+  const [major = 0, minor = 0, patch = 0] = version.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
+  return major !== 4 ? major < 4 : minor !== 8 ? minor < 8 : patch < 4;
+}
+
+const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+/**
+ * Convex's `typeCheckFunctions`: the compiler on the functions' project, or why it cannot run (no
+ * `tsconfig.json`, no compiler). It runs `<compiler> --noEmit --project <functionsDir> --pretty true` (owner,
+ * 2026-10-05: DV-387); "No inputs were found" (TS18003) passes, as Convex's. An older TypeScript gets
+ * Convex's warning, printed after a typecheck that passed.
+ */
+export async function runTypecheck(
+  functionsDir: string,
+  cwd: string,
+  compiler: TypescriptCompiler = "tsc",
+): Promise<TypecheckRun> {
+  if (!existsSync(join(functionsDir, "tsconfig.json")))
+    return {
+      kind: "cantTypecheck",
+      why: `Found no ${posix(relative(cwd, join(functionsDir, "tsconfig.json")))} to typecheck the functions with, so skipping typecheck. Run \`bunvex codegen --init\` to create one.`,
+    };
+  const path = compilerPath(cwd, compiler);
+  if (!path) return { kind: "cantTypecheck", why: `No \`${compiler}\` binary found, so skipping typecheck.` };
+  const [version, run] = await Promise.all([
+    spawnCompiler(path, ["--version"], cwd),
+    // The project relative to the project directory, as Convex passes it, so the errors name files from there.
+    spawnCompiler(path, ["--noEmit", "--project", relative(cwd, functionsDir) || ".", "--pretty", "true"], cwd),
+  ]);
+  const output = `${run.out}${run.err}`.trim();
+  const v = /Version (.*)/.exec(version.out)?.[1];
+  const warning =
+    v && olderThanRecommended(v)
+      ? "bunvex works best with TypeScript version 4.8.4 or newer -- npm i --save-dev typescript@latest to update."
+      : undefined;
+  if (run.code === 0 || output.replace(ANSI_COLOR, "").startsWith("error TS18003")) return { kind: "success", warning };
+  return { kind: "failed", output };
+}
+
+/**
+ * Convex's typecheck step (`typeCheckFunctionsInMode`): `try` skips it when it cannot run (no `tsconfig.json`,
+ * no compiler) and `enable` fails then; both fail on type errors. `compiler` is bunvex.json's
+ * `typescriptCompiler` (default `tsc`).
+ */
+export async function typecheck(
+  functionsDir: string,
+  cwd: string,
+  mode: TypecheckMode,
+  compiler: TypescriptCompiler = "tsc",
+): Promise<TypecheckResult> {
+  if (mode === "disable") return { ok: true, skipped: "disabled" };
+  const run = await runTypecheck(functionsDir, cwd, compiler);
+  if (run.kind === "cantTypecheck")
+    return mode === "enable" ? { ok: false, output: run.why } : { ok: true, skipped: run.why };
+  return run.kind === "success" ? { ok: true, warning: run.warning } : { ok: false, output: run.output };
 }

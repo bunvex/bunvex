@@ -1,7 +1,7 @@
 // A schema as JSON (STUDY-35), in the shape of Convex's `DatabaseSchema` export: what a push stores in
 // `_schemas`, so a deployable server restarts on the schema it was last pushed, and what the push reports.
 import { type GenericValidator, type ValidatorJSON, validatorFromJson } from "@bunvex/values";
-import type { DeclaredTable, SchemaDefinition } from "./schema.ts";
+import { type DeclaredTable, type SchemaDefinition, stagedDocumentJson } from "./schema.ts";
 
 export type IndexJson = { indexDescriptor: string; fields: string[] };
 /** A search index, as Convex's schema JSON (`filterFields` sorted, as Convex serializes its set). */
@@ -23,6 +23,8 @@ export type TableJson = {
   vectorIndexes?: VectorIndexJson[];
   stagedVectorIndexes?: VectorIndexJson[];
   documentType: ValidatorJSON | null;
+  /** `.staged()`'s validator (STUDY-106); absent without one, as Convex's export leaves it out. */
+  stagedDocumentType?: ValidatorJSON;
 };
 export type SchemaJson = { tables: TableJson[]; schemaValidation: boolean };
 
@@ -44,6 +46,7 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
         ...searchJson(t),
         ...vectorJson(t),
         documentType: anyJson(t.document),
+        ...(t.stagedDocument === undefined ? {} : { stagedDocumentType: stagedDocumentJson(t.stagedDocument) }),
       };
     }),
     schemaValidation: s.schemaValidation,
@@ -121,6 +124,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
             stagedVector: (t.stagedVectorIndexes ?? []).map((i) => i.indexDescriptor),
           }
         : {}),
+      ...(t.stagedDocumentType == null ? {} : { stagedDocument: validatorFromJson(t.stagedDocumentType) }),
     });
   }
   return { tables, schemaValidation: j.schemaValidation };

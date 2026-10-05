@@ -32,6 +32,7 @@ export {
   IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MAX_USER_TABLES,
   MODULES_TABLE,
@@ -273,6 +274,7 @@ export {
   type SchemaValidators,
   type SearchIndexDef,
   type SystemFieldValidators,
+  stagedDocumentError,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
