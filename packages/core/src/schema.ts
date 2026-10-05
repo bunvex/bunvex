@@ -327,13 +327,14 @@ function checkDatabaseIndexes(table: string, t: TableDefinition) {
 
 /**
  * Convex's check when a table definition is exported (`TableDefinition.export`): the staged validator's JSON
- * must be an object. Convex's message ends with a docs link, left out (DV-356).
+ * must be an object. `schemaToJson`, bunvex's `export`, runs it; a push answers it as Convex does (`InvalidSchemaExport`).
+ * Convex's message ends with a docs link, left out (DV-356).
  */
-function checkStagedDocument(staged: GenericValidator): GenericValidator {
+export function stagedDocumentJson(staged: GenericValidator): ValidatorJSON {
   const json: unknown = staged.json;
   if (typeof json !== "object")
     throw new Error("Invalid staged validator: please make sure that the parameter of `.staged()` is valid");
-  return staged;
+  return json as ValidatorJSON;
 }
 
 /**
@@ -585,7 +586,7 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
       ...(Object.keys(t.vectorIndexes).length
         ? { vectorIndexes: structuredClone(t.vectorIndexes), stagedVector: [...t.stagedVector] }
         : {}),
-      ...(t.stagedDocument === undefined ? {} : { stagedDocument: checkStagedDocument(t.stagedDocument) }),
+      ...(t.stagedDocument === undefined ? {} : { stagedDocument: t.stagedDocument }),
     });
   }
   for (const t of Object.values(tables)) checkIndexSystemFields(t);

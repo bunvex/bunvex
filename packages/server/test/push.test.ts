@@ -462,6 +462,17 @@ describe("deploy2 over HTTP", () => {
     const twice = await d.push([messages(1)], withStaged(".staged({ a: v.string() }).staged({ b: v.string() })"));
     expect([twice.start.status, twice.start.body.code]).toEqual([400, "InvalidSchema"]);
     expect(twice.start.body.message).toContain("Table cannot have more than one staged validator.");
+    // A staged validator whose JSON is not an object: the export fails, answered as Convex's
+    // InvalidSchemaExport, its own message dropped.
+    const notObject = await d.push(
+      [messages(1)],
+      withStaged('.staged({ isValidator: true, kind: "object", json: "nope" })'),
+    );
+    expect([notObject.start.status, notObject.start.body.code]).toEqual([400, "InvalidSchemaExport"]);
+    expect(notObject.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
+    expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
   test("an index on a field the schema does not have: Convex's SchemaDefinitionError, nothing pushed (STUDY-100)", async () => {

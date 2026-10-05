@@ -74,18 +74,25 @@ In `@bunvex/core`:
     type parameters, so `DataModelFromSchemaDefinition` is unchanged.
   - The old `staged: string[]` field (the staged index names) is renamed `stagedIndexes`, since `staged` is now
     the method. The `DeclaredTable` the engine reads keeps its `staged` names.
-  - `defineSchema` copies the staged validator into the `DeclaredTable`'s `stagedDocument`. Before that it runs
-    Convex's export check: a staged validator whose JSON is not an object throws Convex's message without the
-    docs link (DV-356). bunvex has no `export()`, and `defineSchema` is where the table is read.
+  - `defineSchema` copies the staged validator into the `DeclaredTable`'s `stagedDocument`. It never throws for
+    it, as Convex's does not.
+  - `stagedDocumentJson` is Convex's `export()` check: a staged validator whose JSON is not an object throws
+    Convex's message without the docs link (DV-356). `schemaToJson`, bunvex's `export()`, runs it.
   - `stagedDocumentError(schema)` is Convex's top-level-type check, with Convex's message without the link
     (DV-356).
 - **`schema-json.ts`.** `schemaToJson` writes `stagedDocumentType` only when there is one, as Convex's export
   does. So the stored JSON of every schema without `.staged()` is unchanged. `schemaFromJson` reads it back
   (`validatorFromJson`), so a restart keeps it.
 
-In `@bunvex/server`, `push.ts` runs `stagedDocumentError` with the other post-evaluation checks, before
-`checkIndexReferences` (as Convex's parse comes before `check_index_references`). It fails the push as a 400
-`InvalidTopLevelTypeInSchemaError`, prefixed as every schema error is.
+In `@bunvex/server`, `push.ts` runs Convex's steps after the schema evaluates, in Convex's order:
+
+1. The export (`schemaToJson`). An error there is answered as Convex answers any `export()` error (S2, owner
+   2026-10-05): 400 `InvalidSchemaExport`, "Default export from schema file isn't a bunvex schema.". The export's
+   own message is dropped, and Convex's "Convex" and docs link are not used (DV-356).
+2. The parse: `stagedDocumentError`, a 400 `InvalidTopLevelTypeInSchemaError`.
+3. `checkIndexReferences`.
+
+Each error is prefixed as every schema error is.
 
 The schema JSON is what bunvex compares to tell a schema change: the push's `schemaDiff` and the stored
 `_schemas` rows. So a staged-only change is a new schema with a diff, and an unchanged schema stores the same
@@ -100,16 +107,12 @@ This is not a hot path: it runs once per push and per schema load.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | S1 | "Invalid staged validator: please make sure that the parameter of `.staged()` is valid" and "The document validator in a schema must be …" have no docs link | DV-04's rule (rule 5): messages never link to Convex's docs | DV-356 (owner, 2026-10-05) |
-| S2 | *gap, pending:* when the staged validator's JSON is not an object, Convex's push replaces its `export()` error with `InvalidSchemaExport` ("Default export from schema file isn't a … schema."). bunvex's `defineSchema` throws it while the schema module evaluates, so the push reports `InvalidSchema` with that message | bunvex has no `export()` step at push. Only a hand-made validator object reaches it | question for the owner (in the PR) |
+| S2 | None now: a staged validator whose JSON is not an object fails the push with Convex's `InvalidSchemaExport` and its message ("… isn't a bunvex schema.", under DV-356) | — | match Convex (owner, 2026-10-05) |
 
-Observations outside this study's scope, for the owner (not divergences of this feature):
+Two observations outside this study's scope are each fixed in their own PR (owner, 2026-10-05):
 
-- bunvex's `defineTable` refuses a top-level validator that is not an object, a union of objects or `v.any()`
-  when it is called, with its own message. Convex refuses it at push with `InvalidTopLevelTypeInSchemaError`, as
-  above. `.staged()` follows Convex; `defineTable` does not.
-- bunvex's `Engine.startSchemaPush` records a new pending schema even when the pushed schema equals the active
-  one. Convex's `submit_pending` returns the active schema's id then. bunvex's push still reports `schemaDiff: null`,
-  since it compares the JSON.
+- `defineTable`'s top-level check;
+- a pushed schema equal to the active one (Convex's `submit_pending`).
 
 ## 4b. Additions (beyond Convex)
 
@@ -121,7 +124,7 @@ None.
   - `.staged()` wraps an object of fields, keeps a validator, returns the table, and leaves the enforced
     validator alone;
   - the duplicate error, and the first staged validator stays;
-  - the export check: Convex's message without the link;
+  - the export check: `defineSchema` accepts the schema, `schemaToJson` throws Convex's message without the link;
   - `stagedDocumentError` for an object, `any`, a union of objects, a string, and a union with a non-object
     member (named);
   - the schema JSON: `stagedDocumentType` for fields, a validator and `any`; absent without one; a round trip
@@ -137,7 +140,8 @@ None.
   - a staged-only change gives a `schemaDiff` whose next schema carries `stagedDocumentType`, and writes are not
     checked against it;
   - `.staged(v.string())` is a 400 `InvalidTopLevelTypeInSchemaError` with the full message;
-  - two `.staged()` calls fail the schema's evaluation.
+  - two `.staged()` calls fail the schema's evaluation;
+  - a staged validator whose JSON is not an object is a 400 `InvalidSchemaExport`, nothing pushed.
 - `packages/sync-e2e/test/staged-validator-oracle.test.ts`, the oracle:
   - the official package's `defineSchema(...).export()` and bunvex's `schemaToJson` give the same
     `stagedDocumentType` for four tables (fields, a union, `any`, none), present in the same tables;
@@ -156,10 +160,9 @@ Sabotage checks, each caught:
 | The push error's code changed | push over HTTP |
 | `defineSchema` drops the staged validator | definition, JSON, push, HTTP and oracle tests |
 | The staged validator enforced in place of `defineTable`'s | JSON, push (documents not checked), push over HTTP |
+| S2: the push answers the export error as `InvalidSchema` | push over HTTP |
+| S2: the export check off | export-check test, push over HTTP |
 
 ## 6. Open questions
 
-- S2: should the push report a staged validator whose JSON is not an object as Convex does, with
-  `InvalidSchemaExport` and the generic message?
-- The two observations in §4: `defineTable`'s top-level check (when and with which code), and a pushed schema
-  equal to the active one.
+None.

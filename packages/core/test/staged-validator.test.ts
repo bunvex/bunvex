@@ -69,10 +69,12 @@ describe("defining it", () => {
     expect(t.stagedDocument!.json).toEqual(v.object({ a: v.number() }).json);
   });
 
-  test("a staged validator whose JSON is not an object: Convex's export error, without the docs link", () => {
+  test("a staged validator whose JSON is not an object: Convex's export error when exported, without the docs link", () => {
     const broken = { isValidator: true, kind: "object", json: "nope" } as unknown as GenericValidator;
     const t = defineTable({ a: v.string() }).staged(broken as never);
-    expect(() => defineSchema({ t })).toThrow(
+    // Defining the schema works, as Convex's; exporting it (`schemaToJson`, Convex's `export()`) throws.
+    const s = defineSchema({ t });
+    expect(() => schemaToJson(s)).toThrow(
       new Error("Invalid staged validator: please make sure that the parameter of `.staged()` is valid"),
     );
   });
