@@ -303,6 +303,7 @@ const fromWire = (args: unknown, path: string) => {
 };
 
 /** Convex's message for a function `/api/function` or `/api/run` cannot find. */
+const isSystemPath = (path: unknown) => typeof path === "string" && path.startsWith("_system/");
 const anyFunctionNotFound = (path: string) =>
   new FunctionPathError(
     `Could not find function for '${path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
@@ -581,8 +582,12 @@ export function createServer(opts: ServerOptions) {
     // So is the write throughput limit (STUDY-78), once its retries are spent.
     if (!r.ok && (r.error instanceof TooManyConcurrentRequestsError || r.error instanceof TooManyWritesError))
       return requestError(429, r.error.code, r.error.message);
-    // An access check (an admin's operation, a key where one is required) is the request's error (403).
-    if (!r.ok) {
+    // An access check (an admin's operation, a key where one is required) is the request's error (403). A
+    // query or mutation of a `_system/` function refused to its caller is the function's error instead, as
+    // Convex's runner reports it (an action's is a 403, checked against Convex's local backend).
+    const systemRefusal =
+      !r.ok && r.error instanceof SystemIdentityRequiredError && (r.error.op === "query" || r.error.op === "mutation");
+    if (!r.ok && !systemRefusal) {
       const denied = accessError(r.error);
       if (denied) return denied;
     }
@@ -1352,7 +1357,8 @@ export function createServer(opts: ServerOptions) {
         // (`ModuleModel::get_metadata`), before the function is looked for.
         if (typeof body.path === "string" && body.path.startsWith("_system/") && !isSystemIdentity(caller))
           return accessError(new SystemIdentityRequiredError("get_module"))!;
-        const found = functions.kindOf(body.path);
+        // an admin's: system modules are not the deployment's, so not found (Convex's `any_udf`)
+        const found = isSystemPath(body.path) ? null : functions.kindOf(body.path);
         if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
           return udfResponse(
             { ok: false, error: anyFunctionNotFound(body.path), logLines: [] } as never,
@@ -1371,7 +1377,8 @@ export function createServer(opts: ServerOptions) {
           return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
         const bad = badPath();
         if (bad) return bad;
-        const found = functions.kindOf(body.path);
+        // system modules are not the deployment's: not found, even to an admin (Convex's `any_udf`)
+        const found = isSystemPath(body.path) ? null : functions.kindOf(body.path);
         if (!found)
           return udfResponse(
             {
@@ -1384,6 +1391,10 @@ export function createServer(opts: ServerOptions) {
           );
         kind = found;
       }
+      // An admin's `/api/action` of a `_system/` path: there are no system actions, and Convex's runner fails
+      // with its internal error (500, checked against Convex's local backend). Anyone else is refused below.
+      if (kind === "action" && isSystemPath(body.path) && isSystemIdentity(caller))
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       // A query at a ts `query_ts` gave (Convex's `/api/query_at_ts`): every such query reads one snapshot.
       let at: number | undefined;
       if (kind === "query_at_ts") {

@@ -294,6 +294,34 @@ const INTERNAL_OPS = {
 const isSystemPath = (name: string) => name.startsWith("_system/");
 const notFound = (name: string) =>
   new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+/**
+ * A `_system/` function an admin asks for that does not exist, as Convex's module lookup words it (checked
+ * against Convex's local backend): no such system module (`Couldn't find system module '"no/such.js"'.`, the
+ * path without `_system/`), or no such function in one (`Couldn't find "nope" in module "_system/cli/tables.js".`).
+ */
+function systemNotFound(name: string): FunctionPathError {
+  const key = registryKey(name);
+  const i = key.lastIndexOf(":");
+  const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
+  const exists = [...Object.keys(SYSTEM_QUERIES), ...Object.keys(SYSTEM_MUTATIONS)].some(
+    (k) => registryKey(k).slice(0, registryKey(k).lastIndexOf(":")) === module,
+  );
+  return new FunctionPathError(
+    exists
+      ? `Couldn't find "${fn}" in module "${module}.js".`
+      : `Couldn't find system module '"${module.slice("_system/".length)}.js"'.`,
+  );
+}
+/**
+ * An action's `runQuery` / `runMutation` / `runAction` of a `_system/` function: Convex's action runtime never
+ * resolves one, whoever runs the action (`TaskExecutor::resolve`, "Couldn't resolve api._system.….<fn>").
+ */
+/** The function an action's call names, as the registry keys it; never a `_system/` one (`unresolvable`). */
+const actionTarget = (name: string) => {
+  if (isSystemPath(name)) throw unresolvable(name);
+  return registryKey(name);
+};
+const unresolvable = (name: string) => new Error(`Couldn't resolve api.${registryKey(name).replace(/[/:]/g, ".")}`);
 const copy = <T>(x: T): T => (x === null ? x : structuredClone(x));
 /** A transaction's `ctx.auth`: reading the identity marks the result as the caller's (the query cache). */
 const txAuth = (db: Tx): Auth => ({
@@ -1463,8 +1491,20 @@ export class Functions {
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
-    // As Convex's runner: a `_system/` path only for a transaction of an admin or the system
-    if (isSystemPath(name) && !db.systemIdentity) throw new SystemIdentityRequiredError(kind);
+    // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
+    // or the system; for them it runs, in this transaction.
+    if (isSystemPath(name)) {
+      // the outcome depends on who calls: the query cache keeps it per caller
+      db.readIdentity();
+      if (!db.systemIdentity) throw notFound(name);
+      if (depth >= MAX_NESTED_CALL_DEPTH)
+        throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
+      const body =
+        kind === "query"
+          ? this.systemQueryBody(name, args, false, undefined, true)
+          : this.systemMutationBody(name, args, false, undefined, true);
+      return body(db);
+    }
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args, measured);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -1609,7 +1649,7 @@ export class Functions {
     caller?: Caller,
   ) {
     if (!isSystemIdentity(caller)) throw new SystemIdentityRequiredError(kind);
-    if (!f) throw notFound(n);
+    if (!f) throw systemNotFound(n);
     if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
@@ -1957,7 +1997,7 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
       },
@@ -1965,14 +2005,17 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
+          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
+            internal: true,
+            authError,
+          }),
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.

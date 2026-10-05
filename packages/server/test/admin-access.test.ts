@@ -197,13 +197,11 @@ describe("HTTP: who reaches what", () => {
     expect((await call("query", "m:whoami", {}, `Bunvex ${SYSTEM}:${user}`)).status).toBe(500);
   });
 
-  test("_system/* functions: refused without a key (SystemIdentityRequired); an admin calls them with its operations", async () => {
+  test("_system/* functions: refused without a key (Operation … not permitted); an admin calls them with its operations", async () => {
     const { call } = await setup();
     const anon = await call("query", "_system/frontend/listCronJobs");
-    expect([anon.status, anon.body]).toEqual([
-      403,
-      { code: "SystemIdentityRequired", message: "Operation query not permitted" },
-    ]);
+    expect([anon.status, anon.body.status]).toEqual([200, "error"]);
+    expect(anon.body.errorMessage).toEndWith("Server Error\nOperation query not permitted\n");
     expect((await call("query", "_system/frontend/listCronJobs", {}, `Bunvex ${KEY}`)).body).toMatchObject({
       status: "success",
       value: [],
@@ -219,10 +217,9 @@ describe("HTTP: who reaches what", () => {
     ]);
     const ok = await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl", {}, `Bunvex ${KEY}`);
     expect(ok.body.value).toMatch(/\/api\/storage\/upload\?token=/);
-    expect((await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl")).body).toEqual({
-      code: "SystemIdentityRequired",
-      message: "Operation mutation not permitted",
-    });
+    expect((await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl")).body.errorMessage).toEndWith(
+      "Server Error\nOperation mutation not permitted\n",
+    );
   });
 
   test("GET /api/check_admin_key", async () => {

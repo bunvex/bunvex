@@ -3,6 +3,20 @@
 "@bunvex/core": patch
 ---
 
-`_system/` functions can be called only by an admin or the system acting as itself, as in Convex. Anyone else gets 403 `SystemIdentityRequired`, "Operation query|mutation|action not permitted", before the function is looked up. This includes an admin acting as a user, a user, a caller with no key, and function code an action runs for one of them.
+`_system/` functions now behave as in Convex's local backend, checked entry point by entry point. Before this, function code could call any `_system/` query or mutation.
 
-The check covers the HTTP API and sync, an action's or HTTP action's `runQuery`/`runMutation`/`runAction`, and a query's or mutation's nested call. `/api/run/_system/…` and scheduling a system function get "Operation get_module not permitted". Before this, function code could call any `_system/` query or mutation.
+Only an admin or the system acting as itself reaches them. Everyone else, an admin acting as a user included, is refused before the function is looked up:
+
+- `/api/query`, `/api/mutation` and sync: the function's error, "Operation query|mutation not permitted".
+- `/api/action`: 403 `SystemIdentityRequired`.
+- `/api/run/_system/…` and scheduling: "Operation get_module not permitted".
+- A nested `ctx.runQuery` / `ctx.runMutation`: "Could not find public function".
+
+For an admin:
+
+- A missing system function gets Convex's module messages.
+- `/api/run` and `/api/function` answer "Could not find function".
+- `/api/action` answers 500.
+- A nested call runs.
+
+An action's `runQuery` / `runMutation` / `runAction` never resolves a system function, whoever runs the action: "Couldn't resolve api._system.…".

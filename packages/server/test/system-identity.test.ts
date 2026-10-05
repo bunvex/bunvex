@@ -1,9 +1,11 @@
 // `_system/` functions only for an admin or the system acting as itself, as Convex's
 // `application_function_runner` (`path.is_system() && !(identity.is_admin() || identity.is_system())` →
-// `unauthorized_error`: 403 `SystemIdentityRequired`, "Operation <op> not permitted") and
-// `ModuleModel::get_metadata` (the same for reading a `_system/` module: `/api/run`, scheduling). Every entry
-// point: the HTTP API, `/api/run`, an action's runQuery / runMutation / runAction, a query's or mutation's
-// nested call, the scheduler, crons, function handles, an HTTP action.
+// `unauthorized_error`, `SystemIdentityRequired`, "Operation <op> not permitted") and `ModuleModel::get_metadata`
+// (the same for reading a `_system/` module: `/api/run`, scheduling). Every expectation here was checked against
+// Convex's local backend (precompiled-2026-09-28): the HTTP API (a query's or mutation's refusal is its error,
+// an action's a 403), `/api/run` and `/api/function`, an action's calls (never resolved), a query's or
+// mutation's nested call (not found, or run for an admin), the scheduler, crons, function handles, an HTTP
+// action, and a sync subscription.
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -81,6 +83,10 @@ async function setup() {
 
 const REFUSED = (op: string) => ({ code: "SystemIdentityRequired", message: `Operation ${op} not permitted` });
 
+/** A query's or mutation's refusal, as Convex answers it: the function's error, not a 403. */
+const REFUSED_RUN = (op: string) =>
+  expect.stringMatching(new RegExp(`Server Error\\nOperation ${op} not permitted\\n$`));
+
 test("HTTP API: nobody and an admin acting as a user are refused before any lookup; an admin and the system run it", async () => {
   const t = await setup();
   for (const [path, args] of [
@@ -88,49 +94,69 @@ test("HTTP API: nobody and an admin acting as a user are refused before any look
     ["_system/does/not:exist", {}],
   ] as const) {
     const r = await t.call("query", path, args);
-    expect([r.status, r.body]).toEqual([403, REFUSED("query")]);
+    expect([r.status, r.body.status, r.body.errorMessage]).toEqual([200, "error", REFUSED_RUN("query")]);
   }
   const acting = await t.call("query", SYS, PAGE, `Bunvex ${KEY}:${actingAs({ subject: "u", issuer: "i" })}`);
-  expect([acting.status, acting.body]).toEqual([403, REFUSED("query")]);
+  expect([acting.status, acting.body.errorMessage]).toEqual([200, REFUSED_RUN("query")]);
   const m = await t.call("mutation", "_system/frontend/fileStorageV2:deleteFiles", { storageIds: [] });
-  expect([m.status, m.body]).toEqual([403, REFUSED("mutation")]);
+  expect([m.status, m.body.errorMessage]).toEqual([200, REFUSED_RUN("mutation")]);
+  // an action's refusal is the request's (403), as Convex's
+  const a = await t.call("action", "_system/x:y", {});
+  expect([a.status, a.body]).toEqual([403, REFUSED("action")]);
   expect((await t.call("query", SYS, PAGE, `Bunvex ${KEY}`)).body.status).toBe("success");
   expect((await t.call("query", SYS, PAGE, `Bunvex ${SYSTEM}`)).body.status).toBe("success");
-  // an admin asking for one that does not exist: not found
-  const missing = await t.call("query", "_system/does/not:exist", {}, `Bunvex ${KEY}`);
-  expect(missing.body.errorMessage).toContain("Could not find public function for '_system/does/not:exist'.");
+  // an admin asking for one that does not exist: Convex's module lookup words it
+  const noModule = await t.call("query", "_system/does/not:exist", {}, `Bunvex ${KEY}`);
+  expect(noModule.body.errorMessage).toEndWith(`Couldn't find system module '"does/not.js"'.\n`);
+  const noFunction = await t.call("query", "_system/cli/tables:nope", {}, `Bunvex ${KEY}`);
+  expect(noFunction.body.errorMessage).toEndWith(`Couldn't find "nope" in module "_system/cli/tables.js".\n`);
+  // an admin's action of a system path: there are none; Convex's internal error
+  const adminAction = await t.call("action", "_system/x:y", {}, `Bunvex ${KEY}`);
+  expect([adminAction.status, adminAction.body.code]).toEqual([500, "InternalServerError"]);
 });
 
-test("/api/run: reading a system module is refused to nobody (get_module)", async () => {
+test("/api/run and /api/function: refused to nobody (get_module); not found even to an admin", async () => {
   const t = await setup();
   const byPath = await t.post("/api/run/_system/cli/tables", { args: PAGE });
   expect([byPath.status, byPath.body]).toEqual([403, REFUSED("get_module")]);
+  for (const r of [
+    await t.post("/api/run/_system/cli/tables/default", { args: PAGE }, `Bunvex ${KEY}`),
+    await t.post("/api/function", { path: SYS, args: PAGE }, `Bunvex ${KEY}`),
+  ]) {
+    expect(r.body.status).toBe("error");
+    expect(r.body.errorMessage).toMatch(
+      /Could not find function for '_system\/cli[/:]tables'\. Did you forget to run `bunvex dev`\?/,
+    );
+  }
 });
 
-test("an action's runQuery, runMutation and runAction: refused unless an admin ran the action", async () => {
+test("an action's runQuery, runMutation and runAction never resolve a system function, whoever runs it", async () => {
   const t = await setup();
   const value = async (path: string, auth?: string) => (await t.call("action", path, {}, auth)).body.value;
-  expect(await value("m:viaRunQuery")).toEqual({ ok: false, error: "Operation query not permitted" });
-  expect(await value("m:viaRunMutation")).toEqual({ ok: false, error: "Operation mutation not permitted" });
-  expect(await value("m:viaRunAction")).toEqual({ ok: false, error: "Operation action not permitted" });
-  // run by an admin, the action's calls are the admin's
-  expect((await value("m:viaRunQuery", `Bunvex ${KEY}`)).ok).toBe(true);
-  expect((await value("m:viaRunMutation", `Bunvex ${KEY}`)).ok).toBe(true);
-  // acting as a user, it is that user's
-  const acting = await value("m:viaRunQuery", `Bunvex ${KEY}:${actingAs({ subject: "u", issuer: "i" })}`);
-  expect(acting).toEqual({ ok: false, error: "Operation query not permitted" });
+  for (const auth of [undefined, `Bunvex ${KEY}`]) {
+    expect(await value("m:viaRunQuery", auth)).toEqual({
+      ok: false,
+      error: "Couldn't resolve api._system.cli.tables.default",
+    });
+    expect(await value("m:viaRunMutation", auth)).toEqual({
+      ok: false,
+      error: "Couldn't resolve api._system.frontend.fileStorageV2.deleteFiles",
+    });
+    expect(await value("m:viaRunAction", auth)).toEqual({ ok: false, error: "Couldn't resolve api._system.x.y" });
+  }
 });
 
-test("a mutation's or query's nested call: refused to nobody", async () => {
+test("a mutation's or query's nested call: not found to nobody; an admin's runs it", async () => {
   const t = await setup();
-  expect((await t.call("mutation", "m:nested")).body.value).toEqual({
-    ok: false,
-    error: "Operation query not permitted",
-  });
-  expect((await t.call("query", "m:nestedInQuery")).body.value).toEqual({
-    ok: false,
-    error: "Operation query not permitted",
-  });
+  const missing = { ok: false, error: "Could not find public function for '_system/cli/tables'." };
+  expect((await t.call("mutation", "m:nested")).body.value).toEqual(missing);
+  expect((await t.call("query", "m:nestedInQuery")).body.value).toEqual(missing);
+  const ran = { ok: true, value: { page: [{ name: "log" }], isDone: true, continueCursor: "end" } };
+  expect((await t.call("mutation", "m:nested", {}, `Bunvex ${KEY}`)).body.value).toEqual(ran);
+  expect((await t.call("query", "m:nestedInQuery", {}, `Bunvex ${KEY}`)).body.value).toEqual(ran);
+  // acting as a user, it is that user's
+  const acting = await t.call("mutation", "m:nested", {}, `Bunvex ${KEY}:${actingAs({ subject: "u", issuer: "i" })}`);
+  expect(acting.body.value).toEqual(missing);
 });
 
 test("the scheduler: scheduling a system function is refused (get_module); for an admin it does not exist", async () => {
@@ -158,10 +184,10 @@ test("crons and function handles never point at a system function", async () => 
   });
 });
 
-test("an HTTP action's runQuery: refused to its anonymous caller", async () => {
+test("an HTTP action's runQuery never resolves a system function", async () => {
   const t = await setup();
   const r = await (await fetch(`${t.site}/peek`)).json();
-  expect(r).toEqual({ ok: false, error: "Operation query not permitted" });
+  expect(r).toEqual({ ok: false, error: "Couldn't resolve api._system.cli.tables.default" });
 });
 
 test("sync: a subscription to a system query without an admin fails with the refusal", async () => {
