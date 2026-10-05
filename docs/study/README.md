@@ -123,7 +123,9 @@ to a spec.
 | [STUDY-78](STUDY-78-write-throughput-limit.md) | The write throughput limit: 4 MiB/s per deployment, `TooManyWrites`, who waits and who fails | implemented |
 | [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler | implemented |
 | [STUDY-95](STUDY-95-error-stacks.md) | A function's error stack: only the app's frames, source-mapped to its files, everywhere errors surface | implemented; S1 / S2 (DV-345, DV-346) accepted as recommended (owner, 2026-10-04) |
+| [STUDY-103](STUDY-103-differential-testing.md) | Differential testing against Convex's own backend: generated operation sequences run on both, compared | accepted: D1 A, D2 A |
 | [STUDY-101](STUDY-101-user-table-cap.md) | At most 10 000 active user tables (`TooManyTables`) | implemented |
+| [STUDY-105](STUDY-105-export-args.md) | `exportArgs()` / `exportReturns()` on registered functions: what the push's analysis and `apiSpec` read (`returns: null` without a validator) | implemented; DV-355 (owner, 2026-10-05); E2 asked |
 | [STUDY-100](STUDY-100-index-reference-check.md) | Index field references checked at push (`check_index_references`) | implemented |
 | [STUDY-99](STUDY-99-http-client-function.md) | `BunvexHttpClient.function()`: any function by an admin, through `/api/function` | implemented |
 | [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
@@ -131,6 +133,8 @@ to a spec.
 | [STUDY-97](STUDY-97-value-size-and-base64.md) | `getDocumentSize`, `Base64` and `getConvexSize` (`valueSize`) from `bunvex/values`, as Convex's | implemented; the `getConvexSize` name kept as `valueSize` (owner, 2026-10-04, DV-347) |
 | [STUDY-104](STUDY-104-ws-heartbeat.md) | The sync socket's WS heartbeat (a 5 s ping, a 120 s timeout closing with 1000 `ClientDisconnected`) and Convex's close frames (`close_frame`, the `FatalError` first, 1005 for no code) | implemented; DV-352–DV-354 (owner, 2026-10-05) |
 | [STUDY-96](STUDY-96-search-index-snapshots.md) | Search and vector indexes snapshotted at a clean shutdown, restored at start with the log since (STUDY-79 option D) | implemented; storage and crash behaviour decided by the owner (2026-10-04) |
+| [STUDY-111](STUDY-111-search-segments.md) | Persisted search segments (STUDY-79 option E): text and vector segment formats, the memory part and merged queries, the flusher, the paged backfill, the compactor, fast-forward and retention | decided (owner, 2026-10-05: build E); PR 1 (formats) implemented |
+| [STUDY-102](STUDY-102-query-options.md) | `QueryOptions` and `bunvexQueryOptions` (Convex's `convexQueryOptions`), and `prewarmQuery`'s required `args` | implemented; the name decided by the owner (2026-10-05, DV-348) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

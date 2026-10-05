@@ -59,14 +59,60 @@ function define<K extends FunctionDef["kind"]>(kind: K, visibility: Visibility, 
   const builderName = visibility === "public" ? kind : `internal${kind[0]!.toUpperCase()}${kind.slice(1)}`;
   const f = dontCallDirectly(builderName, spec.handler as (ctx: unknown, args: unknown) => unknown);
   assertNotBrowser();
-  // Convex's markers: what the function is (`ApiFromModules` reads them as types).
+  // Convex's markers: what the function is (`ApiFromModules` reads them as types), and its validators' JSON,
+  // which the push's analysis and `apiSpec` read (`exportArgs` / `exportReturns`, plain own properties as
+  // Convex's).
   Object.assign(f, spec, {
     isBunvexFunction: true,
     [KIND_MARKER[kind]]: true,
     [visibility === "public" ? "isPublic" : "isInternal"]: true,
+    exportArgs: () => JSON.stringify((spec.args ?? v.any()).json, strictReplacer),
+    exportReturns: () => JSON.stringify(spec.returns ? spec.returns.json : null, strictReplacer),
   });
   DEFINED.add(f);
   return f as unknown as FunctionDef;
+}
+
+/**
+ * Convex's `strictReplacer` (registration_impl.ts): a validator still `undefined` when the JSON is made, usually
+ * from a circular import, fails the analysis instead of vanishing from the JSON.
+ */
+function strictReplacer(key: string, value: unknown) {
+  if (value === undefined)
+    throw new Error(`A validator is undefined for field "${key}". This is often caused by circular imports.`);
+  return value;
+}
+
+export type ValidatorExport = "exportArgs" | "exportReturns";
+
+/**
+ * What Convex's analyze reads from a function (analyze.rs `parse_args_validator` / `parse_returns_validator`):
+ * the JSON its `exportArgs()` / `exportReturns()` returns; without the method, unvalidated (`{"type":"any"}`
+ * arguments, a `null` result validator). A malformed export is a `problem`, in Convex's words, for `id`
+ * (`module.js:name`); an error the method throws propagates.
+ */
+export function exportedValidator(
+  f: object,
+  method: ValidatorExport,
+  id: string,
+): { json: string } | { problem: string } {
+  const m = (f as Record<string, unknown>)[method];
+  if (m === undefined) return { json: method === "exportArgs" ? '{"type":"any"}' : "null" };
+  if (typeof m !== "function") return { problem: `${id}.${method} is not a function or \`undefined\`.` };
+  const json: unknown = m.call(f);
+  if (typeof json !== "string")
+    return { problem: `Invalid ${method} return value: ${id}.${method}() didn't return a string.` };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (e) {
+    return { problem: `Invalid JSON returned from ${id}.${method}(): ${(e as Error).message}` };
+  }
+  // Convex stores `args` as an object validator, or none for `v.any()`; anything else is refused.
+  const type = (parsed as { type?: unknown } | null)?.type;
+  if (method === "exportArgs" && type !== "object" && type !== "any")
+    return { problem: `Invalid JSON returned from ${id}.${method}(): Args validator must be an object or any` };
+  return { json };
 }
 
 /**

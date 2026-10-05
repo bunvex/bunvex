@@ -159,11 +159,9 @@ gaps.
 **Low: rare, ops-only, or a missing nicety**
 
 - Client:
-  - `convexQueryOptions`;
   - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
   - `.count()` on the query builder;
   - typed limit error codes.
