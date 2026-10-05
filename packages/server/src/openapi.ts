@@ -354,6 +354,15 @@ export const OPENAPI_OPERATIONS: readonly ApiOperation[] = [
     description: "Delete tables with their documents and indexes.",
     body: "DeleteTableArgs",
   },
+  {
+    doc: "dashboard",
+    method: "post",
+    path: "/delete_scheduled_functions_table",
+    operationId: "delete_scheduled_functions_table",
+    summary: "Delete all scheduled functions",
+    description: "Replace the scheduled functions' table with an empty one, in one transaction, whatever it holds.",
+    body: "DeleteScheduledFunctionsTableRequest",
+  },
   // ---------------------------------------------------------------- public (`/api`)
   {
     doc: "public",
@@ -496,13 +505,6 @@ export const OPENAPI_LEFT_OUT: readonly {
     path: "/delete_component",
     reason: "not built yet",
     note: "bunvex has no components yet (STUDY-62).",
-  },
-  {
-    doc: "dashboard",
-    method: "post",
-    path: "/delete_scheduled_functions_table",
-    reason: "not built yet",
-    note: "Listed in the parity gaps (docs/parity/platform.md §4).",
   },
 ];
 

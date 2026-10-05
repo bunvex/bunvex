@@ -234,6 +234,7 @@ describe("the documents' structure", () => {
       "check_admin_key",
       "shapes2",
       "delete_tables",
+      "delete_scheduled_functions_table",
       "public_query_get",
       "public_query_post",
       "public_get_query_ts",
@@ -387,6 +388,7 @@ describe("served", () => {
     expect((await call("check_admin_key")).success).toBe(true);
     await call("shapes2");
     await call("delete_tables", { body: { tableNames: ["doomed"] } });
+    await call("delete_scheduled_functions_table", { body: {} });
 
     expect(
       await call("public_query_get", { query: `?path=m:echo&args=${encodeURIComponent('{"x":1}')}&format=json` }),

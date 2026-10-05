@@ -1947,6 +1947,14 @@ export const PLATFORM_SCHEMAS: Record<string, JsonSchema> = {
 
 /** `/api/dashboard_openapi.json`: the dashboard routes' schemas. */
 export const DASHBOARD_SCHEMAS: Record<string, JsonSchema> = {
+  DeleteScheduledFunctionsTableRequest: {
+    type: "object",
+    properties: {
+      componentId: {
+        type: ["string", "null"],
+      },
+    },
+  },
   DeleteTableArgs: {
     type: "object",
     required: ["tableNames"],

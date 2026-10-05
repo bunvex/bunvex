@@ -85,10 +85,43 @@
           }
         }
       }
+    },
+    "/delete_scheduled_functions_table": {
+      "post": {
+        "summary": "Delete all scheduled functions",
+        "description": "Replace the scheduled functions' table with an empty one, in one transaction, whatever it holds.",
+        "operationId": "delete_scheduled_functions_table",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteScheduledFunctionsTableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "DeleteScheduledFunctionsTableRequest": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "DeleteTableArgs": {
         "type": "object",
         "required": [
