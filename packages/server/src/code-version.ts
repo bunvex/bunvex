@@ -53,8 +53,11 @@ export type AnalyzedModule = {
 export class InvalidModulesError extends Error {
   readonly status = 400;
   readonly code = "InvalidModules";
-  constructor(message: string) {
-    super(`Loading the pushed modules encountered the following error:\n${message}`);
+  constructor(
+    /** What went wrong, without the push's preamble (the function tester words it its own way). */
+    readonly detail: string,
+  ) {
+    super(`Loading the pushed modules encountered the following error:\n${detail}`);
     this.name = "InvalidModulesError";
   }
 }
@@ -82,12 +85,20 @@ export type LoadOptions = {
   importTimeoutMs?: number;
 };
 
+/** The module a function tester's query imports `query` and `internalQuery` from. */
+export const REPL_WRAPPERS = "bunvex:/_system/repl/wrappers.js";
+
 /** The `bunvex/*` modules a bundle leaves external, each linked to the server's own. */
 const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
   "bunvex/server": () => import("./index.ts"),
   "@bunvex/server": () => import("./index.ts"),
   "bunvex/values": () => import("@bunvex/values"),
   "@bunvex/values": () => import("@bunvex/values"),
+  // The function tester's builders (STUDY-119, DV-390): Convex's `convex:/_system/repl/wrappers.js`.
+  [REPL_WRAPPERS]: async () => {
+    const { query, internalQuery } = await import("./builders.ts");
+    return { query, internalQuery };
+  },
 };
 const BUILTINS = new Set([
   ...builtinModules,

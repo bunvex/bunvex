@@ -226,6 +226,9 @@ export type FunctionRef = AnyFunctionReference | string;
 /** What an HTTP action's `ctx.meta` names it: Convex runs it as `http.js:default`, stripped `http`. */
 const HTTP_ACTION = { kind: "action", visibility: "public", handler: () => undefined } as unknown as FunctionDef;
 
+/** A query's definition. */
+export type QueryDef = Extract<FunctionDef, { kind: "query" }>;
+
 /** A call that came with no request (a test, an embedded call): a fresh request id, nothing else. */
 const REQUESTLESS = (): CallRequest => ({
   ip: null,
@@ -1096,8 +1099,8 @@ export class Functions {
   }
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
-  queryBody(name: string, args: unknown, fromClient = true, caller?: Caller) {
-    const body = this.queryBodyOf(name, args, fromClient, caller);
+  queryBody(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
+    const body = this.queryBodyOf(name, args, fromClient, caller, standalone);
     return async (db: Tx) => {
       const value = await body(db);
       // Convex's check: only a mutation's result may hold `db.vars.commitTs` (STUDY-53).
@@ -1139,9 +1142,10 @@ export class Functions {
     return value;
   }
 
-  private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller) {
-    if (isSystemPath(name)) return this.systemQueryBody(name, args, fromClient, caller);
-    const resolved = this.fnLater(name, "query", fromClient, caller);
+  /** A query's body; `standalone`, a query that is not deployed, runs as `name` (the function tester's). */
+  private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
+    if (isSystemPath(name) && !standalone) return this.systemQueryBody(name, args, fromClient, caller);
+    const resolved = standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller);
     return async (db: Tx) => {
       noteTx(db);
       await this.failWhileNotRunning(db);
@@ -1670,6 +1674,23 @@ export class Functions {
           cachedQueryLogs,
           caller,
         ),
+      returnedJson,
+      undefined,
+      args,
+    );
+  }
+
+  /**
+   * A query that is not deployed, as JSON (STUDY-119): Convex's `execute_standalone_module` runs the function
+   * tester's query with `run_query_without_caching`, so it never reads or fills the cache. It runs as `name`.
+   */
+  async runStandaloneQueryJson(f: QueryDef, name: string, args: unknown, caller?: Caller): Promise<string> {
+    this.names.set(f, registryKey(name));
+    return this.logged(
+      "Query",
+      name,
+      caller,
+      () => this.engine.queryJson(this.queryBody(name, args, false, caller, f), undefined, undefined, caller),
       returnedJson,
       undefined,
       args,

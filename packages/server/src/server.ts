@@ -70,7 +70,7 @@ import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
-import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
+import { type AdminCaller, adminCallerOf, callerOf, type Functions, type SourcedCaller } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -78,6 +78,7 @@ import { ImportError, type ImportOptions, ImportRequestError, ImportService, MOD
 import {
   BadJsonBody,
   QUERY_BATCH,
+  RUN_TEST_FUNCTION,
   readJsonBody,
   UDF_POST,
   UDF_POST_ARGS_ONLY,
@@ -114,6 +115,7 @@ import {
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
@@ -1046,6 +1048,65 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
+  /**
+   * Convex's `POST /api/run_test_function {adminKey, bundle, args, format, componentId?}` (STUDY-119): the
+   * admin key in the body (any key, as `must_be_admin_from_key`), `RunTestQuery`, then the bundle's default
+   * query run once, uncached, as the function tester (`Tester`); a `UdfResponse` in the requested format.
+   */
+  const testFunctionRoute = async (req: Request): Promise<Response> => {
+    if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+    let body: {
+      adminKey: string;
+      bundle: TestBundle | unknown[];
+      args: unknown;
+      format: string;
+      componentId?: string | null;
+    };
+    try {
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), RUN_TEST_FUNCTION);
+    } catch (e) {
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    // A struct may come as an array of its fields, as serde reads it.
+    const b = body.bundle;
+    const bundle: TestBundle = Array.isArray(b)
+      ? { path: b[0] as string, source: b[1] as string, sourceMap: b[2] as string, environment: b[3] as string }
+      : b;
+    let caller: Caller;
+    try {
+      caller = withRequest(adminCaller(body.adminKey, false), req);
+      functions.requireOperation(caller, "RunTestQuery");
+    } catch (e) {
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
+    }
+    // bunvex has no components (STUDY-62): its own refusal, as `/api/shapes2` and `/api/delete_tables`.
+    if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+      return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+    let found: Awaited<ReturnType<typeof standaloneQuery>>;
+    try {
+      const config = await udfConfig(engine);
+      found = await standaloneQuery(bundle, {
+        seed: config.seed,
+        timestamp: config.timestamp,
+        env: await deploymentEnv(),
+      });
+    } catch (e) {
+      if (e instanceof TestFunctionError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    const tester = { ...caller, source: "Tester" } as SourcedCaller;
+    return udfResponse(
+      await collectLogs(async () =>
+        functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester),
+      ),
+      "query",
+      { format: body.format, client: req.headers.get("bunvex-client") },
+    );
+  };
+
   // Convex's CORS layer on `/api` (STUDY-67 H2).
   const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
@@ -1124,6 +1185,8 @@ export function createServer(opts: ServerOptions) {
         (url.pathname === "/api/get_config_hashes" || url.pathname.startsWith("/api/deploy2/"))
       )
         return pushRoute(url, req);
+      // The function tester (STUDY-119): its admin key is in the body.
+      if (url.pathname === "/api/run_test_function") return testFunctionRoute(req);
       // The admin API (STUDY-34): each route needs an admin key, and its operation.
       if (
         url.pathname === "/stats" ||
