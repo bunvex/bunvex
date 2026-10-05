@@ -1,4 +1,4 @@
-// Fixed programs on Convex's backend and on bunvex's (STUDY-103 phase 1): each is one shape a bug has taken
+// Fixed programs on Convex's backend and on bunvex's (STUDY-129 phase 1): each is one shape a bug has taken
 // or could take; both backends must answer every call alike and end with the same data. Skipped, with a
 // note, when Convex's backend is not there (scripts/download-convex-backend.sh fetches it).
 import { describe, expect, test } from "bun:test";

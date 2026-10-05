@@ -1,4 +1,4 @@
-// A program (STUDY-103 §3.1): calls of the app, its ids written as references (`{ ref: "r1" }`) that each
+// A program (STUDY-129 §3.1): calls of the app, its ids written as references (`{ ref: "r1" }`) that each
 // backend resolves to its own ids (those of earlier calls: a reference is resolved before its call is sent). `run` plays it on one backend; `compare` plays it on both and returns the
 // differences of the normalised records (each answer, then the final contents of every table).
 

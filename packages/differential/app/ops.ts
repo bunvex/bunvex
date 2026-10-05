@@ -1,4 +1,4 @@
-// The differential app (STUDY-103): operations as data, so one generated sequence runs unchanged on Convex
+// The differential app (STUDY-129): operations as data, so one generated sequence runs unchanged on Convex
 // and on bunvex. Written from scratch for this harness. Every operation's outcome is returned, in order;
 // a `throw` operation makes the whole mutation fail after what it wrote (nothing of it may stay).
 import { v } from "convex/values";

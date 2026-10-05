@@ -1,4 +1,4 @@
-// The two backends of a differential run (STUDY-103): Convex's local backend (the oracle) and bunvex's,
+// The two backends of a differential run (STUDY-129): Convex's local backend (the oracle) and bunvex's,
 // each fresh, each with the app of ../app deployed by its own CLI, as a user would. Calls go over the HTTP
 // function API both serve (`/api/query`, `/api/mutation`), so both answer the same requests.
 import { randomBytes } from "node:crypto";

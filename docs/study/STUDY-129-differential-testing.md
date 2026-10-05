@@ -1,4 +1,4 @@
-# STUDY-103 — Differential testing against Convex's own backend
+# STUDY-129 — Differential testing against Convex's own backend
 
 - **Status:** accepted (owner, 2026-10-05: D1 A, D2 A).
 - **Convex source read:**

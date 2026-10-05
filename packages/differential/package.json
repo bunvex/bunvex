@@ -2,7 +2,7 @@
   "name": "@bunvex/differential",
   "version": "0.0.0",
   "private": true,
-  "description": "Differential tests (STUDY-103): the same app and the same calls on Convex's local backend and on bunvex's, their answers and data compared. Tests only, never published.",
+  "description": "Differential tests (STUDY-129): the same app and the same calls on Convex's local backend and on bunvex's, their answers and data compared. Tests only, never published.",
   "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
