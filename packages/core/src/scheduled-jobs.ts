@@ -7,7 +7,7 @@
 //   `_scheduled_jobs`; bunvex stores the public fields plus internal ones and hides those (S2).
 // - `nextTs` exists while the job is pending or in progress (the executor's `by_next_ts` index);
 //   `completedTime` once it is done (`by_completed_ts`, for garbage collection).
-import { type Value, valueSize } from "@bunvex/values";
+import { rawValueSize, type Value } from "@bunvex/values";
 import { SCHEDULED_FUNCTIONS_TABLE } from "./catalog.ts";
 import type { Tx } from "./tx.ts";
 
@@ -68,7 +68,7 @@ export async function insertJob(
   job: { name: string; args: Value[]; scheduledTime: number; now: number; canceled?: boolean },
 ): Promise<string> {
   // Convex's `check_scheduling_limits`, against the transaction's limits (a nested call's are lowered).
-  const size = valueSize(job.args as Value);
+  const size = rawValueSize(job.args as Value);
   if (db.scheduledCount >= db.limits.functionsScheduled)
     throw new Error(`Too many functions scheduled by this mutation (limit: ${db.limits.functionsScheduled})`);
   if (db.scheduledBytes + size > db.limits.scheduledFunctionArgsBytes)

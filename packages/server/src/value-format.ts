@@ -46,7 +46,40 @@ export function defaultFormat(clientHeader: string | null): Format {
 /**
  * A value held as encoded JSON text (bunvex's wire form), rewritten in `format` as Convex writes it (floats
  * as `serde_json` does, `1.0`, `-0.0`). Encoded asks for no work; another format costs a parse and a write
- * (about 30 µs per KiB).
+ * (about 30 µs per KiB), so the latest rewrites are kept: a cached query hands every caller the same text.
  */
-export const reformat = (encodedJson: string, format: Format): string =>
-  format === "encoded" ? encodedJson : writeValue(fromJsonValue(JSON.parse(encodedJson) as JSONValue), format);
+export function reformat(encodedJson: string, format: Format): string {
+  if (format === "encoded") return encodedJson;
+  let memo = memos.get(format);
+  if (!memo) {
+    memo = { entries: new Map(), chars: 0 };
+    memos.set(format, memo);
+  }
+  const known = memo.entries.get(encodedJson);
+  if (known !== undefined) {
+    // Most recently used last.
+    memo.entries.delete(encodedJson);
+    memo.entries.set(encodedJson, known);
+    return known;
+  }
+  const out = writeValue(fromJsonValue(JSON.parse(encodedJson) as JSONValue), format);
+  const chars = encodedJson.length + out.length;
+  if (chars > MEMO_MAX_ENTRY_CHARS) return out;
+  memo.entries.set(encodedJson, out);
+  memo.chars += chars;
+  for (const [k, v] of memo.entries) {
+    if (memo.entries.size <= MEMO_MAX_ENTRIES && memo.chars <= MEMO_MAX_CHARS) break;
+    memo.entries.delete(k);
+    memo.chars -= k.length + v.length;
+  }
+  return out;
+}
+
+/** The rewrites kept, per format, least recently used first; bounded by count and by characters. */
+/** @internal For tests: how many rewrites and characters each format keeps. */
+export const reformatMemoStats = () =>
+  Object.fromEntries([...memos].map(([f, m]) => [f, { entries: m.entries.size, chars: m.chars }]));
+const memos = new Map<Format, { entries: Map<string, string>; chars: number }>();
+const MEMO_MAX_ENTRIES = 1024;
+const MEMO_MAX_CHARS = 16 * 1024 * 1024;
+const MEMO_MAX_ENTRY_CHARS = 1024 * 1024;

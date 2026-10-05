@@ -150,9 +150,6 @@ gaps.
 2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, itself a component) or WorkOS AuthKit equivalent;
    Clerk and Auth0 exist (platform §1).
 3. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
-4. **Search after a restart:** queries get Convex's bootstrapping answer while the indexes rebuild (STUDY-79),
-   but the rebuild reads the whole table. **Planned** (owner, 2026-10-04, STUDY-79 §6, option D): snapshot the
-   in-memory indexes at a clean shutdown, load them at start and replay the log since.
 
 **Low: rare, ops-only, or a missing nicety**
 
@@ -163,7 +160,6 @@ gaps.
   - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `getDocumentSize`, `Base64`, the `getConvexSize` name;
   - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
   - `.count()` on the query builder;
@@ -177,6 +173,9 @@ gaps.
   - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
   - `/api/delete_scheduled_functions_table`;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
+  - persisted search segments (STUDY-79 option E): a restart restores the clean-shutdown snapshot and replays
+    the log since (STUDY-96), but after a crash the replay runs from the last clean shutdown, or the whole
+    table without one;
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
   - Prometheus `/metrics`;

@@ -95,6 +95,11 @@ export const filterValueBytes = (key: string) => Math.min(key.length / 2, 32);
 
 export class SearchIndexes {
   private entries = new Map<string, SearchIndexEntry>();
+
+  /** Every index (a snapshot of them, STUDY-96). */
+  all(): SearchIndexEntry[] {
+    return [...this.entries.values()];
+  }
   /** One synthetic id per (tablet, index), kept across rebuilds, so read-sets taken before still match. */
   private readIds = new Map<string, number>();
 
@@ -213,6 +218,11 @@ export class SearchIndexes {
   }
 
   /** A backfilled document (unless a commit already set it). */
+  /** A document's indexed state from a snapshot, or its removal (unless a commit already set it; STUDY-96). */
+  restore(e: SearchIndexEntry, id: string, d: IndexedDoc | null) {
+    if (!e.touched?.has(id)) e.index.set(id, d);
+  }
+
   backfill(e: SearchIndexEntry, doc: Doc) {
     const id = doc._id as string;
     if (!e.touched?.has(id)) e.index.set(id, indexedDoc(e.def, doc));

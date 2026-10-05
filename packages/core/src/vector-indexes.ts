@@ -13,7 +13,7 @@ export const MAX_VECTOR_RESULTS = 256;
 export const MAX_VECTOR_FILTER_CONDITIONS = 64;
 
 /** A document as an index holds it: its vector (f32, L2-normalized) and its filter values' sort keys. */
-type Entry = { vector: Float32Array; filters: Record<string, string> };
+export type Entry = { vector: Float32Array; filters: Record<string, string> };
 
 export type VectorIndexEntry = {
   table: string;
@@ -74,6 +74,11 @@ function compareInternal(a: string, b: string): number {
 
 export class VectorIndexes {
   private entries = new Map<string, VectorIndexEntry>();
+
+  /** Every index (a snapshot of them, STUDY-96). */
+  all(): VectorIndexEntry[] {
+    return [...this.entries.values()];
+  }
   private static key = (tablet: number, name: string) => `${tablet}\u0000${name}`;
 
   get(t: TableDef, name: string): VectorIndexEntry | undefined {
@@ -130,6 +135,13 @@ export class VectorIndexes {
   }
 
   /** A document the backfill read at its snapshot (ignored if a later commit already set it). */
+  /** A document's entry from a snapshot, or its removal (unless a commit already set it; STUDY-96). */
+  restore(e: VectorIndexEntry, id: string, entry: Entry | null) {
+    if (e.touched?.has(id)) return;
+    if (entry) e.docs.set(id, entry);
+    else e.docs.delete(id);
+  }
+
   backfill(e: VectorIndexEntry, doc: Doc) {
     const id = doc._id as string;
     if (e.touched?.has(id)) return;
