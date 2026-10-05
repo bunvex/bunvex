@@ -51,6 +51,8 @@ async function typed(db: GenericDatabaseWriter<DM>, reader: GenericDatabaseReade
   check<Equal<(typeof byName)[number]["_id"], GenericId<"users">>>(true);
   // @ts-expect-error not an index of users
   reader.query("users").withIndex("by_author");
+  // @ts-expect-error `count()` is internal, as Convex's (`@internal`, so not in its published types; STUDY-107)
+  await reader.query("users").count();
   // @ts-expect-error fields in index order: age before name
   reader.query("users").withIndex("by_name_age", (q) => q.eq("age", 3));
   // @ts-expect-error the value's type
