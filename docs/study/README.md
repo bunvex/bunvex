@@ -124,7 +124,7 @@ to a spec.
 | [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler | implemented |
 | [STUDY-95](STUDY-95-error-stacks.md) | A function's error stack: only the app's frames, source-mapped to its files, everywhere errors surface | implemented; S1 / S2 (DV-345, DV-346) accepted as recommended (owner, 2026-10-04) |
 | [STUDY-101](STUDY-101-user-table-cap.md) | At most 10 000 active user tables (`TooManyTables`) | implemented |
-| [STUDY-106](STUDY-106-staged-validator.md) | `TableDefinition.staged(validator)`: accepted, serialized and stored with the schema; nothing checks documents against it, as in Convex | implemented; DV-356 (owner, 2026-10-05); S2 asked |
+| [STUDY-106](STUDY-106-staged-validator.md) | `TableDefinition.staged(validator)`: accepted, serialized and stored with the schema; nothing checks documents against it, as in Convex | implemented; DV-356 (owner, 2026-10-05) |
 | [STUDY-100](STUDY-100-index-reference-check.md) | Index field references checked at push (`check_index_references`) | implemented |
 | [STUDY-99](STUDY-99-http-client-function.md) | `BunvexHttpClient.function()`: any function by an admin, through `/api/function` | implemented |
 | [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
