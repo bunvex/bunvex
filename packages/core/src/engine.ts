@@ -930,7 +930,7 @@ export class Engine {
     // TooOld: a memory part with writes older than the checkpoint age is flushed.
     for (const [kind, e] of all) {
       const s = state.get(kind, e.tablet, e.name);
-      if (!e.ready || e.staged || !s || !e.index.changed.size) continue;
+      if (!e.ready || !s || !e.index.changed.size) continue;
       if (now - state.currentTs(s) >= w.maxCheckpointAgeMs * 1000) this.scheduleFlush(kind, e);
     }
     // Fast-forward, debounced.
@@ -947,7 +947,6 @@ export class Engine {
         const s = state.get(kind, e.tablet, e.name);
         return (
           e.ready &&
-          !e.staged &&
           s &&
           !s.backfill &&
           !e.index.changed.size &&
@@ -1070,12 +1069,12 @@ export class Engine {
     const limits = this.segmentLimits;
     for (const t of tx.writtenTables()) {
       for (const e of this.searchIndexes.forTablet(t.id))
-        if (e.ready && !e.staged && e.index.memoryBytes >= limits.textHardLimitBytes) {
+        if (e.ready && e.index.memoryBytes >= limits.textHardLimitBytes) {
           this.scheduleFlush("text", e);
           throw indexTooLarge("text", `${e.table}.${e.name}`);
         }
       for (const e of this.vectorIndexes.forTablet(t.id))
-        if (e.ready && !e.staged && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
+        if (e.ready && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
           this.scheduleFlush("vector", e);
           throw indexTooLarge("vector", `${e.table}.${e.name}`);
         }
@@ -1143,7 +1142,7 @@ export class Engine {
 
   private async flushLocked(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
     const state = this.searchSegments;
-    if (!state || e.staged || !this.isCurrent(kind, e)) return;
+    if (!state || !this.isCurrent(kind, e)) return;
     const ts = this.committer.visibleTs;
     // Prepared at once: the memory part and the deletes as of `ts`.
     const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
@@ -1168,7 +1167,7 @@ export class Engine {
           def: e.def,
           ts,
           segments: refs,
-          staged: false,
+          staged: e.staged,
         };
         states.set(stateKey(kind, e.tablet, e.name), s);
         return true;
@@ -1218,7 +1217,7 @@ export class Engine {
    */
   private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
     const state = this.searchSegments;
-    if (!state || e.staged || !this.isCurrent(kind, e)) return false;
+    if (!state || !this.isCurrent(kind, e)) return false;
     const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
     const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
     const candidates = index.segments.map((p) => ({
@@ -1395,7 +1394,7 @@ export class Engine {
               def: e.def,
               ts,
               segments: refs,
-              staged: false,
+              staged: e.staged,
               ...(end ? {} : { backfill: { cursor: next } }),
             };
             states.set(stateKey(kind, e.tablet, e.name), s);
@@ -1434,7 +1433,7 @@ export class Engine {
       ...this.vectorIndexes.all().map((e) => ["vector", e] as const),
     ];
     for (const [kind, e] of all) {
-      if (!e.ready || e.staged) continue;
+      if (!e.ready) continue;
       try {
         await this.flushIndex(kind, e);
       } catch (err) {
@@ -1474,7 +1473,7 @@ export class Engine {
         let changed = false;
         for (const [k, s] of states) {
           const w = wanted.get(k);
-          if (w && sameSpec(w[1].def, s.def) && !(w[1].staged && s.segments.length)) {
+          if (w && sameSpec(w[1].def, s.def)) {
             if (s.staged !== w[1].staged) {
               s.staged = w[1].staged;
               changed = true;
@@ -1520,7 +1519,7 @@ export class Engine {
         // since, are still this index.
         const before = states.get(k);
         if (before?.segments.length) return false;
-        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: false });
+        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: e.staged });
         return true;
       })
       .catch(() => {});
