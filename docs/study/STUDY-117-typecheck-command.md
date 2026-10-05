@@ -86,7 +86,7 @@ the deploy / dev / codegen step (`typecheck(mode)`) share. `deploy.ts` holds bun
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| T1 (DV-387) | The compiler runs with `--noEmit` too | Convex's message names `tsc --noEmit`, and the owner chose to pass it. Observable only with a functions `tsconfig.json` that emits: Convex would write the `.js` files and bunvex does not | owner, 2026-10-05 |
+| T1 (DV-387) | The compiler runs with `--noEmit` too | Convex does not pass `--noEmit`: it relies on the `"noEmit": true` of the tsconfig its `codegen --init` generates. bunvex passes it so that a typecheck never writes files. Observable only with a functions `tsconfig.json` that emits: Convex would write the `.js` files and bunvex does not | owner, 2026-10-05 (confirmed after review: keep `--noEmit`) |
 
 ## 4b. Additions (beyond Convex)
 
