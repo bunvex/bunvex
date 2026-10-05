@@ -1559,6 +1559,15 @@ export class Tx {
    * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
    * table, so a cached query or a subscription re-runs when it changes. System transactions only.
    */
+  /**
+   * The system tables the catalog has, by name, `_tables` and `_index` included (they have no `_tables` row):
+   * for the system-table browser (STUDY-131 AD-24). System access only.
+   */
+  systemTableNames(): string[] {
+    if (!this.systemAccess) throw new Error("systemTableNames is for system transactions");
+    return [...this.catalog.tables.keys()].filter((n) => n.startsWith("_")).sort();
+  }
+
   async countTable(table: string): Promise<number> {
     if (!this.systemAccess) throw new Error("countTable is for system transactions");
     const t = this.findTable(table);

@@ -98,6 +98,40 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
 
 /**
+ * One line on what each system table holds, for the system-table browser (STUDY-131 AD-24: the dashboard's
+ * "Show system tables" and `bunvex data --system`). Keep it next to `SYSTEM_TABLE_NUMBERS`: a table added
+ * there gets its line here (a test checks every numbered table has one). The browser lists the tables the
+ * catalog has, not this list; a table without a line here is listed with an empty description.
+ */
+export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  _tables: "Every table: its name, number and state (active, hidden, deleting).",
+  _index: "Every index: its table, fields and state (backfilling, backfilled, enabled).",
+  _exports: "Snapshot exports and their state.",
+  _udf_config: "The pushed code's function runtime settings.",
+  _modules: "Each pushed module's metadata.",
+  _source_packages: "The pushed code packages the modules live in.",
+  _environment_variables: "The deployment's environment variables, by name.",
+  _deployment_audit_log: "The audit log: one document per deployment event.",
+  _session_requests: "Committed sync-session mutations, for idempotent resends.",
+  _cron_jobs: "The cron jobs and their schedules.",
+  _schemas: "Pushed schemas and their state (pending, active, overwritten, failed).",
+  _cron_job_logs: "The last runs of each cron job.",
+  _scheduled_functions: "Scheduled function runs and their state (apps read them through db.system).",
+  _storage: "Stored files' metadata (apps read it through db.system).",
+  _snapshot_imports: "Snapshot imports, their state and checkpoints.",
+  _log_sinks: "Configured log streams and their status.",
+  _function_handles: "Function handles: a function path and when it was deleted.",
+  _canonical_urls: "The deployment's canonical cloud and site URLs.",
+  _backend_state: "The deployment's run state (running, paused, disabled).",
+  _cron_next_run: "Each cron job's previous and next run.",
+  _data_sync_progress: "Data sync progress, one row per sync.",
+  _usage_limits: "Usage limits per metric and window.",
+  _index_backfills: "Progress checkpoints of index backfills.",
+  _instance: "The deployment's own settings, such as the generated instance secret.",
+  _storage_deletions: "Blobs of deleted files, removed once the delete commits.",
+};
+
+/**
  * A table's lifecycle (STUDY-42 PR 2), as Convex's `TableState`: `active` (the one table of its name that
  * functions see), `hidden` (being filled — an import's — invisible to functions, possibly sharing an active
  * table's name and number, made active by `activate`), `deleting` (replaced or deleted: invisible, its

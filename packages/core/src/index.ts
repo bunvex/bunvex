@@ -41,6 +41,8 @@ export {
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  SYSTEM_TABLE_NUMBERS,
   searchIndexesUnavailable,
   TooManyTablesError,
   UDF_CONFIG_TABLE,
@@ -285,7 +287,7 @@ export {
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
-export { SystemReader } from "./system-reader.ts";
+export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {

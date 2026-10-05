@@ -24,6 +24,9 @@ const VISIBLE: Record<string, (d: Doc) => Doc> = {
     }) as unknown as Doc,
 };
 
+/** The system tables an app reads through `db.system` (in their public shape); every other one is private. */
+export const APP_VISIBLE_SYSTEM_TABLES: readonly string[] = Object.keys(VISIBLE);
+
 function visible(table: string): (d: Doc) => Doc {
   const project = VISIBLE[table];
   if (!project) throw new Error(`System table ${table} is not accessible here.`);
