@@ -5,7 +5,7 @@ import { BunvexError } from "@bunvex/values";
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi as convexApi } from "convex/server";
 import { ConvexError } from "convex/values";
-import { renameFormat, startServer, until } from "./harness.ts";
+import { ADMIN_KEY, renameFormat, startServer, until } from "./harness.ts";
 
 const api = anyApi;
 const cleanup: (() => unknown)[] = [];
@@ -73,6 +73,41 @@ describe("BunvexHttpClient", () => {
     expect(await http.query(api.messages.count)).toBe(2);
   });
 
+  test("function(): any kind by an admin, internal ones included, arguments as the object itself", async () => {
+    const { h, http } = await setup();
+    const sent: unknown[] = [];
+    const spy = new BunvexHttpClient(h.url, {
+      logger: false,
+      fetch: ((url: string, init: RequestInit) => {
+        sent.push({ url, body: JSON.parse(init.body as string) });
+        return fetch(url, init);
+      }) as typeof fetch,
+    });
+    spy.setAdminAuth(ADMIN_KEY);
+    expect(await spy.function(api.messages.send, undefined, { body: "a" })).toBe("A");
+    await spy.function("messages:send", "", { body: "b" });
+    expect(await spy.function(api.messages.list)).toEqual(["a", "b"]);
+    expect(await spy.function(api.messages.echo, undefined, { x: 5n })).toBe(5n);
+    expect(await spy.function(api.messages.clear, undefined, { keep: "b" })).toBe("b");
+    expect(await http.query(api.messages.list)).toEqual(["b"]);
+    expect(sent[0]).toEqual({
+      url: `${h.url}/api/function`,
+      body: { path: "messages:send", args: { body: "a" }, format: "encoded_json" },
+    });
+    expect((sent[1] as { body: unknown }).body).toMatchObject({ componentPath: "", path: "messages:send" });
+    const e = (await spy.function(api.messages.fail).catch((x) => x)) as BunvexError<{ code: string }>;
+    expect(e).toBeInstanceOf(BunvexError);
+    expect(e.data).toMatchObject({ code: "nope" });
+  });
+
+  test("function() without an admin key: the server's 401 BadDeployKey", async () => {
+    const { http } = await setup();
+    const e = (await http.function(api.messages.list).catch((x) => x)) as Error;
+    expect(JSON.parse(e.message)).toMatchObject({ code: "BadDeployKey" });
+    http.setAuth("not-a-user-token-the-server-accepts");
+    await expect(http.function(api.messages.list)).rejects.toThrow();
+  });
+
   test("the function's log lines reach the logger; a ts from the future is refused", async () => {
     const { h, lines, http } = await setup();
     await http.mutation(api.messages.logged, {});
@@ -106,6 +141,29 @@ describe("the official ConvexHttpClient against bunvex", () => {
     }>;
     expect(e).toBeInstanceOf(ConvexError);
     expect(e.data).toEqual({ code: "nope", n: 7n });
+  });
+
+  test("function(), as bunvex's: the same request and answers", async () => {
+    const { h } = await setup();
+    // Its admin scheme is `Convex <key>`, bunvex's `Bunvex <key>` (DV-97): renamed as the format is.
+    const adminScheme = ((url: string, init: RequestInit) => {
+      const headers = { ...(init.headers as Record<string, string>) };
+      headers.Authorization = headers.Authorization!.replace(/^Convex /, "Bunvex ");
+      return fetch(url, { ...init, headers });
+    }) as typeof fetch;
+    // Both are `@internal`, so not in its published types.
+    const c = new ConvexHttpClient(h.url, {
+      skipConvexDeploymentUrlCheck: true,
+      logger: false,
+      fetch: renameFormat(adminScheme),
+    }) as unknown as {
+      setAdminAuth(key: string): void;
+      function(f: unknown, componentPath?: string, args?: unknown): Promise<unknown>;
+    };
+    c.setAdminAuth(ADMIN_KEY);
+    expect(await c.function(convexApi.messages.send, undefined, { body: "x" })).toBe("X");
+    expect(await c.function(convexApi.messages.clear, undefined, { keep: "x" })).toBe("x");
+    expect(await c.function("messages:list")).toEqual(["x"]);
   });
 
   test("as it is, it asks for Convex's format name, which bunvex refuses (DV-307)", async () => {

@@ -158,7 +158,6 @@ gaps.
 
 - Client:
   - `convexQueryOptions`;
-  - `BunvexHttpClient.function()`;
   - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
   - close 1000 with a reason for NotFound and Forbidden;
   - large-transition warnings;

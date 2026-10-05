@@ -255,4 +255,24 @@ export class BunvexHttpClient {
       name,
     )) as FunctionReturnType<A>;
   }
+
+  /**
+   * @internal Run any function by its own kind, internal ones included (Convex's `function`, `/api/function`):
+   * the server requires an admin key (`setAdminAuth`). Its arguments are sent as the object itself, not in an
+   * array. `componentPath` names a component's function; bunvex has none (STUDY-62), so only the root's.
+   */
+  async function<F extends Ref<"query" | "mutation" | "action">>(
+    anyFunction: F | string,
+    componentPath?: string,
+    ...args: OptionalRestArgs<F>
+  ): Promise<FunctionReturnType<F>> {
+    const name = getFunctionName(anyFunction);
+    const functionArgs = parseArgs(args[0] as Record<string, Value> | undefined);
+    return (await this.call(
+      "function",
+      { componentPath, path: name, args: toJsonValue(functionArgs) },
+      "any",
+      name,
+    )) as FunctionReturnType<F>;
+  }
 }
