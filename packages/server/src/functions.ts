@@ -42,10 +42,10 @@ import {
   hasCommitTs,
   isBunvexError,
   isSimpleObject,
+  rawValueSize,
   toJsonValue,
   type Value,
   v,
-  valueSize,
 } from "@bunvex/values";
 import { isolateFetch, nodeFetch } from "./action-fetch.ts";
 
@@ -470,7 +470,7 @@ function sizeOfResult(value: unknown): number {
     const known = resultSizes.get(value);
     if (known !== undefined) return known;
   }
-  return valueSize((value ?? null) as Value);
+  return rawValueSize((value ?? null) as Value);
 }
 /** The same for a result already as JSON: its length. */
 const returnedJson = (json: string): Outcome => ({ returnBytes: json.length });
@@ -1059,7 +1059,7 @@ export class Functions {
         `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
       );
     // Convex measures the positional args array, `[args]` (`validate_udf_args_size`, crates/udf/src/helpers.rs).
-    const size = valueSize([a as Value]);
+    const size = rawValueSize([a as Value]);
     if (size > this.maxArgsSize)
       throw new FunctionPathError(
         `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
@@ -1077,7 +1077,7 @@ export class Functions {
    * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
    */
   private checkReturns(f: FunctionDef, value: unknown) {
-    const size = valueSize((value ?? null) as Value);
+    const size = rawValueSize((value ?? null) as Value);
     if (typeof value === "object" && value !== null) resultSizes.set(value, size);
     if (size > this.maxResultSize)
       throw new FunctionPathError(
@@ -1120,7 +1120,7 @@ export class Functions {
   ): Promise<T> {
     const warnings = (resultBytes: number | null) =>
       functionWarnings({
-        argsBytes: valueSize([args as Value]),
+        argsBytes: rawValueSize([args as Value]),
         maxArgsBytes: this.maxArgsSize,
         tx: db,
         resultBytes,
@@ -1804,7 +1804,7 @@ export class Functions {
             const warn = (resultBytes: number | null) => {
               if (node) return;
               actionWarnings({
-                argsBytes: valueSize([a as Value]),
+                argsBytes: rawValueSize([a as Value]),
                 maxArgsBytes: this.maxArgsSize,
                 pending: meteredAction()?.pendingOps ?? new Map(),
                 elapsedMs: performance.now() - t0,

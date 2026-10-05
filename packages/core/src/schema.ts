@@ -9,6 +9,7 @@ import {
   isBytes,
   type ObjectType,
   type PropertyValidators,
+  rawValueSize,
   type Validator,
   type ValidatorJSON,
   type VFloat64,
@@ -16,7 +17,6 @@ import {
   type VObject,
   type VUnion,
   v,
-  valueSize,
 } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 
@@ -607,7 +607,7 @@ export const isReservedIndex = (ix: IndexDef) =>
  */
 export function indexKeySize(ix: IndexDef, doc: Doc): number {
   let n = 33;
-  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += valueSize(v);
+  for (const v of indexKeyValues(ix, doc)) if (v !== undefined) n += rawValueSize(v);
   return n;
 }
 

@@ -208,7 +208,10 @@ import type {
   GenericQueryCtx,
   GenericDatabaseReader,
   GenericDatabaseWriter,
+  SystemTableNames,
+  TableNamesInDataModel,
 } from "bunvex/server";
+import type { TableValidators } from "bunvex/values";
 import type { DataModel } from "./dataModel.js";
 
 /**
@@ -250,6 +253,12 @@ export declare const httpAction: HttpActionBuilder;
  * The deployment's environment variables.
  */
 export declare const env: Record<string, string | undefined>;
+
+/**
+ * Validators, as \`v\` from bunvex/values, with \`v.id\` typed by this app's tables and the system tables: editors
+ * complete them, and a misspelled table is a type error (any name, with no schema or \`strictTableNameTypes: false\`).
+ */
+export declare const v: TableValidators<TableNamesInDataModel<DataModel> | SystemTableNames>;
 
 /** The context of every query: a database reader, \`auth\` and \`storage\`. */
 export type QueryCtx = GenericQueryCtx<DataModel>;
@@ -327,6 +336,12 @@ export const httpAction = httpActionGeneric;
  * The deployment's environment variables.
  */
 export const env = process.env;
+
+/**
+ * Validators, as \`v\` from bunvex/values, with \`v.id\` typed by this app's tables and the system tables: editors
+ * complete them, and a misspelled table is a type error (any name, with no schema or \`strictTableNameTypes: false\`).
+ */
+export { v } from "bunvex/values";
 "
 ,
   },
@@ -499,7 +514,10 @@ import type {
   GenericQueryCtx,
   GenericDatabaseReader,
   GenericDatabaseWriter,
+  SystemTableNames,
+  TableNamesInDataModel,
 } from "bunvex/server";
+import { type TableValidators, v as untypedV } from "bunvex/values";
 import type { DataModel } from "./dataModel.js";
 
 /**
@@ -543,6 +561,12 @@ export const httpAction: HttpActionBuilder = httpActionGeneric;
 export const env: Record<string, string | undefined> = (
   globalThis as unknown as { process: { env: Record<string, string | undefined> } }
 ).process.env;
+
+/**
+ * Validators, as \`v\` from bunvex/values, with \`v.id\` typed by this app's tables and the system tables: editors
+ * complete them, and a misspelled table is a type error (any name, with no schema or \`strictTableNameTypes: false\`).
+ */
+export const v: TableValidators<TableNamesInDataModel<DataModel> | SystemTableNames> = untypedV;
 
 /** The context of every query: a database reader, \`auth\` and \`storage\`. */
 export type QueryCtx = GenericQueryCtx<DataModel>;

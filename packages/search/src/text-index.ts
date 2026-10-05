@@ -89,6 +89,11 @@ export class TextIndex {
     }
   }
 
+  /** Every indexed document's id (a snapshot of the index, STUDY-96). */
+  ids(): IterableIterator<string> {
+    return this.docs.keys();
+  }
+
   /** The indexed state of a document, for an overlay's undo. */
   get(id: string): IndexedDoc | null {
     const s = this.docs.get(id);

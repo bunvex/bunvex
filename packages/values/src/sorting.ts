@@ -41,6 +41,25 @@ class Writer {
     }
     this.buf[this.n++] = TERMINATOR;
   }
+  /**
+   * A string's UTF-8 bytes, escaped and terminated (`escaped(utf8.encode(s))`). A string of ASCII without
+   * U+0000 (ids, field names, most values) is written unit by unit, with nothing allocated; the rest is
+   * encoded.
+   */
+  escapedString(s: string) {
+    const len = s.length;
+    this.room(len + 1);
+    const start = this.n;
+    for (let i = 0; i < len; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 0 || c > 0x7f) {
+        this.n = start;
+        return this.escaped(utf8.encode(s));
+      }
+      this.buf[this.n++] = c;
+    }
+    this.buf[this.n++] = TERMINATOR;
+  }
   done() {
     return this.buf.slice(0, this.n);
   }
@@ -85,7 +104,7 @@ function write(w: Writer, v: Value | undefined) {
       return w.byte(v ? TRUE : FALSE);
     case "string":
       w.byte(STRING);
-      return w.escaped(utf8.encode(v));
+      return w.escapedString(v);
   }
   if (isBytes(v)) {
     w.byte(BYTES);
@@ -101,7 +120,7 @@ function write(w: Writer, v: Value | undefined) {
   for (const k of fields) {
     const e = (v as Record<string, Value>)[k];
     if (e === undefined) continue;
-    w.escaped(utf8.encode(k));
+    w.escapedString(k);
     if (k === "") w.byte(ESCAPE); // tells an empty field name from the object's terminator
     write(w, e);
   }

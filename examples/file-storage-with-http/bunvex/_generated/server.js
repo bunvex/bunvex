@@ -57,3 +57,9 @@ export const httpAction = httpActionGeneric;
  * The deployment's environment variables.
  */
 export const env = process.env;
+
+/**
+ * Validators, as `v` from bunvex/values, with `v.id` typed by this app's tables and the system tables: editors
+ * complete them, and a misspelled table is a type error (any name, with no schema or `strictTableNameTypes: false`).
+ */
+export { v } from "bunvex/values";

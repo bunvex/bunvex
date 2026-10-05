@@ -130,9 +130,11 @@ test("a query's engine objects print by name: ctx.db, ctx.db.system, queries at 
   const line = (label: string) => r.logLines.find((l) => l.startsWith(`[LOG] '${label}' `));
   expect(line("db")).toBe("[LOG] 'db' Tx {…}");
   expect(line("system")).toBe("[LOG] 'system' SystemReader {…}");
-  expect(line("system query")).toBe("[LOG] 'system query' ProjectedQuery {…}");
+  expect(line("system query")).toBe("[LOG] 'system query' ProjectedQueryInitializer {…}");
   expect(line("table")).toBe("[LOG] 'table' TableReader {…}");
-  for (const q of ["query", "withIndex", "order", "full scan"]) expect(line(q)).toBe(`[LOG] '${q}' QueryImpl {…}`);
+  // As Convex's classes: db.query(t) is a QueryInitializerImpl, and every operator returns a QueryImpl.
+  expect(line("query")).toBe("[LOG] 'query' QueryInitializerImpl {…}");
+  for (const q of ["withIndex", "order", "full scan"]) expect(line(q)).toBe(`[LOG] '${q}' QueryImpl {…}`);
   // The rest of the context prints as Convex's: its plain objects and functions.
   expect(line("ctx")).toContain("db: Tx {…}");
   expect(line("ctx")).toContain("getUserIdentity: [Function: getUserIdentity]");

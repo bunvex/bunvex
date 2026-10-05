@@ -18,7 +18,10 @@ import type {
   GenericQueryCtx,
   GenericDatabaseReader,
   GenericDatabaseWriter,
+  SystemTableNames,
+  TableNamesInDataModel,
 } from "bunvex/server";
+import type { TableValidators } from "bunvex/values";
 import type { DataModel } from "./dataModel.js";
 
 /**
@@ -60,6 +63,12 @@ export declare const httpAction: HttpActionBuilder;
  * The deployment's environment variables.
  */
 export declare const env: Record<string, string | undefined>;
+
+/**
+ * Validators, as `v` from bunvex/values, with `v.id` typed by this app's tables and the system tables: editors
+ * complete them, and a misspelled table is a type error (any name, with no schema or `strictTableNameTypes: false`).
+ */
+export declare const v: TableValidators<TableNamesInDataModel<DataModel> | SystemTableNames>;
 
 /** The context of every query: a database reader, `auth` and `storage`. */
 export type QueryCtx = GenericQueryCtx<DataModel>;
