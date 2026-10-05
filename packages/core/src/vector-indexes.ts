@@ -1,9 +1,9 @@
-// The engine's vector indexes (STUDY-51): one in-memory index per vector index of an active table, exact
-// (every vector compared — Convex's memory index is exact too; its disk segments are approximate HNSW), as
-// the owner chose. Built by a backfill at one snapshot, then kept up to date by every commit as it becomes
-// visible. A search sees the latest visible state, as Convex's (`now_ts_for_reads`): vector search runs in
-// actions, outside any transaction.
-import { decodeId } from "@bunvex/values";
+// The engine's vector indexes (STUDY-51): one index per vector index of an active table, exact (every vector
+// compared — Convex's memory index is exact too; its disk segments are approximate HNSW), as the owner chose.
+// Each is segments plus a memory part (`SegmentedVectorIndex`, STUDY-111). Built by a backfill at one snapshot,
+// then kept up to date by every commit as it becomes visible. A search sees the latest visible state, as
+// Convex's (`now_ts_for_reads`): vector search runs in actions, outside any transaction.
+import { SegmentedVectorIndex, type VectorDoc } from "@bunvex/search";
 import { type Doc, fieldValue, type TableDef, type VectorIndexDef } from "./schema.ts";
 import { filterKey } from "./search-indexes.ts";
 
@@ -13,7 +13,7 @@ export const MAX_VECTOR_RESULTS = 256;
 export const MAX_VECTOR_FILTER_CONDITIONS = 64;
 
 /** A document as an index holds it: its vector (f32, L2-normalized) and its filter values' sort keys. */
-export type Entry = { vector: Float32Array; filters: Record<string, string> };
+export type Entry = VectorDoc;
 
 export type VectorIndexEntry = {
   table: string;
@@ -24,7 +24,8 @@ export type VectorIndexEntry = {
   ready: boolean;
   /** Being rebuilt after the process started (STUDY-79): a search meanwhile is `VectorIndexesUnavailable`. */
   bootstrapping: boolean;
-  docs: Map<string, Entry>;
+  /** The index: its segments and memory part. */
+  index: SegmentedVectorIndex;
   /** Documents a commit set while the backfill ran: the backfill's older copy must not replace them. */
   touched: Set<string> | null;
 };
@@ -64,13 +65,6 @@ export function inVectorIndex(def: VectorIndexDef, doc: Doc): boolean {
 
 /** A filter: per field, the values (their sort keys) any of which matches; fields are ORed, as Convex's. */
 export type VectorFilter = Map<string, Set<string>>;
-
-/** Two document ids by their internal ids' bytes (Convex breaks score ties on them, descending). */
-function compareInternal(a: string, b: string): number {
-  const x = decodeId(a).internalId;
-  const y = decodeId(b).internalId;
-  return Buffer.compare(Buffer.from(x), Buffer.from(y));
-}
 
 const NONE: readonly VectorIndexEntry[] = [];
 
@@ -119,7 +113,7 @@ export class VectorIndexes {
         staged: w.staged,
         ready: false,
         bootstrapping,
-        docs: new Map(),
+        index: new SegmentedVectorIndex(w.def.dimensions, w.def.filterFields),
         touched: new Set(),
       };
       next.set(k, e);
@@ -140,26 +134,23 @@ export class VectorIndexes {
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
         if (e.staged) continue;
-        const entry = w.next ? vectorEntry(e.def, w.next) : null;
-        if (entry) e.docs.set(w.id, entry);
-        else e.docs.delete(w.id);
+        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null);
         e.touched?.add(w.id);
       }
   }
 
-  /** A document the backfill read at its snapshot (ignored if a later commit already set it). */
   /** A document's entry from a snapshot, or its removal (unless a commit already set it; STUDY-96). */
   restore(e: VectorIndexEntry, id: string, entry: Entry | null) {
     if (e.touched?.has(id)) return;
-    if (entry) e.docs.set(id, entry);
-    else e.docs.delete(id);
+    e.index.set(id, entry);
   }
 
+  /** A document the backfill read at its snapshot (ignored if a later commit already set it). */
   backfill(e: VectorIndexEntry, doc: Doc) {
     const id = doc._id as string;
     if (e.touched?.has(id)) return;
     const entry = vectorEntry(e.def, doc);
-    if (entry) e.docs.set(id, entry);
+    if (entry) e.index.set(id, entry);
   }
 
   done(e: VectorIndexEntry) {
@@ -172,17 +163,6 @@ export class VectorIndexes {
    * descending internal id, as Convex's ordering. Only documents matching `filter`, when there is one.
    */
   search(e: VectorIndexEntry, query: ArrayLike<number>, limit: number, filter: VectorFilter | null) {
-    const q = normalized(query);
-    const hits: { id: string; score: number }[] = [];
-    for (const [id, d] of e.docs) {
-      if (filter && ![...filter].some(([f, keys]) => keys.has(d.filters[f]!))) continue;
-      let dot = 0;
-      for (let i = 0; i < q.length; i++) dot = Math.fround(dot + Math.fround(q[i]! * d.vector[i]!));
-      hits.push({ id, score: dot });
-    }
-    // Descending by score (NaN above everything, as `total_cmp`), then by internal id, descending.
-    const key = (s: number) => (Number.isNaN(s) ? Number.POSITIVE_INFINITY : s);
-    hits.sort((a, b) => key(b.score) - key(a.score) || (a.score === b.score ? compareInternal(b.id, a.id) : 0));
-    return hits.slice(0, limit);
+    return e.index.search(normalized(query), limit, filter);
   }
 }

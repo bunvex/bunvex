@@ -1,0 +1,20 @@
+{
+  "name": "@bunvex/differential",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Differential tests (STUDY-103): the same app and the same calls on Convex's local backend and on bunvex's, their answers and data compared. Tests only, never published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "bunvex": "workspace:*"
+  },
+  "devDependencies": {
+    "convex": "1.46.0",
+    "fast-check": "4.10.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/differential"
+  }
+}

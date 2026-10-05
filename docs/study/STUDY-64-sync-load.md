@@ -297,6 +297,7 @@ Not divergences:
 ## 6. Open questions
 
 - `CLIENT_TIMEOUT` (120 s without a pong closes the socket) and Bun's `idleTimeout` of 960 s differ; the
-  parity row "WS-level ping every 5 s; client considered dead after 120 s" stays *partial*.
+  parity row "WS-level ping every 5 s; client considered dead after 120 s" stays *partial*. Resolved by
+  [STUDY-104](STUDY-104-ws-heartbeat.md) (DV-352): Convex's 5 s ping and 120 s timeout.
 - Convex negotiates `permessage-deflate` on the sync socket (its `tungstenite` fork); bunvex does not
   compress. Not covered here.
