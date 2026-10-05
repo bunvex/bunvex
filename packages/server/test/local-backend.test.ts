@@ -173,4 +173,30 @@ describe("bunvex-local-backend", () => {
     expect(existsSync(join(cwd, "bunvex_local_storage/modules"))).toBe(true);
     expect(existsSync(join(cwd, "bunvex_local_storage/files"))).toBe(false);
   });
+  test("the storage is pinned at the first start (STUDY-126): a restart with --s3-storage is refused", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+    dirs.push(cwd);
+    const local = parseLocalBackendFlags(["--instance-secret", SECRET, "--port", "0", "--site-proxy-port", "0"]);
+    if (typeof local === "string") throw new Error(local);
+    const a = await startLocalBackend(local, io(cwd).it);
+    await a.stop();
+    const s3 = parseLocalBackendFlags([
+      "--instance-secret",
+      SECRET,
+      "--port",
+      "0",
+      "--site-proxy-port",
+      "0",
+      "--s3-storage",
+    ]);
+    if (typeof s3 === "string") throw new Error(s3);
+    const it = { ...io(cwd).it, env: { S3_STORAGE_FILES_BUCKET: "files-bucket", AWS_REGION: "us-east-1" } };
+    await expect(startLocalBackend(s3, it)).rejects.toThrow(
+      'Database was initialized with Some(Local { dir: "bunvex_local_storage" }), but backend started up with S3.',
+    );
+    // The refused start released the store: the local one starts again.
+    const b = await startLocalBackend(local, io(cwd).it);
+    stops.push(b.stop);
+    expect(await (await fetch(`${b.url}/instance_name`)).text()).toBe("bunvex-self-hosted");
+  });
 });

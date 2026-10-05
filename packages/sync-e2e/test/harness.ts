@@ -11,6 +11,7 @@ import {
   issueAdminKey,
   mutation,
   query,
+  type ServerOptions,
 } from "@bunvex/server";
 import { BunvexError, v } from "@bunvex/values";
 
@@ -20,7 +21,8 @@ const INSTANCE_SECRET = "4361726e697461732c206c69746572616c6c79206d65616e696e672
 /** An admin key of the harness's deployment (for `/api/function`). */
 export const ADMIN_KEY = issueAdminKey({ instanceName: "harness", cipherKey: adminKeyCipherKey(INSTANCE_SECRET) });
 
-export async function startServer() {
+/** `opts` go to `createServer` (e.g. shorter WebSocket heartbeat timings). */
+export async function startServer(opts: Partial<ServerOptions> = {}) {
   const engine = await new Engine(
     defineSchema({ messages: defineTable(v.any()), counters: defineTable(v.any()), settings: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
@@ -87,7 +89,7 @@ export async function startServer() {
   // No site port (HTTP actions; no sync test calls one): createServer puts it on the API's port + 1 when the
   // port is given, as a restart gives it, and that port is not the harness' to take (harness.test.ts)
   const serve = (on: number) =>
-    createServer({ engine, functions, port: on, sitePort: null, redactLogsToClient: false });
+    createServer({ engine, functions, port: on, sitePort: null, redactLogsToClient: false, ...opts });
   let current = serve(0);
   port = current.server.port!;
   return {
