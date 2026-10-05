@@ -1,5 +1,6 @@
 // A WebSocket client on a raw TCP socket, for tests that need a client that stops reading: it can pause the
-// socket, so the server's frames pile up in the kernel and then in Bun's send buffer (STUDY-64 §1.3).
+// socket, so the server's frames pile up in the kernel and then in Bun's send buffer (STUDY-64 §1.3). It never
+// answers a ping by itself, and it records the server's pings and close frame (STUDY-104).
 import net from "node:net";
 import { v1 } from "@bunvex/protocol";
 
@@ -12,13 +13,21 @@ export type RawWs = {
   resume(): void;
   closed: Promise<void>;
   end(): void;
+  /** When each WS ping arrived (`performance.now()`), and each pong. */
+  pings: number[];
+  pongs: number[];
+  /** The server's close frame: its code (null: the frame had none) and reason, once it came. */
+  closeFrame: { code: number | null; reason: string } | null;
+  /** Send a control frame: a ping, or a pong (which a server takes even unasked, RFC 6455 §5.5.3). */
+  ping(): void;
+  pong(): void;
 };
 
-/** A masked client text frame (RFC 6455 §5.2). */
-function frame(text: string): Buffer {
+/** A masked client frame (RFC 6455 §5.2), text unless `op` says otherwise. */
+function frame(text: string, op = 0x1): Buffer {
   const payload = Buffer.from(text);
   const n = payload.length;
-  const head = n < 126 ? Buffer.from([0x81, 0x80 | n]) : Buffer.alloc(n < 65536 ? 4 : 10);
+  const head = n < 126 ? Buffer.from([0x80 | op, 0x80 | n]) : Buffer.alloc(n < 65536 ? 4 : 10);
   if (n >= 126 && n < 65536) {
     head[0] = 0x81;
     head[1] = 0x80 | 126;
@@ -75,7 +84,13 @@ export function rawWs(port: number, path = "/api/1.0.0/sync"): Promise<RawWs> {
         if (buf.length < at + len) return;
         const payload = buf.subarray(at, at + len);
         buf = buf.subarray(at + len);
+        if (op === 0x9) ws.pings.push(performance.now());
+        if (op === 0xa) ws.pongs.push(performance.now());
         if (op === 0x8) {
+          ws.closeFrame =
+            payload.length >= 2
+              ? { code: payload.readUInt16BE(0), reason: payload.subarray(2).toString("utf8") }
+              : { code: null, reason: "" };
           socket.end();
           return;
         }
@@ -95,6 +110,11 @@ export function rawWs(port: number, path = "/api/1.0.0/sync"): Promise<RawWs> {
       resume: () => socket.resume(),
       closed,
       end: () => socket.destroy(),
+      pings: [],
+      pongs: [],
+      closeFrame: null,
+      ping: () => socket.write(frame("", 0x9)),
+      pong: () => socket.write(frame("", 0xa)),
     };
   });
 }

@@ -39,7 +39,13 @@ import {
   writeCodeRows,
   writePackage,
 } from "./code-store.ts";
-import { type AnalyzedModule, CodeVersion, InvalidModulesError, type ModuleSource } from "./code-version.ts";
+import {
+  type AnalyzedModule,
+  CodeVersion,
+  FunctionExportError,
+  InvalidModulesError,
+  type ModuleSource,
+} from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
 import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
@@ -256,6 +262,7 @@ export class PushService {
       version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
     } catch (e) {
       if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
+      if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
       throw e;
     }
     let schema = emptySchema;

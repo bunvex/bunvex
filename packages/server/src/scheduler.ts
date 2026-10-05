@@ -40,7 +40,16 @@ import {
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
-import { type GenericId, hasCommitTs, isSimpleObject, rawValueSize, type Value } from "@bunvex/values";
+import {
+  type GenericId,
+  hasCommitTs,
+  isSimpleObject,
+  MAX_VALUE_NESTING,
+  measureRawValue,
+  rawValueSize,
+  TOO_NESTED_MESSAGE,
+  type Value,
+} from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import { functionNameOf } from "./function-handles.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
@@ -113,8 +122,11 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     const name = functions.scheduledTarget(
       await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
     );
-    // As Convex's `validate_schedule_args`: arguments travel as plain values, so a commit timestamp
-    // placeholder cannot (STUDY-53).
+    // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
+    // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot
+    // (STUDY-53).
+    if (measureRawValue([args]).nesting > MAX_VALUE_NESTING)
+      throw new Error(`Invalid arguments for ${name}: ${TOO_NESTED_MESSAGE}`);
     if (hasCommitTs(args))
       throw new Error(`Invalid arguments for ${name}: Field name $commitTs starts with '$', which is reserved.`);
     return write(async (db) => {

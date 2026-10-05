@@ -120,7 +120,7 @@ Key bunvex facts behind the statuses:
 | `convex/server` is one isomorphic module: an app's shared code and `_generated/` load in a browser bundle and in Node (Next.js), not only in the backend | `npm-packages/convex/package.json` (`./server`); `server/index.ts` | done (STUDY-91) | `bunvex/server` resolves to the whole package under Bun (the `bun` condition) and to `src/isomorphic.ts` elsewhere: every value but the runtime's (engine, persistence, server, admin keys, which Convex's module does not have); a test keeps the two in step and bundles it for a browser. |
 | Warning when a registered function is called directly | impl/registration_impl.ts (`dontCallDirectly`) | done (STUDY-66) | A registered function is callable: it warns (the caller's log line) and runs its handler, as Convex's; bunvex's wording, no docs link. |
 | Guard against importing functions in a browser | impl/registration_impl.ts (`assertNotBrowser`) | done (STUDY-66) | `console.error` when defined in a real browser (native `window` getter); the opt-out is `window.__bunvexAllowFunctionsInBrowser` (the naming rule). |
-| `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | partial (STUDY-35) | The push analysis records each function's `args` / `returns` validator JSON (Convex's `AnalyzedFunction`), for the dashboard and `_system` functions; the `exportArgs()` / `exportReturns()` methods on a registered function are missing. |
+| `exportArgs()` / `exportReturns()` metadata, used by the dashboard and codegen | impl/registration_impl.ts | done (STUDY-105) | Plain own properties on every registered function, internal ones too: the validator JSON, `{"type":"any"}` without `args` and `"null"` without `returns`. The push's analysis and `apiSpec` read them, with Convex's errors for a broken export. The strict replacer's message has no docs link (DV-355). |
 
 ### 6. Function contexts
 
@@ -337,7 +337,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | Document size ≤ 1 MiB (`MAX_USER_SIZE`, including system fields) | crates/common/src/document.rs | done (#35) | |
 | Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | done (#35) | |
-| Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | missing | |
+| Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | done (STUDY-109) | Nesting: arguments 63 levels (Convex parses `[args]`), results 64, written values 64 (a patch: each field 64), with Convex's messages and order (nesting, then size, then validator; a written value before its table and document; `runUdf`'s message for a query's or mutation's nested call past 64). Any depth fails with the message, never a stack overflow; past serde's 128 JSON levels Convex answers otherwise (DV-363). Size and nesting are measured in one walk. The 32 MiB size is never reached: the 16 MiB argument and result limits and the 1 MiB document limit come first. |
 | Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | |
 | Object fields ≤ 1024 | crates/value/src/object.rs | done (#35) |  |
 | Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | done (#6, #21) |  |
