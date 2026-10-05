@@ -328,3 +328,65 @@ HTTP routes and crons work, and a second deploy changes them.
   with item 9. Until then the auth config reads the process environment.
 - **Components** (`convex.config.ts`, `componentDefinitions`) are out of scope, as are node external
   packages (`node.externalPackages`).
+
+## 7. A push of a schema already there (2026-10-05)
+
+### 7.1 How Convex does it
+
+`SchemaModel::submit_pending` (crates/database/src/bootstrap_model/schema/mod.rs:207–258) records a push's schema
+as follows:
+
+- **Equal to the active schema:** it marks the pending and validated schemas `overwritten` and returns the active
+  schema's id, state `Active`. There is nothing to validate. `mark_active` (:324–347) is then a no-op at
+  `finish_push`.
+- **Equal to the pending (or validated) schema:** it returns that schema's id. It is not overwritten, and its
+  validation goes on.
+- **Otherwise:** it marks the pending or validated schema `overwritten` and inserts a new pending schema.
+
+"Equal" is `DatabaseSchema`'s `PartialEq` (crates/common/src/schemas/mod.rs:144). Its tables and each kind of
+index are `BTreeMap`s keyed by name, and an object validator's fields are a `BTreeMap`. So declaration order does
+not matter. The order of an index's fields and of a union's members does.
+
+### 7.2 What bunvex did, and does now
+
+Before this section, `Engine.startSchemaPush` always marked the earlier pending schema `overwritten` and inserted a
+new pending one, even for the schema already active. A second push of the same schema raced the first.
+
+Now it does what `submit_pending` does (owner, 2026-10-05):
+
+- **The comparison.** `schemaKey` (schema-json.ts) is the schema JSON with the tables and indexes sorted by name
+  and objects' keys sorted. It is compared to each stored schema's key.
+- **Equal to the active schema:** the unfinished schema is overwritten, and the active id is returned.
+  - Nothing is validated, and `schemaPushStatus` is `complete`.
+  - `commitSchemaPush` on the active schema runs the catalog step and the push's body, and leaves the row as it
+    is, like Convex's no-op `mark_active`.
+- **Equal to the pending or validated schema:** that id is returned, and its validation goes on.
+- **The index catalog step is unchanged:** it still runs for every push, as Convex prepares the indexes apart
+  from `submit_pending`.
+
+Two pushes of the same schema at once now share it, as on Convex. The race test in `push.test.ts` now uses two
+different schemas.
+
+### 7.3 Divergences
+
+None.
+
+### 7.4 Tests
+
+- `packages/core/test/schema-push.test.ts`:
+  - the active schema pushed again, with its fields in another order: the active id, complete at once, the commit
+    runs its body, and a single `_schemas` row stays;
+  - the pending schema pushed again: the same id, not overwritten, and a different schema overwrites it;
+  - a pending push followed by the active schema: the pending one is overwritten.
+- `packages/server/test/push.test.ts`: over HTTP, a second push of the same schema answers the active schema's id,
+  finishes, and leaves one `active` row.
+
+Sabotage checks, each caught:
+
+| Sabotage | Caught by |
+|---|---|
+| The active schema not reused | core (2 tests), HTTP |
+| The pending schema not reused | core |
+| The comparison keeps declaration order | core (fields in another order) |
+| The commit re-activates (deletes and patches) the active row | core, HTTP (4 tests) |
+| Unfinished schemas not overwritten when the active one is reused | core |
