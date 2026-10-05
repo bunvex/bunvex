@@ -5,6 +5,7 @@
 import { type GenericValidator, type Infer, type ObjectType, type PropertyValidators, v } from "@bunvex/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./functions.ts";
 import type { ActionBuilder, MutationBuilder, QueryBuilder } from "./registration.ts";
+import { parseValidatorJson } from "./validator-json.ts";
 
 /** `args`: an object of field validators or a validator (Convex's `asObjectValidator`). */
 export type ArgsValidator = PropertyValidators | GenericValidator;
@@ -102,17 +103,9 @@ export function exportedValidator(
   const json: unknown = m.call(f);
   if (typeof json !== "string")
     return { problem: `Invalid ${method} return value: ${id}.${method}() didn't return a string.` };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch (e) {
-    return { problem: `Invalid JSON returned from ${id}.${method}(): ${(e as Error).message}` };
-  }
-  // Convex stores `args` as an object validator, or none for `v.any()`; anything else is refused.
-  const type = (parsed as { type?: unknown } | null)?.type;
-  if (method === "exportArgs" && type !== "object" && type !== "any")
-    return { problem: `Invalid JSON returned from ${id}.${method}(): Args validator must be an object or any` };
-  return { json };
+  // Parsed as Convex's backend parses it (validator-json.ts): what it stores, or why it refuses it.
+  const r = parseValidatorJson(json, method === "exportArgs" ? "args" : "returns");
+  return "json" in r ? r : { problem: `Invalid JSON returned from ${id}.${method}(): ${r.error}` };
 }
 
 /**
