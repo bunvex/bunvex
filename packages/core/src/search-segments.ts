@@ -23,7 +23,16 @@ const VERSIONS_PAGE = 1000;
  * Convex's SEARCH_INDEX_SIZE_SOFT_LIMIT (10 MiB) and VECTOR_INDEX_SIZE_SOFT_LIMIT (30 MiB): a memory part over
  * its limit is flushed into a new segment.
  */
-export type SearchSegmentLimits = { textSoftLimitBytes: number; vectorSoftLimitBytes: number };
+export type SearchSegmentLimits = {
+  textSoftLimitBytes: number;
+  vectorSoftLimitBytes: number;
+  /**
+   * Convex's SEARCH_INDEX_SIZE_HARD_LIMIT and VECTOR_INDEX_SIZE_HARD_LIMIT (100 MiB each): a write to a table
+   * whose ready index has a memory part this large is refused until a flush brings it down.
+   */
+  textHardLimitBytes: number;
+  vectorHardLimitBytes: number;
+};
 
 export function searchSegmentLimitsFromEnv(env: Record<string, string | undefined> = process.env): SearchSegmentLimits {
   const bytes = (name: string, fallback: number) => {
@@ -33,6 +42,8 @@ export function searchSegmentLimitsFromEnv(env: Record<string, string | undefine
   return {
     textSoftLimitBytes: bytes("SEARCH_INDEX_SIZE_SOFT_LIMIT", 10 * 2 ** 20),
     vectorSoftLimitBytes: bytes("VECTOR_INDEX_SIZE_SOFT_LIMIT", 30 * 2 ** 20),
+    textHardLimitBytes: bytes("SEARCH_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
+    vectorHardLimitBytes: bytes("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
   };
 }
 

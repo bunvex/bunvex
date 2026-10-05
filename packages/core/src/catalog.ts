@@ -162,10 +162,19 @@ export class IndexBackfillingError extends Error {
  * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
  * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
  * hitting it is skipped and retried later.
+ *
+ * Also a write refused because an index's memory part is too large (STUDY-111, `TextIndexTooLarge` /
+ * `VectorIndexTooLarge`): Convex's `ErrorMetadata::overloaded`, which it handles as it does the above — HTTP
+ * 503 with its code, a WebSocket closed with `Again` and the code, a system error a scheduled job retries, a
+ * plain `Error` in an action.
  */
 export class IndexesUnavailableError extends Error {
   constructor(
-    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable",
+    readonly code:
+      | "SearchIndexesUnavailable"
+      | "VectorIndexesUnavailable"
+      | "TextIndexTooLarge"
+      | "VectorIndexTooLarge",
     message: string,
   ) {
     super(message);
@@ -181,6 +190,16 @@ export const vectorIndexesUnavailable = () =>
   new IndexesUnavailableError(
     "VectorIndexesUnavailable",
     "Vector indexes are bootstrapping and not yet available for use",
+  );
+
+/**
+ * Convex's refusal of a write to a table whose index has a memory part at its hard limit
+ * (`Transaction::validate_memory_index_size`), in its words without the documentation link (DV-04).
+ */
+export const indexTooLarge = (kind: "text" | "vector", index: string) =>
+  new IndexesUnavailableError(
+    kind === "text" ? "TextIndexTooLarge" : "VectorIndexTooLarge",
+    `Too many writes to ${index}. Spread your writes out over time or throttle them to avoid errors. If you’re importing data into a new application, consider removing the index and adding it again after the import (you can re-add the index as a staged index to avoid blocking your pushes).`,
   );
 
 /** A query on a staged index (Convex's `IndexStagedError`, a bad request). */

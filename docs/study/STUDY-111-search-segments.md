@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats), PR 2 (the merged query path) and PR 3 (the flusher, the start from segments) implemented
+  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments) and PR 3b (backpressure) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),
@@ -286,9 +286,25 @@ apart):
 Segments are read in place, so loading them is reading their blobs: 17 blobs, 122 MB, in tens of
 milliseconds from a warm file cache. The write throughput is within the noise of one run.
 
-### 3.4 The rest of the series (planned; each PR updates this section)
+### 3.4 Backpressure (PR 3b)
 
-- **Backpressure (PR 3b).** DV-228: Convex's 100 MiB `TextIndexTooLarge` / `VectorIndexTooLarge`.
+DV-228 said there was no unflushed memory part to bound; now there is, so bunvex matches Convex (§1.8):
+
+- Before a mutation's commit, a transaction that writes a table one of whose ready (built, not staged) search
+  or vector indexes has a memory part at its hard limit fails: 100 MiB (`SEARCH_INDEX_SIZE_HARD_LIMIT`,
+  `VECTOR_INDEX_SIZE_HARD_LIMIT`), by the estimate the soft limit uses. Indexes being built never refuse.
+- The error is Convex's `overloaded("TextIndexTooLarge" | "VectorIndexTooLarge", "Too many writes to <table.index>.
+  …")`, its message without the documentation link (DV-04). bunvex handles it as its `IndexesUnavailableError`
+  (Convex handles overloaded and feature-temporarily-unavailable errors alike): a system error the function
+  cannot catch; HTTP 503 with the code; a sync session closed with 1013 and the code (Convex's `Again`); a
+  scheduled job retried later; a plain `Error` in an action's `runMutation` (Convex's `allow_all_errors`).
+- The refusal wakes the flusher, as Convex's commit does before it validates.
+- Without a segment store there is nothing to flush into, and nothing is refused.
+- Measured on the commit path (20 000 single-insert mutations on a table with a search index): 51–54 000
+  commits/s before, 52–53 000 after.
+
+### 3.5 The rest of the series (planned; each PR updates this section)
+
 - **Backfill (PR 4).** Convex's paged backfill (§1.4): a segment per page of the table at a fresh ts, the log
   since for the pages before; the cursor in the state.
 - **Compactor (PR 5).** Convex's thresholds (§1.5) and the writer's reconciliation.
@@ -370,6 +386,17 @@ one behind; the definition, or retention, not checked; the replay overwriting a
 commit made during the start; no flush before a built index is ready; a dropped index's state kept; a memory
 part over its limit not flushed; no flush at a clean shutdown; keys above U+D800 sorted in UTF-16 order, or
 surrogates not swapped (segment term order).
+
+**PR 3b** (`packages/core/test/search-segments.test.ts`, `packages/server/test/index-too-large.test.ts`):
+
+- a write to a table whose text index's memory part is at its limit fails with `TextIndexTooLarge` and Convex's
+  message; another table's write goes through; once the refusal's flush is done, writes go through; the same
+  for `VectorIndexTooLarge`; without a store, never refused;
+- HTTP 503 with the code and message, then 200 after the flush; sync closes with 1013 and the code; an
+  action's `runMutation` gets a plain `Error` it catches; a scheduled mutation is delayed, then succeeds.
+
+Sabotage checks (each made tests fail): no check before the commit; the text or the vector limit never
+reached; the refusal not waking the flusher; the wrong code; refusing without a store.
 
 ## 6. Open questions
 
