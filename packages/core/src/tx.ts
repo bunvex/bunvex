@@ -41,6 +41,7 @@ import {
 import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -1340,6 +1341,9 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
+    engineOwned(old);
+    engineOwned(next);
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
