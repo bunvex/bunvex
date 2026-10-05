@@ -26,6 +26,7 @@ import {
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
+  databaseIndexRows,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   FUNCTION_HANDLES_TABLE,
@@ -108,18 +109,22 @@ import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIn
 import {
   canPersistSegments,
   changedSince,
+  type IndexRowWrite,
   type IndexSegmentsState,
+  isSearchIndexRow,
+  rowToState,
   type SearchCompactionConfig,
   type SearchSegmentLimits,
+  type SearchSegmentStore,
   SearchSegmentsState,
   SegmentReplay,
+  sameSpec,
   searchCompactionFromEnv,
   searchSegmentLimitsFromEnv,
   segmentRefs,
   segmentsToCompact,
   stateKey,
 } from "./search-segments.ts";
-import { canSnapshotSearch, loadSearchSnapshot, SearchRestore, type SearchSnapshotStore } from "./search-snapshot.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -329,11 +334,10 @@ export class Engine {
       summaryCheckpoints?: SummaryCheckpointOptions | false;
       /**
        * Where the search and vector indexes' segments are kept (the `search` blob use case, STUDY-111): flushed
-       * as their memory parts grow and at a clean shutdown, loaded at start with the log since. A snapshot an
-       * earlier version wrote there at a clean shutdown (STUDY-96) is still read when an index has no segments.
-       * None: the indexes are in memory only, read from their tables at every start.
+       * as their memory parts grow and at a clean shutdown, loaded at start with the log since. None: the
+       * indexes are in memory only, read from their tables at every start.
        */
-      searchSnapshots?: SearchSnapshotStore;
+      searchStorage?: SearchSegmentStore;
       /** The memory parts' flush thresholds (default: SEARCH_INDEX_SIZE_SOFT_LIMIT / VECTOR_INDEX_SIZE_SOFT_LIMIT). */
       searchSegmentLimits?: Partial<SearchSegmentLimits>;
       /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
@@ -407,12 +411,10 @@ export class Engine {
     // segments and replays the log since (STUDY-111), or is read from its table, and searches meanwhile are
     // Convex's bootstrapping answer (STUDY-79).
     await this.loadSearchSegments();
-    await this.loadSearchSnapshot();
     this.reconcileSearch(true);
     this.reconcileVector(true);
-    // The state, log and snapshot are held only while the indexes they restore are being built.
+    // The log since the segments is held only while the indexes it restores are being built.
     void Promise.allSettled([...this.searchBackfills]).then(() => {
-      this.searchRestore = null;
       this.segmentReplay = null;
     });
     await this.loadInstanceSecret();
@@ -509,7 +511,7 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
-    // A compaction in progress stops (its blobs deleted); then every index is flushed.
+    // A compaction in progress stops; then every index is flushed.
     await Promise.allSettled([...this.compacting.values()]);
     await this.flushSearchSegments();
     if (this.lease) {
@@ -781,7 +783,7 @@ export class Engine {
       this.searchBackfills.add(p);
       void p.finally(() => this.searchBackfills.delete(p));
     }
-    this.dropStaleSegments();
+    this.scheduleIndexRowsSync();
   }
 
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
@@ -801,24 +803,18 @@ export class Engine {
       this.searchBackfills.add(p);
       void p.finally(() => this.searchBackfills.delete(p));
     }
-    this.dropStaleSegments();
+    this.scheduleIndexRowsSync();
   }
 
-  /** The snapshot the bootstrapping indexes are restored from (STUDY-96), while they are. */
-  private searchRestore: SearchRestore | null = null;
-  /**
-   * How many indexes the last start loaded from their segments (STUDY-111), and restored from an earlier
-   * version's snapshot (STUDY-96). Tests and measurements.
-   */
   private get compactionConfig(): SearchCompactionConfig {
     this.compaction ??= { ...searchCompactionFromEnv(), ...this.opts.searchCompaction };
     return this.compaction;
   }
   private compaction: SearchCompactionConfig | null = null;
 
+  /** What the search and vector indexes' segments did since the start (tests and measurements). */
   readonly searchStats = {
     fromSegments: 0,
-    restored: 0,
     replayed: 0,
     flushes: 0,
     backfillSteps: 0,
@@ -832,22 +828,12 @@ export class Engine {
     while (this.flushing.size) await Promise.allSettled([...this.flushing.values()]);
   }
 
-  private async loadSearchSnapshot() {
-    const blobs = this.opts.searchSnapshots;
-    const p = this.persistence;
-    if (!blobs || !canSnapshotSearch(p)) return;
-    const at = this.committer.visibleTs;
-    try {
-      const snapshot = await loadSearchSnapshot(p, blobs, at);
-      if (snapshot) this.searchRestore = new SearchRestore(p, snapshot, at, decodeDoc);
-    } catch (e) {
-      console.error(
-        `bunvex: the search index snapshot could not be read, indexing the tables: ${(e as Error).message}`,
-      );
-    }
-  }
-
-  /** The stored state of the search and vector indexes' segments (STUDY-111), on a store that can keep them. */
+  /**
+   * The search and vector indexes' `_index` rows (STUDY-111): kept for every such index, as Convex's. With a
+   * segment store and a persistence that has the document log, `searchSegments` is the same, and segments are
+   * persisted; otherwise null, and every index is read from its table at each start.
+   */
+  private indexRows: SearchSegmentsState | null = null;
   private searchSegments: SearchSegmentsState | null = null;
   /** The log since the segments' ts, read once per table while the indexes are restored at a start. */
   private segmentReplay: SegmentReplay | null = null;
@@ -862,22 +848,60 @@ export class Engine {
 
   /** Reads the segments' state at start (STUDY-111): what each index restores from. */
   private async loadSearchSegments() {
-    const blobs = this.opts.searchSnapshots;
     const p = this.persistence;
-    if (!blobs || !canPersistSegments(p)) return;
-    const state = new SearchSegmentsState(p, blobs);
-    try {
-      await state.load();
-    } catch (e) {
-      console.error(
-        `bunvex: the search segments' state could not be read, indexing the tables: ${(e as Error).message}`,
-      );
-    }
+    const store = canPersistSegments(p) ? p : null;
+    const blobs = store ? (this.opts.searchStorage ?? null) : null;
+    const state = new SearchSegmentsState(store, blobs, (writes) => this.writeIndexRows(writes));
+    state.load(
+      await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
+    );
+    this.indexRows = state;
+    if (!store || !blobs) return;
     this.searchSegments = state;
     // Each table's log is read once, from the oldest ts any of its indexes starts from.
     const oldest = new Map<number, number>();
     for (const s of state.all()) oldest.set(s.tablet, Math.min(oldest.get(s.tablet) ?? s.ts, s.ts));
-    this.segmentReplay = new SegmentReplay(p, this.committer.visibleTs, decodeDoc, oldest);
+    this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest);
+  }
+
+  /** Writes search and vector indexes' `_index` rows, in one system transaction; the inserted rows' ids. */
+  private writeIndexRows(writes: IndexRowWrite[]): Promise<string[]> {
+    return this.runMutation(async (db) => {
+      const ids: string[] = [];
+      for (const w of writes)
+        if (w._id === undefined) ids.push((await db.insert(INDEX_TABLE, w.row!)) as string);
+        else if (w.row) await db.patch(INDEX_TABLE, w._id, { config: w.row.config });
+        else await db.delete(INDEX_TABLE, w._id);
+      return ids;
+    }, true);
+  }
+
+  /** Stores a new segment and its (empty) deletes, as Convex stores every segment with its deletes files. */
+  private async storeSegment(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry, bytes: Uint8Array) {
+    const blobs = this.searchSegments!.blobs!;
+    const { segment, deletes } = (e.index as SearchIndexEntry["index"]).describe(bytes) as unknown as {
+      segment: { numDocs: number; uid: string };
+      deletes: Uint8Array;
+    };
+    const [segmentKey, deletesKey] = await Promise.all([blobs.put(bytes), blobs.put(deletes)]);
+    return {
+      keys: { segment: segmentKey, deletes: deletesKey },
+      ref: {
+        segment: segmentKey,
+        deletes: deletesKey,
+        docs: segment.numDocs,
+        deleted: 0,
+        bytes: this.segmentSize(kind, e)(segment),
+        id: segment.uid,
+      },
+    };
+  }
+
+  /** The bytes a segment counts for (Convex's `size_bytes_total`, or vectors × dimensions × 4). */
+  private segmentSize(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
+    return (segment: { numDocs: number; uid: string }) =>
+      kind === "text" ? (segment as unknown as { bytes: Uint8Array }).bytes.length : segment.numDocs * dims * 4;
   }
 
   /**
@@ -1013,18 +1037,25 @@ export class Engine {
     const f = index.prepareFlush();
     const before = state.get(kind, e.tablet, e.name);
     if (!f.segment && !f.deletes.length && before && before.ts >= ts) return;
-    const blobs = state.blobs;
-    const segment = f.segment ? await blobs.put(f.segment) : null;
-    const deletes = await Promise.all(f.deletes.map((d) => blobs.put(d.bytes)));
+    const added = f.segment ? await this.storeSegment(kind, e, f.segment) : null;
+    const deletes = await Promise.all(f.deletes.map((d) => state.blobs!.put(d.bytes)));
     const stored = await state.update(
       (states) => {
         if (!this.isCurrent(kind, e)) return false;
-        const refs = segmentRefs(index.segments).map((r, i) => {
+        const refs = segmentRefs(index.segments, this.segmentSize(kind, e)).map((r, i) => {
           const at = f.deletes.findIndex((d) => d.part === index.segments[i]);
           return at < 0 ? r : { ...r, deletes: deletes[at]!, deleted: f.deletes[at]!.part.deletes.count };
         });
-        if (segment) refs.push({ segment, deletes: null, docs: 0, deleted: 0 });
-        const s: IndexSegmentsState = { kind, tablet: e.tablet, name: e.name, def: e.def, ts, segments: refs };
+        if (added) refs.push(added.ref);
+        const s: IndexSegmentsState = {
+          kind,
+          tablet: e.tablet,
+          name: e.name,
+          def: e.def,
+          ts,
+          segments: refs,
+          staged: false,
+        };
         states.set(stateKey(kind, e.tablet, e.name), s);
         return true;
       },
@@ -1032,12 +1063,7 @@ export class Engine {
         f.deletes.forEach((d, i) => {
           d.part.keys = { segment: d.part.keys!.segment, deletes: deletes[i]! };
         });
-        const part = index.commitFlush(f, segment ? { segment, deletes: null } : undefined);
-        // The state's count of the new segment's documents.
-        if (part) {
-          const s = state.get(kind, e.tablet, e.name)!;
-          s.segments[s.segments.length - 1]!.docs = part.segment.numDocs;
-        }
+        index.commitFlush(f, added?.keys);
       },
     );
     if (stored) this.searchStats.flushes++;
@@ -1073,8 +1099,8 @@ export class Engine {
    * Convex's compactor for one index (STUDY-111 PR 5, `search_compactor.rs`): the segments
    * `segmentsToCompact` picks are merged into one of their live documents, built outside the index's lock; then,
    * under it, the deletes they got meanwhile (flushes' included) are carried into it and stored with it
-   * (Convex's writer `merge_deletes`), and the state names it in their place. Their blobs stay, as every
-   * search blob (DV-370). True when it compacted.
+   * (Convex's writer `merge_deletes`), the state names it in their place, and their blobs are deleted. True when
+   * it compacted.
    */
   private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
     const state = this.searchSegments;
@@ -1096,25 +1122,28 @@ export class Engine {
       await new Promise((r) => setImmediate(r));
       if (this.closed) throw new Error("the engine closed");
     });
-    const segment = c.segment ? await state.blobs.put(c.segment) : null;
+    const segment = c.segment ? await state.blobs!.put(c.segment) : null;
     await this.opts.beforeSearchCompactionCommit?.();
     return this.withIndexLock(e, async () => {
       if (this.closed || !this.isCurrent(kind, e) || chosen.some((p) => !index.segments.includes(p))) return false;
-      const carried = index.reconcileCompaction(c);
-      const deletes = carried ? await state.blobs.put(carried) : null;
+      // Its deletes (none, or those carried over) are stored with it.
+      const carried = index.reconcileCompaction(c) ?? (c.merged ? c.merged.deletes.encode() : null);
+      const deletes = carried ? await state.blobs!.put(carried) : null;
       const stored = await state.update(
         (states) => {
           const before = states.get(stateKey(kind, e.tablet, e.name));
           if (!before || !this.isCurrent(kind, e)) return false;
           // The segments as they will be: the merged one in the place of the first it replaces.
           const kept = index.segments.filter((p) => !chosen.includes(p));
-          const refs = segmentRefs(kept);
-          if (segment && c.merged)
+          const refs = segmentRefs(kept, this.segmentSize(kind, e));
+          if (segment && deletes && c.merged)
             refs.splice(Math.min(index.segments.indexOf(chosen[0]!), refs.length), 0, {
               segment,
               deletes,
               docs: c.merged.segment.numDocs,
               deleted: c.merged.deletes.count,
+              bytes: this.segmentSize(kind, e)(c.merged.segment),
+              id: c.merged.segment.uid,
             });
           states.set(stateKey(kind, e.tablet, e.name), { ...before, segments: refs });
           return true;
@@ -1222,7 +1251,7 @@ export class Engine {
       const updates: [string, Doc | null][] = [];
       if (cursor !== null && lastTs !== null) {
         const upTo = cursor;
-        const changed = await changedSince(state.store, e.tablet, lastTs, ts, decodeDoc, (id) => id <= upTo);
+        const changed = await changedSince(state.store!, e.tablet, lastTs, ts, decodeDoc, (id) => id <= upTo);
         for (const [id, c] of changed) updates.push([id, c.doc]);
       }
       if (this.closed || !this.isCurrent(kind, e)) return false;
@@ -1235,16 +1264,16 @@ export class Engine {
         }
         const bytes = index.buildSegment(docs);
         const deletes = index.changedDeletes();
-        const segment = bytes ? await state.blobs.put(bytes) : null;
-        const deleteKeys = await Promise.all(deletes.map((d) => state.blobs.put(d.bytes)));
+        const added = bytes ? await this.storeSegment(kind, e, bytes) : null;
+        const deleteKeys = await Promise.all(deletes.map((d) => state.blobs!.put(d.bytes)));
         const stored = await state.update(
           (states) => {
             if (!this.isCurrent(kind, e)) return false;
-            const refs = segmentRefs(index.segments).map((r, i) => {
+            const refs = segmentRefs(index.segments as never, this.segmentSize(kind, e)).map((r, i) => {
               const at = deletes.findIndex((d) => d.part === index.segments[i]);
               return at < 0 ? r : { ...r, deletes: deleteKeys[at]! };
             });
-            if (segment) refs.push({ segment, deletes: null, docs: docs.length, deleted: 0 });
+            if (added) refs.push(added.ref);
             const s: IndexSegmentsState = {
               kind,
               tablet: e.tablet,
@@ -1252,6 +1281,7 @@ export class Engine {
               def: e.def,
               ts,
               segments: refs,
+              staged: false,
               ...(end ? {} : { backfill: { cursor: next } }),
             };
             states.set(stateKey(kind, e.tablet, e.name), s);
@@ -1262,7 +1292,7 @@ export class Engine {
               const part = d.part as { keys?: { segment: string; deletes: string | null } };
               part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
             });
-            index.commitBackfill(bytes, deletes, ts, segment ? { segment, deletes: null } : undefined);
+            index.commitBackfill(bytes, deletes, ts, added?.keys);
           },
         );
         // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
@@ -1299,23 +1329,79 @@ export class Engine {
     }
   }
 
-  /** The stored state of indexes that are gone (dropped, replaced, staged) is removed; their blobs are kept. */
-  private dropStaleSegments() {
-    const state = this.searchSegments;
+  /**
+   * Makes the search and vector indexes' `_index` rows the indexes': a row for each (a new one backfilling, as
+   * Convex inserts it), none for an index that is gone or redefined (its blobs kept, DV-370). A staged index is not
+   * built, so its row stays backfilling, staged, without segments (DV-368).
+   */
+  private rowsSyncScheduled = false;
+  /** Syncs the rows once the text and vector reconciles that run together are both done. */
+  private scheduleIndexRowsSync() {
+    if (this.rowsSyncScheduled) return;
+    this.rowsSyncScheduled = true;
+    queueMicrotask(() => {
+      this.rowsSyncScheduled = false;
+      this.syncIndexRows();
+    });
+  }
+
+  private syncIndexRows() {
+    const state = this.indexRows;
     if (!state) return;
+    const wanted = new Map<string, ["text" | "vector", SearchIndexEntry | VectorIndexEntry]>();
+    for (const e of this.searchIndexes.all()) wanted.set(stateKey("text", e.tablet, e.name), ["text", e]);
+    for (const e of this.vectorIndexes.all()) wanted.set(stateKey("vector", e.tablet, e.name), ["vector", e]);
     void state
       .update((states) => {
-        let gone = false;
+        let changed = false;
         for (const [k, s] of states) {
-          const t = this.catalog.byTablet(s.tablet);
-          const e = t && (s.kind === "text" ? this.searchIndexes.get(t, s.name) : this.vectorIndexes.get(t, s.name));
-          if (e && !e.staged && JSON.stringify(e.def) === JSON.stringify(s.def)) continue;
+          const w = wanted.get(k);
+          if (w && sameSpec(w[1].def, s.def) && !(w[1].staged && s.segments.length)) {
+            if (s.staged !== w[1].staged) {
+              s.staged = w[1].staged;
+              changed = true;
+            }
+            continue;
+          }
           states.delete(k);
-          gone = true;
+          changed = true;
         }
-        return gone;
+        for (const [k, [kind, e]] of wanted)
+          if (!states.has(k)) {
+            states.set(k, {
+              kind,
+              tablet: e.tablet,
+              name: e.name,
+              def: e.def,
+              ts: 0,
+              segments: [],
+              backfill: { cursor: null },
+              staged: e.staged,
+            });
+            changed = true;
+          }
+        return changed;
       })
-      .catch((err) => console.error(`bunvex: the search segments' state could not be written: ${err.message}`));
+      .catch((err) => {
+        if (!this.closed) console.error(`bunvex: the search indexes' _index rows could not be written: ${err.message}`);
+      });
+  }
+
+  /**
+   * Without segments, an index read from its table is ready with nothing stored: its row says so (`snapshotted`
+   * with no segments at ts 0, so a later start with a store replays from the beginning or reads the table).
+   */
+  private markRowReady(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const state = this.indexRows;
+    if (!state || this.searchSegments) return;
+    void state
+      .update((states) => {
+        if (!this.isCurrent(kind, e)) return false;
+        const k = stateKey(kind, e.tablet, e.name);
+        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: false });
+        return true;
+      })
+      .catch(() => {});
   }
 
   private async backfillVector(e: VectorIndexEntry) {
@@ -1332,20 +1418,6 @@ export class Engine {
       this.searchStats.fromSegments++;
       this.vectorIndexes.done(e);
       this.scheduleCompaction("vector", e);
-      return;
-    }
-    if (
-      e.bootstrapping &&
-      this.searchRestore &&
-      (await this.searchRestore.vector(
-        e,
-        (id, entry) => this.vectorIndexes.restore(e, id, entry),
-        (doc) => vectorEntry(e.def, doc),
-      ))
-    ) {
-      this.searchStats.restored++;
-      await this.flushIndex("vector", e);
-      this.vectorIndexes.done(e);
       return;
     }
     if (this.searchSegments) {
@@ -1384,9 +1456,8 @@ export class Engine {
       last = page[page.length - 1]!._id as string;
       await new Promise((r) => setImmediate(r));
     }
-    // Ready once stored as a segment, as Convex's backfill.
-    await this.flushIndex("vector", e);
     this.vectorIndexes.done(e);
+    this.markRowReady("vector", e);
   }
 
   /**
@@ -1459,20 +1530,6 @@ export class Engine {
       this.scheduleCompaction("text", e);
       return;
     }
-    if (
-      e.bootstrapping &&
-      this.searchRestore &&
-      (await this.searchRestore.text(
-        e,
-        (id, d) => this.searchIndexes.restore(e, id, d),
-        (doc) => indexedDoc(e.def, doc),
-      ))
-    ) {
-      this.searchStats.restored++;
-      await this.flushIndex("text", e);
-      this.searchIndexes.done(e);
-      return;
-    }
     if (this.searchSegments) {
       if (
         await this.backfillPaged(
@@ -1509,9 +1566,8 @@ export class Engine {
       // A background job: let the server's own work run between pages.
       await new Promise((r) => setImmediate(r));
     }
-    // Ready once stored as a segment, as Convex's backfill.
-    await this.flushIndex("text", e);
     this.searchIndexes.done(e);
+    this.markRowReady("text", e);
   }
 
   /**
@@ -1841,7 +1897,7 @@ export class Engine {
           return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
         if (row.state === "active") return { type: "complete" as const };
         const validated = row.state === "validated";
-        const indexes = (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
+        const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
         // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
@@ -2660,7 +2716,7 @@ function deletionRefusal(schema: SchemaDefinition, table: string): string | null
 async function readCatalog(db: Tx) {
   return {
     tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
-    indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
+    indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
   };
 }
 
@@ -2680,6 +2736,17 @@ export async function readSystemRows(persistence: Persistence, table: string): P
   const { tables, indexes } = await readCatalog(read(bootstrapCatalog()));
   if (!tables.some((t) => t.name === table)) return [];
   return (await read(buildCatalog(tables, indexes)).query(table).collect()) as Record<string, unknown>[];
+}
+
+/**
+ * The search and vector indexes' states, from their `_index` rows read straight from a store at its latest commit
+ * (tests and tools, STUDY-111).
+ */
+export async function readSearchIndexStates(persistence: Persistence): Promise<{ indexes: IndexSegmentsState[] }> {
+  const ts = (await persistence.maxTs?.()) ?? 0;
+  const tx = new Tx(bootstrapCatalog(), persistence, ts, false, wallClock(), true);
+  const rows = (await tx.query(INDEX_TABLE).collect()) as Record<string, unknown>[];
+  return { indexes: rows.filter(isSearchIndexRow).flatMap((r) => rowToState(r) ?? []) };
 }
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */

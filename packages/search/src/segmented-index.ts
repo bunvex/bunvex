@@ -217,6 +217,12 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     this.estimates.delete(id);
   }
 
+  /** A built segment as it is stored with no deletes: its documents, id, and its empty deletes' bytes. */
+  describe(segment: Uint8Array): { segment: S; deletes: Uint8Array } {
+    const opened = this.open(segment);
+    return { segment: opened, deletes: this.noDeletes(opened).encode() };
+  }
+
   /** `docs` as a segment of this index (null: none). */
   buildSegment(docs: [string, Doc][]): Uint8Array | null {
     return docs.length ? this.build(docs) : null;

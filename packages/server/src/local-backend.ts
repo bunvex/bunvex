@@ -24,7 +24,7 @@ import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./a
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence } from "./persistence.ts";
-import { searchSnapshotStore } from "./search-snapshot-store.ts";
+import { searchSegmentStore } from "./search-storage.ts";
 import { createServer } from "./server.ts";
 
 export type LocalBackendIo = {
@@ -218,7 +218,7 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     instanceSecret: f.instanceSecret,
     storedSchema: true,
     lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
-    searchSnapshots: searchSnapshotStore(() => {
+    searchStorage: searchSegmentStore(() => {
       searchBlobs ??= storage("search");
       return searchBlobs;
     }),

@@ -3,9 +3,9 @@
 // restart resumes from it; the answers are those of indexing the table at once, whatever was written meanwhile.
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "../src/index.ts";
+import { readSearchIndexStates } from "../src/engine.ts";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { SEARCH_SEGMENTS_GLOBAL } from "../src/search-segments.ts";
 
 const indexed = defineSchema({
   notes: defineTable(v.any())
@@ -14,7 +14,7 @@ const indexed = defineSchema({
 });
 const plain = defineSchema({ notes: defineTable(v.any()) });
 
-function blobs(): SearchSnapshotStore & { map: Map<string, Uint8Array> } {
+function blobs(): SearchSegmentStore & { map: Map<string, Uint8Array> } {
   const map = new Map<string, Uint8Array>();
   let n = 0;
   return {
@@ -103,7 +103,7 @@ test("a new index is built in steps, with writes between them, and answers as in
     });
   };
   e = new Engine(indexed, p, {
-    searchSnapshots: blobs(),
+    searchStorage: blobs(),
     searchSegmentLimits: SMALL,
     // No compaction, to see the steps' segments.
     searchCompaction: { minSegments: 1e9, maxDeletedFraction: 1 },
@@ -112,7 +112,7 @@ test("a new index is built in steps, with writes between them, and answers as in
   await e.init();
   await e.searchReady();
   expect(e.searchStats.backfillSteps).toBeGreaterThan(10);
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as {
+  const state = (await readSearchIndexStates(p)) as {
     indexes: { kind: string; segments: unknown[]; backfill?: unknown }[];
   };
   for (const s of state.indexes) {
@@ -134,7 +134,7 @@ test("a build interrupted by a crash resumes from its cursor; meanwhile searches
     stepped = r;
   });
   e1 = new Engine(indexed, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchSegmentLimits: SMALL,
     beforeSearchBackfillPage: () => {
       if (e1?.searchStats.backfillSteps >= 3) {
@@ -146,12 +146,17 @@ test("a build interrupted by a crash resumes from its cursor; meanwhile searches
   });
   await e1.init();
   await third;
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { backfill?: { cursor: string } }[] };
+  const state = (await readSearchIndexStates(p)) as { indexes: { backfill?: { cursor: string } }[] };
   expect(state.indexes.some((s) => typeof s.backfill?.cursor === "string")).toBe(true);
   e1.committer.fail(new Error("simulated crash"));
   await e1.close().catch(() => {});
   // Writes between the runs, to documents the crashed run had read: the resumed build takes them from the log.
-  const between = await new Engine(plain, p).init();
+  // (A run of the same schema whose build never gets to read a page, so the state is the crashed run's.)
+  const between = await new Engine(indexed, p, {
+    searchStorage: store,
+    searchSegmentLimits: SMALL,
+    beforeSearchBackfillPage: () => new Promise(() => {}),
+  }).init();
   await between.mutation(async (db) => {
     const first = await db.query("notes").take(20);
     for (const d of first) await db.patch(d._id, { body: "changed between runs", v: [9, 1] });
@@ -164,7 +169,7 @@ test("a build interrupted by a crash resumes from its cursor; meanwhile searches
     release = r;
   });
   const e2 = new Engine(indexed, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchSegmentLimits: SMALL,
     beforeSearchBackfillPage: () => held,
   });
@@ -191,9 +196,9 @@ test("a build interrupted by a crash resumes from its cursor; meanwhile searches
 
 test("an empty table's index is ready at once, with no segments", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
-  const e = await new Engine(indexed, p, { searchSnapshots: blobs(), searchSegmentLimits: SMALL }).init();
+  const e = await new Engine(indexed, p, { searchStorage: blobs(), searchSegmentLimits: SMALL }).init();
   await e.searchReady();
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { segments: unknown[] }[] };
+  const state = (await readSearchIndexStates(p)) as { indexes: { segments: unknown[] }[] };
   expect(state.indexes.map((s) => s.segments.length)).toEqual([0, 0]);
   await e.mutation((db) => db.insert("notes", note(1)));
   expect((await answers(e)).text.hello).toHaveLength(1);

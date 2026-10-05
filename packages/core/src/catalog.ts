@@ -136,6 +136,13 @@ export type IndexMeta = {
   staged?: boolean;
 };
 
+/**
+ * The database indexes' `_index` rows: a search or vector index's row (STUDY-111) has Convex's `config` instead
+ * of `fields`, and the catalog of tables and database indexes leaves it out.
+ */
+export const databaseIndexRows = (rows: Record<string, unknown>[]): IndexMeta[] =>
+  rows.filter((r) => r.config === undefined) as unknown as IndexMeta[];
+
 /** A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`). */
 export type IndexBackfillMeta = {
   _id: string;

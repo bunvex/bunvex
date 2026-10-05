@@ -29,6 +29,7 @@ import {
 import { BTree } from "./btree.ts";
 import {
   Catalog,
+  databaseIndexRows,
   INDEX_TABLE,
   IndexBackfillingError,
   type IndexMeta,
@@ -676,7 +677,7 @@ export class Tx {
     this.systemDepth++;
     try {
       const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
-      const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
+      const indexes = databaseIndexRows(await this.query(INDEX_TABLE).collect());
       const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
       const meta = plan.insertTables[0];
       let metaId: string | undefined;

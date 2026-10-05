@@ -3,9 +3,10 @@
 // and stored with it — with the answers of indexing the table, before and after a crash.
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "../src/index.ts";
+import { readSearchIndexStates } from "../src/engine.ts";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { SEARCH_SEGMENTS_GLOBAL, type SearchCompactionConfig, segmentsToCompact } from "../src/search-segments.ts";
+import { type SearchCompactionConfig, segmentsToCompact } from "../src/search-segments.ts";
 
 const CONFIG: SearchCompactionConfig = {
   smallSegmentBytes: 100,
@@ -50,7 +51,7 @@ const schema = defineSchema({
     .vectorIndex("by_v", { vectorField: "v", dimensions: 2 }),
 });
 
-function blobs(): SearchSnapshotStore & { map: Map<string, Uint8Array> } {
+function blobs(): SearchSegmentStore & { map: Map<string, Uint8Array> } {
   const map = new Map<string, Uint8Array>();
   let n = 0;
   return {
@@ -103,7 +104,7 @@ type State = { indexes: { kind: string; segments: { segment: string; deletes: st
 test("one segment per commit: the compactor keeps their number down; every named blob is stored, none deleted", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
-  const e = await new Engine(schema, p, { searchSnapshots: store, searchSegmentLimits: EVERY }).init();
+  const e = await new Engine(schema, p, { searchStorage: store, searchSegmentLimits: EVERY }).init();
   await e.searchReady();
   const ids: string[] = [];
   for (let i = 0; i < 40; i++) {
@@ -112,7 +113,7 @@ test("one segment per commit: the compactor keeps their number down; every named
     await e.searchCompacted();
   }
   expect(e.searchStats.compactions).toBeGreaterThan(5);
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as State;
+  const state = (await readSearchIndexStates(p)) as State;
   for (const s of state.indexes) expect(s.segments.length).toBeLessThan(5);
   const named = new Set(state.indexes.flatMap((s) => s.segments.flatMap((r) => [r.segment, r.deletes])));
   // Every blob the state names is stored; the compacted ones stay too (no search blob is deleted, DV-370).
@@ -121,7 +122,7 @@ test("one segment per commit: the compactor keeps their number down; every named
   const got = await answers(e);
   await e.close();
   expect(got).toEqual(await scanned(p));
-  const back = await new Engine(schema, p, { searchSnapshots: store }).init();
+  const back = await new Engine(schema, p, { searchStorage: store }).init();
   await back.searchReady();
   expect(await answers(back)).toEqual(got);
   await back.close();
@@ -143,7 +144,7 @@ test("a compaction while flushes land: their deletes are carried into the merged
   });
   const ids: string[] = [];
   e = new Engine(schema, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchSegmentLimits: EVERY,
     // The first compaction waits between its build and its commit; later ones never commit (so what the crash
     // below finds stored is the first one's work).
@@ -179,7 +180,7 @@ test("a compaction while flushes land: their deletes are carried into the merged
   e.committer.fail(new Error("simulated crash"));
   stopLater();
   await e.close().catch(() => {});
-  const back = await new Engine(schema, p, { searchSnapshots: store, searchSegmentLimits: EVERY }).init();
+  const back = await new Engine(schema, p, { searchStorage: store, searchSegmentLimits: EVERY }).init();
   await back.searchReady();
   expect(back.searchStats.replayed).toBe(0);
   expect(await answers(back)).toEqual(got);
@@ -190,7 +191,7 @@ test("a large segment more than 20 % deleted is rewritten; one with nothing left
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
   const e = await new Engine(schema, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     // Every segment is large, and three never fit: only deletes compact.
     searchCompaction: { smallSegmentBytes: 0, maxSegmentBytes: 1 },
   }).init();
@@ -202,7 +203,7 @@ test("a large segment more than 20 % deleted is rewritten; one with nothing left
   });
   await e.close(); // one segment per index
   const e2 = await new Engine(schema, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchCompaction: { smallSegmentBytes: 0, maxSegmentBytes: 1 },
   }).init();
   await e2.searchReady();
@@ -211,7 +212,7 @@ test("a large segment more than 20 % deleted is rewritten; one with nothing left
   });
   await e2.close(); // the deletes stored with the segment: 25 % deleted
   const e3 = await new Engine(schema, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchCompaction: { smallSegmentBytes: 0, maxSegmentBytes: 1 },
   }).init();
   await e3.searchReady();
@@ -225,7 +226,7 @@ test("a large segment more than 20 % deleted is rewritten; one with nothing left
     for (const id of ids.slice(5)) await db.delete(id as never);
   });
   await e3.close();
-  const e4 = await new Engine(schema, p, { searchSnapshots: store }).init();
+  const e4 = await new Engine(schema, p, { searchStorage: store }).init();
   await e4.searchReady();
   await e4.searchCompacted();
   for (const x of [...e4.searchIndexes.all(), ...e4.vectorIndexes.all()]) expect(x.index.segments).toHaveLength(0);

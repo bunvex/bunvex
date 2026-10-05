@@ -10,7 +10,7 @@
 import { heapStats } from "bun:jsc";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { v } from "@bunvex/values";
 
@@ -29,7 +29,7 @@ const note = (i: number) => ({
 });
 
 const dir = `${where}.search`;
-const files: SearchSnapshotStore = {
+const files: SearchSegmentStore = {
   put: async (d) => {
     const key = crypto.randomUUID();
     await Bun.write(join(dir, key), d);
@@ -45,7 +45,7 @@ const files: SearchSnapshotStore = {
 async function open() {
   const t = performance.now();
   const e = await new Engine(schema, new SqlitePersistence(where!, { durable: true }), {
-    searchSnapshots: files,
+    searchStorage: files,
   }).init();
   await e.searchReady();
   return { e, ms: Math.round(performance.now() - t) };
@@ -72,11 +72,9 @@ if (child === "crash") {
   process.exit(0);
 }
 if (child === "build") {
-  // Building the indexes from the table, as for a new index: no stored state or snapshot to start from.
-  const p = new SqlitePersistence(where!, { durable: true });
-  await p.setGlobal("search_segments", null);
-  await p.setGlobal("search_snapshot", null);
-  p.close();
+  // Building the indexes from the table, as for a new index: the stored segments are gone.
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
   const { e, ms } = await open();
   Bun.gc(true);
   console.log(
