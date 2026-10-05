@@ -1,6 +1,6 @@
 // `api`'s type from the modules' types (STUDY-36), as Convex's npm-packages/convex/src/server/api.ts:
 // `_generated/api.d.ts` writes `ApiFromModules<{ "dir/file": typeof import("../dir/file"), … }>` and
-// filters it into `api` (public) and `internal`. Types only.
+// filters it into `api` (public) and `internal`. Types, and `filterApi` (the identity, narrowed by type).
 import type { Expand } from "@bunvex/core";
 import type { FunctionReference } from "@bunvex/protocol";
 import type { RegisteredAction, RegisteredMutation, RegisteredQuery } from "./registration.ts";
@@ -72,3 +72,15 @@ export type FilterApi<API, Predicate> = Expand<{
     ? API[Mod]
     : FilterApi<API[Mod], Predicate>;
 }>;
+
+/**
+ * `api` narrowed to the references that match `Predicate`, as Convex's `filterApi`: the same object at runtime,
+ * filtered only in its type.
+ *
+ * ```ts
+ * const queries = filterApi<typeof api, FunctionReference<"query">>(api);
+ * ```
+ */
+export function filterApi<API, Predicate>(api: API): FilterApi<API, Predicate> {
+  return api as FilterApi<API, Predicate>;
+}

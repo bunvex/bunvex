@@ -374,8 +374,25 @@ const MAX_ARRAY_LEN = 8192;
 const MAX_OBJECT_FIELDS = 1024;
 const utf8len = utf8Length;
 
-/** Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. */
-export function valueSize(v: Value): number {
+/**
+ * Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. Convex's
+ * client exports it as `getConvexSize` (values/size.ts), whose edges it keeps: `undefined` is 0, a commit-ts
+ * placeholder 9 (an int64), and anything else that is not a value throws `Unsupported value type: <typeof>`.
+ */
+export function valueSize(v: Value | undefined): number {
+  return sizeOf(v, true);
+}
+
+/**
+ * `valueSize` for a value not validated yet (a function's arguments, result or writes, measured for the
+ * limits): something that is not a value counts as an empty object instead of throwing, so its own
+ * validation reports it with its path.
+ */
+export function rawValueSize(v: Value | undefined): number {
+  return sizeOf(v, false);
+}
+
+function sizeOf(v: Value | undefined, strict: boolean): number {
   // Plain loops: this walks every result and argument (the 16 MiB limits, STUDY-64), so no per-field arrays.
   switch (typeof v) {
     case "string":
@@ -385,21 +402,48 @@ export function valueSize(v: Value): number {
       return 9;
     case "boolean":
       return 1;
+    case "undefined":
+      return 0;
+    case "object":
+      break;
+    default:
+      if (strict) throw new Error(`Unsupported value type: ${typeof v}`);
+      return 2;
   }
   if (v === null) return 1;
   if (Array.isArray(v)) {
     let n = 2;
-    for (let i = 0; i < v.length; i++) n += valueSize(v[i]);
+    for (let i = 0; i < v.length; i++) n += sizeOf(v[i], strict);
     return n;
   }
-  if (isBytes(v)) return v.byteLength + 2;
+  if (Object.getPrototypeOf(v) !== Object.prototype) {
+    if (isBytes(v)) return v.byteLength + 2;
+    if (isCommitTsPlaceholder(v)) return 9;
+    if (strict && !isSimpleObject(v)) throw new Error(`Unsupported value type: ${typeof v}`);
+  }
   const o = v as { [k: string]: Value | undefined };
   let n = 2;
   for (const k of Object.keys(o)) {
     const e = o[k];
-    if (e !== undefined) n += utf8len(k) + 1 + valueSize(e);
+    if (e !== undefined) n += utf8len(k) + 1 + sizeOf(e, strict);
   }
   return n;
+}
+
+/** Convex's estimate of a stored `_id` (a 32-character id) and `_creationTime` (values/size.ts). */
+const SYSTEM_ID_SIZE = 38;
+const SYSTEM_CREATION_TIME_SIZE = 23;
+
+/**
+ * A document's size as stored (Convex's `getDocumentSize`): `valueSize`, plus Convex's estimate of the system
+ * fields it does not have yet — 38 bytes for `_id` (or `customIdLength` + 6), 23 for `_creationTime`.
+ */
+export function getDocumentSize(value: Record<string, Value>, options?: { customIdLength?: number }): number {
+  const size = valueSize(value);
+  let extra = 0;
+  if (value._id === undefined) extra += options?.customIdLength ? options.customIdLength + 6 : SYSTEM_ID_SIZE;
+  if (value._creationTime === undefined) extra += SYSTEM_CREATION_TIME_SIZE;
+  return size + extra;
 }
 
 /** How deeply arrays and objects nest: a scalar is 0, `[1]` is 1, `{a: [1]}` is 2. */
