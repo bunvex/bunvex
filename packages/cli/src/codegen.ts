@@ -529,32 +529,95 @@ export function initFunctionsDir(functionsDir: string): string[] {
 }
 
 export type TypecheckMode = "enable" | "try" | "disable";
-export type TypecheckResult = { ok: true; skipped?: string } | { ok: false; output: string };
+export type TypecheckResult = { ok: true; skipped?: string; warning?: string } | { ok: false; output: string };
+/** Convex's `TypescriptCompiler`: `tsc`, or `tsgo` from `@typescript/native-preview` (STUDY-117). */
+export type TypescriptCompiler = "tsc" | "tsgo";
 
-/**
- * Convex's typecheck step: the app's own `tsc --project <functionsDir>`. `try` skips it when it cannot run
- * (no `tsconfig.json`, no TypeScript installed) and `enable` fails then; both fail on type errors.
- */
-export async function typecheck(functionsDir: string, cwd: string, mode: TypecheckMode): Promise<TypecheckResult> {
-  if (mode === "disable") return { ok: true, skipped: "disabled" };
-  const cantRun = (why: string): TypecheckResult =>
-    mode === "enable" ? { ok: false, output: why } : { ok: true, skipped: why };
-  if (!existsSync(join(functionsDir, "tsconfig.json")))
-    return cantRun(
-      `Found no ${posix(relative(cwd, join(functionsDir, "tsconfig.json")))} to typecheck the functions with, so skipping typecheck. Run \`bunvex codegen --init\` to create one.`,
-    );
-  const tsc = [
-    join(cwd, "node_modules", "@typescript", "native", "bin", "tsc"),
-    join(cwd, "node_modules", "typescript", "bin", "tsc"),
-  ].find(existsSync);
-  if (!tsc) return cantRun("No `tsc` binary found, so skipping typecheck.");
-  // In the standalone executable (STUDY-39) `process.execPath` is bunvex itself: BUN_BE_BUN makes it Bun.
-  const p = Bun.spawn([process.execPath, tsc, "--project", functionsDir], {
+/** Where the app's compiler is, looked for in the project as Convex's `findTypeScriptCompilerPath` does. */
+export function compilerPath(cwd: string, compiler: TypescriptCompiler): string | undefined {
+  const modules = join(cwd, "node_modules");
+  const candidates =
+    compiler === "tsgo"
+      ? // `bin/tsgo` in newer previews, `bin/tsgo.js` before.
+        ["tsgo", "tsgo.js"].map((f) => join(modules, "@typescript", "native-preview", "bin", f))
+      : // TypeScript 7's alias when the TypeScript 6 API is also installed, then TypeScript.
+        [join(modules, "@typescript", "native", "bin", "tsc"), join(modules, "typescript", "bin", "tsc")];
+  return candidates.find((p) => existsSync(p));
+}
+
+/** One typecheck's outcome, as Convex's `TypecheckResult`, with what each prints. */
+export type TypecheckRun =
+  | { kind: "cantTypecheck"; why: string }
+  | { kind: "success"; warning?: string }
+  | { kind: "failed"; output: string };
+
+// In the standalone executable (STUDY-39) `process.execPath` is bunvex itself: BUN_BE_BUN makes it Bun.
+async function spawnCompiler(path: string, args: string[], cwd: string) {
+  const p = Bun.spawn([process.execPath, path, ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, BUN_BE_BUN: "1" },
   });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return code === 0 ? { ok: true } : { ok: false, output: `${out}${err}`.trim() };
+  return { out, err, code };
+}
+
+/** Below Convex's recommended TypeScript (4.8.4). */
+function olderThanRecommended(version: string): boolean {
+  const [major = 0, minor = 0, patch = 0] = version.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
+  return major !== 4 ? major < 4 : minor !== 8 ? minor < 8 : patch < 4;
+}
+
+const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+/**
+ * Convex's `typeCheckFunctions`: the compiler on the functions' project, or why it cannot run (no
+ * `tsconfig.json`, no compiler). It runs `<compiler> --noEmit --project <functionsDir> --pretty true` (owner,
+ * 2026-10-05: DV-387); "No inputs were found" (TS18003) passes, as Convex's. An older TypeScript gets
+ * Convex's warning, printed after a typecheck that passed.
+ */
+export async function runTypecheck(
+  functionsDir: string,
+  cwd: string,
+  compiler: TypescriptCompiler = "tsc",
+): Promise<TypecheckRun> {
+  if (!existsSync(join(functionsDir, "tsconfig.json")))
+    return {
+      kind: "cantTypecheck",
+      why: `Found no ${posix(relative(cwd, join(functionsDir, "tsconfig.json")))} to typecheck the functions with, so skipping typecheck. Run \`bunvex codegen --init\` to create one.`,
+    };
+  const path = compilerPath(cwd, compiler);
+  if (!path) return { kind: "cantTypecheck", why: `No \`${compiler}\` binary found, so skipping typecheck.` };
+  const [version, run] = await Promise.all([
+    spawnCompiler(path, ["--version"], cwd),
+    // The project relative to the project directory, as Convex passes it, so the errors name files from there.
+    spawnCompiler(path, ["--noEmit", "--project", relative(cwd, functionsDir) || ".", "--pretty", "true"], cwd),
+  ]);
+  const output = `${run.out}${run.err}`.trim();
+  const v = /Version (.*)/.exec(version.out)?.[1];
+  const warning =
+    v && olderThanRecommended(v)
+      ? "bunvex works best with TypeScript version 4.8.4 or newer -- npm i --save-dev typescript@latest to update."
+      : undefined;
+  if (run.code === 0 || output.replace(ANSI_COLOR, "").startsWith("error TS18003")) return { kind: "success", warning };
+  return { kind: "failed", output };
+}
+
+/**
+ * Convex's typecheck step (`typeCheckFunctionsInMode`): `try` skips it when it cannot run (no `tsconfig.json`,
+ * no compiler) and `enable` fails then; both fail on type errors. `compiler` is bunvex.json's
+ * `typescriptCompiler` (default `tsc`).
+ */
+export async function typecheck(
+  functionsDir: string,
+  cwd: string,
+  mode: TypecheckMode,
+  compiler: TypescriptCompiler = "tsc",
+): Promise<TypecheckResult> {
+  if (mode === "disable") return { ok: true, skipped: "disabled" };
+  const run = await runTypecheck(functionsDir, cwd, compiler);
+  if (run.kind === "cantTypecheck")
+    return mode === "enable" ? { ok: false, output: run.why } : { ok: true, skipped: run.why };
+  return run.kind === "success" ? { ok: true, warning: run.warning } : { ok: false, output: run.output };
 }

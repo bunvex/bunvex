@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
-import { type CodegenConfig, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
+import { type CodegenConfig, runCodegen, type TypecheckMode, type TypescriptCompiler, typecheck } from "./codegen.ts";
 import {
   type CheckMode,
   checkLargeIndexBackfill,
@@ -51,7 +51,12 @@ ${TARGET_OPTIONS}
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
-export type ProjectConfig = { functions?: string; codegen?: { fileType?: "ts" | "js/dts" } };
+export type ProjectConfig = {
+  functions?: string;
+  codegen?: { fileType?: "ts" | "js/dts" };
+  /** Convex's `typescriptCompiler`: the typecheck's compiler (STUDY-117). */
+  typescriptCompiler?: TypescriptCompiler;
+};
 
 /** How Convex's schema validator (zod) names a value's type in "Expected …, received …". */
 function receivedType(v: unknown): string {
@@ -79,7 +84,7 @@ export function readProjectConfig(cwd: string): ProjectConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config))
     throw new Error("Expected `bunvex.json` to contain an object");
   const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
-  const { functions, codegen } = config as Record<string, unknown>;
+  const { functions, codegen, typescriptCompiler } = config as Record<string, unknown>;
   if (functions !== undefined && typeof functions !== "string")
     throw issue("functions", `Expected string, received ${receivedType(functions)}`);
   if (codegen !== undefined) {
@@ -94,12 +99,24 @@ export function readProjectConfig(cwd: string): ProjectConfig {
           : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
       );
   }
+  if (typescriptCompiler !== undefined && typescriptCompiler !== "tsc" && typescriptCompiler !== "tsgo")
+    throw issue(
+      "typescriptCompiler",
+      typeof typescriptCompiler === "string"
+        ? `Invalid enum value. Expected 'tsc' | 'tsgo', received '${typescriptCompiler}'`
+        : `Expected 'tsc' | 'tsgo', received ${receivedType(typescriptCompiler)}`,
+    );
   return config as ProjectConfig;
 }
 
 export function functionsDir(cwd: string): string {
   const { functions } = readProjectConfig(cwd);
   return resolve(cwd, functions ?? "bunvex");
+}
+
+/** The typecheck's compiler: bunvex.json's `typescriptCompiler`, else `tsc` (Convex's `resolveTypescriptCompiler`). */
+export function typescriptCompilerOf(cwd: string): TypescriptCompiler {
+  return readProjectConfig(cwd).typescriptCompiler ?? "tsc";
 }
 
 /** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
@@ -422,13 +439,14 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     const start = await post("/api/deploy2/start_push", request);
     // Convex's final codegen and typecheck, after the push is analyzed and before it is finished.
     if (flags.codegen) runCodegen(dir, codegen);
-    const checked = await typecheck(dir, io.cwd, flags.typecheck);
+    const checked = await typecheck(dir, io.cwd, flags.typecheck, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
       io.err(checked.output);
       io.err("To ignore failing typecheck, use `--typecheck=disable`.");
       return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
+    if (checked.warning) io.err(checked.warning);
     // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
     const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {

@@ -3,7 +3,7 @@
 // `tsconfig.json` and `README.md` first.
 import { relative } from "node:path";
 import { initFunctionsDir, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
-import { codegenConfig, functionsDir } from "./deploy.ts";
+import { codegenConfig, functionsDir, typescriptCompilerOf } from "./deploy.ts";
 import type { Io } from "./io.ts";
 
 export const CODEGEN_USAGE = `Usage: bunvex codegen [options]
@@ -40,13 +40,14 @@ export async function codegenCommand(args: string[], io: Io): Promise<number> {
     const dir = functionsDir(io.cwd);
     if (init) for (const f of initFunctionsDir(dir)) io.err(`Wrote ${relative(io.cwd, dir)}/${f}`);
     const result = runCodegen(dir, codegenConfig(io.cwd));
-    const checked = await typecheck(dir, io.cwd, mode);
+    const checked = await typecheck(dir, io.cwd, mode, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
       io.err(checked.output);
       io.err("To ignore failing typecheck, use `--typecheck=disable`.");
       return 1;
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
+    if (checked.warning) io.err(checked.warning);
     io.out(
       result.written.length
         ? `✔ Generated ${relative(io.cwd, dir)}/_generated (${result.written.join(", ")})`

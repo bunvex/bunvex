@@ -188,9 +188,10 @@ export const worse = action({ args: {}, handler: (ctx) => ctx.runMutation(api.me
     const bad = io(app);
     expect(await main(["codegen"], bad.it)).toBe(1);
     const output = bad.err.join("\n");
-    expect(output).toContain(`bunvex/bad.ts(3,`);
+    // `--pretty true`, as Convex runs the compiler (STUDY-117): colored, `file:line:column`.
+    expect(Bun.stripANSI(output)).toContain(`bunvex/bad.ts:3:`);
     expect(output).toContain(`'"nope"'`);
-    expect(output).toContain(`bunvex/bad.ts(4,`);
+    expect(Bun.stripANSI(output)).toContain(`bunvex/bad.ts:4:`);
     expect(output).toContain("To ignore failing typecheck, use `--typecheck=disable`.");
     expect(await main(["codegen", "--typecheck=disable"], io(app).it)).toBe(0);
   }, 120_000);
@@ -241,7 +242,7 @@ console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("'
     write(app, { "bunvex/typo.ts": `import { v } from "./_generated/server";\nexport const bad = v.id("mesages");` });
     const strict = io(app);
     expect(await main(["codegen"], strict.it)).toBe(1);
-    expect(strict.err.join("\n")).toContain(`bunvex/typo.ts(2,`);
+    expect(Bun.stripANSI(strict.err.join("\n"))).toContain(`bunvex/typo.ts:2:`);
     expect(strict.err.join("\n")).toContain(`'"mesages"'`);
     // A loose schema: any table name.
     write(app, {
