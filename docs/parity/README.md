@@ -7,7 +7,7 @@ item. It is the project's to-do list at the scale of the whole product.
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 227 | 5 | 13 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 159 | 2 | 4 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 187 | 37 | 27 |
 
 Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
@@ -159,12 +159,8 @@ gaps.
 **Low: rare, ops-only, or a missing nicety**
 
 - Client:
-  - `convexQueryOptions`;
-  - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
-  - close 1000 with a reason for NotFound and Forbidden;
   - arguments-size metrics.
 - Server API:
-  - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
   - `.count()` on the query builder;
   - typed limit error codes.

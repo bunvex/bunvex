@@ -124,3 +124,25 @@ test("a commit timestamp in a search filter field is indexed as resolved (with S
   );
   expect(hits.map((d) => d.at)).toEqual([ns]);
 });
+
+test("after the commit, the index holds the resolved timestamp: eq on it finds the document", async () => {
+  const e = await engine();
+  await e.mutation((db) => db.insert("events", { tag: "real", at: 5n }));
+  const { ts } = await e.mutationWithTs((db) => db.insert("events", { tag: "committed", at: db.vars!.commitTs }));
+  const ns = BigInt(ts) * 1000n;
+  const found = await e.query((db) =>
+    db
+      .query("events")
+      .withIndex("by_at", (q) => q.eq("at", ns))
+      .collect(),
+  );
+  expect(found.map((d) => d.tag)).toEqual(["committed"]);
+  // And nothing is left at the placeholder's key, after every real timestamp.
+  const above = await e.query((db) =>
+    db
+      .query("events")
+      .withIndex("by_at", (q) => q.gt("at", ns))
+      .collect(),
+  );
+  expect(above).toEqual([]);
+});

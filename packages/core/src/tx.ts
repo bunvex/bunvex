@@ -41,6 +41,7 @@ import {
 import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -72,6 +73,7 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
+import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
@@ -458,18 +460,19 @@ export class Tx {
     let writeDocuments = 0;
     let writeIndexRows = 0;
     if (committed)
-      for (const { table: t, old, next } of this.writes.values()) {
+      for (const w of this.writes.values()) {
+        const { table: t, old, next } = w;
         if (t.name.startsWith("_") || (!old && !next)) continue;
         writeDocuments++;
         for (const ix of maintainedIndexes(t)) {
-          const oldKey = old && indexKey(ix, old);
-          const newKey = next && indexKey(ix, next);
+          const oldKey = writtenKey(w, "old", ix);
+          const newKey = writtenKey(w, "next", ix);
           writeIndexRows +=
             oldKey && newKey && compareKeys(oldKey, newKey) === 0 ? 1 : (oldKey ? 1 : 0) + (newKey ? 1 : 0);
           if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
         }
         if (!next) continue;
-        const size = rawValueSize(next as unknown as Value);
+        const size = sizeOfVersion(next);
         writeBytes += size;
         // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
         // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
@@ -510,7 +513,14 @@ export class Tx {
   }
   private writes = new Map<
     string,
-    { table: TableDef; old: Doc | null; next: Doc | null; measured?: { size: number; nesting: number } }
+    {
+      table: TableDef;
+      old: Doc | null;
+      next: Doc | null;
+      measured?: { size: number; nesting: number };
+      /** The index keys `stage` computed, per index id, for `old` and `next` (null: none); reused at commit. */
+      keys?: { old?: Map<number, Uint8Array | null>; next?: Map<number, Uint8Array | null> };
+    }
   >();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
   private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
@@ -546,7 +556,8 @@ export class Tx {
   resolveCommitTs(ns: bigint) {
     for (const [id, paths] of this.commitTs) {
       const w = this.writes.get(id);
-      if (w?.next) this.writes.set(id, { ...w, next: setAt(w.next, paths, ns) });
+      // The rewritten version's keys may change (an index on the commit timestamp): computed again at commit.
+      if (w?.next) this.writes.set(id, { ...w, next: setAt(w.next, paths, ns), keys: { old: w.keys?.old } });
     }
     this.commitTs.clear();
   }
@@ -1251,7 +1262,9 @@ export class Tx {
       const k = indexKey(ix, d);
       if (!shadowed.has(Buffer.from(k).toString("hex"))) rows.push([k, d]);
     }
-    for (const [k, d] of pend) if (d) rows.push([k, d]);
+    // The transaction's own versions as copies, as `get` hands them out: a function mutating what a query
+    // returned must not change what it wrote (Convex's values cross into the function's runtime).
+    for (const [k, d] of pend) if (d) rows.push([k, structuredClone(d)]);
     rows.sort((a, b) => (desc ? compareKeys(b[0], a[0]) : compareKeys(a[0], b[0])));
     return rows.slice(0, limit).map(([, d]) => d);
   }
@@ -1295,6 +1308,7 @@ export class Tx {
           `Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`,
         );
       const size = rawValueSize(v);
+      rememberStagedSize(next, size);
       if (size > MAX_USER_SIZE)
         throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
       this.bytesWritten += size;
@@ -1327,6 +1341,9 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
+    engineOwned(old);
+    engineOwned(next);
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
@@ -1354,9 +1371,14 @@ export class Tx {
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
+    // The keys of the first version (the snapshot's) are those of `current` at the first write; kept since.
+    const oldKeys = prev ? prev.keys?.old : new Map<number, Uint8Array | null>();
+    const nextKeys = new Map<number, Uint8Array | null>();
     for (const ix of maintainedIndexes(t)) {
       const curKey = current ? indexKey(ix, current) : null;
       const newKey = next ? indexKey(ix, next) : null;
+      if (!prev) oldKeys!.set(ix.id, curKey);
+      nextKeys.set(ix.id, newKey);
       let tree = this.pending.get(ix.id);
       if (!tree) {
         tree = new BTree<Uint8Array, Doc | null>(undefined, compareKeys);
@@ -1365,7 +1387,13 @@ export class Tx {
       if (curKey && (!newKey || compareKeys(curKey, newKey) !== 0)) tree.set(curKey, null);
       if (newKey && next) tree.set(newKey, next);
     }
-    this.writes.set(id, { table: t, old: prev ? prev.old : old, next, ...(measured ? { measured } : {}) });
+    this.writes.set(id, {
+      table: t,
+      old: prev ? prev.old : old,
+      next,
+      ...(measured ? { measured } : {}),
+      keys: { ...(oldKeys ? { old: oldKeys } : {}), next: nextKeys },
+    });
   }
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
@@ -1504,8 +1532,8 @@ export class Tx {
     for (const [id, w] of this.writes) {
       docs.push({ table: w.table.id, id, json: w.next ? encodeDoc(w.next) : null });
       for (const ix of maintainedIndexes(w.table)) {
-        const oldK = w.old ? indexKey(ix, w.old) : null;
-        const newK = w.next ? indexKey(ix, w.next) : null;
+        const oldK = writtenKey(w, "old", ix);
+        const newK = writtenKey(w, "next", ix);
         if (oldK && newK && compareKeys(oldK, newK) === 0) {
           // The key did not move; the entry is rewritten so its version (and the write log) reflect
           // the change — a query on this index must see the new document version.
@@ -1798,6 +1826,23 @@ function sortFields(doc: Record<string, unknown>): Doc {
   const out: Record<string, unknown> = {};
   for (const k of Object.keys(doc).sort()) out[k] = doc[k];
   return out as Doc;
+}
+
+/** A write's key on `ix` for `old` or `next`, as `stage` computed it, else computed now. */
+function writtenKey(
+  w: {
+    old: Doc | null;
+    next: Doc | null;
+    keys?: { old?: Map<number, Uint8Array | null>; next?: Map<number, Uint8Array | null> };
+  },
+  which: "old" | "next",
+  ix: IndexDef,
+): Uint8Array | null {
+  const doc = w[which];
+  if (!doc) return null;
+  const known = w.keys?.[which];
+  if (known?.has(ix.id)) return known.get(ix.id)!;
+  return indexKey(ix, doc);
 }
 
 /** A document as stored (Convex's JSON form: $integer, $float, $bytes). */
