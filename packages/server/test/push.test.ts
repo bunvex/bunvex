@@ -2,16 +2,17 @@
 // wait_for_schema, finish_push — with the Deploy operation, diff pushes, Convex's errors, the schema and
 // auth.config from the push, crons in the same commit, and a restart on the pushed code and schema.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, Engine } from "@bunvex/core";
+import { defineSchema, Engine, MODULES_TABLE, SOURCE_PACKAGES_TABLE } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 import { startIssuer } from "./issuer.ts";
 
 const SECRET = "ab".repeat(32);
@@ -228,7 +229,7 @@ describe("deploy2 over HTTP", () => {
     const c = first!.metadata.component_diffs[0];
     expect(c.component_path).toBeNull();
     expect(c.component_diff.diffType).toEqual({ type: "create" });
-    expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js"], removed: [] });
+    expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js", "schema.js"], removed: [] });
     expect(c.component_diff.indexDiff.added_indexes).toEqual([
       { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
     ]);
@@ -296,7 +297,10 @@ describe("deploy2 over HTTP", () => {
     });
     expect(r.wait).toEqual({ type: "complete" });
     expect(r.finish!.status).toBe(200);
-    expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({ added: ["messages.js", "other.js"], removed: [] });
+    expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({
+      added: ["messages.js", "other.js", "schema.js"],
+      removed: [],
+    });
     expect(r.finish!.body.componentDiffs[""].indexDiff).toEqual(r.start.body.schemaChange.indexDiffs[""]);
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["hi v1"]);
@@ -370,7 +374,7 @@ describe("deploy2 over HTTP", () => {
     stops.push(() => d.s.shutdown());
     await d.push([messages(1), mod("other.js", `export const x = 1;`)], schema);
     const hashes = (await d.post("/api/get_config_hashes", {})).body.moduleHashes;
-    expect(hashes.map((h: { path: string }) => h.path).sort()).toEqual(["messages.js", "other.js"]);
+    expect(hashes.map((h: { path: string }) => h.path).sort()).toEqual(["messages.js", "other.js", "schema.js"]);
     const r = await d.push([messages(2), mod("other.js", `export const x = 1;`)], schema);
     expect(r.changedModules.map((m) => m.path)).toEqual(["messages.js"]);
     expect(r.finish!.status).toBe(200);
@@ -1073,5 +1077,75 @@ describe("environment variables (STUDY-37)", () => {
       status: 400,
       body: { code: "RaceDetected", message: "Environment variables have changed during push" },
     });
+  });
+});
+
+describe("the code's system rows", () => {
+  test("_modules and _source_packages rows have Convex's shapes (STUDY-134, DV-424)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    // A module bundled as the CLI bundles it (an external source map), so its functions have positions.
+    const dir = tmp();
+    writeFileSync(
+      join(dir, "fns.ts"),
+      `import { mutation, query } from ${JSON.stringify(["@bunvex", "server"].join("/"))};
+export const seed = mutation(async ({ db }) => {
+  return null;
+});
+export const list = query({
+  args: {},
+  handler: async ({ db }) => {
+    return [];
+  },
+});
+`,
+    );
+    const built = await Bun.build({
+      entrypoints: [join(dir, "fns.ts")],
+      format: "esm",
+      target: "browser",
+      sourcemap: "external",
+      external: ["@bunvex/*"],
+    });
+    const map = built.outputs.find((o) => o.kind === "sourcemap")!;
+    const fns: ModuleSource = {
+      path: "fns.js",
+      source: await built.outputs.find((o) => o.kind !== "sourcemap")!.text(),
+      sourceMap: await map.text(),
+      environment: "isolate",
+    };
+    const auth = mod("auth.config.js", "export default { providers: [] };");
+    const r = await d.push([fns, mod("_deps/AB12CD34.js", "export const shared = 1;"), auth], schema);
+    expect(r.finish!.status).toBe(200);
+    const rows = (await d.engine.query((db) => db.asSystem(() => db.query(MODULES_TABLE).collect()))).map(stored) as {
+      path: string;
+    }[];
+    const byPath = new Map(rows.map((row) => [row.path, row]));
+    expect([...byPath.keys()].sort()).toEqual(["_deps/AB12CD34.js", "auth.config.js", "fns.js", "schema.js"]);
+    const convex = new Map(convexRows("_modules").map((row) => [row.path as string, row]));
+    // A module of functions (each with its int64 position), a dependency chunk (no analysis), the schema; the auth
+    // config is a module like the schema (Convex analyzes both to nothing).
+    expect(shapeDiff(byPath.get("fns.js"), convex.get("fns.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("_deps/AB12CD34.js"), convex.get("_deps/DA6PZB4T.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("schema.js"), convex.get("schema.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("auth.config.js"), convex.get("schema.js"))).toEqual([]);
+    // The hash: Convex's base64 of sha256(source + source map); the push's wire keeps the hex.
+    expect((byPath.get("fns.js") as unknown as { sha256: string }).sha256).toBe(
+      Buffer.from(sha(fns), "hex").toString("base64"),
+    );
+    const hashes = (await d.post("/api/get_config_hashes", {})).body.moduleHashes as { path: string; hash: string }[];
+    expect(hashes.find((h) => h.path === "fns.js")!.hash).toBe(sha(fns));
+    const [pkg] = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).collect()))).map(
+      stored,
+    ) as Record<string, unknown>[];
+    expect(shapeDiff(pkg, convexRows("_source_packages")[0])).toEqual([]);
+    const sizes = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).first())))!
+      .packageSize as { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
+    expect(sizes.zippedSizeBytes).toBeGreaterThan(0n);
+    expect(sizes.unzippedSizeBytes).toBeGreaterThan(sizes.zippedSizeBytes);
+    // A second push of the same code sends nothing but hashes, and the schema and auth config still load.
+    const again = await d.push([fns, mod("_deps/AB12CD34.js", "export const shared = 1;"), auth], schema);
+    expect(again.changedModules).toEqual([]);
+    expect(again.finish!.status).toBe(200);
   });
 });

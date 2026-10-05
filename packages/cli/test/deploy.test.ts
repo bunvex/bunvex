@@ -157,7 +157,15 @@ describe("bunvex deploy", () => {
       })
     ).json()) as { moduleHashes: { path: string }[] };
     const paths = hashes.moduleHashes.map((h) => h.path).filter((p) => !p.startsWith("_deps/"));
-    expect(paths.sort()).toEqual(["crons.js", "files.js", "http.js", "jobs.js", "lib/format.js", "messages.js"]);
+    expect(paths.sort()).toEqual([
+      "crons.js",
+      "files.js",
+      "http.js",
+      "jobs.js",
+      "lib/format.js",
+      "messages.js",
+      "schema.js",
+    ]);
     // Codegen ran (STUDY-36): the api lists every module; the stale _generated/api.ts is gone.
     const apiDts = readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8");
     for (const m of ["crons", "files", "http", "jobs", "lib/format", "messages"])
