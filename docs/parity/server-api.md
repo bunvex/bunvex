@@ -187,7 +187,7 @@ Key bunvex facts behind the statuses:
 | VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | done (#24) | |
 | Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | done (#24) | bunvex marker is `isValidator` (no "convex" in names). |
 | `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | done (#24) | asObjectValidator not yet. |
-| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24) | |
+| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24; STUDY-13 §6) | Every builder throws Convex's message when called with `undefined`: `v.object` (the field), `v.array`, `v.record` (key, value), `v.union` (the member's index). Its other argument checks are Convex's in order and words too, `v.literal` and `v.id` included. No docs link (DV-358). The `strictReplacer` side is STUDY-105. |
 | Value `null` | values/value.ts | done | JSON. |
 | Value `boolean` | values/value.ts | done | |
 | Value `string` | values/value.ts | done | |
