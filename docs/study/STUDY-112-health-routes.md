@@ -1,6 +1,6 @@
 # STUDY-112 — Health routes: `/instance_version`, `/`, `/echo` and the version string
 
-- **Status:** implemented; V1–V3 decided by the owner (2026-10-05), DV-373–DV-375; V3's premise is open (§6)
+- **Status:** implemented; V1–V3 decided by the owner (2026-10-05), DV-373–DV-375
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; behaviour probed on a
   local `convex-local-backend` build (a dev build: its version is `unknown`)
 - **Related:** STUDY-34 (`/instance_name`, the admin API), STUDY-31 H5 (DV-147, the site's `/version`), STUDY-67
@@ -68,9 +68,11 @@ itself, H3), and the site port asks `versionRoute` for `/version`.
   waits on `/instance_name`. The one test that read `bunvex` (`http-actions.test.ts`, site `/version`) now
   expects the package version.
 - **`/` (V2, DV-374).** `This bunvex deployment is running.`: no Convex wording or link (rule 5).
-- **`/echo` (V3, DV-375).** The body streams back as it arrives (no buffering, no copy). A declared length over
-  128 MiB is a 413 `Payload Too Large` before a byte is read. A body without a length is counted as it streams
-  and cut off past 128 MiB: the 200 has already gone out, so the client sees the connection break (an echo can
+- **`/echo` (V3, DV-375).** The body streams back as it arrives (no buffering, no copy). The limit is Convex's
+  knob `MAX_ECHO_BYTES` (read at start as bunvex reads Convex's other knobs: a non-negative integer, unset or
+  empty is the 128 MiB default, anything else refused; `createServer`'s `maxEchoBytes` overrides it). A declared
+  length over it is a 413 `Payload Too Large` before a byte is read. A body without a length is counted as it streams
+  and cut off past the limit: the 200 has already gone out, so the client sees the connection break (an echo can
   only answer 413 up front by buffering the body first).
 - **Methods.** A shared `getOnly` answers GET and HEAD and 405s the rest with `allow: GET,HEAD` (also
   `/instance_name` and `/version`, which answered any method before); `/echo` 405s all but POST with
@@ -83,7 +85,7 @@ itself, H3), and the site port asks `versionRoute` for `/version`.
 |---|---|---|---|
 | V1 | `/version` and `/instance_version` answer `@bunvex/server`'s semver (`0.1.0-alpha.0`), and the site's `/version` too | Convex answers its release version (`unknown` on a dev build), and the site proxy always `unknown`; bunvex's release version is its package's | owner, 2026-10-05: DV-373 (also updates DV-147) |
 | V2 | `GET /` answers `This bunvex deployment is running.` | Convex's sentence names Convex and links docs.convex.dev (rule 5) | owner, 2026-10-05: DV-374 |
-| V3 | `/echo` enforces 128 MiB: 413 for a declared length past it, a broken connection for a longer chunked body | Convex declares the 128 MiB limit (knob, comment) but its `Body` extractor never applies it: its open-source backend echoes any size (probed). The owner asked for the limit and the 413, as Convex intends | owner, 2026-10-05: DV-375 — the premise ("Convex returns 413") is not what the open-source code does; confirmation asked (§6) |
+| V3 | `/echo` enforces `MAX_ECHO_BYTES` (Convex's knob, default 128 MiB): 413 for a declared length past it, a broken connection for a longer chunked body | Convex declares the limit (knob, comment) but its `Body` extractor never applies it: its open-source backend echoes any size (probed) | owner, 2026-10-05: DV-375, enforce the configurable value (decided after the finding) |
 
 ## 5. Tests
 
@@ -99,6 +101,9 @@ itself, H3), and the site port asks `versionRoute` for `/version`.
   declaring exactly 128 MiB gets `200` (the echo starts streaming before the body ends);
 - a chunked 3 MB body comes back whole; a chunked 128 MiB + 1 body (one reused 1 MiB chunk, from a child
   process) breaks off.
+- `MAX_ECHO_BYTES`: unset or empty is 128 MiB, `1000` is 1000, `-1` and `1.5` are refused;
+- with a limit of 1000: 1000 bytes echo, 1001 is a 413 (fetch and raw socket), a chunked 999 comes back, a
+  chunked 2 MiB breaks off.
 
 `http-actions.test.ts` and `cors.test.ts` still pass with the new version string and CORS paths.
 
@@ -114,13 +119,15 @@ itself, H3), and the site port asks `versionRoute` for `/version`.
 | `/echo` dropped from the CORS paths | the CORS test |
 | GET routes accept any method but OPTIONS | the methods test |
 | `/echo` accepts GET | the methods test |
+| `createServer` ignores `maxEchoBytes` | the 1000-byte limit test |
+| the knob read from another variable | the knob test |
+| the streamed cut-off at the default instead of the configured limit | the 1000-byte limit test |
+| a negative or fractional knob accepted | the knob test |
 
 No measurement: the routes are new and off every hot path (the API port's dispatch gains one `switch` on the
 path before the existing checks).
 
 ## 6. Open questions
 
-- **V3's premise.** The owner decided "`/echo` matches Convex, including the 128 MiB limit and the 413". Convex's
-  open-source backend does not enforce that limit (§1, probed). Built as decided (limit + 413); the owner may
-  instead want no limit (Convex's actual open-source behaviour). `network-test` sends at most 64 MiB, so either
-  choice passes it.
+None. V3's premise ("Convex returns 413") turned out not to hold for Convex's open-source code (§1); the owner
+then chose to enforce the limit and make it configurable with Convex's knob (2026-10-05).

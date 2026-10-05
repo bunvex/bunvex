@@ -71,7 +71,7 @@ import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
 import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
-import { healthRoute, versionRoute } from "./health.ts";
+import { healthRoute, maxEchoBytesFromEnv, versionRoute } from "./health.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -152,6 +152,8 @@ export type ServerOptions = {
    * else two weeks, as Convex.
    */
   sessionRequestRetentionMs?: number | null;
+  /** The largest body `POST /echo` takes. Default: `MAX_ECHO_BYTES`, else 128 MiB, as Convex's knob (DV-375). */
+  maxEchoBytes?: number;
   /**
    * The auth config (STUDY-27): the default export of the app's `bunvex/auth.config.ts`, as Convex's
    * `convex/auth.config.ts`. Validated at start (an invalid one throws here). Without it, any token is
@@ -691,6 +693,7 @@ export function createServer(opts: ServerOptions) {
   // ---------------------------------------------------------------- request body caps (H3, F4)
   /** Bun's default `maxRequestBodySize`, the cap every route but uploads keeps. */
   const cap = opts.maxRequestBodySize ?? 128 * 1024 * 1024;
+  const maxEchoBytes = opts.maxEchoBytes ?? maxEchoBytesFromEnv();
   const payloadTooLarge = () => new Response("Payload Too Large", { status: 413 });
   /** A declared body over the cap: 413, as Bun answers it. */
   const bodyCap = (req: Request) => {
@@ -1092,7 +1095,7 @@ export function createServer(opts: ServerOptions) {
       }
       // The meta `/version` and Convex's health routes: `/instance_name` (STUDY-34), `/instance_version`, `/`
       // and `/echo` (STUDY-112), with no auth and their own body limit.
-      const health = healthRoute(req, url.pathname, engine.instanceName);
+      const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
       if (health) return health;
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).

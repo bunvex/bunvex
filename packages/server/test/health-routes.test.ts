@@ -5,7 +5,7 @@ import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import pkg from "../package.json";
 import { Functions } from "../src/functions.ts";
-import { MAX_ECHO_BYTES, ROOT_TEXT, SERVER_VERSION } from "../src/health.ts";
+import { MAX_ECHO_BYTES, maxEchoBytesFromEnv, ROOT_TEXT, SERVER_VERSION } from "../src/health.ts";
 import { createServer } from "../src/server.ts";
 
 const stops: (() => unknown)[] = [];
@@ -13,9 +13,9 @@ afterEach(async () => {
   for (const s of stops.splice(0)) await s();
 });
 
-async function setup() {
+async function setup(opts: { maxEchoBytes?: number } = {}) {
   const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
-  const s = createServer({ engine, functions: new Functions(engine), port: 0 });
+  const s = createServer({ engine, functions: new Functions(engine), port: 0, ...opts });
   stops.push(s.stop);
   return { api: `http://127.0.0.1:${s.server!.port}`, site: `http://127.0.0.1:${s.site!.port}`, port: s.server!.port! };
 }
@@ -168,3 +168,23 @@ test("/echo: a body without a length is cut off past 128 MiB (streamed, one reus
   expect(await streamed(`${api}/echo`, 3_000_000)).toBe(3_000_000);
   expect(await streamed(`${api}/echo`, MAX_ECHO_BYTES + 1)).toBe(-1);
 }, 60_000);
+
+test("MAX_ECHO_BYTES, Convex's knob: unset or empty is 128 MiB; a bad value is refused", () => {
+  expect(maxEchoBytesFromEnv({})).toBe(MAX_ECHO_BYTES);
+  expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "" })).toBe(MAX_ECHO_BYTES);
+  expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "1000" })).toBe(1000);
+  expect(() => maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "-1" })).toThrow("MAX_ECHO_BYTES: not a non-negative integer: -1");
+  expect(() => maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "1.5" })).toThrow("MAX_ECHO_BYTES");
+});
+
+test("/echo with a configured limit of 1000 bytes: 1000 echo, 1001 is a 413, a longer chunked body is cut off", async () => {
+  const { api, port } = await setup({ maxEchoBytes: 1000 });
+  const at = await fetch(`${api}/echo`, { method: "POST", body: new Uint8Array(1000).fill(3) });
+  expect(at.status).toBe(200);
+  expect((await at.arrayBuffer()).byteLength).toBe(1000);
+  const over = await fetch(`${api}/echo`, { method: "POST", body: new Uint8Array(1001) });
+  expect(over.status).toBe(413);
+  expect(await declared(port, 1001, 10)).toBe("HTTP/1.1 413 Payload Too Large");
+  expect(await streamed(`${api}/echo`, 999)).toBe(999);
+  expect(await streamed(`${api}/echo`, 2 * 1024 * 1024)).toBe(-1);
+});
