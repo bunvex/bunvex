@@ -24,6 +24,7 @@ export {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -96,6 +97,13 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export {
+  DATABASE_VERSION,
+  type DatabaseGlobals,
+  readDatabaseGlobals,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 export type {
   BaseDatabaseReader,
   BaseDatabaseReaderWithTable,

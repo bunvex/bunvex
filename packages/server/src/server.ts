@@ -1303,11 +1303,18 @@ export function createServer(opts: ServerOptions) {
   };
   // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
   server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
+  /**
+   * The S3 key prefix of the stores made from the environment, recorded in `_db` by the first one used
+   * (STUDY-126): a store pinned to a local directory refuses S3, as Convex's `initialize_storage_tag`.
+   */
+  let s3PrefixOnce: Promise<string> | null = null;
+  const s3Prefix = () =>
+    (s3PrefixOnce ??= engine.initializeStorage({ tag: "s3" }).then((t) => (t as { s3Prefix: string }).s3Prefix));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
       ? blobStoreFromEnv(process.env, {
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.fileStorage;
   const cloudOrigin = opts.cloudOrigin ?? process.env.BUNVEX_CLOUD_ORIGIN ?? `http://127.0.0.1:${server.port}`;
@@ -1379,14 +1386,14 @@ export function createServer(opts: ServerOptions) {
     opts.moduleStorage ??
     blobStoreFromEnv(process.env, {
       useCase: "modules",
-      s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+      s3Prefix,
     });
   /** Snapshot exports (STUDY-42). */
   const exportStore =
     opts.exportStorage === undefined
       ? blobStoreFromEnv(process.env, {
           useCase: "exports",
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.exportStorage;
   const exportService = exportStore
@@ -1453,7 +1460,7 @@ export function createServer(opts: ServerOptions) {
     opts.importStorage === undefined
       ? blobStoreFromEnv(process.env, {
           useCase: "snapshot_imports",
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.importStorage;
   const importService = importStore

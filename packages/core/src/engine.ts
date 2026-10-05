@@ -25,6 +25,7 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -66,6 +67,13 @@ import {
   type WriteLogRetention,
 } from "./committer.ts";
 import type { CursorCodec } from "./cursor.ts";
+import {
+  DATABASE_VERSION,
+  initializeDatabaseGlobals,
+  initializeStorageType,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 import {
   type ExecutionKind,
   installDeterminism,
@@ -386,6 +394,7 @@ export class Engine {
     });
     await this.loadInstanceSecret();
     await this.loadInstanceName();
+    await this.loadDatabaseGlobals();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -508,6 +517,17 @@ export class Engine {
   }
 
   /**
+   * The database's globals (`_db`, STUDY-126), written at the store's first start as Convex's bootstrap
+   * does. A version above this bunvex's is warned about, as Convex's migration worker does.
+   */
+  private async loadDatabaseGlobals() {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    const version = await this.runMutation((db) => initializeDatabaseGlobals(db, () => uuid), true);
+    if (version > DATABASE_VERSION)
+      console.warn(`persisted db metadata version is ahead at ${version}, this binary is at ${DATABASE_VERSION}`);
+  }
+
+  /**
    * A key for one purpose, derived from the instance secret (HMAC-SHA256(secret, purpose)), as Convex's
    * keybroker derives one per use ("store file authorization", …). The secret itself never leaves.
    */
@@ -560,23 +580,25 @@ export class Engine {
     return this.cursorCodecCache;
   }
 
-  /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
-  async instanceSetting(name: string, make: () => string): Promise<string> {
-    return this.runMutation(async (db) => {
-      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
-      const have = doc?.[name];
-      if (typeof have === "string") return have;
-      const value = make();
-      if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { [name]: value });
-      else await db.insert(INSTANCE_TABLE, { [name]: value });
-      return value;
-    }, true);
+  /**
+   * The storage this start uses, checked against the one the store was initialized with (STUDY-126, Convex's
+   * `initialize_storage_tag`): the first start records it; S3's key prefix is `<instance name>-<uuid>/`.
+   * Throws when the store was initialized with another kind of storage.
+   */
+  async initializeStorage(init: StorageTagInitializer): Promise<StorageType> {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    return this.runMutation(
+      (db) => initializeStorageType(db, init, this.instanceName, () => uuid),
+      true,
+      "init_storage",
+    );
   }
 
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+      { name: DATABASE_GLOBALS_TABLE, indexes: {}, document: v.any() },
       {
         name: SESSION_REQUESTS_TABLE,
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },

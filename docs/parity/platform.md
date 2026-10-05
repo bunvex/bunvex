@@ -76,7 +76,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | done (STUDY-32) | Convex's messages. |
 | Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | done (STUDY-32) | Not enforced in Convex either. |
 | Blob backends: local directory and S3 (`S3_STORAGE_*_BUCKET`, `S3_ENDPOINT_URL`, path style) | `crates/storage`; `crates/aws_s3`; `crates/aws_utils` | done (STUDY-32, STUDY-35, STUDY-42) | Per use case (`files`, `modules`, `exports`, `snapshot_imports`, `search`) with Convex's env names; `search` holds the search indexes' clean-shutdown snapshot, not segments (STUDY-96; DV-227, DV-270). |
-| Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | partial (STUDY-32) | The S3 key prefix is kept in `_instance` (`bunvex-<uuid>/`); switching local↔S3 is not checked yet. |
+| Storage type pinned at init (`_db` globals) | `crates/model/database_globals` | done (STUDY-126) | `_db` as Convex's: the first start records local (`--local-storage`) or S3 (`<instance name>-<uuid>/`); a moved directory is recorded, local ↔ S3 or another instance's prefix refused with Convex's messages. `createServer`'s environment stores record S3 at first use. |
 | Dashboard: file system functions (`numFiles`, `fileMetadata`, `getFile`, `deleteFile`, `deleteFiles`, `generateUploadUrl`) | `system-udfs/convex/_system/frontend/fileStorageV2.ts` | done (STUDY-32, STUDY-48) | All six in `system-functions.ts`, with Convex's arguments and filters; `componentId` accepted and ignored. |
 | Total file-storage size gauge | `FileStorageSizeTracker` | done (STUDY-73) | The usage gauges' hourly file total, which also limits exports with storage to 1 TiB. |
 
@@ -278,7 +278,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_deployment_audit_log`, `_audit_log_config` | `crates/model/deployment_audit_log`, `audit_log_config` | partial (STUDY-48) | `_deployment_audit_log` done; `_audit_log_config` (custom audit logs) missing. |
 | `_backend_state` | `crates/model/backend_state` | done (STUDY-63) | Number 536, `{system, usage_limit, user}`; bunvex sets `user` only. |
 | `_canonical_urls` | `crates/model/canonical_urls` | done (STUDY-49) | Number 546; `{requestDestination, url}`. |
-| `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | missing | |
+| `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | done (STUDY-126) | Number 520, `{version, awsPrefixSecret, storageType}`; `version` is bunvex's own data version (1). |
 | `_usage_limits` | `crates/model/usage_limits` | done (STUDY-61) | Number 552, `by_selector`; `{metric, window, limitType, limit, enabled}`. |
 | `_data_sync_progress` | `crates/model/data_sync_progress` | done (STUDY-69) | Number 553, `by_sync_id`, `by_last_updated`; Convex's states and write rules; `create_data_sync`. |
 | `_backend_info`, `_aws_lambda_versions`, `_next_persistence_index_id` | `crates/model/*` | missing | Internal bookkeeping (cloud entitlements, Lambda, id allocation); `_backend_info` can be skipped. |

@@ -130,6 +130,7 @@ to a spec.
 | [STUDY-98](STUDY-98-filter-api.md) | `filterApi` from `bunvex/server`: the api, filtered by type | implemented |
 | [STUDY-97](STUDY-97-value-size-and-base64.md) | `getDocumentSize`, `Base64` and `getConvexSize` (`valueSize`) from `bunvex/values`, as Convex's | implemented; the `getConvexSize` name kept as `valueSize` (owner, 2026-10-04, DV-347) |
 | [STUDY-96](STUDY-96-search-index-snapshots.md) | Search and vector indexes snapshotted at a clean shutdown, restored at start with the log since (STUDY-79 option D) | implemented; storage and crash behaviour decided by the owner (2026-10-04) |
+| [STUDY-126](STUDY-126-db-globals.md) | `_db`, the database globals: the data version, the storage type pinned at the first start (local or S3, `<instance name>-<uuid>/`), Convex's refusal to switch | implemented (DV-403) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

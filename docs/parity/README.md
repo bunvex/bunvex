@@ -182,7 +182,7 @@ gaps.
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
   - Prometheus `/metrics`;
-  - `_index_worker_metadata`, `_auth`, `_db`;
+  - `_index_worker_metadata`, `_auth`;
   - an upgrade guide.
 - CLI:
   - `codegen` flags;
