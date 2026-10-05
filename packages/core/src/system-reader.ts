@@ -1,6 +1,7 @@
 // `db.system` (Convex's `DatabaseReader.system`): read access to the system tables an app may see. They
 // come back in their public shape: `_scheduled_functions` (STUDY-30 S2) and `_storage` (STUDY-32 F1). Only the `by_id` and `by_creation_time` indexes are public, as on Convex's virtual tables; the
-// other system tables are not visible.
+// other system tables read as empty, as Convex's (a function sees their index as missing), but `count()` counts them
+// (STUDY-107).
 import { decodeId } from "@bunvex/values";
 import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "./catalog.ts";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
@@ -64,6 +65,19 @@ export class SystemReader {
   }
 
   query(table: string): TxQuery {
+    if (!VISIBLE[table] && table.startsWith("_")) {
+      // Another system table, or an unknown `_` name: Convex's `db.system.query` takes it, its reads find
+      // nothing (the index is `Missing` to a function), and its `count()` counts the table, 0 when there is
+      // none (STUDY-107).
+      const q = this.tx.privateSystemQuery(table);
+      return new ProjectedQueryInitializer(
+        table,
+        q,
+        (d) => d,
+        () => this.tx.asSystem(() => q.count()),
+        true,
+      );
+    }
     const project = visible(table);
     const q = this.tx.asSystemSync(() => this.tx.query(table));
     // Convex counts a virtual table as its system table (`Transaction::count`); here they are the same table.
@@ -127,6 +141,8 @@ export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery
     q: TxQuery,
     project: (d: Doc) => Doc,
     private readonly counter: () => Promise<number>,
+    /** A private system table: any index name, as Convex's (it finds nothing). */
+    private readonly anyIndex = false,
   ) {
     super(table, q, project);
   }
@@ -138,7 +154,7 @@ export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery
     return this.q as TxQuery;
   }
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
-    if (!PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
+    if (!this.anyIndex && !PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
     return this.wrap(this.initial.withIndex(name, range));
   }
   /** System tables have no search indexes. */

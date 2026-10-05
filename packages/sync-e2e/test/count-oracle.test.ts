@@ -53,6 +53,7 @@ async function probe(db: Db) {
     order: kind(db.query("items").order("desc")),
     filter: kind(db.query("items").filter((q: unknown) => (q as Stage).eq(1, 1))),
     systemInitializer: kind(db.system.query("_storage")),
+    privateSystemInitializer: kind(db.system.query("_index")),
     userSystemTable: await outcome(() => db.query("_storage").count()),
     systemUserTable: await outcome(() => db.system.query("items").count()),
   };
@@ -74,6 +75,7 @@ test("the same stages have count(), and the same tables are refused", async () =
     order: "undefined",
     filter: "undefined",
     systemInitializer: "function",
+    privateSystemInitializer: "function",
     userSystemTable: { threw: true },
     systemUserTable: { threw: true },
   });

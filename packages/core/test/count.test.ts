@@ -10,6 +10,7 @@ import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 import { TableSummaries, TableSummariesUnavailableError } from "../src/table-summaries.ts";
+import type { Tx } from "../src/tx.ts";
 
 const schema = defineSchema({ t: defineTable(v.any()).index("by_x", ["x"]), u: defineTable(v.any()) });
 
@@ -177,4 +178,87 @@ test("the engine drops a count's changes with the write log's commits", async ()
   const old = await e.queryTracked((db) => db.query("t").count(), {}, at);
   expect(!old.ok && old.error).toBeInstanceOf(OutOfRetentionError);
   expect(await e.query((db) => db.query("t").count())).toBe(2);
+});
+
+/** Run `start` (one transaction that counts, waits, counts again) while commits push the write log past it. */
+async function countAcrossCommits(start: (e: Engine, body: (db: Tx) => Promise<number[]>) => Promise<number[]>) {
+  const e = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
+    writeLogRetention: { minRetentionUs: 0, maxRetentionUs: 0 },
+  }).init();
+  await e.summariesReady();
+  await e.mutation((db) => db.insert("t", { x: 1 }));
+  const gate = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const running = start(e, async (db) => {
+    const before = await db.query("t").count();
+    started.resolve();
+    await gate.promise; // meanwhile commits land and the write log drops the older ones
+    return [before, await db.query("t").count(), await db.query("u").count()];
+  });
+  await started.promise;
+  const at = e.committer.visibleTs;
+  for (let i = 0; i < 4; i++) await e.mutation((db) => db.insert(i % 2 ? "u" : "t", { x: i }));
+  expect(e.committer.logStartTs).toBeGreaterThan(at);
+  gate.resolve();
+  const counts = await running;
+  expect(await e.query((db) => db.query("t").count())).toBe(3);
+  return counts;
+}
+
+test("a running transaction counts at its snapshot for its whole life, past the write log's retention", async () => {
+  expect(await countAcrossCommits((e, body) => e.query(body))).toEqual([1, 1, 0]);
+  // A subscription's run (`queryTracked`) too.
+  const tracked = await countAcrossCommits(async (e, body) => {
+    const r = await e.queryTracked(body);
+    if (!r.ok) throw r.error;
+    return r.value;
+  });
+  expect(tracked).toEqual([1, 1, 0]);
+});
+
+test("pins: changes are kept while a transaction holds an older snapshot, dropped after", () => {
+  const s = new TableSummaries();
+  s.retainedAfter = () => Number.POSITIVE_INFINITY; // the write log keeps nothing
+  s.finish();
+  const unpin = s.pin(1);
+  const unpinAgain = s.pin(1);
+  for (let ts = 2; ts <= 4; ts++) s.apply(ts, [{ tablet: 7, old: null, next: { _id: `d${ts}` } as never }]);
+  expect(s.countAt(7, 1)).toBe(0);
+  unpin();
+  s.apply(5, [{ tablet: 7, old: null, next: { _id: "d5" } as never }]);
+  expect(s.countAt(7, 1)).toBe(0); // still held once
+  unpinAgain();
+  unpinAgain(); // twice is once
+  s.apply(6, [{ tablet: 7, old: null, next: { _id: "d6" } as never }]);
+  expect(() => s.countAt(7, 1)).toThrow(OutOfRetentionError);
+  expect(s.countAt(7, 6)).toBe(5);
+});
+
+test("db.system.query counts any system table, as Convex's 1.0/count; unknown names are 0", async () => {
+  const e = await engine();
+  const r = await e.mutation(async (db) => {
+    const tables = (await db.asSystem(() => db.query("_tables").collect())).length;
+    const indexes = (await db.asSystem(() => db.query("_index").collect())).length;
+    const before = await db.system.query("_tables").count();
+    await db.insert("brand_new", {}); // creates the table: its `_tables` row is this transaction's own write
+    return {
+      tables,
+      indexes,
+      before,
+      after: await db.system.query("_tables").count(),
+      index: await db.system.query("_index").count(),
+      unknown: await db.system.query("_no_such_table").count(),
+      // Its reads find nothing, whatever the index, as Convex's (the index is missing to a function).
+      read: await db.system.query("_tables").collect(),
+      byIndex: await db.system.query("_index").withIndex("by_anything").collect(),
+    };
+  });
+  expect(r.before).toBe(r.tables);
+  expect(r.after).toBe(r.tables + 1);
+  expect(r.index).toBeGreaterThan(r.indexes); // the new table's system indexes too
+  expect([r.unknown, r.read, r.byIndex]).toEqual([0, [], []]);
+  expect(await e.query((db) => db.system.query("_tables").count())).toBe(r.tables + 1);
+  // User tables are still refused through db.system, and system tables through db.query.
+  await expect(e.query((db) => db.system.query("t").count())).rejects.toThrow();
+  await expect(e.query((db) => db.query("_tables").count())).rejects.toThrow("System table _tables");
 });

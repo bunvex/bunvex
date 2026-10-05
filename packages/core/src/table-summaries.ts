@@ -86,6 +86,35 @@ export class TableSummaries {
    * are kept as long as the commits themselves. A snapshot older than that is out of retention already.
    */
   retainedAfter: () => number = () => Number.NEGATIVE_INFINITY;
+  /**
+   * The snapshots of the transactions running now, with how many hold each: their changes are kept for as long
+   * as they run, however old, as Convex's transaction holds its count snapshot for its whole life.
+   */
+  private pins = new Map<number, number>();
+  /** The oldest pinned snapshot (+∞ with none). */
+  private oldestPin = Number.POSITIVE_INFINITY;
+
+  /** Keep the changes after `snapshot` until the returned function is called (once the transaction ends). */
+  pin(snapshot: number): () => void {
+    this.pins.set(snapshot, (this.pins.get(snapshot) ?? 0) + 1);
+    if (snapshot < this.oldestPin) this.oldestPin = snapshot;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = this.pins.get(snapshot)! - 1;
+      if (n > 0) {
+        this.pins.set(snapshot, n);
+        return;
+      }
+      this.pins.delete(snapshot);
+      if (snapshot === this.oldestPin) {
+        let oldest = Number.POSITIVE_INFINITY;
+        for (const s of this.pins.keys()) if (s < oldest) oldest = s;
+        this.oldestPin = oldest;
+      }
+    };
+  }
 
   get ready() {
     return this.queued === null;
@@ -106,7 +135,8 @@ export class TableSummaries {
 
   /**
    * `tablet`'s count at `snapshot` (at most the latest commit's ts): the latest, less the changes committed
-   * since. Before the build, Convex's bootstrapping error; past the write log's retention, its error.
+   * since. Before the build, Convex's bootstrapping error. A snapshot no running transaction pinned and older
+   * than the write log keeps is out of retention (a transaction begun there, as Convex refuses one).
    */
   countAt(tablet: number, snapshot: number): number {
     if (!this.ready || snapshot < this.builtFloor) throw new TableSummariesUnavailableError(COUNT_UNAVAILABLE);
@@ -146,7 +176,8 @@ export class TableSummaries {
       else deltas.push({ ts, tablet: w.tablet, d });
     }
     this.at = ts;
-    const horizon = this.retainedAfter();
+    // Dropped once both the write log and every running transaction are past them.
+    const horizon = Math.min(this.retainedAfter(), this.oldestPin);
     while (this.deltaHead < deltas.length && deltas[this.deltaHead].ts <= horizon)
       this.droppedTs = deltas[this.deltaHead++].ts;
     // Compact once the dropped prefix is the larger part: amortized O(1) per commit.

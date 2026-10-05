@@ -1,6 +1,6 @@
 # STUDY-107 — `count()` on the query initializer
 
-- **Status:** implemented; DV-359 decided (owner, 2026-10-05); C3 (DV-360) and C4 (DV-361) pending (owner)
+- **Status:** implemented; DV-359 decided (owner, 2026-10-05); C3 (DV-360) and C4 (DV-361) resolved to match Convex (owner, 2026-10-05)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-52](STUDY-52-shape-inference.md) (table summaries, the counts), [STUDY-72](STUDY-72-table-summary-checkpoints.md)
   (summary checkpoints), [STUDY-79](STUDY-79-search-index-bootstrapping.md) (bootstrapping errors),
@@ -76,8 +76,16 @@
   visible state only, so a transaction whose snapshot was behind (a query that ran while a commit became visible,
   or one run at an older ts) counted the newer state. `TableSummaries` now keeps each commit's count changes
   (`countAt(tablet, snapshot)` subtracts those after the snapshot). They are dropped with the write log's
-  commits (`Committer.logStartTs`). A snapshot older than that is out of the write log's retention: `countAt`
-  throws `OutOfRetentionError`, a system error (see C4).
+  commits (`Committer.logStartTs`), **and** kept while any transaction that started at or before them is still
+  running: `execute` and `queryTracked` pin their snapshot in `TableSummaries` for the body's run (a map of
+  snapshot → holders, with the oldest cached). So a running transaction counts at its snapshot for its whole
+  life, as Convex's (C4). Only a snapshot no running transaction holds and older than the write log keeps (a
+  transaction *begun* out of retention, which Convex refuses too) throws `OutOfRetentionError`.
+- **Other system tables (C3).** As Convex, `db.system.query` takes any `_` name. For a system table other than
+  `_storage` and `_scheduled_functions`, or an unknown `_` name, every read finds nothing and records none, whatever
+  the index name (Convex resolves a private system table's index as `Missing` for a function), and `count()`
+  counts the table with system access: `_tables`, `_index` and the rest count their rows, an unknown name 0.
+  These are bunvex's own system tables, so the numbers are bunvex's (e.g. `_index` counts bunvex's index rows).
 - **Bootstrapping.** `TableSummariesUnavailableError` now extends `IndexesUnavailableError` (STUDY-79). So it is
   handled as Convex's `feature_temporarily_unavailable`: the function cannot catch it (`failExecution`), HTTP
   answers 503 with the code, a sync query is skipped and retried, a scheduled job is delayed. `countAt` uses
@@ -90,8 +98,8 @@
 |---|---|---|---|
 | C1 | The read is the whole `by_creation_time` range, not `by_id` | Not observable: both cover every document of the table, and both invalidate on any write to it; bunvex's existing `countTable` read | DV-359, owner 2026-10-05 (keep) |
 | C2 | The public `QueryInitializer` type has no `count` | Same as Convex (`@internal`, stripped from its published types) | not a divergence (owner 2026-10-05) |
-| C3 | `db.system.query(name)` refuses a non-public system table (`_tables`, `_index`, …) and an unknown `_` name before `count`. Convex lets `db.system.query` take any `_` name, and its `1.0/count` has no system-table guard: `db.system.query("_index").count()` counts Convex's index metadata rows, and an unknown name is 0 | Matching is possible, but it would expose bunvex's own system tables (different from Convex's) to app code; Convex's behaviour looks accidental for an internal API | DV-360, **pending (owner)** |
-| C4 | A count at a snapshot older than the write log's retention (≥ 30 s by default; the hard byte cap can shorten it) fails with `OutOfRetentionError`. Convex's transaction holds its count snapshot for its whole life | Ainda não fizemos: keeping every change for as long as a running transaction holds its snapshot needs the engine to track live snapshots. A function's system timeout (15 s) is shorter than the minimum retention, so with default limits no function reaches it; a mutation that old already fails at commit with Convex's `OutOfRetention` | DV-361, **pending (owner)** |
+| C3 | Was: `db.system.query(name)` refused a non-public system table (`_tables`, `_index`, …) and an unknown `_` name before `count`. Convex lets `db.system.query` take any `_` name, and its `1.0/count` has no system-table guard: `db.system.query("_index").count()` counts Convex's index metadata rows, and an unknown name is 0 | Matching is possible, but it would expose bunvex's own system tables (different from Convex's) to app code; Convex's behaviour looks accidental for an internal API | DV-360, **resolved to match Convex** (owner, 2026-10-05) |
+| C4 | Was: a count at a snapshot older than the write log's retention (≥ 30 s by default; the hard byte cap can shorten it) fails with `OutOfRetentionError`. Convex's transaction holds its count snapshot for its whole life | Ainda não fizemos: keeping every change for as long as a running transaction holds its snapshot needs the engine to track live snapshots. A function's system timeout (15 s) is shorter than the minimum retention, so with default limits no function reaches it; a mutation that old already fails at commit with Convex's `OutOfRetention` | DV-361, **resolved to match Convex** (owner, 2026-10-05) |
 
 The bootstrapping error matches Convex: bunvex has a summaries-not-ready state (the build at start, STUDY-52 /
 STUDY-72), and `count()` there throws Convex's code and message as a system error.
@@ -114,8 +122,16 @@ None.
   `db.table(t).query().count()`; the initializer stays usable after `count`;
 - virtual tables through `db.system` (with a mutation's own insert); `db.query("_storage")` refused;
 - while the summaries are built: `TableSummariesUnavailable` with Convex's message;
-- the changes kept as long as the write log's commits, and `OutOfRetentionError` past them (a unit test and an
-  engine test with zero retention).
+- the changes kept as long as the write log's commits, and `OutOfRetentionError` for a transaction begun past
+  them (a unit test and an engine test with zero retention);
+- a running transaction (`Engine.query` and `queryTracked`) counts at its snapshot for its whole life while
+  commits push the write log past it; pins held twice, released once each;
+- `db.system.query` on any system table: `_tables` and `_index` count their rows (a mutation's own new table
+  too), an unknown `_` name counts 0, their reads find nothing whatever the index; user tables still refused
+  through `db.system`, system tables through `db.query`.
+
+`packages/core/test/system-reader.test.ts` and `packages/server/test/scheduler.test.ts`: a private system table
+through `db.system.query` reads as empty (it was refused).
 
 `packages/server/test/count.test.ts`: from an app's query and mutation; a sync subscription re-run on a write;
 while the summaries are built, the error is uncatchable, HTTP 503 with the code, and a sync query is skipped,
@@ -125,7 +141,8 @@ then answered.
 
 `packages/sync-e2e/test/count-oracle.test.ts` (oracle): Convex's own `setupReader()` from the `convex`
 package, its syscalls answered by the test, against a bunvex transaction. Both give the same answers for
-which stages have `count` and which tables `db.query` / `db.system.query` refuse, and Convex sends `{ table }` only.
+which stages have `count` (a private system table's initializer too) and which tables `db.query` /
+`db.system.query` refuse, and Convex sends `{ table }` only.
 
 Sabotage checks, each caught:
 
@@ -139,17 +156,27 @@ Sabotage checks, each caught:
 - S8, the bootstrapping error not a system error: 3 fail (core, server 503, sync skip);
 - S9, changes never dropped: 2 fail (retention unit and engine).
 
-Measurement (`TableSummaries.apply`, 200 000 one-insert commits; darwin arm64, three runs each):
+After the owner's decisions (C3, C4), on the changed code (S1, S6, S9 re-run there: 4, 4 and 3 fail):
 
-- before: 167–292 ns per commit; after: 153–338 ns. The ranges overlap, so the difference is within noise;
-- `countAt` at the latest snapshot: about 10 ns; 10 commits back: 50–170 ns.
+- S10, pins ignored when dropping: 2 fail (whole life, pins);
+- S11, a release keeps the oldest pin: 2 fail (engine retention, pins);
+- S12, `execute` does not pin: 1 fails (whole life);
+- S16, `queryTracked` does not pin: 1 fails (whole life);
+- S13, private system tables refused again: 3 fail (system reader, count, oracle);
+- S14, the private count without system access: 1 fails;
+- S15, private reads see the table: 2 fail (system reader, count).
 
-The deltas are about 40 bytes per count-changing commit and table, kept no longer than the write log's entries,
-which are larger.
+Measurement (`TableSummaries.apply`, 200 000 one-insert commits, changes kept 30 s at 20 000 commits/s; on
+main with the version-size reuse (90eb5677) and index keys once (25c36661); darwin arm64, three runs, twice):
+
+- before: 162–214 ns per commit; after: 168–213 ns; after, with a transaction pinned throughout (nothing
+  dropped): 163–195 ns. The ranges overlap: within noise;
+- a transaction's pin and release: 60–70 ns, with 8 others running;
+- `countAt` at the latest snapshot: about 8 ns; 10 commits back: about 44 ns.
+
+The deltas are about 40 bytes per count-changing commit and table. They are kept as long as the write log keeps
+the commit, or longer while a transaction that began before it still runs (bounded by the function timeouts).
 
 ## 6. Open questions
 
-- C3 (DV-360): should `db.system.query(name).count()` count any system table, as Convex? Recommendation: no.
-  Keep the public virtual tables only. The others are bunvex's internals, and Convex keeps `count` internal.
-- C4 (DV-361): is the write log's retention an acceptable bound for an old snapshot's count? Recommendation:
-  yes, as built.
+None. C3 and C4 were decided by the owner (2026-10-05): match Convex.

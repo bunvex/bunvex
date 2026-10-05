@@ -879,6 +879,25 @@ export class Tx {
   }
 
   /**
+   * @internal (SystemReader) A query of a system table an app may not read (Convex's
+   * `StableIndexName::Missing` for a private system table): every read finds nothing and records none, any
+   * index name included; its `count()` still counts the table, as Convex's `1.0/count` (STUDY-107).
+   */
+  privateSystemQuery(table: string): TxQuery {
+    const st: QState = {
+      t: undefined,
+      ix: undefined,
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      ops: [],
+      closed: false,
+      iterated: false,
+    };
+    return this.makeQuery(table, st);
+  }
+
+  /**
    * A query of a table given by its definition, hidden or being deleted too (an import's or the deletion
    * worker's, STUDY-42). System transactions only.
    */

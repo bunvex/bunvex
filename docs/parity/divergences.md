@@ -324,6 +324,8 @@ Kept so the history is in one place.
 | DV-323 | An HTTP action's response-size warning and its 20 MiB error line were not in the run's lines (the run was logged when the handler returned; the error went to the server console) | As Convex: the run is logged once its body is sent, with the size warning and `error:httpAction` lines; an oversized chunk is dropped and later ones still go (`http-body.ts`) | yes, in the action's lines and log streams | owner, 2026-10-04 (STUDY-76) | [STUDY-76](../study/STUDY-76-limit-warnings.md) |
 | DV-73 | Pagination cursors were signed (HMAC), not encrypted | As Convex's keybroker: the `InstanceCursor` proto sealed with AES-128-GCM-SIV under KBKDF(secret, "cursor"), deterministic, version 7, hex (`cursor.ts`); a cursor of another instance gets `Key is invalid for instance` | yes (cursors are opaque) | owner, 2026-10-01 (STUDY-17 D1: match Convex) | [STUDY-17 D1](../study/STUDY-17-paginate.md#4-divergences) |
 | DV-08 | A pagination cursor's fingerprint covered table, index, range and order, not the filter: a cursor reused with another filter was accepted (never with wrong documents) | As Convex: filters have a serialized form (`$field`, `$literal`, `$eq`…`$mod`, `$neg`, `$and`, `$or`, `$not`) and the fingerprint covers every `filter` and `limit` in order; another filter's cursor is `InvalidCursor`, and the clients start over. Unfiltered queries keep their fingerprint | yes (`InvalidCursor` for another filter) | owner, 2026-10-04 (option b; accepted earlier in #42) | [STUDY-17 D3 §4.1](../study/STUDY-17-paginate.md#41-d3-re-studied-owner-2026-10-04) |
+| DV-360 | `db.system.query(name)` refused a system table other than `_storage` and `_scheduled_functions` (and an unknown `_` name), so it had no `count()` | As Convex: `db.system.query` takes any `_` name; a private system table's reads find nothing (its index is `Missing` to a function) and its `count()` counts its rows (`_tables`, `_index`, …), an unknown name 0 | yes | owner, 2026-10-05 (match Convex) | [STUDY-107 C3](../study/STUDY-107-query-count.md#4-divergences) |
+| DV-361 | A `count()` at a snapshot older than the write log's retention failed with `OutOfRetentionError`, even in a transaction still running | As Convex (its transaction holds its count snapshot): each running transaction pins its snapshot, and the count changes since are kept until it ends; only a transaction begun out of retention fails | only past the system timeout under default limits | owner, 2026-10-05 (match Convex) | [STUDY-107 C4](../study/STUDY-107-query-count.md#4-divergences) |
 
 Not a divergence, listed so it is not "fixed" into one: the `0x00`-escape prefix quirk in index keys is the
 same in both systems ([STUDY-05 D13](../study/STUDY-05-index-keys-and-ordering.md#4-divergences)).
@@ -343,11 +345,6 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
-
-| ID | bunvex | Convex | Observable | Why | Decided | Source |
-|---|---|---|---|---|---|---|
-| DV-360 | `db.system.query(name)` refuses a system table other than `_storage` and `_scheduled_functions` (and an unknown `_` name), so it has no `count()` | `db.system.query` takes any `_` name and `1.0/count` has no system-table guard: `db.system.query("_index").count()` counts the root namespace's `_index` rows; an unknown name counts 0 | yes | matching would expose bunvex's own system tables (which differ from Convex's) to app code, through an internal API | pending (owner); recommended: keep | [STUDY-107 C3](../study/STUDY-107-query-count.md#4-divergences) |
-| DV-361 | A `count()` at a snapshot older than the write log's retention (≥ 30 s by default) fails with `OutOfRetentionError` | the transaction holds its count snapshot for its whole life | only past the system timeout (15 s) under default limits | Ainda não fizemos: it needs the engine to track the snapshots of running transactions; the write log's retention is the bound OCC already uses | pending (owner); recommended: keep | [STUDY-107 C4](../study/STUDY-107-query-count.md#4-divergences) |
 
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
@@ -407,6 +404,8 @@ DV-322 was decided by the owner (2026-10-04, #340: option (a), the logger factor
 DV-340 (STUDY-40 L8) was accepted as recommended (owner, 2026-10-04) and is in [Decided divergences](#decided-divergences).
 
 DV-345 and DV-346 (STUDY-95 S1, S2) were accepted as recommended (owner, 2026-10-04) and are in [Decided divergences](#decided-divergences).
+
+DV-360 and DV-361 (STUDY-107 C3, C4) were decided by the owner (2026-10-05: match Convex), built, and are in [Resolved to match Convex](#resolved-to-match-convex).
 
 ## Waiting on a dependency
 
