@@ -57,6 +57,17 @@ import { isolateFetch, nodeFetch } from "./action-fetch.ts";
  */
 const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
 
+/**
+ * A mutation's result must be a value before it commits: Convex converts it inside the run
+ * (`invokeMutation`, registration_impl.ts), so a result that is not one (`undefined` in an array, a function,
+ * a class instance) is the function's own error and none of its writes stay. The conversion is the wire's,
+ * so the message is the one a later conversion would have given.
+ */
+const mustBeValue = <T>(value: T): T => {
+  toJsonValue((value === undefined ? null : value) as Value);
+  return value;
+};
+
 import {
   ActionPermits,
   type ConcurrencyLimiter,
@@ -1179,7 +1190,7 @@ export class Functions {
         const timer = timed(this.newTimer());
         const run = () => this.withAudit(db, () => withUserTimer(timer, () => this.invoke(f, db, a, 0, job)));
         const value = await this.warned(db, a, timer, async () =>
-          this.checkReturns(f, await (env ? withEnv(env, run) : run())),
+          mustBeValue(this.checkReturns(f, await (env ? withEnv(env, run) : run()))),
         );
         checkDeadline(deadline);
         return value;
@@ -1437,6 +1448,7 @@ export class Functions {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
         withUserTimer(timer, () => this.invoke(f, db, a, depth + 1)),
       );
+      if (sp) mustBeValue(value);
     } catch (e) {
       if (sp) db.rollback(sp);
       throw this.nestedError(e, timer);
