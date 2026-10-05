@@ -208,6 +208,20 @@ export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
 export const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
+/**
+ * The transaction limit errors Convex tags `ErrorMetadata::pagination_limit` (database/src/reads.rs,
+ * writes.rs: too many documents, bytes or reads read; too many writes or bytes written), which `paginate` ends
+ * its page at (STUDY-108). Convex hands the tag to no function: an app sees a plain Error with the message,
+ * so the mark stays here, out of the error.
+ */
+const paginationLimits = new WeakSet<Error>();
+function paginationLimit(message: string): Error {
+  const e = new Error(message);
+  paginationLimits.add(e);
+  return e;
+}
+const isPaginationLimit = (e: unknown): boolean => e instanceof Error && paginationLimits.has(e);
+
 type QState = {
   t: TableDef | undefined;
   ix: IndexDef | undefined;
@@ -426,11 +440,11 @@ export class Tx {
     if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
     if (this.systemTx) return;
     if (this.docsRead > this.limits.documentsRead)
-      throw new Error(
+      throw paginationLimit(
         `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
       );
     if (this.bytesRead > this.limits.bytesRead)
-      throw new Error(
+      throw paginationLimit(
         `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
       );
   }
@@ -748,7 +762,7 @@ export class Tx {
   recordInterval(i: Interval) {
     this.readList.push(i);
     if (!this.systemTx && this.readList.length - this.uncountedReads > this.limits.databaseQueries)
-      throw new Error(
+      throw paginationLimit(
         `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
   }
@@ -1122,7 +1136,13 @@ export class Tx {
     }
     if (!st.t || !st.ix) return done([], "end", null, null);
     if (start === "end") {
-      this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
+      try {
+        this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
+      } catch (e) {
+        // Convex's cursor is already at the end when this read fails: the page ends there, split required.
+        if (!isPaginationLimit(e)) throw e;
+        return done([], "end", "SplitRequired", null);
+      }
       return done([], "end", null, null);
     }
     // The page's range: after the start cursor, up to (and including) the end cursor.
@@ -1141,56 +1161,102 @@ export class Tx {
       if (end && end !== "end") lo = end.after;
     }
     const page: Doc[] = [];
+    // Every document read, passed by the filters or not: Convex's split cursor is the middle one
+    // (`IndexRange::intermediate_cursors`), on any page of more than two.
     const keys: Uint8Array[] = [];
     let rowsRead = 0;
     let bytesRead = 0;
     let last: Uint8Array | null = null;
     let exhausted = true;
     let status: PaginationResult["pageStatus"] = null;
-    const maxRows = opts.maximumRowsRead;
-    const maxBytes = opts.maximumBytesRead;
-    const sub: QState = { ...st, range: { lo, hi } };
-    for await (const d of this.stream(sub)) {
-      if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
-        status = "SplitRequired";
-        exhausted = false;
-        break;
-      }
-      rowsRead++;
-      bytesRead += rawValueSize(d as unknown as Value);
-      last = indexKey(st.ix, d);
-      if (pipe.offer(d)) {
-        page.push(this.handOut(d));
+    // As Convex's `IndexRange`: the page's own limits hold without an end cursor only (a pinned page is read to
+    // its end), and are checked before the next document is read, which then is not charged.
+    const maxRows = end ? undefined : opts.maximumRowsRead;
+    const maxBytes = end ? undefined : opts.maximumBytesRead;
+    // Convex records the page's read with its first document (or, with none, at the end of the range); at the
+    // read-interval limit, that is where the page fails.
+    const readsFull = !this.systemTx && this.readList.length - this.uncountedReads >= this.limits.databaseQueries;
+    let recorded = false;
+    const recordPage = () => {
+      recorded = true;
+      // The range this page covers (to the end cursor, or to the last key read).
+      const readHi = st.desc ? hi : exhausted ? hi : readEndAfter(last ?? lo, hi);
+      const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
+      this.recordInterval({ index: st.ix!.id, lo: readLo, hi: readHi });
+    };
+    const docs = this.stream({ ...st, range: { lo, hi } });
+    try {
+      for (;;) {
+        if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
+          status = "SplitRequired";
+          exhausted = false;
+          break;
+        }
+        const next = await docs.next();
+        if (next.done) break;
+        const d = next.value;
+        rowsRead++;
+        bytesRead += rawValueSize(d as unknown as Value);
+        last = indexKey(st.ix, d);
         keys.push(last);
-        // As Convex: a full page stops without looking further, so its cursor is "after the last
-        // document" even if nothing follows (the next page is then empty and done).
-        if (!end && page.length >= pageSize) {
+        if (readsFull && !recorded) {
+          exhausted = false;
+          recordPage(); // throws: the page ends past its first document, as Convex's
+        }
+        if (pipe.offer(d)) {
+          page.push(this.handOut(d));
+          // As Convex: a full page stops without looking further, so its cursor is "after the last
+          // document" even if nothing follows (the next page is then empty and done).
+          if (!end && page.length >= pageSize) {
+            exhausted = false;
+            break;
+          }
+        }
+        // A full limit ends the page as Convex's does: not done, the cursor after the last document read.
+        if (pipe.done) {
           exhausted = false;
           break;
         }
       }
-      // A full limit ends the page as Convex's does: not done, the cursor after the last document read.
-      if (pipe.done) {
-        exhausted = false;
-        break;
+      if (!recorded) recordPage();
+    } catch (e) {
+      // A transaction limit hit while reading (Convex's `read_page_from_query`): the page ends at the last
+      // document read, split required, instead of failing the function. The document over the limit is
+      // charged but not in the page. Before any document, with no cursor to continue from, Convex fails with a
+      // system error.
+      if (!isPaginationLimit(e)) throw e;
+      if (!start && last === null) {
+        const err = new QueryCursorError(
+          `This should be impossible. Hit pagination limit before setting query cursor: ${(e as Error).message}`,
+        );
+        failExecution(err);
+        throw err;
       }
+      status = "SplitRequired";
+      exhausted = false;
+      if (!recorded && last !== null) recordPage();
+    } finally {
+      await docs.return(undefined);
     }
-    // Read-set: the range this page covers (to the end cursor, or to the last key read).
-    const readHi = st.desc ? hi : exhausted ? hi : readEndAfter(last ?? lo, hi);
-    const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
-    this.recordInterval({ index: st.ix.id, lo: readLo, hi: readHi });
+    // Convex's soft limits (`IndexRange::is_approaching_data_limit`): 3/4 of the page's limits, or of the
+    // transaction's when it sets none, or more than 6144 documents.
+    const softRows = Math.min(opts.maximumRowsRead ?? TRANSACTION_MAX_READ_SIZE_ROWS, TRANSACTION_MAX_READ_SIZE_ROWS);
+    const softBytes = Math.min(
+      opts.maximumBytesRead ?? TRANSACTION_MAX_READ_SIZE_BYTES,
+      TRANSACTION_MAX_READ_SIZE_BYTES,
+    );
     if (
       status === null &&
-      ((maxRows !== undefined && rowsRead > (maxRows * 3) / 4) ||
-        (maxBytes !== undefined && bytesRead > (maxBytes * 3) / 4) ||
+      (rowsRead > Math.floor((softRows * 3) / 4) ||
+        bytesRead > Math.floor((softBytes * 3) / 4) ||
         page.length > (8192 * 3) / 4)
     )
       status = "SplitRecommended";
-    const split =
-      status && keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
+    const split = keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
     // A page with a pinned end reports that end as its continue cursor even when it stopped early at a read
     // limit (Convex's `end_cursor.or_else(query.cursor())`): the halves of its split then still cover it all.
-    const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last ?? lo });
+    // With no document read, the page continues from where it started.
+    const pos: CursorPosition = end ?? (exhausted ? "end" : last ? { after: last } : (start ?? "end"));
     return done(page, pos, status, split);
   }
 
@@ -1315,9 +1381,9 @@ export class Tx {
     }
     this.docsWritten++;
     if (this.docsWritten > this.limits.documentsWritten)
-      throw new Error(`Too many writes in a single function execution (limit: ${this.limits.documentsWritten})`);
+      throw paginationLimit(`Too many writes in a single function execution (limit: ${this.limits.documentsWritten})`);
     if (this.bytesWritten > this.limits.bytesWritten)
-      throw new Error(
+      throw paginationLimit(
         `Too many bytes written in a single function execution (limit: ${formatBytes(this.limits.bytesWritten)})`,
       );
     return measured;
@@ -1849,12 +1915,13 @@ const reusedError = () => new Error("This query has been chained with another op
 
 /**
  * Convex's "Cursor was None" (crates/isolate/src/environment/udf/async_syscall.rs, `read_page_from_query`):
- * `paginate` over a `limit(0)` never reads, so it has no cursor to return. Convex raises it without error
- * metadata, a system error: the client gets the internal-error message, and the function cannot catch it.
+ * `paginate` over a `limit(0)` never reads, so it has no cursor to return; nor does a first page that hits a
+ * transaction limit before its first document (STUDY-108). Convex raises both without error metadata, a
+ * system error: the client gets the internal-error message, and the function cannot catch it.
  */
 export class QueryCursorError extends Error {
-  constructor() {
-    super("Cursor was None. This should be impossible if `.next` was called on the query.");
+  constructor(message = "Cursor was None. This should be impossible if `.next` was called on the query.") {
+    super(message);
     this.name = "QueryCursorError";
   }
 }

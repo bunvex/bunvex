@@ -6,7 +6,7 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 227 | 5 | 13 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 228 | 5 | 12 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 187 | 37 | 27 |
 
@@ -167,8 +167,7 @@ gaps.
 - Server API:
   - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
-  - `.count()` on the query builder;
-  - typed limit error codes.
+  - `.count()` on the query builder.
 - Limits and checks:
   - nesting 64 for arguments and results;
   - the 1024-concurrent-request and upload-concurrency (4) limits.
