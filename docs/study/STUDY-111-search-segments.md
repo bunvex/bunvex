@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats) implemented
+  formats) and PR 2 (the merged query path) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),
@@ -173,14 +173,62 @@ segment costs its bytes in memory, and the same code can later run over a memory
 
 Not decoding is checked by a test that opens a segment and reads every field without copying the buffer.
 
-### 3.2 The rest of the series (planned; each PR updates this section)
+### 3.2 The memory part and the merged query path (PR 2, `@bunvex/search`)
 
-- **The memory part (PR 2).** Per index, the documents changed since the segments' ts, in today's in-memory
-  structure, plus each segment's deletes in RAM: a write marks the document's segment copy deleted at once
-  (Convex's tombstones). A search merges the segments and the memory part with the statistics of the whole
-  index (§1.3), then the transaction's overlay, exactly as today's single index. A differential test runs
-  random writes, flushes, compactions and restarts and compares every answer with today's `TextIndex` and
-  vector index.
+- **`SegmentedIndex`** (`segmented-index.ts`), the bookkeeping both kinds share:
+  - the segments, each with its deletes **in memory** and a count of the deletes the stored copy has;
+  - the memory part: the documents changed since the segments were written, in their latest state, and per
+    changed id the sequence number of its last change;
+  - a change marks the document's segment copy deleted at once (Convex's memory tombstones), so every live
+    document is in exactly one place;
+  - an estimate of the memory part's size, which the flusher compares with its soft limit (PR 3).
+- **Flush:** `prepareFlush` builds the memory part as a new segment and encodes the deletes of every segment
+  whose deletes changed, at one moment. Once they are stored, `commitFlush` adds the segment and keeps in the
+  memory part only the changes made since the prepare, deleting their copies from the new segment.
+- **Compaction:** `prepareCompaction` builds the live documents of some segments as one segment.
+  - `reconcileCompaction`, run under the flushes' lock, carries over the deletes those segments got since: a
+    flush's included, as Convex's writer does (`merge_deletes`). It returns the new segment's deletes to store
+    with it.
+  - `commitCompaction` replaces the segments, carrying the deletes made since the reconcile too.
+- **Load:** stored segments and their deletes; a change made before they arrived (a commit during a start)
+  deletes its stale copy.
+- **Text search** (`SegmentedTextIndex`), the memory part a `TextIndex`:
+  - the statistics of the whole index: live documents, tokens, and each term's document frequency, summed over
+    the memory part and every segment's live documents, deletes subtracted (Convex's `Bm25StatisticsDiff`);
+  - the query terms (exact matches, then prefix expansions read from each segment's sorted terms) chosen exactly
+    as `TextIndex.search` chooses them, the overlay included;
+  - each segment's matching live documents scored term at a time, in the weights' byte order: each document's
+    score is summed in the order `TextIndex.search` sums it, so the f32 scores are bit for bit the same.
+- **Vector search** (`SegmentedVectorIndex`), the memory part a map:
+  - every live vector of every part compared (DV-269), with a top-`limit` selection instead of sorting every hit;
+  - Convex's order, a total one: by score descending, a NaN above everything, equal scores by internal id
+    descending. Today's sort fell back to the map's insertion order between two NaN scores (or a NaN and +∞),
+    so that order changed with how the index was built; it is the id order now, as Convex's `total_cmp`.
+- **The engine** (`core`) keeps a `SegmentedTextIndex` / `SegmentedVectorIndex` per index. Until the flusher
+  (PR 3), everything stays in the memory part, so the engine behaves as before; searches go through the merged
+  path.
+
+**Measured.** `bench/search-segments-micro.ts` (index level, 200 000 documents of 12 words plus a 64-dimension
+vector; "8 segments": everything flushed, as the engine will hold it from PR 3; one run, M-series laptop):
+
+| | Heap | Text search, median ms (`gamma` / `alpha beta` / `n12`, ~1100 prefix expansions / `theta` + filter) | Vector search, median ms |
+|---|---|---|---|
+| Today (`TextIndex`, one map) | 448 MiB text, 89 MiB vector | 97 / 132 / 6.3 / 57 | 46 |
+| Segmented, all in the memory part (PR 2's engine) | 474 MiB, 115 MiB | 92 / 194 / 10.7 / 59 | 19 |
+| Segmented, 8 segments | **55 MiB**, **57 MiB** | **47 / 72** / 9.9 / **13** | **14** |
+
+`bench/search-segments.ts` (engine level, same documents, SQLite): this PR against `main`, 200 000 documents:
+
+| | Write throughput | Heap with the indexes ready | Text search, median | Vector search, median |
+|---|---|---|---|---|
+| `main` | 5310 documents/s | 844 MiB | 69.6 ms | 49.0 ms |
+| this PR | 4657 documents/s | 896 MiB | 72.5 ms | 14.9 ms |
+
+The throughput difference is noise: two runs of 50 000 each gave 6042 and 6277 documents/s on this branch, 6044
+and 5160 on `main`.
+
+### 3.3 The rest of the series (planned; each PR updates this section)
+
 - **Index state (PR 3).** Per index: its kind, tablet, name and definition, `backfilling` (with its cursor) or
   `ready`, its ts and its segments (keys of the segment and deletes blobs, counts). Convex keeps it in the
   `_index` row; bunvex has no `_index` rows for search indexes yet (platform §search), so it is kept in a
@@ -219,7 +267,34 @@ Later PRs add their rows here (state storage, garbage collection, the shutdown f
 - a corrupt or foreign buffer (wrong magic, format or kind, truncated) is refused;
 - opening does not copy: every section is a view over the given buffer.
 
-Sabotage checks: see the PR.
+Sabotage checks (each made a test fail): posting frequencies off by one; fieldnorm stored as the raw length;
+deleted terms not counted; deleted tokens encoded wrong; deletes of another segment accepted; the kind not
+checked; a prefix range that skips terms; vectors written at the wrong place; an unaligned buffer not copied.
+
+**PR 2** — the differential tests (`packages/search/test/segmented-text-index.test.ts`,
+`segmented-vector-index.test.ts`), 12 seeds × 500 steps each:
+
+- the oracle is today's single in-memory index: `TextIndex` for text, and for vectors today's search (one map,
+  every vector, every hit sorted);
+- random writes and deletes of 100–120 documents with shared prefixes, accents, long texts (lossy fieldnorms),
+  few distinct creation times and vector components (ties), and missing filter fields;
+- random flushes, prepared and committed later with writes between;
+- random compactions of some segments, prepared, then (flushes landing meanwhile) reconciled and committed, with
+  writes between the reconcile and the commit;
+- random crashes: a new index from what was stored (segments, their stored deletes) plus the documents changed
+  since the last flush at their current state, as the engine's start replays the log;
+- after every step: the size, the indexed bytes, a document, and three searches (text: 1–3 tokens with prefix,
+  filters, and a random overlay of pending writes and deletes; vector: limits 0–256 and filters), compared with
+  the oracle hit for hit, scores bit for bit, in order. 18 000 text and 18 000 vector searches in all.
+- Unit tests: a flush keeps the changes made after its prepare; segments loaded after a change arrived;
+  equal and NaN vector scores in Convex's order across a segment and the memory part.
+
+Sabotage checks (each made a test fail): segment deletes left out of document frequencies, or of the token
+total; deleted, or overlaid, segment documents scored; the overlay's base not subtracted; no prefix expansions
+from segments; a compaction dropping the deletes made since its prepare, or not storing them; a flush leaving
+later changes' segment copies alive, or dropping changes made after its prepare; a load keeping stale copies;
+segment filter ordinals not compared; vector: deleted segment documents compared, a segment's first filter key
+ignored, ties with the worst kept hit dropped, NaN scores last, the memory part's filter ignored.
 
 ## 6. Open questions
 
