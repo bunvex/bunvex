@@ -70,7 +70,9 @@ Before this study bunvex kept the S3 key prefix (`bunvex-<uuid>/`) in its own `_
   exits 1 with the message. Its S3 stores use the recorded prefix.
 - `createServer`'s stores made from the environment (an embedding app, tests) record S3 on their first S3
   operation; they have no single local directory to pin, so a local store is not recorded there.
-- `_instance` keeps the instance secret and name (DV-07, DV-159) and nothing else.
+- `_instance` keeps the instance secret and name (DV-07, DV-159) and nothing else. Convex's `_db` has no name;
+  its self-hosted image keeps the name with the secret, in its credentials. The owner decided the name stays with
+  the secret in `_instance` (2026-10-05, G4).
 
 `version` is bunvex's own data version, `DATABASE_VERSION = 1n` (`database-globals.ts`): bunvex has no
 migrations yet, and Convex's number counts Convex's migrations, not bunvex's format. `awsPrefixSecret` is
@@ -85,6 +87,7 @@ kind of storage, as Convex's: S3 with `--s3-storage`.
 |---|---|---|---|
 | G1 (DV-403) | Was: the S3 prefix `bunvex-<uuid>/` in `_instance`, no pin. Now as Convex: `_db` (520), `<instance name>-<uuid>/`, the pin and its messages | match Convex's internal system tables; no legacy data | owner, 2026-10-05: match Convex |
 | G2 | `version` starts at 1 (bunvex's data version), not Convex's 133 | the number counts each system's own migrations; no app or operator sees it | not a behaviour difference; noted |
+| G4 (DV-403) | The instance name stays in `_instance` with the secret, not in `_db` | Convex's `_db` has no name field; its self-hosted image keeps name and secret together (DV-159) | owner, 2026-10-05: keep it in `_instance` |
 | G3 | `createServer`'s environment stores record S3 at first use and never pin local | an embedded server has no one local directory flag; the shipped backend pins at start | follows from K4 and the library API; noted |
 
 ## 5. Tests
