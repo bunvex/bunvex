@@ -77,7 +77,7 @@ bunvex/
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
-│   │   └── metrics                  Prometheus                                                D
+│   │   └── metrics                  Prometheus /metrics, both ports (STUDY-114)                ✅
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅
 │   │   ├── local                    local disk (STUDY-32)                                      ✅

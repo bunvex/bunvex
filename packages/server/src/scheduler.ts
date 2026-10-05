@@ -283,7 +283,9 @@ export class ScheduledJobExecutor {
         }
         nextAt = await this.engine.query((db) => nextJobTs(db, now));
         // At full capacity Convex keeps the time it had.
-        this.logStats(free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady, now);
+        const oldest = free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady;
+        this.oldestReady = oldest;
+        this.logStats(oldest, now);
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
@@ -308,6 +310,21 @@ export class ScheduledJobExecutor {
 
   private lastStatsLog = 0;
   private lastReady: number | null = null;
+  /** The ready time of the oldest runnable job the last loop saw (`/metrics`), ms; null with none. */
+  private oldestReady: number | null = null;
+
+  /** Scheduled functions running now. */
+  get runningJobs(): number {
+    return this.running.size;
+  }
+
+  /**
+   * Convex's `scheduled_job_backlog_seconds`: how long the oldest runnable job has waited, 0 with none. It
+   * keeps growing while the loop does not run again, so a stalled executor shows.
+   */
+  backlogSeconds(now = wallClock()): number {
+    return this.oldestReady === null ? 0 : Math.max(0, now - this.oldestReady) / 1000;
+  }
 
   /**
    * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready

@@ -181,7 +181,6 @@ gaps.
     table without one;
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
-  - Prometheus `/metrics`;
   - `_index_worker_metadata`, `_auth`, `_db`;
   - an upgrade guide.
 - CLI:
