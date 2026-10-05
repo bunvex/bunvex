@@ -5,9 +5,12 @@
 const VARY = "origin, access-control-request-method, access-control-request-headers";
 const METHODS = "GET,POST,OPTIONS,PATCH,DELETE,PUT";
 
-/** Whether Convex's layer wraps this path: `/api/*` (but the sync upgrade) and `/instance_name`. */
+/** The health routes (`health_check_routes`), which have the layer too; the meta `/version` does not. */
+const HEALTH = new Set(["/instance_name", "/instance_version", "/", "/echo"]);
+
+/** Whether Convex's layer wraps this path: `/api/*` (but the sync upgrade) and the health routes. */
 export const hasApiCors = (pathname: string) =>
-  (pathname.startsWith("/api/") && !/^\/api\/[^/]+\/sync$/.test(pathname)) || pathname === "/instance_name";
+  (pathname.startsWith("/api/") && !/^\/api\/[^/]+\/sync$/.test(pathname)) || HEALTH.has(pathname);
 
 /**
  * Any `OPTIONS` request (tower-http answers it as a preflight before the route): 200, no body, every method,
