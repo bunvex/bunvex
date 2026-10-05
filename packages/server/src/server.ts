@@ -25,7 +25,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
-import { decodeId, type Value } from "@bunvex/values";
+import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
@@ -274,10 +274,13 @@ const fromWire = (args: unknown, path: string) => {
     const one = Array.isArray(args) ? args[0] : args;
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
-    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
-    throw new FunctionPathError(
-      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
-    );
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too
+    // deep for the stack to stringify (thousands of levels) is past the nesting limit too (STUDY-109).
+    const message =
+      e instanceof RangeError && e.message.includes("call stack")
+        ? TOO_NESTED_MESSAGE
+        : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
+    throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
 

@@ -337,7 +337,7 @@ Key bunvex facts behind the statuses:
 |---|---|---|---|
 | Document size ≤ 1 MiB (`MAX_USER_SIZE`, including system fields) | crates/common/src/document.rs | done (#35) | |
 | Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | done (#35) | |
-| Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | missing | |
+| Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | done (STUDY-109) | Nesting: arguments 63 levels (Convex parses `[args]`), results 64, written values 64 (a patch: each field 64), with Convex's messages and order (nesting, then size, then validator; a written value before its table and document; `runUdf`'s message for a query's or mutation's nested call past 64). Any depth fails with the message, never a stack overflow; past serde's 128 JSON levels Convex answers otherwise (DV-363). Size and nesting are measured in one walk. The 32 MiB size is never reached: the 16 MiB argument and result limits and the 1 MiB document limit come first. |
 | Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | |
 | Object fields ≤ 1024 | crates/value/src/object.rs | done (#35) |  |
 | Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | done (#6, #21) |  |
