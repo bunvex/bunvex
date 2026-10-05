@@ -187,11 +187,15 @@ export const worse = action({ args: {}, handler: (ctx) => ctx.runMutation(api.me
     });
     const bad = io(app);
     expect(await main(["codegen"], bad.it)).toBe(1);
-    const output = bad.err.join("\n");
+    // As Convex's (STUDY-124): the failure and the hint on stderr, the compiler's errors on stdout.
+    expect(bad.err).toEqual([
+      "✖ TypeScript typecheck via `tsc` failed.",
+      "To ignore failing typecheck, use `--typecheck=disable`.",
+    ]);
+    const output = bad.out.join("\n");
     expect(output).toContain(`bunvex/bad.ts(3,`);
     expect(output).toContain(`'"nope"'`);
     expect(output).toContain(`bunvex/bad.ts(4,`);
-    expect(output).toContain("To ignore failing typecheck, use `--typecheck=disable`.");
     expect(await main(["codegen", "--typecheck=disable"], io(app).it)).toBe(0);
   }, 120_000);
 
@@ -241,8 +245,8 @@ console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("'
     write(app, { "bunvex/typo.ts": `import { v } from "./_generated/server";\nexport const bad = v.id("mesages");` });
     const strict = io(app);
     expect(await main(["codegen"], strict.it)).toBe(1);
-    expect(strict.err.join("\n")).toContain(`bunvex/typo.ts(2,`);
-    expect(strict.err.join("\n")).toContain(`'"mesages"'`);
+    expect(strict.out.join("\n")).toContain(`bunvex/typo.ts(2,`);
+    expect(strict.out.join("\n")).toContain(`'"mesages"'`);
     // A loose schema: any table name.
     write(app, {
       "bunvex/schema.ts": TYPED_APP["bunvex/schema.ts"].replace(/\}\);$/, "}, { strictTableNameTypes: false });"),
@@ -265,7 +269,19 @@ export const byId = query({ args: { id: v.id("anything"), file: v.id("_storage")
     expect(await main(["codegen"], r.it)).toBe(0);
     expect(r.err.join("\n")).toContain("Found no bunvex/tsconfig.json");
     expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(1);
-    expect(await main(["codegen", "--typecheck", "sometimes"], io(app).it)).toBe(2);
+    const sometimes = io(app);
+    expect(await main(["codegen", "--typecheck", "sometimes"], sometimes.it)).toBe(1);
+    // `codegen` shows no help after an argument error, as Convex's.
+    expect(sometimes.err).toEqual([
+      "error: option '--typecheck <mode>' argument 'sometimes' is invalid. Allowed choices are enable, try, disable.",
+    ]);
+    // With `enable` and nothing to typecheck with: the reason, then the hint.
+    const enable = io(app);
+    expect(await main(["codegen", "--typecheck", "enable"], enable.it)).toBe(1);
+    expect(enable.err).toEqual([
+      "Found no bunvex/tsconfig.json to typecheck the functions with, so skipping typecheck. Run `bunvex codegen --init` to create one.",
+      "To ignore failing typecheck, use `--typecheck=disable`.",
+    ]);
   });
 });
 

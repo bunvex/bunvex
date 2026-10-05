@@ -2,7 +2,8 @@
 // dynamic modes need nothing but the code, so no deployment is involved (G1); `--init` writes
 // `tsconfig.json` and `README.md` first.
 import { relative } from "node:path";
-import { initFunctionsDir, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
+import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
+import { initFunctionsDir, printTypecheckFailure, runCodegen, type TypecheckMode, typecheck } from "./codegen.ts";
 import { codegenConfig, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 
@@ -25,16 +26,14 @@ export async function codegenCommand(args: string[], io: Io): Promise<number> {
     const a = args[i]!;
     if (a === "--init") init = true;
     else if (a === "--typecheck" || a.startsWith("--typecheck=")) {
+      // Argument errors as Convex's commander prints them; `codegen` shows no help after them.
       const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[++i];
-      if (v !== "enable" && v !== "try" && v !== "disable") {
-        io.err(`bunvex codegen: --typecheck must be enable, try or disable\n\n${CODEGEN_USAGE}`);
-        return 2;
-      }
+      if (v === undefined) return argumentError(io, missingArgument("--typecheck <mode>"));
+      if (v !== "enable" && v !== "try" && v !== "disable")
+        return argumentError(io, invalidChoice("--typecheck <mode>", v, ["enable", "try", "disable"]));
       mode = v;
-    } else {
-      io.err(`bunvex codegen: unknown option ${a}\n\n${CODEGEN_USAGE}`);
-      return 2;
-    }
+    } else if (a.startsWith("-")) return argumentError(io, unknownOption(a, optionsIn(CODEGEN_USAGE)));
+    else return argumentError(io, tooManyArguments("codegen", 0, args.filter((x) => !x.startsWith("-")).length));
   }
   try {
     const dir = functionsDir(io.cwd);
@@ -42,8 +41,7 @@ export async function codegenCommand(args: string[], io: Io): Promise<number> {
     const result = runCodegen(dir, codegenConfig(io.cwd));
     const checked = await typecheck(dir, io.cwd, mode);
     if (!checked.ok) {
-      io.err(checked.output);
-      io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+      printTypecheckFailure(io, checked);
       return 1;
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);

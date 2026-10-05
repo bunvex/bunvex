@@ -1,5 +1,6 @@
 // Package @bunvex/cli — the bunvex command line. Today: `admin-key` (STUDY-34), `deploy` (STUDY-35), `codegen` (STUDY-36), `env`, `run` and `dev` (STUDY-37, STUDY-40), `export` and `import` (STUDY-42), `data` (STUDY-43), `logs` (STUDY-47).
 import { adminKeyCommand } from "./admin-key.ts";
+import { argumentError, unknownCommand, unknownOption } from "./args.ts";
 import { codegenCommand } from "./codegen-command.ts";
 import { dataCommand } from "./data.ts";
 import { deployCommand } from "./deploy.ts";
@@ -57,14 +58,20 @@ export async function main(argv: string[], io: Io = processIo()): Promise<number
     io.out(`bunvex ${VERSION}`);
     return 0;
   }
-  if (command === undefined || command === "--help" || command === "-h" || command === "help") {
+  // No command: commander prints the program's help on stderr and exits 1, as Convex's.
+  if (command === undefined) {
+    io.err(USAGE);
+    return 1;
+  }
+  if (command === "--help" || command === "-h" || command === "help") {
     io.out(USAGE);
-    return command === undefined ? 2 : 0;
+    return 0;
   }
   const run = COMMANDS[command];
-  if (!run) {
-    io.err(`bunvex: unknown command ${command}\n\n${USAGE}`);
-    return 2;
-  }
+  // Convex's program shows its help after an argument error (`showHelpAfterError`).
+  if (!run)
+    return command.startsWith("-")
+      ? argumentError(io, unknownOption(command, ["--version", "--help"]), USAGE)
+      : argumentError(io, unknownCommand(command, [...Object.keys(COMMANDS), "help"]), USAGE);
   return run(args, io);
 }

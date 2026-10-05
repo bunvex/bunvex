@@ -8,6 +8,7 @@ import { join, relative, sep } from "node:path";
 import { BunvexClient, type Logger } from "@bunvex/client";
 import { makeFunctionReference } from "@bunvex/protocol";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import { deployCommand, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 import { parseJson5 } from "./json5.ts";
@@ -178,10 +179,8 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex run: ${taken}`);
-    return 2;
-  }
+  // Convex's `run` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, RUN_USAGE);
   let identity: string | undefined;
   let push = false;
   let watch = false;
@@ -194,21 +193,23 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     if (name === "--push") push = true;
     else if (name === "--identity" || name === "--typecheck" || name === "--codegen") {
       const v = inline ?? r[++i];
-      if (v === undefined) {
-        io.err(`bunvex run: ${name} needs a value`);
-        return 2;
-      }
+      const spec = name === "--identity" ? "--identity <identity>" : `${name} <mode>`;
+      if (v === undefined) return argumentError(io, missingArgument(spec), RUN_USAGE);
+      const choices = name === "--typecheck" ? ["enable", "try", "disable"] : ["enable", "disable"];
+      if (name !== "--identity" && !choices.includes(v))
+        return argumentError(io, invalidChoice(spec, v, choices), RUN_USAGE);
       if (name === "--identity") identity = v;
       else pushFlags.push(`${name}=${v}`);
     } else if (name === "--watch" || name === "-w") watch = true;
-    else if (a.startsWith("-") && a !== "-") {
-      io.err(`bunvex run: unknown option ${a}\n\n${RUN_USAGE}`);
-      return 2;
-    } else positional.push(a);
+    else if (a.startsWith("-") && a !== "-")
+      return argumentError(io, unknownOption(a, optionsIn(RUN_USAGE)), RUN_USAGE);
+    else positional.push(a);
   }
-  if (!positional.length || positional.length > 2) {
-    io.err(`bunvex run: expected <functionName> [args]\n\n${RUN_USAGE}`);
-    return 2;
+  if (positional.length > 2) return argumentError(io, tooManyArguments("run", 2, positional.length), RUN_USAGE);
+  // Convex's own check (`[functionName]` is optional to commander), printed as its `ctx.crash`.
+  if (!positional.length) {
+    io.err("✖ `bunvex run` requires <functionName>.");
+    return 1;
   }
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {

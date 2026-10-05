@@ -127,10 +127,26 @@ test("bunvex data: tables, documents in each format, the limit warning, _storage
   expect(files.out).toContain('"contentType": "text/plain"');
   expect(files.out).not.toContain("storageKey");
   // Options.
-  expect((await t.run(["alpha", "--limit", "0"])).code).toBe(2);
-  expect((await t.run(["alpha", "--order", "up"])).code).toBe(2);
-  expect((await t.run(["alpha", "--format", "csv"])).code).toBe(2);
+  // Argument errors as Convex's commander prints them: `error: …`, then (for `data`) a blank line and the help.
+  const usageError = async (args: string[], message: string) => {
+    const r = await t.run(args);
+    expect(r.code).toBe(1);
+    expect(r.err.slice(0, 2)).toEqual([`error: ${message}`, ""]);
+    expect(r.err[2]).toStartWith("Usage: bunvex data");
+  };
+  await usageError(["alpha", "--limit", "0"], "option '--limit <n>' argument '0' is invalid. Not a positive number.");
+  await usageError(["alpha", "--limit", "x"], "option '--limit <n>' argument 'x' is invalid. Not a number.");
+  await usageError(
+    ["alpha", "--order", "up"],
+    "option '--order <choice>' argument 'up' is invalid. Allowed choices are asc, desc.",
+  );
+  await usageError(
+    ["alpha", "--format", "csv"],
+    "option '--format <format>' argument 'csv' is invalid. Allowed choices are jsonArray, json, jsonLines, jsonl, pretty.",
+  );
+  await usageError(["alpha", "beta"], "too many arguments for 'data'. Expected 1 argument but got 2.");
+  await usageError(["--limt", "3"], "unknown option '--limt'\n(Did you mean --limit?)");
   expect((await t.run(["alpha", "--component", "x"])).err).toEqual([
-    "bunvex data: --component: bunvex does not have components yet.",
+    "error: --component: bunvex does not have components yet.",
   ]);
 });

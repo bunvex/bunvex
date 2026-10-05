@@ -529,7 +529,26 @@ export function initFunctionsDir(functionsDir: string): string[] {
 }
 
 export type TypecheckMode = "enable" | "try" | "disable";
-export type TypecheckResult = { ok: true; skipped?: string } | { ok: false; output: string };
+/**
+ * A typecheck's outcome. A failure is `failed` (the compiler's errors, in `output`) or `cantTypecheck` (`enable`
+ * with no tsconfig or compiler: the reason, in `output`); `compiler` names the compiler that ran.
+ */
+export type TypecheckResult =
+  | { ok: true; skipped?: string }
+  | { ok: false; reason: "failed" | "cantTypecheck"; output: string; compiler: string };
+
+/**
+ * Convex's failed typecheck in deploy, dev and codegen (`typeCheckFunctionsInMode`, cli/lib/typecheck.ts): the
+ * reason on stderr — "✖ TypeScript typecheck via `<compiler>` failed." (Convex always says `tsc`, DV-388) or
+ * why it could not run — then the hint, then the compiler's errors on stdout (Convex reruns it with stdio
+ * inherited).
+ */
+export function printTypecheckFailure(io: { out: (l: string) => void; err: (l: string) => void }, r: TypecheckResult) {
+  if (r.ok) return;
+  io.err(r.reason === "failed" ? `✖ TypeScript typecheck via \`${r.compiler}\` failed.` : r.output);
+  io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+  if (r.reason === "failed" && r.output) io.out(r.output);
+}
 
 /**
  * Convex's typecheck step: the app's own `tsc --project <functionsDir>`. `try` skips it when it cannot run
@@ -538,7 +557,9 @@ export type TypecheckResult = { ok: true; skipped?: string } | { ok: false; outp
 export async function typecheck(functionsDir: string, cwd: string, mode: TypecheckMode): Promise<TypecheckResult> {
   if (mode === "disable") return { ok: true, skipped: "disabled" };
   const cantRun = (why: string): TypecheckResult =>
-    mode === "enable" ? { ok: false, output: why } : { ok: true, skipped: why };
+    mode === "enable"
+      ? { ok: false, reason: "cantTypecheck", output: why, compiler: "tsc" }
+      : { ok: true, skipped: why };
   if (!existsSync(join(functionsDir, "tsconfig.json")))
     return cantRun(
       `Found no ${posix(relative(cwd, join(functionsDir, "tsconfig.json")))} to typecheck the functions with, so skipping typecheck. Run \`bunvex codegen --init\` to create one.`,
@@ -556,5 +577,5 @@ export async function typecheck(functionsDir: string, cwd: string, mode: Typeche
     env: { ...process.env, BUN_BE_BUN: "1" },
   });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return code === 0 ? { ok: true } : { ok: false, output: `${out}${err}`.trim() };
+  return code === 0 ? { ok: true } : { ok: false, reason: "failed", output: `${out}${err}`.trim(), compiler: "tsc" };
 }
