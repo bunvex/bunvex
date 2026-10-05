@@ -15,6 +15,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   type Engine,
+  ImportBackfillingError,
   ImportIdError,
   insertAuditLogEvents,
   OccError,
@@ -760,11 +761,16 @@ export class ImportService {
               "TableExists",
               `Table ${name} already exists. Please choose a new table name or use replace/append modes.`,
             );
-          def = await this.engine.createHiddenTable(name, {
-            ...(number !== undefined ? { number } : {}),
-            ...(active ? { copyIndexesOf: name } : {}),
-            replacing: replacedByAll,
-          });
+          def = await this.engine
+            .createHiddenTable(name, {
+              ...(number !== undefined ? { number } : {}),
+              ...(active ? { copyIndexesOf: name } : {}),
+              replacing: replacedByAll,
+            })
+            .catch((e) => {
+              // Convex's `InvalidImport` (a bad request): the table it replaces is still backfilling an index.
+              throw e instanceof ImportBackfillingError ? new ImportError(e.code, e.message) : e;
+            });
           hidden.push(def.id);
           const tablet = String(def.id);
           await this.write(async (db) => {

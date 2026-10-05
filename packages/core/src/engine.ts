@@ -2261,9 +2261,12 @@ export class Engine {
 
   /**
    * Create a hidden table (an import's, as Convex's `create_empty_table`): invisible to functions, with
-   * `number` (else the first free one) and the indexes of the active table `copyIndexesOf` (empty, so
-   * enabled at once; writes maintain them). `number` may be the active table's of the same name, or of a
-   * table in `replacing` (one the activation deletes). Its definition, once committed.
+   * `number` (else the first free one) and a copy of each ENABLED index of the active table `copyIndexesOf`
+   * (Convex's `copy_indexes_to_table`, which refuses a table still backfilling an index). As Convex's, the
+   * copies start `Backfilling`; the table is backfilled (it is empty: next to nothing to copy) and its indexes
+   * enabled before it is returned (`backfill_and_enable_indexes_on_table`), so the import writes into a table
+   * whose indexes are enabled. `number` may be the active table's of the same name, or of a table in
+   * `replacing` (one the activation deletes). Its definition, once committed.
    */
   async createHiddenTable(
     name: string,
@@ -2271,13 +2274,14 @@ export class Engine {
   ): Promise<TableDef> {
     const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
     const indexes: Record<string, string[]> = {};
-    for (const ix of [...(source?.indexes.values() ?? []), ...(source?.pending ?? [])])
+    for (const ix of source?.indexes.values() ?? [])
       if (!(ix.name in SYSTEM_INDEXES))
         indexes[ix.name] = ix.fields[ix.fields.length - 1] === "_creationTime" ? ix.fields.slice(0, -1) : ix.fields;
-    let def: TableDef | undefined;
-    await this.runMutation(
+    const created = await this.runMutation(
       async (db) => {
         const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
+        if (source && stored.some((i) => i.tablet === source.id && i.state === "backfilling"))
+          throw new ImportBackfillingError(opts.copyIndexesOf!);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
@@ -2301,25 +2305,55 @@ export class Engine {
         meta.name = name;
         meta.state = "hidden";
         const metaId = await db.insert(TABLES_TABLE, meta);
-        for (const i of plan.insertIndexes)
-          await db.insert(INDEX_TABLE, indexRow({ ...i, state: "enabled", staged: undefined }));
+        for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
         await writeNextIndexId(db, plan.nextIndexId);
+        const catalogIndexes = (state: "backfilling" | "enabled") =>
+          plan.insertIndexes.map((i) => ({
+            name: i.name,
+            fields: i.fields,
+            id: i.indexId,
+            state: i.state === "enabled" ? ("enabled" as const) : state,
+          }));
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
-          def = c.add(
-            name,
-            meta.tablet,
-            meta.number,
-            plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
-            "hidden",
-            metaId,
-          );
+          c.add(name, meta.tablet, meta.number, catalogIndexes("backfilling"), "hidden", metaId);
           this.catalog = c;
         };
+        return { meta, metaId, catalogIndexes };
       },
       true,
       "_system/create_hidden_table",
     );
+    const { meta, metaId, catalogIndexes } = created;
+    // Convex's `backfill_and_enable_indexes_on_table`: the copies are backfilled (`Backfilled2`; a system
+    // table's are enabled by the backfill itself), then enabled in one commit.
+    const backfilling = (await this.runMutation(readCatalog, true)).indexes.filter(
+      (i) => i.tablet === meta.tablet && i.state === "backfilling",
+    );
+    if (backfilling.length) {
+      this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
+      await this.indexWorker.backfillNow(backfilling, true);
+    }
+    let def: TableDef | undefined;
+    const install = () => {
+      const c = this.catalog.withTableStates({});
+      c.hidden.delete(meta.tablet);
+      def = c.add(name, meta.tablet, meta.number, catalogIndexes("enabled"), "hidden", metaId);
+      this.catalog = c;
+    };
+    await this.runMutation(
+      async (db) => {
+        const { indexes: stored } = await readCatalog(db);
+        for (const i of stored)
+          if (i.tablet === meta.tablet && i.state !== "enabled")
+            await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "enabled", staged: false }));
+        db.onCommitVisible = install;
+      },
+      true,
+      "snapshot_import_enable_indexes",
+    );
+    // Nothing to enable (no copied index, or a system table's, enabled by its backfill): no commit to wait for.
+    if (!def) install();
     return def!;
   }
 
@@ -3066,6 +3100,18 @@ function validatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
       if (dv) out.set(t.name, dv);
     }
   return out;
+}
+
+/**
+ * An import that would replace a table still backfilling an index: Convex's `InvalidImport` from
+ * `copy_indexes_to_table`, in its words.
+ */
+export class ImportBackfillingError extends Error {
+  readonly code = "InvalidImport";
+  constructor(table: string) {
+    super(`${table} is still backfilling indexes, so it cannot be replaced. Wait for indexes to complete backfilling`);
+    this.name = "ImportBackfillingError";
+  }
 }
 
 /** A push's schema change that cannot finish (Convex's `RaceDetected`, or indexes not ready). */

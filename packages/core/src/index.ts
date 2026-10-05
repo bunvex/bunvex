@@ -163,6 +163,7 @@ export {
   type CallRequest,
   DEFAULT_INSTANCE_NAME,
   Engine,
+  ImportBackfillingError,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,
   type MutationOptions,
