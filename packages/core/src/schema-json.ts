@@ -1,7 +1,7 @@
 // A schema as JSON (STUDY-35), in the shape of Convex's `DatabaseSchema` export: what a push stores in
 // `_schemas`, so a deployable server restarts on the schema it was last pushed, and what the push reports.
 import { type GenericValidator, type ValidatorJSON, validatorFromJson } from "@bunvex/values";
-import type { DeclaredTable, SchemaDefinition } from "./schema.ts";
+import { type DeclaredTable, documentJson, type SchemaDefinition } from "./schema.ts";
 
 export type IndexJson = { indexDescriptor: string; fields: string[] };
 /** A search index, as Convex's schema JSON (`filterFields` sorted, as Convex serializes its set). */
@@ -26,7 +26,7 @@ export type TableJson = {
 };
 export type SchemaJson = { tables: TableJson[]; schemaValidation: boolean };
 
-const anyJson = (v: GenericValidator) => (v.kind === "any" ? null : v.json);
+const anyJson = (v: GenericValidator) => (v.kind === "any" ? null : documentJson(v));
 
 export function schemaToJson(s: SchemaDefinition): SchemaJson {
   return {

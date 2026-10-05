@@ -239,6 +239,7 @@ export {
   type DocValidator,
   defineSchema,
   defineTable,
+  documentTypeError,
   docValidator,
   type Expand,
   type FieldValue,

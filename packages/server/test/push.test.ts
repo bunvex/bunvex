@@ -399,6 +399,30 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
+  test("a document validator a table cannot have: Convex's errors at push, nothing pushed (STUDY-14 §6)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    const withDocument = (validator: string) =>
+      mod(
+        "schema.js",
+        `import { defineSchema, defineTable } from "@bunvex/server";
+         import { v } from "@bunvex/values";
+         export default defineSchema({ messages: defineTable({ author: v.string(), body: v.string() }).index("by_author", ["author"]), other: defineTable(${validator}) });`,
+      );
+    const top = await d.push([messages(1)], withDocument("v.union(v.object({ a: v.string() }), v.string())"));
+    expect([top.start.status, top.start.body.code]).toEqual([400, "InvalidTopLevelTypeInSchemaError"]);
+    expect(top.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nThe document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    const notObject = await d.push([messages(1)], withDocument('{ isValidator: true, kind: "object", json: "nope" }'));
+    expect([notObject.start.status, notObject.start.body.code]).toEqual([400, "InvalidSchemaExport"]);
+    expect(notObject.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+  });
+
   test("an index on a field the schema does not have: Convex's SchemaDefinitionError, nothing pushed (STUDY-100)", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

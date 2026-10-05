@@ -230,7 +230,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#29) | |
-| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29) | |
+| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29; STUDY-14 §6) | As Convex, `defineTable` itself checks nothing more. A push refuses a validator a table cannot have with `InvalidTopLevelTypeInSchemaError`, and one whose JSON is not an object with `InvalidSchemaExport`. Messages without the docs link (DV-397). |
 | `.index(name, [fields])` | server/schema.ts | done (#29) | `defineTable(...).index(name, fields)`. |
 | `.index(name, { fields, staged })`: staged indexes that don't block a push | server/schema.ts | done (STUDY-29) | `{ fields, staged: true }`: backfilled in the background, not enabled until un-staged; a query on it gets Convex's error. |
 | `.searchIndex(name, { searchField, filterFields, staged })` | server/schema.ts | done (STUDY-45) | Convex's push-time checks and messages; `staged` too. |

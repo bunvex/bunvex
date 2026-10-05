@@ -17,6 +17,7 @@
 import { parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
+  documentTypeError,
   type Engine,
   indexReferenceError,
   insertAuditLogEvents,
@@ -49,6 +50,20 @@ import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
 function checkIndexReferences(schema: SchemaDefinition) {
+  // First Convex exports the schema (`schemaToJson` here). An error there, such as a document validator whose
+  // JSON is not an object, is answered with `invalid_schema_export_error`, its own message dropped (STUDY-14 §6).
+  try {
+    schemaToJson(schema);
+  } catch {
+    throw new PushError(
+      "InvalidSchemaExport",
+      "Hit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
+  }
+  // Then Convex parses it: a document validator a table cannot have (STUDY-14 §6).
+  const document = documentTypeError(schema);
+  if (document)
+    throw new PushError("InvalidTopLevelTypeInSchemaError", `Hit an error while evaluating your schema:\n${document}`);
   const error = indexReferenceError(schema);
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
