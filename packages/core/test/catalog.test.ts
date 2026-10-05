@@ -60,6 +60,7 @@ describe("catalog (_tables / _index)", () => {
           _index_backfills: 548,
           _storage_deletions: 9998,
           _instance: 9999,
+          _next_tablet_id: 9997,
           users: 10001,
           posts: 10002,
         });

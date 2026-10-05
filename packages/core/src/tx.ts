@@ -78,6 +78,7 @@ import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } f
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import { readNextTablet, writeNextTablet } from "./tablet-ids.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
@@ -614,6 +615,11 @@ export class Tx {
     return t;
   }
 
+  /** Whether the catalog this transaction runs on has table `name` (system code: a table it may write). */
+  hasTable(name: string): boolean {
+    return this.catalog.tables.has(name);
+  }
+
   /** A table visible to this transaction (the catalog, or one it created), or undefined. */
   private findTable(name: string): TableDef | undefined {
     if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
@@ -718,10 +724,17 @@ export class Tx {
     try {
       const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
       const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
-      const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
+      const plan = planCatalog(
+        [{ name, indexes: {}, document: ANY }],
+        tables,
+        indexes,
+        true,
+        await readNextTablet(this),
+      );
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
       for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
+      await writeNextTablet(this, plan.nextTablet);
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
       const def = new Catalog().add(
         name,

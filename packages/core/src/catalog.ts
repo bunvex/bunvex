@@ -56,6 +56,8 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
+/** The next tablet id to hand out (STUDY-04 §7): `{nextId}`, so a purged table's id is never given again. */
+export const NEXT_TABLET_ID_TABLE = "_next_tablet_id";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
@@ -93,6 +95,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index_backfills: 548,
   // bunvex's own.
   _instance: 9_999,
+  _next_tablet_id: 9_997,
   _storage_deletions: 9_998,
 };
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
@@ -362,6 +365,8 @@ export type CatalogChanges = {
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
   restageIndexes: { _id: string; staged: boolean }[];
+  /** The tablet allocator's next value once `insertTables` took theirs (STUDY-04 §7): the caller writes it. */
+  nextTablet: number;
 };
 
 const sameFields = (a: string[], b: string[]) => a.length === b.length && a.every((f, i) => f === b[i]);
@@ -392,9 +397,18 @@ export function planCatalog(
   tables: TableMeta[],
   indexes: IndexMeta[],
   userTables = true,
+  tabletAllocator?: number,
 ): CatalogChanges {
-  const changes: CatalogChanges = { insertTables: [], insertIndexes: [], deleteIndexes: [], restageIndexes: [] };
-  let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
+  // A new table's tablet comes from the allocator (`_next_tablet_id`, STUDY-04 §7): never a purged table's. Only
+  // the store's first catalog commit runs before it exists, when nothing was purged yet.
+  let nextTablet = tabletAllocator ?? Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
+  const changes: CatalogChanges = {
+    insertTables: [],
+    insertIndexes: [],
+    deleteIndexes: [],
+    restageIndexes: [],
+    nextTablet,
+  };
   let nextIndexId = Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
   const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
@@ -441,6 +455,7 @@ export function planCatalog(
     }
     for (const i of stored) if (!wanted.has(i.name) && i.state !== "enabled") changes.deleteIndexes.push(i._id);
   }
+  changes.nextTablet = nextTablet;
   return changes;
 }
 
