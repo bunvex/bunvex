@@ -3,6 +3,7 @@
 // value and the validator in the same display forms.
 
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
+import { floatDebugText } from "./float-text.ts";
 import { decodeId } from "./id.ts";
 import type { GenericValidator } from "./validators.ts";
 import { compareValues, isBytes, isSimpleObject, opaque, type Value } from "./value.ts";
@@ -25,13 +26,8 @@ function display(v: Value | undefined, ancestors: Set<object>): string {
   if (v === undefined) return "undefined";
   if (v === null) return "null";
   if (typeof v === "bigint") return v.toString();
-  if (typeof v === "number") {
-    if (Number.isNaN(v)) return "NaN";
-    if (v === Number.POSITIVE_INFINITY) return "inf";
-    if (v === Number.NEGATIVE_INFINITY) return "-inf";
-    if (Object.is(v, -0)) return "-0.0";
-    return Number.isInteger(v) && Math.abs(v) < 1e16 ? `${v}.0` : String(v);
-  }
+  // Rust's `{:?}`, as Convex's `Display for ConvexValue` (`1.0`, `1e16`, `1.5e-7`, `NaN`, `inf`).
+  if (typeof v === "number") return floatDebugText(v);
   if (typeof v === "boolean") return String(v);
   if (typeof v === "string") return JSON.stringify(v);
   if (isBytes(v)) return `ArrayBuffer(${v.byteLength} bytes)`;
