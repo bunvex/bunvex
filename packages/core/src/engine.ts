@@ -13,7 +13,7 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
-import { BackendStateCache } from "./backend-state.ts";
+import { BackendStateCache, initializeBackendState } from "./backend-state.ts";
 import {
   activeTables,
   BACKEND_STATE_TABLE,
@@ -396,6 +396,8 @@ export class Engine {
       this.searchRestore = null;
       this.segmentReplay = null;
     });
+    // The run state's one document, as Convex writes it with the table at the store's first start (`running`).
+    await this.runMutation((db) => initializeBackendState(db), true);
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).

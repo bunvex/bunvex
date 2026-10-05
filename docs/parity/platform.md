@@ -279,7 +279,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | done (STUDY-42) | Convex's fields, states and indexes (timestamps in ns); `_snapshot_imports` also keeps the upload's size (`object_size`, not returned by `queryImport`). |
 | `_log_sinks` | `crates/model/log_sinks` | done (STUDY-59) | Number 535, `{status, config}`; one live sink per type, 8 at most; Convex's states. |
 | `_deployment_audit_log`, `_audit_log_config` | `crates/model/deployment_audit_log`, `audit_log_config` | partial (STUDY-48) | `_deployment_audit_log` done; `_audit_log_config` (custom audit logs) missing. |
-| `_backend_state` | `crates/model/backend_state` | done (STUDY-63) | Number 536, `{system, usage_limit, user}`; bunvex sets `user` only. |
+| `_backend_state` | `crates/model/backend_state` | done (STUDY-63, STUDY-134) | Number 536, `{system, usage_limit, user}`; its one document is written running (all `"none"`) at the store's first start, as Convex's `initialize_application_system_tables` (DV-427); bunvex sets `user` and `usage_limit` only. |
 | `_canonical_urls` | `crates/model/canonical_urls` | done (STUDY-49) | Number 546; `{requestDestination, url}`. |
 | `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | missing | |
 | `_usage_limits` | `crates/model/usage_limits` | done (STUDY-61) | Number 552, `by_selector`; `{metric, window, limitType, limit, enabled}`. |

@@ -1,0 +1,13 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_backend_state",
+  "rows": [
+    {
+      "_creationTime": 1791233999255.947,
+      "_id": "k028m7pcj971pv5nxac4reg1bd8fqpv0",
+      "system": "none",
+      "usage_limit": "none",
+      "user": "none"
+    }
+  ]
+}
