@@ -131,6 +131,7 @@ bunvex/
 │   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
 │   │   ├── run, env                 run a function, env vars (STUDY-37)                       🟡
 │   │   ├── deployment               usage and usage limits (STUDY-118)                         ✅
+│   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
 │   │   └── mcp                      for AI agents                                              D
@@ -202,6 +203,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── testing ──► server                   react ──► client
                 ◄── sync-e2e ──► client, react, server (tests only, never published)
                 ◄── jepsen ──► client, server (consistency runs, tests only, never published)
+                   differential ──► bunvex (against Convex's backend, tests only, never published)
 cli ──► server, core, client                              bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)

@@ -26,6 +26,18 @@ const MAX_INT64 = 2n ** 63n - 1n;
 const MAX_FIELD_NAME_LEN = 1024;
 const MAX_VALUE_FOR_ERROR_LEN = 16384;
 
+/**
+ * Convex's `MAX_NESTING` (crates/value/src/size.rs): how deeply arrays and objects may nest in any value — an
+ * argument, a result, a written value. Documents have their own, lower limit (16).
+ */
+export const MAX_VALUE_NESTING = 64;
+
+/**
+ * Convex's `TooNestedError` message. Convex checks the limit as it builds a value from its leaves up, so the
+ * level it reports is always the first one past the limit.
+ */
+export const TOO_NESTED_MESSAGE = `Value is too nested (nested ${MAX_VALUE_NESTING + 1} levels deep > maximum nesting ${MAX_VALUE_NESTING})`;
+
 /** NaN, ±Infinity and −0 cannot be plain JSON numbers. */
 export const isSpecialFloat = (n: number) => Number.isNaN(n) || !Number.isFinite(n) || Object.is(n, -0);
 
@@ -243,10 +255,21 @@ export function toJsonValue(value: Value): JSONValue {
   return toJson(value, value, "");
 }
 
-/** Parse the JSON form back: `$integer` → bigint, `$float` → number, `$bytes` → ArrayBuffer. */
+/**
+ * Parse the JSON form back: `$integer` → bigint, `$float` → number, `$bytes` → ArrayBuffer. A value nested
+ * deeper than `MAX_VALUE_NESTING` throws `TOO_NESTED_MESSAGE` before going further down.
+ */
 export function fromJsonValue(value: JSONValue): Value {
+  return fromJson(value, 1);
+}
+
+/** `depth`: the nesting an array or object here adds up to, counted from the root (whose own is 1). */
+function fromJson(value: JSONValue, depth: number): Value {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(fromJsonValue);
+  if (Array.isArray(value)) {
+    if (depth > MAX_VALUE_NESTING) throw new Error(TOO_NESTED_MESSAGE);
+    return value.map((e) => fromJson(e, depth + 1));
+  }
   const keys = Object.keys(value);
   if (keys.length === 1) {
     const k = keys[0];
@@ -268,10 +291,11 @@ export function fromJsonValue(value: JSONValue): Value {
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     }
   }
+  if (depth > MAX_VALUE_NESTING) throw new Error(TOO_NESTED_MESSAGE);
   const out: Record<string, Value> = {};
   for (const [k, v] of Object.entries(value)) {
     validateObjectField(k);
-    out[k] = fromJsonValue(v);
+    out[k] = fromJson(v, depth + 1);
   }
   return out;
 }
@@ -348,7 +372,7 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
   }
 }
 
-function copy(value: unknown, original: unknown, context: string): Value {
+function copy(value: unknown, original: unknown, context: string, depth: number, max: number): Value {
   if (value === null || typeof value === "number" || typeof value === "boolean" || typeof value === "string")
     return value;
   if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
@@ -356,16 +380,18 @@ function copy(value: unknown, original: unknown, context: string): Value {
   if (Array.isArray(value)) {
     if (value.length > MAX_ARRAY_LEN)
       throw new Error(`Array length is too long (${value.length} > maximum length ${MAX_ARRAY_LEN})`);
-    return value.map((v, i) => copy(v, original, `${context}[${i}]`));
+    if (depth > max) throw new Error(TOO_NESTED_MESSAGE);
+    return value.map((v, i) => copy(v, original, `${context}[${i}]`, depth + 1, max));
   }
   if (!isSimpleObject(value)) return toJson(value, original, context) as never; // throws Convex's message
   const keys = Object.keys(value).filter((k) => value[k] !== undefined);
   if (keys.length > MAX_OBJECT_FIELDS)
     throw new Error(`Object has too many fields (${keys.length} > maximum number ${MAX_OBJECT_FIELDS})`);
+  if (depth > max) throw new Error(TOO_NESTED_MESSAGE);
   const out: Record<string, Value> = {};
   for (const k of keys.sort()) {
     validateObjectField(k);
-    out[k] = copy(value[k], original, `${context}.${k}`);
+    out[k] = copy(value[k], original, `${context}.${k}`, depth + 1, max);
   }
   return out;
 }
@@ -380,7 +406,7 @@ const utf8len = utf8Length;
  * placeholder 9 (an int64), and anything else that is not a value throws `Unsupported value type: <typeof>`.
  */
 export function valueSize(v: Value | undefined): number {
-  return sizeOf(v, true);
+  return sizeOf(v, true, 1);
 }
 
 /**
@@ -389,10 +415,34 @@ export function valueSize(v: Value | undefined): number {
  * validation reports it with its path.
  */
 export function rawValueSize(v: Value | undefined): number {
-  return sizeOf(v, false);
+  return sizeOf(v, false, 1);
 }
 
-function sizeOf(v: Value | undefined, strict: boolean): number {
+/**
+ * `rawValueSize` and the nesting, in one walk (a function's arguments and result: Convex checks both as it
+ * builds the value). The walk stops going down past `maxNesting`, so a value of any depth is safe to measure:
+ * `nesting` is exact up to `maxNesting + 1`, and past that `size` counts only what was walked.
+ */
+export function measureRawValue(
+  v: Value | undefined,
+  maxNesting = MAX_VALUE_NESTING,
+): { size: number; nesting: number } {
+  deepest = 0;
+  depthCap = maxNesting + 1;
+  try {
+    const size = sizeOf(v, false, 1);
+    return { size, nesting: deepest };
+  } finally {
+    depthCap = Number.POSITIVE_INFINITY;
+  }
+}
+
+/** The deepest array or object `sizeOf` reached, and the depth it does not go below (`measureRawValue`). */
+let deepest = 0;
+let depthCap = Number.POSITIVE_INFINITY;
+
+/** `depth`: the nesting an array or object here adds up to, counted from the root (whose own is 1). */
+function sizeOf(v: Value | undefined, strict: boolean, depth: number): number {
   // Plain loops: this walks every result and argument (the 16 MiB limits, STUDY-64), so no per-field arrays.
   switch (typeof v) {
     case "string":
@@ -412,8 +462,9 @@ function sizeOf(v: Value | undefined, strict: boolean): number {
   }
   if (v === null) return 1;
   if (Array.isArray(v)) {
+    if (depth > deepest && deeper(depth)) return 2;
     let n = 2;
-    for (let i = 0; i < v.length; i++) n += sizeOf(v[i], strict);
+    for (let i = 0; i < v.length; i++) n += sizeOf(v[i], strict, depth + 1);
     return n;
   }
   if (Object.getPrototypeOf(v) !== Object.prototype) {
@@ -421,13 +472,20 @@ function sizeOf(v: Value | undefined, strict: boolean): number {
     if (isCommitTsPlaceholder(v)) return 9;
     if (strict && !isSimpleObject(v)) throw new Error(`Unsupported value type: ${typeof v}`);
   }
+  if (depth > deepest && deeper(depth)) return 2;
   const o = v as { [k: string]: Value | undefined };
   let n = 2;
   for (const k of Object.keys(o)) {
     const e = o[k];
-    if (e !== undefined) n += utf8len(k) + 1 + sizeOf(e, strict);
+    if (e !== undefined) n += utf8len(k) + 1 + sizeOf(e, strict, depth + 1);
   }
   return n;
+}
+
+/** A new deepest level for `sizeOf`: whether it is the cap, past which it does not go down. */
+function deeper(depth: number): boolean {
+  deepest = depth;
+  return depth >= depthCap;
 }
 
 /** Convex's estimate of a stored `_id` (a 32-character id) and `_creationTime` (values/size.ts). */
@@ -456,8 +514,9 @@ export function valueNesting(v: Value): number {
 
 /**
  * A validated deep copy of a value, as a `fromJsonValue(toJsonValue(v))` round trip would give (same
- * checks and messages, fields sorted, undefined fields dropped) without building the JSON.
+ * checks and messages, fields sorted, undefined fields dropped) without building the JSON. Nested deeper
+ * than `maxNesting`, it throws `TOO_NESTED_MESSAGE` before going further down.
  */
-export function copyValue(value: Value): Value {
-  return copy(value, value, "");
+export function copyValue(value: Value, maxNesting = MAX_VALUE_NESTING): Value {
+  return copy(value, value, "", 1, maxNesting);
 }
