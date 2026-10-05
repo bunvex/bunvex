@@ -65,6 +65,7 @@
         "@bunvex/core": "workspace:*",
         "@bunvex/persistence": "workspace:*",
         "@bunvex/persistence-conformance": "workspace:*",
+        "@bunvex/search": "workspace:*",
         "@bunvex/values": "workspace:*",
         "bunvex": "workspace:*",
         "mongodb": "^7.7.0",

@@ -220,6 +220,10 @@ type Registered<Kind extends FunctionDef["kind"], Visibility extends FunctionVis
   { kind: Kind }
 > & {
   isBunvexFunction: true;
+  /** @internal The `args` validator's JSON (`{"type":"any"}` without one), read by the push's analysis. */
+  exportArgs(): string;
+  /** @internal The `returns` validator's JSON (`null` without one), read by the push's analysis. */
+  exportReturns(): string;
   /** Phantom: not present at run time. */
   _args: Args;
   /** Phantom: not present at run time. */

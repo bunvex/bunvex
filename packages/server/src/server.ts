@@ -25,7 +25,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
-import { decodeId, type Value } from "@bunvex/values";
+import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
@@ -111,6 +111,7 @@ import {
   SyncSession,
   splayOptions,
   supportsTransitionChunks,
+  type WsHeartbeatOptions,
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
@@ -256,6 +257,11 @@ export type ServerOptions = {
    * Bun's largest, 2³² − 1. For tests.
    */
   wsBackpressureLimit?: number;
+  /**
+   * The sync socket's WS ping interval and client timeout (STUDY-104). Defaults: Convex's 5 s and 120 s. For
+   * tests.
+   */
+  wsHeartbeat?: Partial<WsHeartbeatOptions>;
 };
 
 /**
@@ -274,10 +280,13 @@ const fromWire = (args: unknown, path: string) => {
     const one = Array.isArray(args) ? args[0] : args;
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
-    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
-    throw new FunctionPathError(
-      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
-    );
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too
+    // deep for the stack to stringify (thousands of levels) is past the nesting limit too (STUDY-109).
+    const message =
+      e instanceof RangeError && e.message.includes("call stack")
+        ? TOO_NESTED_MESSAGE
+        : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
+    throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
 
@@ -651,6 +660,7 @@ export function createServer(opts: ServerOptions) {
     formatError,
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
+    ...(opts.wsHeartbeat ? { wsHeartbeat: opts.wsHeartbeat } : {}),
     // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
     onInvalidations: (events) => {
       const bySource = new Map<string, Map<string, number>>();
@@ -1055,7 +1065,12 @@ export function createServer(opts: ServerOptions) {
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
       maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
+      // The sync session pings every 5 s and closes a client silent for 120 s (STUDY-104), so Bun's own ping
+      // (sent when the idle timeout nears) is off: one heartbeat, not two. The idle timeout stays, at Bun's
+      // largest, as a backstop: it only fires on a socket nothing has come in on for 16 minutes, which the
+      // session's timeout closes long before.
       idleTimeout: 960,
+      sendPings: false,
       // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
       // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
       // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
@@ -1066,6 +1081,14 @@ export function createServer(opts: ServerOptions) {
       },
       message(ws, raw) {
         ws.data.session.message(String(raw));
+      },
+      // Any frame from the client shows it is alive, as Convex's `last_received` (STUDY-104); Bun answers a
+      // client's ping with a pong by itself.
+      ping(ws) {
+        ws.data.session.heard();
+      },
+      pong(ws) {
+        ws.data.session.heard();
       },
       close(ws) {
         ws.data.session.close();

@@ -21,6 +21,7 @@ import {
   PaginatedQueryClient,
   type PaginatedQueryToken,
   type PaginationStatus,
+  type QueryOptions,
   type QueryToken,
   type v1,
 } from "@bunvex/client";
@@ -273,9 +274,12 @@ export class BunvexReactClient {
     };
   }
 
-  /** Subscribe to a query ahead of the component that will use it, for `extendSubscriptionFor` ms (5 s). */
-  prewarmQuery<Q extends Ref<"query">>(opts: { query: Q; args?: FunctionArgs<Q>; extendSubscriptionFor?: number }) {
-    const unsubscribe = this.watchQuery(opts.query, opts.args).onUpdate(() => {});
+  /**
+   * Subscribe to a query ahead of the component that will use it, for `extendSubscriptionFor` ms (5 s). `args` is
+   * required, as in Convex's `QueryOptions`; an untyped caller that leaves it out still runs with `{}`, as Convex.
+   */
+  prewarmQuery<Q extends Ref<"query">>(opts: QueryOptions<Q> & { extendSubscriptionFor?: number }) {
+    const unsubscribe = this.watchQuery(opts.query, opts.args || {}).onUpdate(() => {});
     setTimeout(unsubscribe, opts.extendSubscriptionFor ?? DEFAULT_EXTEND_SUBSCRIPTION_FOR);
   }
 
