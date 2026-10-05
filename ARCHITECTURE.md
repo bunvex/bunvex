@@ -202,6 +202,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── testing ──► server                   react ──► client
                 ◄── sync-e2e ──► client, react, server (tests only, never published)
                 ◄── jepsen ──► client, server (consistency runs, tests only, never published)
+                   differential ──► bunvex (against Convex's backend, tests only, never published)
 cli ──► server, core, client                              bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)

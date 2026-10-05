@@ -18,6 +18,7 @@ export const auditEvents = {
   cancelScheduledFunction: (id: string, functionPath: string | null) =>
     event("cancel_scheduled_function", { ...ROOT, scheduled_function_id: id, function_path: functionPath }),
   cancelAllScheduledFunctions: () => event("cancel_all_scheduled_functions", { ...ROOT }),
+  deleteScheduledJobsTable: () => event("delete_scheduled_jobs_table", { ...ROOT }),
   requestExport: (id: string, includeStorage: boolean) =>
     event("request_export", {
       id,
