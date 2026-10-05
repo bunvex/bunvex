@@ -51,7 +51,10 @@ export function defaultFormat(clientHeader: string | null): Format {
 export function reformat(encodedJson: string, format: Format): string {
   if (format === "encoded") return encodedJson;
   let memo = memos.get(format);
-  if (!memo) memos.set(format, (memo = { entries: new Map(), chars: 0 }));
+  if (!memo) {
+    memo = { entries: new Map(), chars: 0 };
+    memos.set(format, memo);
+  }
   const known = memo.entries.get(encodedJson);
   if (known !== undefined) {
     // Most recently used last.
