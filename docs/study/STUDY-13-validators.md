@@ -85,3 +85,64 @@
 - `v.id` against the table resolver.
 - `json` shapes, the object helpers, the `record` guards, and `Infer`, checked by the typecheck of a test
   file.
+
+## 6. The builders' argument checks (2026-10-05)
+
+### 6.1 How Convex does it
+
+`npm-packages/convex/src/values/validators.ts` checks each builder's arguments when it is called. These are not
+value checks.
+
+- `throwUndefinedValidatorError(context, fieldName?)` (:12–22) catches `undefined` where a validator goes, which is
+  usually a circular import. Its message is "A validator is undefined[ for field "<f>"] in <context>. This is
+  often caused by circular imports. See https://docs.convex.dev/error#undefined-validator for details.". It is
+  thrown by:
+  - `v.object()` (:376), for the field's name; the next check is "v.object() entries must be validators";
+  - `v.array()` (:569), with no field;
+  - `v.record()` (:632–646), for `"key"` and `"value"`. Then come "Record validator cannot have optional keys",
+    then "… optional values", and only then "Key and value of v.record() but be validators" (Convex's wording,
+    typo included);
+  - `v.union()` (:701), for `member at index <i>`, then "All members of v.union() must be validators".
+    `v.nullable(x)` is `v.union(x, v.null())`, so it reports member 0.
+- `v.id(tableName)` (:94) requires a string: "v.id(tableName) requires a string".
+- `v.literal(value)` (:509–515) takes a string, number, bigint or boolean: "v.literal(value) must be a string,
+  number, or boolean".
+- `v.optional(undefined)` fails with the engine's own `TypeError`, in both.
+
+### 6.2 What bunvex did, and does now
+
+Before this section, bunvex had these differences:
+
+- `v.object`, `v.array` and `v.union` did not catch `undefined`: an object said "v.object() entries must be
+  validators; the entry for "<f>" is not", and an array was built;
+- `v.record`'s `undefined` message had no "This is often caused by circular imports.", and its checks ran in
+  another order with "must be validators";
+- `v.literal` and `v.id` took anything.
+
+Now every builder above throws Convex's message, in Convex's order (owner, 2026-10-05), from
+`throwUndefinedValidator` in `packages/values/src/validators.ts`. Convex's docs link is left out (DV-358).
+
+### 6.3 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| B1 | The undefined-validator message has no "See https://docs.convex.dev/error#undefined-validator for details." | DV-04's rule (rule 5) | DV-358 (owner, 2026-10-05) |
+
+### 6.4 Tests
+
+- `packages/values/test/undefined-validators.test.ts`: each builder's `undefined` message, the non-validator
+  messages, the record's order, and `v.literal` / `v.id`.
+- `packages/sync-e2e/test/undefined-validators-oracle.test.ts`: the oracle. The same 16 calls against the
+  official `convex/values` throw the same messages, once Convex's docs link is removed.
+
+Sabotage checks, each caught:
+
+| Sabotage | Caught by |
+|---|---|
+| `v.object` does not catch `undefined` | unit test, oracle |
+| The record's non-validator message reworded | unit test, oracle |
+| The union's member index off by one | unit test, oracle (`union`, `nullable`) |
+| A bigint literal refused | unit tests |
+| `v.id` takes `undefined` | unit test, oracle |
+| The undefined-validator message changed | unit tests, oracle |
+| `v.array` does not catch `undefined` | unit test, oracle |
