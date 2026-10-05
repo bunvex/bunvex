@@ -171,7 +171,6 @@ gaps.
   - typed limit error codes.
 - Limits and checks:
   - nesting 64 for arguments and results;
-  - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
   - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
   - `/api/delete_scheduled_functions_table`;

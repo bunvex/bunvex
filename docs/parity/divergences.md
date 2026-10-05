@@ -231,6 +231,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-340 | **Moved to [AD-18](additions.md#additions)** (the local backend's log): a bunvex addition, not a divergence | — | — | — | owner, 2026-10-04 (as recommended; whether bunvex reports errors to a service of its own, as Convex's Sentry, is open: STUDY-40 L8) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-345 | A function error's frame names the function as JavaScriptCore does: a name the bundler changed shows changed (`assertShort2`), an inline handler `<anonymous>`, and a strict-mode tail call has no caller frame | V8 with esbuild `keepNames`: the original names, every caller | yes (stack text) | the engine: JavaScriptCore names a frame by its declared identifier and implements proper tail calls | owner, 2026-10-04 (as recommended) | [STUDY-95 S1](../study/STUDY-95-error-stacks.md#4-divergences) |
 | DV-347 | Convex's `getConvexSize` is `valueSize` in `bunvex/values` | `getConvexSize` (values/size.ts) | yes: `import { getConvexSize }` fails; the function, sizes and errors are the same | Rule 5: no "convex" in shipped names (as `toJsonValue` for `convexToJson`) | owner, 2026-10-04 (keep `valueSize`) | [STUDY-97 VS1](../study/STUDY-97-value-size-and-base64.md#4-divergences) |
+| DV-364 | `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` sets the HTTP server's concurrent request limit (default 128) | Self-hosted Convex passes a constant 128 (`local_backend` `MAX_CONCURRENT_REQUESTS`) and never reads the knob (whose own default, 1024, is the cloud's) | operational | The same default as self-hosted Convex, with Convex's knob name to change it | owner, 2026-10-05 | [STUDY-110 L1](../study/STUDY-110-request-concurrency-limit.md#4-divergences) |
+| DV-365 | A WebSocket upgrade never waits for the request limit | The upgrade request takes a permit until its 101 (the session itself holds none), so while all 128 are taken a new session's handshake waits | yes (connection latency under saturation) | Owner: upgrades are exempt; an open session holds no permit in either | owner, 2026-10-05 | [STUDY-110 L2](../study/STUDY-110-request-concurrency-limit.md#4-divergences) |
 | DV-346 | A frame's line and column are the original 1-based position its source map defines | the frame's 1-based position passed to a 0-based lookup, the token's 0-based position printed: usually the right line on esbuild's output, a 0-based column | yes (positions) | over Bun's output, Convex's arithmetic shows wrong lines; the right line is what Convex's users see | owner, 2026-10-04 (as recommended) | [STUDY-95 S2](../study/STUDY-95-error-stacks.md#4-divergences) |
 
 ## Resolved to match Convex
@@ -342,6 +344,10 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
+
+| ID | bunvex | Convex | Observable | Why | Decided | Source |
+|---|---|---|---|---|---|---|
+| DV-366 | The site port (HTTP actions) shares the 128-request limit with the API and has no limit of its own | Self-hosted Convex's `dev_site_proxy` is a service of `max_concurrency = 4`: at most 4 site requests forwarded at once, each then under the backend's 128 | yes (HTTP action concurrency) | Ainda não fizemos: matching it is a second limit of 4 on the site, but it caps HTTP actions at 4 in flight, which looks like a dev-proxy default rather than a designed limit. Recommendation: do not match | pending (owner) | [STUDY-110 L3](../study/STUDY-110-request-concurrency-limit.md#4-divergences) |
 
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).

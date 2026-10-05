@@ -89,6 +89,7 @@ import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } 
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
+import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
@@ -256,6 +257,11 @@ export type ServerOptions = {
    * Bun's largest, 2³² − 1. For tests.
    */
   wsBackpressureLimit?: number;
+  /**
+   * Requests the API and the site serve at once, together (STUDY-110); past it they wait their turn. Default:
+   * `HTTP_SERVER_MAX_CONCURRENT_REQUESTS`, else 128, as self-hosted Convex.
+   */
+  maxConcurrentRequests?: number;
 };
 
 /**
@@ -1302,7 +1308,11 @@ export function createServer(opts: ServerOptions) {
     },
   };
   // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
-  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
+  // The concurrent request limit (STUDY-110) is inside the client version check, as Convex's layers; one for
+  // the API and the site, as Convex's site proxy forwards into the backend's service.
+  const requestLimit =
+    opts.maxConcurrentRequests === undefined ? requestLimitFromEnv() : new RequestLimit(opts.maxConcurrentRequests);
+  server = Bun.serve<WsData, never>(withClientVersionCheck(withRequestLimit(withApiCors(apiOptions), requestLimit)));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1330,18 +1340,23 @@ export function createServer(opts: ServerOptions) {
     sitePort === null
       ? null
       : Bun.serve(
-          withClientVersionCheck({
-            port: sitePort,
-            ...(opts.hostname ? { hostname: opts.hostname } : {}),
-            idleTimeout: 120,
-            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-            fetch(req, srv) {
-              const url = new URL(req.url);
-              if (url.pathname === "/version") return new Response("bunvex");
-              srv.timeout(req, 0);
-              return serveHttpAction(req, url.pathname, url.search);
-            },
-          } as Bun.Serve.Options<undefined, never>),
+          withClientVersionCheck(
+            withRequestLimit(
+              {
+                port: sitePort,
+                ...(opts.hostname ? { hostname: opts.hostname } : {}),
+                idleTimeout: 120,
+                ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+                fetch(req, srv) {
+                  const url = new URL(req.url);
+                  if (url.pathname === "/version") return new Response("bunvex");
+                  srv.timeout(req, 0);
+                  return serveHttpAction(req, url.pathname, url.search);
+                },
+              } as Bun.Serve.Options<undefined, never>,
+              requestLimit,
+            ),
+          ),
         );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
