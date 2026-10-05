@@ -44,6 +44,39 @@ The parse (`crates/model/src/modules/function_validators.rs`) takes JSON, then a
 - `ReturnsValidator` (:187–206) is `null` (`Unvalidated`) or any validator.
 - A malformed validator is "Error in args validator: …" or "Error in returns validator: …", with a docs link.
 
+The parse itself (`JsonForm::json_deserialize`, crates/json_trait/src/lib.rs:38–45) has two steps, with the
+messages below. The message after "Invalid JSON returned from …():" is the error's `Display`, which is its
+outermost message.
+
+1. **The shape.** `serde_json` reads the text into `ValidatorJson` (crates/common/src/schemas/json.rs:640–680). It
+   is tagged by `type`:
+   - `null`, `number`, `bigint`, `commitTs`, `boolean`, `string`, `bytes`, and `any` with its aliases `map` and
+     `set`;
+   - `literal {value}`, `id {tableName}`, `array {value}`, `record {keys, values}`, `object {value}`,
+     `union {value}`;
+   - a field is `{fieldType, optional}`.
+
+   Any serde failure gets the context `invalid_json()`, whose message is "Invalid JSON". So bad syntax, an
+   unknown `type`, or a missing or mistyped field all read "Invalid JSON". Serde's own words never show.
+2. **The meaning.** `Validator::try_from` (json.rs:682–739) checks the following, in order:
+   - a literal's value must convert to a value and be a number, a bigint, a boolean or a string: "Value
+     `<v>` is not a valid literal.";
+   - an id's table name is an identifier (`check_valid_identifier`'s messages);
+   - an object's fields are taken in key order (a `BTreeMap`):
+     - each name is a field name, then an identifier (`check_valid_field_name`, `check_valid_identifier`);
+     - each validator's error is wrapped as "Invalid validator for key \`k\`: …";
+   - a record's keys come first: they must be a subset of `v.string()`. Otherwise the message is "Records can
+     only have string keys. Your validator contains a record with key typed as \`<display>\`, which is not a
+     subtype of \`v.string()\`". Then come its values, then "Records cannot have string literal keys", then
+     "Records cannot have optional values";
+   - arrays and unions are checked member by member.
+
+What Convex stores is the parsed validator serialized back (`json_serialize`):
+
+- only the fields its type has;
+- an object's fields in key order;
+- `map` and `set` as `any`.
+
 These errors are a `JsError` from `udf_analyze`. `Application::start_push` (crates/application/src/lib.rs:2896)
 reports them as `InvalidModules`: "Loading the pushed modules encountered the following error:\n<message>".
 `start_push`'s route then prefixes "Hit an error while pushing:\n" (local_backend/src/deploy_config2.rs:323).
@@ -91,8 +124,14 @@ Now (`@bunvex/server`):
 - **One source.** `exportedValidator(f, method, id)` (builders.ts) is what Convex's analyze does with one
   method:
   - absent: `{"type":"any"}` or `"null"`;
-  - not a function, a non-string result, unparseable JSON: Convex's messages;
-  - an args validator that is neither an object nor `any`: Convex's message.
+  - not a function, or a non-string result: Convex's messages;
+  - otherwise the string is parsed as Convex's backend parses it (`validator-json.ts`, E2, owner 2026-10-05):
+    - the shape serde accepts, or "Invalid JSON";
+    - then each check of `Validator::try_from`, in its order and words, with "Error in args validator: " or
+      "Error in returns validator: " before it;
+    - then "Args validator must be an object or any".
+
+    The JSON stored is the one Convex serializes back.
 
   Both readers go through it:
   - the push's analysis (`code-version.ts` `analyzeExport`) stores its string;
@@ -113,7 +152,8 @@ This is not a hot path: the methods run once per function at a push, and on an `
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | E1 | The strict replacer's message has no docs link | DV-04's rule: messages never link to Convex's docs | DV-355 (owner rule, 2026-10-05) |
-| E2 | *gap, pending:* an export's JSON is only checked for syntax, and for `args`, for an object or `any`. Convex parses the validator (`Validator::try_from`): a malformed one is "Error in args validator: …". Its parse errors are serde's words, which bunvex cannot reproduce: it reports `JSON.parse`'s message after Convex's prefix | Only an export overwritten by hand reaches it; bunvex's builders always produce valid JSON | question for the owner (in the PR) |
+| E2 | The full parse is built and matches Convex (owner, 2026-10-05). Serde's wording was never at stake: every serde failure reads "Invalid JSON" in Convex too. What remains is in E3 | — | match Convex (owner, 2026-10-05) |
+| E3 | What still differs in the parse: (1) "Error in args/returns validator: …" has no second line linking to Convex's docs; (2) a key repeated in one JSON object of the export is refused by serde for a struct (`duplicate field`, so "Invalid JSON"), while `JSON.parse` keeps the last one; (3) a literal value that does not convert gives bunvex's value-conversion message (`fromJsonValue`), not Convex's `json_to_value` one; (4) a float literal is stored as JavaScript prints it (`1`), where serde prints `1.0`. That is only visible in the stored analysis, since `apiSpec` parses it to the same number | (1) DV-04's rule. (2)–(4): we cannot do it, short of reimplementing serde_json's reader and printer; only a hand-written export reaches (2) and (3) | DV-357 (owner, 2026-10-05) |
 
 Before this study bunvex had another difference: `returns: {"type":"any"}` for a function without `returns`.
 It now matches Convex (`null`), as the owner decided (2026-10-05), so it needs no row.
@@ -153,8 +193,25 @@ Sabotage checks, each caught:
 | The strict replacer never fires | strict replacer test |
 | `apiSpec`'s `returns` read from `exportArgs` | `apiSpec`, `function-spec` |
 | The "not a function" message changed | analysis (broken exports), push over HTTP |
+| E2: an id's `tableName` not required | the parse test |
+| E2: `$` field names allowed | the parse test |
+| E2: the "Invalid validator for key" wrapper dropped | the parse test |
+| E2: optional record values allowed | the parse test |
+| E2: fields checked in written order, not key order | the parse test |
+| E2: `map` stored as itself instead of `any` | the stored-JSON test |
+| E2: string-literal record keys allowed | the parse test |
+
+The E2 tests (`export-validators.test.ts`) cover:
+
+- the shapes serde refuses ("Invalid JSON");
+- a `$` field name and a non-identifier field name;
+- an id's bad table name (wrapped with its key);
+- a literal that is not one, with fields checked in key order;
+- a record whose keys are not strings (a `v.float64()`, a union with a number literal), string-literal keys,
+  and optional values;
+- unions;
+- the stored JSON: sorted fields, `map` / `set` as `any`, extra fields dropped.
 
 ## 6. Open questions
 
-- E2: should bunvex parse an export's validator JSON fully, with Convex's "Error in args validator: …" messages
-  (still without serde's exact parse-error words)? Only a hand-overwritten export reaches it.
+None.

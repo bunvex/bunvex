@@ -117,9 +117,12 @@ describe("the analysis", () => {
     expect(await broken("q.exportReturns = () => ({});")).toBe(
       "Invalid exportReturns return value: m.js:q.exportReturns() didn't return a string.",
     );
-    expect(await broken('q.exportArgs = () => "{";')).toStartWith("Invalid JSON returned from m.js:q.exportArgs(): ");
-    expect(await broken('q.exportReturns = () => "nope";')).toStartWith(
-      "Invalid JSON returned from m.js:q.exportReturns(): ",
+    // Every serde failure is Convex's `invalid_json`: "Invalid JSON".
+    expect(await broken('q.exportArgs = () => "{";')).toBe(
+      "Invalid JSON returned from m.js:q.exportArgs(): Invalid JSON",
+    );
+    expect(await broken('q.exportReturns = () => "nope";')).toBe(
+      "Invalid JSON returned from m.js:q.exportReturns(): Invalid JSON",
     );
     expect(await broken(`q.exportArgs = () => '{"type":"string"}';`)).toBe(
       "Invalid JSON returned from m.js:q.exportArgs(): Args validator must be an object or any",
@@ -128,6 +131,88 @@ describe("the analysis", () => {
     expect(
       await failure(load([fnModule(`export const q = query({ args: v.string(), handler: async () => 1 });`)])),
     ).toBe("Invalid JSON returned from m.js:q.exportArgs(): Args validator must be an object or any");
+  });
+
+  test("the JSON is parsed as Convex's backend parses a validator: its shape, then its meaning (E2)", async () => {
+    const args = (json: string) =>
+      failure(load([fnModule(`export const q = query(async () => 1); q.exportArgs = () => ${JSON.stringify(json)};`)]));
+    const returns = (json: string) =>
+      failure(
+        load([fnModule(`export const q = query(async () => 1); q.exportReturns = () => ${JSON.stringify(json)};`)]),
+      );
+    const ARGS = "Invalid JSON returned from m.js:q.exportArgs(): ";
+    const RETURNS = "Invalid JSON returned from m.js:q.exportReturns(): ";
+    const field = (fieldType: object, optional = false) => ({ fieldType, optional });
+    const object = (value: object) => JSON.stringify({ type: "object", value });
+    // The shape: what serde refuses is "Invalid JSON".
+    for (const bad of [
+      "null",
+      "[]",
+      '{"type":"nope"}',
+      '{"type":7}',
+      '{"type":"object"}',
+      '{"type":"literal"}',
+      '{"type":"id"}',
+      object({ a: { fieldType: { type: "string" } } }),
+      object({ a: field({ type: "array" }) }),
+      object({ a: field({ type: "union", value: {} }) }),
+    ])
+      expect(await args(bad)).toBe(`${ARGS}Invalid JSON`);
+    // The meaning, in Convex's words (its docs link left out, DV-357).
+    expect(await args(object({ $a: field({ type: "string" }) }))).toBe(
+      `${ARGS}Error in args validator: Field name $a starts with '$', which is reserved.`,
+    );
+    expect(await args(object({ "1a": field({ type: "string" }) }))).toBe(
+      `${ARGS}Error in args validator: Invalid first character '1' in 1a: Identifiers must start with an alphabetic character or underscore`,
+    );
+    expect(await args(object({ a: field({ type: "id", tableName: "bad-name" }) }))).toBe(
+      `${ARGS}Error in args validator: Invalid validator for key \`a\`: Identifier bad-name has invalid character '-': Identifiers can only contain alphanumeric characters or underscores`,
+    );
+    expect(
+      await args(object({ b: field({ type: "literal", value: null }), a: field({ type: "literal", value: [1] }) })),
+    ).toBe(`${ARGS}Error in args validator: Invalid validator for key \`a\`: Value [1.0] is not a valid literal.`);
+    const record = (keys: object, values = field({ type: "string" })) =>
+      JSON.stringify({ type: "record", keys, values });
+    expect(await returns(record({ type: "number" }))).toBe(
+      `${RETURNS}Error in returns validator: Records can only have string keys. Your validator contains a record with key typed as \`v.float64()\`, which is not a subtype of \`v.string()\``,
+    );
+    expect(await returns(record({ type: "union", value: [{ type: "string" }, { type: "literal", value: 1 }] }))).toBe(
+      `${RETURNS}Error in returns validator: Records can only have string keys. Your validator contains a record with key typed as \`v.union(v.string(), v.literal(1.0))\`, which is not a subtype of \`v.string()\``,
+    );
+    expect(
+      await returns(
+        record({
+          type: "union",
+          value: [
+            { type: "id", tableName: "t" },
+            { type: "literal", value: "k" },
+          ],
+        }),
+      ),
+    ).toBe(`${RETURNS}Error in returns validator: Records cannot have string literal keys`);
+    expect(await returns(record({ type: "string" }, field({ type: "string" }, true)))).toBe(
+      `${RETURNS}Error in returns validator: Records cannot have optional values`,
+    );
+    // A union is parsed member by member; an empty union is a validator.
+    expect(
+      await returns('{"type":"union","value":[{"type":"string"},{"type":"literal","value":{"$a":1}}]}'),
+    ).toStartWith(`${RETURNS}Error in returns validator: `);
+    expect(await returns('{"type":"union","value":[]}')).toBe("loaded");
+  });
+
+  test("what is stored is the JSON Convex serializes back: fields in key order, map and set as any", async () => {
+    const version = await load([
+      fnModule(
+        `export const q = query(async () => 1);
+         q.exportArgs = () => '{"type":"object","extra":1,"value":{"b":{"optional":false,"fieldType":{"type":"map"}},"a":{"fieldType":{"type":"string"},"optional":true}}}';
+         q.exportReturns = () => '{"type":"set"}';`,
+      ),
+    ]);
+    const f = version.analysis["m.js"]!.functions[0]!;
+    expect(f.args).toBe(
+      '{"type":"object","value":{"a":{"fieldType":{"type":"string"},"optional":true},"b":{"fieldType":{"type":"any"},"optional":false}}}',
+    );
+    expect(f.returns).toBe('{"type":"any"}');
   });
 
   test("a method that throws fails the push with its error, as Convex's `Error`", async () => {
