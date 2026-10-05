@@ -85,3 +85,37 @@
 - `v.id` against the table resolver.
 - `json` shapes, the object helpers, the `record` guards, and `Infer`, checked by the typecheck of a test
   file.
+
+## 7. A literal validator in messages (2026-10-05)
+
+Convex shows a validator in a message (`Validator: …`, "does not match literal validator `v.literal(…)`") with
+`Display for LiteralValidator` (crates/common/src/schemas/validator.rs:704–725). It prints JSON where JSON has a
+form:
+
+- a string, as JSON: `v.literal("a")`;
+- a boolean: `v.literal(true)`;
+- a finite number, through `serde_json`: `v.literal(2.0)`.
+
+Otherwise it prints the type alone:
+
+- any bigint: `v.literal(<bigint>)`, never its value (not `5n` or `5`);
+- NaN and the infinities: `v.literal(<number>)`.
+
+bunvex printed the bigint's digits (`v.literal(3)`) and `NaN` / `inf`. `displayLiteral` (check.ts) now prints
+Convex's forms. `displayValidator` and the literal-mismatch message use it (owner, 2026-10-05).
+
+A finite float is still printed by `displayValue`, as in every other message. Its form differs from serde_json's
+for very large or very small magnitudes (JavaScript writes `10000000000000000` and `1e+21`, where `ryu` writes
+`1e16` and `1e21`). That is not part of this change. It is reported to the owner as an open question for the
+value display as a whole.
+
+Tests (`packages/values/test/validators.test.ts`, "literals compare by type and value"):
+
+- a bigint, NaN and −infinity literal, a string, a boolean and a float literal;
+- a union with a bigint literal in a `Validator:` line.
+
+Sabotage checks, each caught:
+
+- a bigint printed as its number;
+- infinity printed as itself;
+- `displayValidator` not using the new form.

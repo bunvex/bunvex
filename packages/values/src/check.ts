@@ -48,13 +48,24 @@ function display(v: Value | undefined, ancestors: Set<object>): string {
   return s;
 }
 
+/**
+ * A literal validator's value as Convex's `Display for LiteralValidator` shows it
+ * (crates/common/src/schemas/validator.rs): JSON for a string, a boolean or a finite number, and the type alone
+ * where JSON has no form: `<bigint>` for any bigint, `<number>` for NaN and the infinities.
+ */
+function displayLiteral(value: Value): string {
+  if (typeof value === "bigint") return "<bigint>";
+  if (typeof value === "number" && !Number.isFinite(value)) return "<number>";
+  return displayValue(value);
+}
+
 /** Display a validator as the messages do: `v.string()`, `v.object({a: v.optional(v.float64())})`. */
 export function displayValidator(x: GenericValidator): string {
   switch (x.kind) {
     case "id":
       return `v.id(${JSON.stringify(x.tableName)})`;
     case "literal":
-      return `v.literal(${displayValue(x.value as Value)})`;
+      return `v.literal(${displayLiteral(x.value as Value)})`;
     case "array":
       return `v.array(${displayValidator(x.element)})`;
     case "record":
@@ -140,7 +151,7 @@ function check(x: GenericValidator, value: Value | undefined, tableOf: TableOfId
         ? null
         : new Mismatch(
             (path) =>
-              `\`${displayValue(value)}\` does not match literal validator \`v.literal(${displayValue(x.value as Value)})\`.${path}`,
+              `\`${displayValue(value)}\` does not match literal validator \`v.literal(${displayLiteral(x.value as Value)})\`.${path}`,
           );
     case "array": {
       if (!Array.isArray(value)) return noMatch(value, x);
