@@ -7,6 +7,8 @@
 // asked or in the background, so a commit costs little more than Convex's.
 
 import type { Value } from "@bunvex/values";
+import { IndexesUnavailableError } from "./catalog.ts";
+import { OutOfRetentionError } from "./committer.ts";
 import type { Doc } from "./schema.ts";
 import {
   NEVER,
@@ -33,14 +35,20 @@ export type SummaryCheckpoint = {
   tables: Record<string, { totalSize: string; inferredTypeWithOptionalFields: ShapeJson }>;
 };
 
-/** Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, a 503: retry). */
-export class TableSummariesUnavailableError extends Error {
-  readonly code = "TableSummariesUnavailable";
-  constructor() {
-    super("Table summary unavailable (still bootstrapping)");
+/**
+ * Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, a 503: retry). Like the
+ * indexes' (STUDY-79), a system error: a function that hits it cannot catch it, and a sync query is retried.
+ */
+export class TableSummariesUnavailableError extends IndexesUnavailableError {
+  declare readonly code: "TableSummariesUnavailable";
+  constructor(message = "Table summary unavailable (still bootstrapping)") {
+    super("TableSummariesUnavailable", message);
     this.name = "TableSummariesUnavailableError";
   }
 }
+
+/** Convex's message for `count()` while the summaries bootstrap (`async_syscall.rs`, `count`). */
+const COUNT_UNAVAILABLE = "Table count unavailable while bootstrapping";
 
 type Write = { tablet: number; old: Doc | null; next: Doc | null };
 
@@ -63,6 +71,50 @@ export class TableSummaries {
   private at = 0;
   /** Commits applied since the build (Convex's `write_commits_since_load`), for checkpoint pacing. */
   commits = 0;
+  /**
+   * The recent commits' count changes (STUDY-107), oldest first from `deltaHead`: a transaction counts at its
+   * snapshot, as Convex's (whose count is its snapshot's summary), not at the latest commit.
+   */
+  private deltas: { ts: number; tablet: number; d: number }[] = [];
+  private deltaHead = 0;
+  /** The build's snapshot: no count is known before it. */
+  private builtFloor = 0;
+  /** The last change dropped: counts are known at every snapshot from it on. */
+  private droppedTs = 0;
+  /**
+   * Changes at or before this ts are dropped: the engine's write log start (`Committer.logStartTs`), so they
+   * are kept as long as the commits themselves. A snapshot older than that is out of retention already.
+   */
+  retainedAfter: () => number = () => Number.NEGATIVE_INFINITY;
+  /**
+   * The snapshots of the transactions running now, with how many hold each: their changes are kept for as long
+   * as they run, however old, as Convex's transaction holds its count snapshot for its whole life.
+   */
+  private pins = new Map<number, number>();
+  /** The oldest pinned snapshot (+∞ with none). */
+  private oldestPin = Number.POSITIVE_INFINITY;
+
+  /** Keep the changes after `snapshot` until the returned function is called (once the transaction ends). */
+  pin(snapshot: number): () => void {
+    this.pins.set(snapshot, (this.pins.get(snapshot) ?? 0) + 1);
+    if (snapshot < this.oldestPin) this.oldestPin = snapshot;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = this.pins.get(snapshot)! - 1;
+      if (n > 0) {
+        this.pins.set(snapshot, n);
+        return;
+      }
+      this.pins.delete(snapshot);
+      if (snapshot === this.oldestPin) {
+        let oldest = Number.POSITIVE_INFINITY;
+        for (const s of this.pins.keys()) if (s < oldest) oldest = s;
+        this.oldestPin = oldest;
+      }
+    };
+  }
 
   get ready() {
     return this.queued === null;
@@ -81,14 +133,27 @@ export class TableSummaries {
     return this.tables.get(tablet)?.count ?? 0;
   }
 
+  /**
+   * `tablet`'s count at `snapshot` (at most the latest commit's ts): the latest, less the changes committed
+   * since. Before the build, Convex's bootstrapping error. A snapshot no running transaction pinned and older
+   * than the write log keeps is out of retention (a transaction begun there, as Convex refuses one).
+   */
+  countAt(tablet: number, snapshot: number): number {
+    if (!this.ready || snapshot < this.builtFloor) throw new TableSummariesUnavailableError(COUNT_UNAVAILABLE);
+    if (snapshot < this.droppedTs) throw new OutOfRetentionError(snapshot, this.droppedTs);
+    let n = this.tables.get(tablet)?.count ?? 0;
+    for (let i = this.deltas.length - 1; i >= this.deltaHead && this.deltas[i].ts > snapshot; i--)
+      if (this.deltas[i].tablet === tablet) n -= this.deltas[i].d;
+    return n;
+  }
+
   /** A commit's writes, as it becomes visible. */
   apply(ts: number, writes: Write[]) {
     if (this.queued) {
       this.queued.push({ ts, writes });
       return;
     }
-    for (const w of writes) this.applyOne(w);
-    this.at = ts;
+    this.applyCommit(ts, writes);
     this.commits++;
     if (this.pendingShapes.length >= FOLD_AFTER && !this.folding) {
       this.folding = true;
@@ -96,6 +161,29 @@ export class TableSummaries {
         this.folding = false;
         this.fold();
       });
+    }
+  }
+
+  /** A commit's writes, with its count changes kept for `countAt`; the changes past retention are dropped. */
+  private applyCommit(ts: number, writes: Write[]) {
+    const deltas = this.deltas;
+    for (const w of writes) {
+      this.applyOne(w);
+      const d = (w.next ? 1 : 0) - (w.old ? 1 : 0);
+      if (d === 0) continue;
+      const last = deltas.length > this.deltaHead ? deltas[deltas.length - 1] : undefined;
+      if (last && last.ts === ts && last.tablet === w.tablet) last.d += d;
+      else deltas.push({ ts, tablet: w.tablet, d });
+    }
+    this.at = ts;
+    // Dropped once both the write log and every running transaction are past them.
+    const horizon = Math.min(this.retainedAfter(), this.oldestPin);
+    while (this.deltaHead < deltas.length && deltas[this.deltaHead].ts <= horizon)
+      this.droppedTs = deltas[this.deltaHead++].ts;
+    // Compact once the dropped prefix is the larger part: amortized O(1) per commit.
+    if (this.deltaHead > 1024 && this.deltaHead * 2 > deltas.length) {
+      this.deltas = deltas.slice(this.deltaHead);
+      this.deltaHead = 0;
     }
   }
 
@@ -153,6 +241,7 @@ export class TableSummaries {
     this.tables = tables;
     this.builtAt = at;
     this.at = at;
+    this.builtFloor = at;
   }
 
   /** A document's version at the checkpoint (`old`) replaced by its version at the build's snapshot. */
@@ -180,6 +269,7 @@ export class TableSummaries {
   build(at: number, tablet: number, docs: Iterable<Doc>) {
     this.builtAt = at;
     this.at = at;
+    this.builtFloor = at;
     for (const d of docs) this.applyOne({ tablet, old: null, next: d });
     this.fold();
   }
@@ -190,8 +280,7 @@ export class TableSummaries {
     this.queued = null;
     for (const c of queued)
       if (this.builtAt === null || c.ts > this.builtAt) {
-        for (const w of c.writes) this.applyOne(w);
-        this.at = c.ts;
+        this.applyCommit(c.ts, c.writes);
         this.commits++;
       }
   }
