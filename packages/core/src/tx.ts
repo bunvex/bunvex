@@ -36,6 +36,7 @@ import {
   IndexBackfillingError,
   type IndexMeta,
   IndexStagedError,
+  indexRow,
   planCatalog,
   searchIndexesUnavailable,
   TABLES_TABLE,
@@ -738,7 +739,8 @@ export class Tx {
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
       for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
-      for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
+      for (const i of plan.insertIndexes)
+        await this.insert(INDEX_TABLE, indexRow({ ...i, createdLowerBound: this.snapshot }));
       await writeNextIndexId(this, plan.nextIndexId);
       const def = new Catalog().add(
         name,

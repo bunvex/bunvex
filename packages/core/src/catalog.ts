@@ -5,6 +5,7 @@
 //
 // `_tables` and `_index` themselves have FIXED ids — that is how startup finds everything else (Convex
 // keeps their ids in persistence globals instead).
+import type { Value } from "@bunvex/values";
 import { opaqueToInspect } from "./inspect.ts";
 import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 
@@ -176,8 +177,10 @@ export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.sta
 /**
  * An index's lifecycle, as Convex's `DatabaseIndexState` (STUDY-29): `backfilling` (the worker is copying
  * the table into it; every write already maintains it), `backfilled` (complete, not yet enabled: the
- * schema's "push" enables it, or it is staged), `enabled` (serves queries). An index of a new table starts
- * `enabled`. `staged` (backfilling / backfilled only): never enabled while the schema declares it staged.
+ * schema's "push" enables it, or it is staged), `enabled` (serves queries). A user index starts
+ * `backfilling`, on a new table too; a system index (`by_id`, `by_creation_time`) of a new table, and every
+ * index of a new system table, start `enabled`. `staged` (backfilling / backfilled only): never enabled while
+ * the schema declares it staged.
  */
 export type IndexState = "backfilling" | "backfilled" | "enabled";
 export type IndexMeta = {
@@ -185,29 +188,131 @@ export type IndexMeta = {
   tablet: number;
   name: string;
   fields: string[];
+  /** The id persistence keys the index's entries by (Convex's `persistenceIndexId`). */
   indexId: number;
   state: IndexState;
   staged?: boolean;
+  /** While backfilling: a commit ts at or before the index's creation (Convex's `indexCreatedLowerBound`). */
+  createdLowerBound?: number;
+  /** While backfilling: the table's documents are all in it, only catching up is left (`retentionStarted`). */
+  retentionStarted?: boolean;
 };
 
+/** bunvex's commit timestamps (microseconds, DV-30) as Convex's in a row: int64 nanoseconds. */
+export const tsToRow = (ts: number): bigint => BigInt(ts) * 1000n;
+/** A row's int64 nanoseconds as a bunvex commit timestamp. */
+export const tsFromRow = (ns: bigint | number): number => Number(BigInt(ns) / 1000n);
+
 /**
- * The database indexes' `_index` rows: a search or vector index's row (STUDY-111) has Convex's `config` instead
- * of `fields`, and the catalog of tables and database indexes leaves it out.
+ * A database index's `_index` row as stored: Convex's `SerializedTabletIndexMetadata`, `config` its
+ * `SerializedIndexConfig::Database` (crates/common/src/bootstrap_model/index/index_config.rs): `fields`
+ * (`by_id`'s are empty, its key is the id alone), `onDiskState` (`Backfilling` with its `backfillState`,
+ * `Backfilled2`, `Enabled`) and the int64 `persistenceIndexId` (STUDY-134). Timestamps are Convex's
+ * nanoseconds. `tablet` and `name` stand for Convex's `table_id` and `descriptor`: bunvex's identities, which
+ * the persistence layout decides (STUDY-133), as in the search rows (STUDY-111).
+ */
+export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: string; config: Record<string, Value> } {
+  let onDiskState: Record<string, Value>;
+  if (m.state === "enabled") onDiskState = { type: "Enabled" };
+  else if (m.state === "backfilled") onDiskState = { type: "Backfilled2", staged: m.staged ?? false };
+  else
+    onDiskState = {
+      type: "Backfilling",
+      backfillState: {
+        indexCreatedLowerBound: tsToRow(m.createdLowerBound ?? 0),
+        retentionStarted: m.retentionStarted ?? false,
+        staged: m.staged ?? false,
+      },
+    };
+  return {
+    tablet: m.tablet,
+    name: m.name,
+    config: {
+      type: "database",
+      fields: m.name === "by_id" ? [] : m.fields,
+      onDiskState,
+      persistenceIndexId: BigInt(m.indexId),
+    },
+  };
+}
+
+/** A database index's `_index` row read back. */
+export function indexMeta(row: Record<string, unknown>): IndexMeta {
+  const c = row.config as { fields: string[]; onDiskState: Record<string, unknown>; persistenceIndexId: bigint };
+  const o = c.onDiskState;
+  const name = row.name as string;
+  const m: IndexMeta = {
+    _id: row._id as string,
+    tablet: row.tablet as number,
+    name,
+    fields: name === "by_id" ? SYSTEM_INDEXES.by_id! : c.fields,
+    indexId: Number(c.persistenceIndexId),
+    state: o.type === "Enabled" ? "enabled" : o.type === "Backfilled2" ? "backfilled" : "backfilling",
+  };
+  if (o.type === "Backfilled2") m.staged = o.staged as boolean;
+  if (o.type === "Backfilling") {
+    const b = o.backfillState as { indexCreatedLowerBound: bigint; retentionStarted: boolean; staged: boolean };
+    m.staged = b.staged;
+    m.createdLowerBound = tsFromRow(b.indexCreatedLowerBound);
+    m.retentionStarted = b.retentionStarted;
+  }
+  return m;
+}
+
+/** A change of an index's state as the patch of its row: the whole `config`, as Convex replaces it. */
+export function indexStatePatch(
+  m: IndexMeta,
+  change: Partial<Pick<IndexMeta, "state" | "staged" | "retentionStarted">>,
+) {
+  const { _id: _, ...rest } = m;
+  return { config: indexRow({ ...rest, ...change }).config };
+}
+
+/**
+ * The database indexes of the `_index` rows, decoded: a search or vector index's row (STUDY-111) has a `config`
+ * of type `search` / `vector`, and the catalog of tables and database indexes leaves it out.
  */
 export const databaseIndexRows = (rows: Record<string, unknown>[]): IndexMeta[] =>
-  rows.filter((r) => r.config === undefined) as unknown as IndexMeta[];
+  rows.filter((r) => (r.config as { type?: string } | undefined)?.type === "database").map(indexMeta);
 
-/** A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`). */
+/**
+ * A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`,
+ * crates/database/src/bootstrap_model/index_backfills/types.rs). Stored with int64 counts and nanosecond
+ * timestamps (`backfillRow`), and kept after the backfill ends, as Convex's.
+ */
 export type IndexBackfillMeta = {
   _id: string;
   /** The `_index` document of the index. */
   indexId: string;
   numDocsIndexed: number;
-  /** Documents in the table when the backfill began, when known (bunvex has no table summaries: null). */
+  /** Documents in the table when the backfill began, when the table summaries knew it. */
   totalDocs: number | null;
-  /** The last document id written into the index, and the snapshot the backfill began at. */
+  /**
+   * The last document id written into the index, and the snapshot the backfill began at; null for a search or
+   * vector index (its progress is in its `_index` row).
+   */
   cursor: { snapshotTs: number; cursor: string | null } | null;
 };
+
+/** A `_index_backfills` document as stored. */
+export const backfillRow = (m: Omit<IndexBackfillMeta, "_id">) => ({
+  indexId: m.indexId,
+  numDocsIndexed: BigInt(m.numDocsIndexed),
+  totalDocs: m.totalDocs === null ? null : BigInt(m.totalDocs),
+  cursor: m.cursor === null ? null : { snapshotTs: tsToRow(m.cursor.snapshotTs), cursor: m.cursor.cursor },
+});
+
+/** A `_index_backfills` document read back. */
+export function backfillMeta(row: Record<string, unknown>): IndexBackfillMeta {
+  const c = row.cursor as { snapshotTs: bigint; cursor: string | null } | null;
+  return {
+    _id: row._id as string,
+    indexId: row.indexId as string,
+    numDocsIndexed: Number(row.numDocsIndexed as bigint),
+    totalDocs: row.totalDocs === null ? null : Number(row.totalDocs as bigint),
+    cursor: c === null ? null : { snapshotTs: tsFromRow(c.snapshotTs), cursor: c.cursor },
+  };
+}
 
 /** A query on an index that is still being built (Convex's `IndexBackfillingError`, a bad request). */
 export class IndexBackfillingError extends Error {
@@ -423,7 +528,7 @@ export type CatalogChanges = {
   insertIndexes: Omit<IndexMeta, "_id">[];
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
-  restageIndexes: { _id: string; staged: boolean }[];
+  restageIndexes: IndexMeta[];
   /** The index id allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller writes it. */
   nextIndexId: number;
 };
@@ -502,12 +607,13 @@ export function planCatalog(
         pending = undefined;
       }
       if (pending) {
-        if ((pending.staged ?? false) !== staged) changes.restageIndexes.push({ _id: pending._id, staged });
+        if ((pending.staged ?? false) !== staged) changes.restageIndexes.push({ ...pending, staged });
         continue;
       }
       if (enabled && sameFields(enabled.fields, fields)) continue; // a staged flag on it waits for the finish
-      // A new table is empty: its indexes need no backfill (a staged one is complete and waits).
-      const state = !isNew ? "backfilling" : staged ? "backfilled" : "enabled";
+      // As Convex's: a new table's `by_id` and `by_creation_time`, and a new system table's indexes, are enabled
+      // at once (`new_enabled`); a user index is backfilled even on a new, empty table (`new_backfilling`).
+      const state = isNew && (name in SYSTEM_INDEXES || d.name.startsWith("_")) ? "enabled" : "backfilling";
       const meta: Omit<IndexMeta, "_id"> = { tablet, name, fields, indexId: nextIndexId++, state };
       if (state !== "enabled") meta.staged = staged;
       changes.insertIndexes.push(meta);

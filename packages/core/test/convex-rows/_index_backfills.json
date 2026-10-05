@@ -1,0 +1,36 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_index_backfills",
+  "rows": [
+    {
+      "_creationTime": 1791234000152.675,
+      "_id": "mg27eb8j5fayp1ps9hy1vjfgdh8fpzft",
+      "cursor": null,
+      "indexId": "g828dmgmvzspehkf046tvdpq1n8fq00j",
+      "numDocsIndexed": {
+        "$integer": "AAAAAAAAAAA="
+      },
+      "totalDocs": {
+        "$integer": "AAAAAAAAAAA="
+      }
+    },
+    {
+      "_creationTime": 1791234000153.161,
+      "_id": "mg27jgb23k16nb667ne6vaq7xd8fpjwb",
+      "cursor": {
+        "cursor": null,
+        "snapshotTs": {
+          "$integer": "AFmZMNW92xg="
+        }
+      },
+      "indexId": "g8271wjbn74dhdskk4sfyhdqed8fqth7",
+      "numDocsIndexed": {
+        "$integer": "AAAAAAAAAAA="
+      },
+      "totalDocs": {
+        "$integer": "AAAAAAAAAAA="
+      }
+    }
+  ],
+  "note": "The first row is the search index search_s's (cursor null), the second the database index by_s_n's."
+}

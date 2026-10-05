@@ -184,8 +184,11 @@ const cursorBytes = (cursor: string) => encoder.encode(cursor).buffer as ArrayBu
 /** An `_index` row of a search or vector index, as stored: `config` as Convex serializes `IndexConfig`. */
 export type SearchIndexRow = { _id?: string; tablet: number; name: string; config: Record<string, unknown> };
 
-/** Whether an `_index` row is a search or vector index's (a database index's has no `config`). */
-export const isSearchIndexRow = (row: Record<string, unknown>) => row.config !== undefined;
+/** Whether an `_index` row is a search or vector index's (a database index's `config` is of type `database`). */
+export const isSearchIndexRow = (row: Record<string, unknown>) => {
+  const type = (row.config as { type?: string } | undefined)?.type;
+  return type === "search" || type === "vector";
+};
 
 /** A state as its `_index` row: Convex's `SerializedIndexConfig::Search` / `::Vector`. */
 export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
@@ -428,6 +431,11 @@ export class SearchSegmentsState {
         });
       },
     };
+  }
+
+  /** The id of an index's `_index` row, once written. */
+  rowId(kind: "text" | "vector", tablet: number, name: string): string | undefined {
+    return this.ids.get(stateKey(kind, tablet, name));
   }
 
   get(kind: "text" | "vector", tablet: number, name: string): IndexSegmentsState | undefined {

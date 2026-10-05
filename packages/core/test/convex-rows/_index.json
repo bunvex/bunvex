@@ -1,0 +1,184 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_index",
+  "rows": [
+    {
+      "_creationTime": 1791234000150.1885,
+      "_id": "g826zbe5hp03k51csjb8tac52s8fptxq",
+      "config": {
+        "fields": ["_creationTime"],
+        "onDiskState": {
+          "type": "Enabled"
+        },
+        "persistenceIndexId": {
+          "$integer": "YQAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_creation_time",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.1887,
+      "_id": "g8271wjbn74dhdskk4sfyhdqed8fqth7",
+      "config": {
+        "fields": ["s", "n", "_creationTime"],
+        "onDiskState": {
+          "backfillState": {
+            "indexCreatedLowerBound": {
+              "$integer": "WG7e+9S92xg="
+            },
+            "retentionStarted": false,
+            "staged": false
+          },
+          "type": "Backfilling"
+        },
+        "persistenceIndexId": {
+          "$integer": "YgAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_s_n",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.189,
+      "_id": "g828dmgmvzspehkf046tvdpq1n8fq00j",
+      "config": {
+        "filterFields": ["b"],
+        "onDiskState": {
+          "staged": false,
+          "state": "backfilling"
+        },
+        "searchField": "s",
+        "type": "search"
+      },
+      "descriptor": "search_s",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.1882,
+      "_id": "g82919eq7kajy9tk69p84n4a9x8fqs1q",
+      "config": {
+        "fields": [],
+        "onDiskState": {
+          "type": "Enabled"
+        },
+        "persistenceIndexId": {
+          "$integer": "YwAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_id",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.1887,
+      "_id": "g8271wjbn74dhdskk4sfyhdqed8fqth7",
+      "config": {
+        "fields": ["s", "n", "_creationTime"],
+        "onDiskState": {
+          "backfillState": {
+            "indexCreatedLowerBound": {
+              "$integer": "WG7e+9S92xg="
+            },
+            "retentionStarted": true,
+            "staged": false
+          },
+          "type": "Backfilling"
+        },
+        "persistenceIndexId": {
+          "$integer": "YgAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_s_n",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.1887,
+      "_id": "g8271wjbn74dhdskk4sfyhdqed8fqth7",
+      "config": {
+        "fields": ["s", "n", "_creationTime"],
+        "onDiskState": {
+          "staged": false,
+          "type": "Backfilled2"
+        },
+        "persistenceIndexId": {
+          "$integer": "YgAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_s_n",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.189,
+      "_id": "g828dmgmvzspehkf046tvdpq1n8fq00j",
+      "config": {
+        "filterFields": ["b"],
+        "onDiskState": {
+          "snapshot": {
+            "data": {
+              "data_type": "MultiSegment",
+              "segments": []
+            },
+            "ts": {
+              "$integer": "MBS4MNW92xg="
+            },
+            "version": {
+              "$integer": "AgAAAAAAAAA="
+            }
+          },
+          "staged": false,
+          "state": "backfilled2"
+        },
+        "searchField": "s",
+        "type": "search"
+      },
+      "descriptor": "search_s",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.1887,
+      "_id": "g8271wjbn74dhdskk4sfyhdqed8fqth7",
+      "config": {
+        "fields": ["s", "n", "_creationTime"],
+        "onDiskState": {
+          "type": "Enabled"
+        },
+        "persistenceIndexId": {
+          "$integer": "YgAAAAAAAAA="
+        },
+        "type": "database"
+      },
+      "descriptor": "by_s_n",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    },
+    {
+      "_creationTime": 1791234000150.189,
+      "_id": "g828dmgmvzspehkf046tvdpq1n8fq00j",
+      "config": {
+        "filterFields": ["b"],
+        "onDiskState": {
+          "data": {
+            "data_type": "MultiSegment",
+            "segments": []
+          },
+          "state": "snapshotted",
+          "ts": {
+            "$integer": "MBS4MNW92xg="
+          },
+          "version": {
+            "$integer": "AgAAAAAAAAA="
+          }
+        },
+        "searchField": "s",
+        "type": "search"
+      },
+      "descriptor": "search_s",
+      "table_id": "xieEK5jsgsrAEcJ-eDNQ-w"
+    }
+  ],
+  "note": "Every revision of the _index rows of table `things`, in commit order: by_id, by_creation_time and search_s at the push's start, then by_s_n Backfilling (retentionStarted false, then true), Backfilled2, Enabled; search_s backfilled2 then snapshotted."
+}

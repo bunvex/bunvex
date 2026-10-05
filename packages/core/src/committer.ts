@@ -334,6 +334,11 @@ export class Committer {
   /** Told each published commit's bytes (STUDY-78), as Convex's snapshot manager tells its limiter. */
   writeThroughput: WriteThroughputLimiter | null = null;
 
+  /** The clock commit timestamps follow, now: a lower bound of the next commit's ts. */
+  clockNow(): number {
+    return this.clockUs();
+  }
+
   constructor(
     private persistence: Persistence,
     /** The write log's retention (default: Convex's knobs). */

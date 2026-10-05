@@ -18,6 +18,8 @@ import {
   AUTH_TABLE,
   activeTables,
   BACKEND_STATE_TABLE,
+  backfillMeta,
+  backfillRow,
   bootstrapCatalog,
   buildCatalog,
   CANONICAL_URLS_TABLE,
@@ -45,6 +47,8 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   IndexStagedError,
+  indexRow,
+  indexStatePatch,
   indexTooLarge,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
@@ -716,17 +720,18 @@ export class Engine {
     // The stored catalog first, so the change below sees the system tables it reads (the index id allocator).
     const stored = await this.runMutation((db) => readCatalog(db), true);
     this.catalog = buildCatalog(stored.tables, stored.indexes);
-    const { tables, indexes } = await this.runMutation(async (db) => {
+    let created: number[] = [];
+    let { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
       const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
+      created = changes.insertTables.map((t) => t.tablet);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
       for (const id of changes.deleteIndexes) {
         await db.delete(INDEX_TABLE, id);
-        await deleteBackfillProgress(db, id);
       }
-      for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, { staged: r.staged });
-      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, indexStatePatch(r, {}));
+      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
       await writeNextIndexId(db, changes.nextIndexId);
       return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
     }, true);
@@ -737,6 +742,8 @@ export class Engine {
       if ((await readNextIndexId(db)) === undefined)
         await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
     }, true);
+    if (await this.backfillNewTables(created, indexes, true))
+      ({ tables, indexes } = await this.runMutation(readCatalog, true));
     if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
     return indexes.some((i) => i.state === "backfilling");
   }
@@ -757,10 +764,10 @@ export class Engine {
         if (!hasFinishChanges(f)) return true;
         for (const i of f.drop) {
           await db.delete(INDEX_TABLE, i._id);
-          await deleteBackfillProgress(db, i._id);
         }
-        for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
-        for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
+        for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "enabled" }));
+        for (const i of f.disable)
+          await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "backfilled", staged: true }));
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
         db.onCommitVisible = (ts) =>
           this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
@@ -775,6 +782,30 @@ export class Engine {
 
   private installValidators(schema: SchemaDefinition) {
     this.docValidators = validatorsOf(schema);
+  }
+
+  /**
+   * A new index's `_index` row, created in `db`. Its `indexCreatedLowerBound` is at or below the commit's ts, as
+   * Convex's begin timestamp: the clock now (a commit's ts is at least the clock then), or the snapshot.
+   */
+  private newIndexRow(db: Tx, i: Omit<IndexMeta, "_id">) {
+    return indexRow({ ...i, createdLowerBound: Math.max(db.snapshot, this.committer.clockNow()) });
+  }
+
+  /**
+   * The user indexes of tables a schema change just created: Convex backfills them as any other
+   * (`Backfilling` → `Backfilled2`, its `_index_backfills` row), and so does bunvex, at once — the tables are
+   * new, so there is next to nothing to copy — so that the change can finish without waiting for the worker.
+   * Whether there were any.
+   */
+  private async backfillNewTables(created: number[], indexes: IndexMeta[], atStart = false): Promise<boolean> {
+    const fresh = indexes.filter((i) => i.state === "backfilling" && created.includes(i.tablet));
+    if (!fresh.length) return false;
+    this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
+    // At the engine's start nothing can write before `init` returns: a table it just created is empty, which
+    // stands for its count while the table summaries are still being built.
+    await this.indexWorker.backfillNow(fresh, atStart);
+    return true;
   }
 
   private startIndexWorker() {
@@ -1360,6 +1391,9 @@ export class Engine {
         }
       }
     }
+    // Its `_index_backfills` row, once its `_index` row is written (the first step writes it, if not before).
+    const fresh = cursor === null;
+    let progress: ((docs: number) => Promise<void>) | null = null;
     for (;;) {
       const ts = this.committer.visibleTs;
       // The table from the cursor, at `ts`, up to the threshold.
@@ -1367,6 +1401,7 @@ export class Engine {
       let size = 0;
       let next = cursor;
       let end = false;
+      let read = 0;
       while (size < threshold) {
         await this.opts.beforeSearchBackfillPage?.();
         if (this.closed || !this.isCurrent(kind, e)) return false;
@@ -1395,6 +1430,7 @@ export class Engine {
           }
         }
         this.searchStats.backfilled += k;
+        read += k;
         if (k === page.length && page.length < 1000) {
           end = true;
           break;
@@ -1454,6 +1490,8 @@ export class Engine {
         return true;
       });
       if (!stepped) return false;
+      progress ??= await this.searchBackfillProgress(kind, e, fresh);
+      await progress?.(read);
       // Convex compacts a backfilling index's segments too.
       this.scheduleCompaction(kind, e);
       if (end) return true;
@@ -1462,6 +1500,54 @@ export class Engine {
       // A background job: let the server's own work run between steps.
       await new Promise((r) => setImmediate(r));
     }
+  }
+
+  /**
+   * A search or vector index's `_index_backfills` row, as Convex's search flusher keeps it: created (or reset)
+   * when a build that started from the beginning takes its first step (`initialize_search_index_backfill`: no cursor, the build's place is
+   * in the `_index` row; the table's count when the summaries have it), and counting the documents each step
+   * read (`update_search_index_backfill_progress`). Returns the step's recorder; null while the index has no
+   * `_index` row.
+   */
+  private async searchBackfillProgress(
+    kind: "text" | "vector",
+    e: SearchIndexEntry | VectorIndexEntry,
+    fresh: boolean,
+  ): Promise<((docs: number) => Promise<void>) | null> {
+    const indexId = this.searchSegments?.rowId(kind, e.tablet, e.name);
+    if (!indexId) return null;
+    let totalDocs: number | null;
+    try {
+      totalDocs = this.tableSummaries.count(e.tablet);
+    } catch {
+      totalDocs = null; // the summaries are not built yet
+    }
+    const { id, done } = await this.runMutation(
+      async (db) => {
+        const row = await db
+          .query(INDEX_BACKFILLS_TABLE)
+          .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexId))
+          .first();
+        if (row && !fresh) return { id: row._id as string, done: backfillMeta(row).numDocsIndexed };
+        const fields = backfillRow({ indexId, numDocsIndexed: 0, totalDocs, cursor: null });
+        if (row) await db.replace(INDEX_BACKFILLS_TABLE, row._id as string, fields);
+        return { id: row ? (row._id as string) : await db.insert(INDEX_BACKFILLS_TABLE, fields), done: 0 };
+      },
+      true,
+      "search_backfill_initialization",
+    );
+    let total = done;
+    return async (docs: number) => {
+      if (docs === 0) return;
+      total += docs;
+      // A total the summaries did not know at the start is taken from them once they do, as Convex's.
+      if (totalDocs === null)
+        try {
+          totalDocs = this.tableSummaries.count(e.tablet);
+        } catch {}
+      const patch = { numDocsIndexed: BigInt(total), ...(totalDocs === null ? {} : { totalDocs: BigInt(totalDocs) }) };
+      await this.runMutation((db) => db.patch(INDEX_BACKFILLS_TABLE, id, patch), true, "search_backfill_progress");
+    };
   }
 
   /** At a clean shutdown: every ready index flushed, so the next start replays nothing (STUDY-111). */
@@ -2003,10 +2089,9 @@ export class Engine {
         for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
-          await deleteBackfillProgress(db, id);
         }
-        for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
-        for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+        for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, indexStatePatch(x, {}));
+        for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
         await writeNextIndexId(db, changes.nextIndexId);
         // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
         // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
@@ -2031,12 +2116,14 @@ export class Engine {
         const addedIndexes = changes.insertIndexes
           .filter((i) => !(i.name in SYSTEM_INDEXES))
           .map((i) => `${tableName(i.tablet)}.${i.name}`);
-        return { schemaId, state, addedIndexes, after: await readCatalog(db) };
+        const created = changes.insertTables.map((t) => t.tablet);
+        return { schemaId, state, addedIndexes, created, after: await readCatalog(db) };
       },
       true,
       "start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
+    if (await this.backfillNewTables(r.created, r.after.indexes)) r.after = await this.runMutation(readCatalog, true);
     const active = this.schema;
     if (r.state === "active") {
       // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
@@ -2135,10 +2222,10 @@ export class Engine {
         if (!f) throw new SchemaPushError("SchemaNotReady", "The schema's indexes are still backfilling.");
         for (const i of f.drop) {
           await db.delete(INDEX_TABLE, i._id);
-          await deleteBackfillProgress(db, i._id);
         }
-        for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
-        for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
+        for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "enabled" }));
+        for (const i of f.disable)
+          await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "backfilled", staged: true }));
         // Already active (a push of the same schema): Convex's `mark_active` does nothing.
         if (row.state !== "active") {
           for (const old of await db.query(SCHEMAS_TABLE).collect())
@@ -2214,7 +2301,8 @@ export class Engine {
         meta.name = name;
         meta.state = "hidden";
         const metaId = await db.insert(TABLES_TABLE, meta);
-        for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
+        for (const i of plan.insertIndexes)
+          await db.insert(INDEX_TABLE, indexRow({ ...i, state: "enabled", staged: undefined }));
         await writeNextIndexId(db, plan.nextIndexId);
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
@@ -2443,6 +2531,13 @@ export class Engine {
       installIndexChanges: (c: { enable: number[]; disable: number[]; drop: number[] }, ts: number) =>
         this.installIndexChanges(c, ts),
       finishSchema: () => this.finishSchema(),
+      tableCount: (tablet: number) => {
+        try {
+          return this.tableSummaries.count(tablet);
+        } catch {
+          return null; // the summaries are not built yet
+        }
+      },
     };
   }
 
@@ -2985,13 +3080,6 @@ export class SchemaPushError extends Error {
 }
 
 /** Drop the backfill checkpoint of a dropped index, if it has one. */
-async function deleteBackfillProgress(db: Tx, indexMetaId: string) {
-  const p = (await db
-    .query(INDEX_BACKFILLS_TABLE)
-    .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexMetaId))
-    .first()) as unknown as IndexBackfillMeta | null;
-  if (p) await db.delete(INDEX_BACKFILLS_TABLE, p._id);
-}
 
 /**
  * A vector search filter (Convex's `VectorSearchExpression`, STUDY-51): `{$eq: [{$field}, {$literal}]}`
