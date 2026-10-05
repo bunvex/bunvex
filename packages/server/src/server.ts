@@ -88,6 +88,7 @@ import { AuditLogLimitError } from "./log.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { isPlatformPath, openApiDocAt, openApiResponse } from "./openapi.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
@@ -1092,6 +1093,11 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname === "/version") return new Response("bunvex");
       // Convex's health route: the deployment's name, as plain text (STUDY-34).
       if (url.pathname === "/instance_name") return new Response(engine.instanceName);
+      // The OpenAPI documents (STUDY-115), with no auth; `/api/v1/` answers only the documented routes.
+      const openApiDoc = openApiDocAt(url.pathname);
+      if (openApiDoc) return openApiResponse(openApiDoc, req);
+      if (url.pathname.startsWith("/api/v1/") && !isPlatformPath(url.pathname))
+        return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
