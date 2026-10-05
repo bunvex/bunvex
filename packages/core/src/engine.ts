@@ -25,6 +25,7 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   databaseIndexRows,
   ENVIRONMENT_VARIABLES_TABLE,
@@ -44,6 +45,7 @@ import {
   indexTooLarge,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
+  NEXT_PERSISTENCE_INDEX_ID_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,
@@ -69,6 +71,13 @@ import {
 } from "./committer.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
+  DATABASE_VERSION,
+  initializeDatabaseGlobals,
+  initializeStorageType,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
+import {
   type ExecutionKind,
   installDeterminism,
   nextUp,
@@ -80,6 +89,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
+import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
@@ -104,7 +114,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
+import { type SchemaJson, schemaFromJson, schemaKey, schemaToJson } from "./schema-json.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   canPersistSegments,
@@ -366,6 +376,8 @@ export class Engine {
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
+    // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
+    this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -419,6 +431,7 @@ export class Engine {
     });
     await this.loadInstanceSecret();
     await this.loadInstanceName();
+    await this.loadDatabaseGlobals();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -543,6 +556,17 @@ export class Engine {
   }
 
   /**
+   * The database's globals (`_db`, STUDY-126), written at the store's first start as Convex's bootstrap
+   * does. A version above this bunvex's is warned about, as Convex's migration worker does.
+   */
+  private async loadDatabaseGlobals() {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    const version = await this.runMutation((db) => initializeDatabaseGlobals(db, () => uuid), true);
+    if (version > DATABASE_VERSION)
+      console.warn(`persisted db metadata version is ahead at ${version}, this binary is at ${DATABASE_VERSION}`);
+  }
+
+  /**
    * A key for one purpose, derived from the instance secret (HMAC-SHA256(secret, purpose)), as Convex's
    * keybroker derives one per use ("store file authorization", …). The secret itself never leaves.
    */
@@ -595,29 +619,32 @@ export class Engine {
     return this.cursorCodecCache;
   }
 
-  /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
-  async instanceSetting(name: string, make: () => string): Promise<string> {
-    return this.runMutation(async (db) => {
-      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
-      const have = doc?.[name];
-      if (typeof have === "string") return have;
-      const value = make();
-      if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { [name]: value });
-      else await db.insert(INSTANCE_TABLE, { [name]: value });
-      return value;
-    }, true);
+  /**
+   * The storage this start uses, checked against the one the store was initialized with (STUDY-126, Convex's
+   * `initialize_storage_tag`): the first start records it; S3's key prefix is `<instance name>-<uuid>/`.
+   * Throws when the store was initialized with another kind of storage.
+   */
+  async initializeStorage(init: StorageTagInitializer): Promise<StorageType> {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    return this.runMutation(
+      (db) => initializeStorageType(db, init, this.instanceName, () => uuid),
+      true,
+      "init_storage",
+    );
   }
 
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+      { name: DATABASE_GLOBALS_TABLE, indexes: {}, document: v.any() },
       {
         name: SESSION_REQUESTS_TABLE,
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      { name: NEXT_PERSISTENCE_INDEX_ID_TABLE, indexes: {}, document: v.any() },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
@@ -671,9 +698,12 @@ export class Engine {
    * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
   private async reconcileCatalog(): Promise<boolean> {
+    // The stored catalog first, so the change below sees the system tables it reads (the index id allocator).
+    const stored = await this.runMutation((db) => readCatalog(db), true);
+    this.catalog = buildCatalog(stored.tables, stored.indexes);
     const { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes);
+      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
       for (const id of changes.deleteIndexes) {
@@ -682,9 +712,16 @@ export class Engine {
       }
       for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, { staged: r.staged });
       for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      await writeNextIndexId(db, changes.nextIndexId);
       return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
     }, true);
     this.catalog = buildCatalog(tables, indexes);
+    // The store's first start created the allocator's table in that commit: its counter is written now, with
+    // the ids that commit took (Convex writes it in its bootstrap).
+    await this.runMutation(async (db) => {
+      if ((await readNextIndexId(db)) === undefined)
+        await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
+    }, true);
     if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
     return indexes.some((i) => i.state === "backfilling");
   }
@@ -1632,7 +1669,7 @@ export class Engine {
     }
   }
 
-  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+  private readonly tableCountOf = (tablet: number, snapshot: number) => this.tableSummaries.countAt(tablet, snapshot);
 
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
@@ -1838,7 +1875,7 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
-        const changes = planCatalog(declared, current.tables, current.indexes);
+        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
         for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
@@ -1846,33 +1883,50 @@ export class Engine {
         }
         for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
         for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
-        for (const row of await db.query(SCHEMAS_TABLE).collect())
-          if (row.state === "pending" || row.state === "validated")
-            await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
-        const schemaId = await db.insert(SCHEMAS_TABLE, {
-          state: "pending",
-          schema: JSON.stringify(schemaToJson(schema)),
-        });
+        await writeNextIndexId(db, changes.nextIndexId);
+        // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
+        // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
+        const json = schemaToJson(schema);
+        const key = schemaKey(json);
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        const same = (row: Record<string, unknown>) => schemaKey(JSON.parse(row.schema as string)) === key;
+        const active = rows.find((row) => row.state === "active");
+        const unfinished = rows.filter((row) => row.state === "pending" || row.state === "validated");
+        let schemaId: string;
+        let state = "pending" as "active" | "pending" | "validated";
+        const reused = active && same(active) ? active : unfinished.find(same);
+        for (const row of unfinished)
+          if (row !== reused) await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+        if (reused) {
+          schemaId = reused._id as string;
+          state = reused.state as typeof state;
+        } else schemaId = await db.insert(SCHEMAS_TABLE, { state: "pending", schema: JSON.stringify(json) });
         const tableName = (tablet: number) =>
           current.tables.find((t) => t.tablet === tablet)?.name ??
           changes.insertTables.find((t) => t.tablet === tablet)?.name;
         const addedIndexes = changes.insertIndexes
           .filter((i) => !(i.name in SYSTEM_INDEXES))
           .map((i) => `${tableName(i.tablet)}.${i.name}`);
-        return { schemaId, addedIndexes, after: await readCatalog(db) };
+        return { schemaId, state, addedIndexes, after: await readCatalog(db) };
       },
       true,
       "start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
     const active = this.schema;
-    this.pendingPush = { id: r.schemaId, schema };
-    this.pendingValidators = validatorsOf(schema);
-    this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
-      this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
-        () => {},
-      ),
-    );
+    if (r.state === "active") {
+      // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
+      this.pendingPush = { id: r.schemaId, schema };
+      this.pendingValidators = null;
+    } else if (this.pendingPush?.id !== r.schemaId) {
+      this.pendingPush = { id: r.schemaId, schema };
+      this.pendingValidators = validatorsOf(schema);
+      this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
+        this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
+          () => {},
+        ),
+      );
+    }
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }
@@ -1945,9 +1999,9 @@ export class Engine {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
         if (row?.state === "failed")
           throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${row.error as string}`);
-        if (!row || (row.state !== "pending" && row.state !== "validated"))
+        if (!row || (row.state !== "pending" && row.state !== "validated" && row.state !== "active"))
           throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-        if (row.state !== "validated")
+        if (row.state === "pending")
           throw new SchemaPushError(
             "SchemaNotReady",
             "The existing documents are still being checked against the schema.",
@@ -1961,9 +2015,12 @@ export class Engine {
         }
         for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
         for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
-        for (const old of await db.query(SCHEMAS_TABLE).collect())
-          if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
-        await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+        // Already active (a push of the same schema): Convex's `mark_active` does nothing.
+        if (row.state !== "active") {
+          for (const old of await db.query(SCHEMAS_TABLE).collect())
+            if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+        }
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
         const name = (i: IndexMeta) => `${tables.find((t) => t.tablet === i.tablet)?.name}.${i.name}`;
@@ -2009,7 +2066,7 @@ export class Engine {
     let def: TableDef | undefined;
     await this.runMutation(
       async (db) => {
-        const { tables, indexes: stored } = await readCatalog(db);
+        const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
@@ -2017,6 +2074,7 @@ export class Engine {
           tables,
           stored,
           !name.startsWith("_"),
+          nextIndexId,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
@@ -2033,6 +2091,7 @@ export class Engine {
         meta.state = "hidden";
         const metaId = await db.insert(TABLES_TABLE, meta);
         for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
+        await writeNextIndexId(db, plan.nextIndexId);
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
           def = c.add(
@@ -2165,6 +2224,26 @@ export class Engine {
       }
   }
 
+  /**
+   * Replace tables with empty ones in one commit (Convex's `TableModel::replace_with_empty_table`): each gets a
+   * new table of the same name, number and indexes, and the old one is deleted in the background. System
+   * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction.
+   */
+  async replaceWithEmptyTables(names: string[], body?: (db: Tx) => Promise<void>) {
+    const tablets: number[] = [];
+    try {
+      for (const name of names) {
+        const { number } = this.catalog.table(name);
+        tablets.push((await this.createHiddenTable(name, { number, copyIndexesOf: name })).id);
+      }
+      await this.activateTables(tablets, [], body);
+    } catch (e) {
+      // The empty tables were never made active: drop them rather than leave them to the stale-table sweep.
+      if (tablets.length) await this.dropHiddenTables(tablets).catch(() => {});
+      throw e;
+    }
+  }
+
   /** Delete an active table: invisible at once, its documents removed in the background. */
   async deleteTable(name: string) {
     await this.activateTables([], [name]);
@@ -2277,8 +2356,14 @@ export class Engine {
       tx.pendingValidators = this.pendingValidators;
     }
     const observed: Observed = { time: false };
-    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
-    return { tx, value, observed, now };
+    // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
+    const unpin = this.tableSummaries.pin(snapshot);
+    try {
+      const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      return { tx, value, observed, now };
+    } finally {
+      unpin();
+    }
   }
 
   /**
@@ -2471,12 +2556,15 @@ export class Engine {
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
     });
+    const unpin = this.tableSummaries.pin(snapshot); // as in execute()
     try {
       const observed: Observed = { time: false };
       const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };
+    } finally {
+      unpin();
     }
   }
 
@@ -2717,6 +2805,7 @@ async function readCatalog(db: Tx) {
   return {
     tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
     indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
+    nextIndexId: await readNextIndexId(db),
   };
 }
 

@@ -10,8 +10,10 @@ import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from
 
 export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
-/** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
+/** The instance secret (and name) when none is configured (STUDY-17, DV-07, DV-159). */
 export const INSTANCE_TABLE = "_instance";
+/** The database's globals (STUDY-126), as Convex's `_db`: the data's version and the pinned storage type. */
+export const DATABASE_GLOBALS_TABLE = "_db";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
@@ -56,6 +58,8 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
+/** The next index id to hand out (STUDY-128), as Convex's `_next_persistence_index_id`: `{nextId}`. */
+export const NEXT_PERSISTENCE_INDEX_ID_TABLE = "_next_persistence_index_id";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
@@ -72,6 +76,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index: 514,
   _exports: 516,
   _udf_config: 518,
+  _db: 520,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,
@@ -91,6 +96,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _data_sync_progress: 553,
   _usage_limits: 552,
   _index_backfills: 548,
+  _next_persistence_index_id: 554,
   // bunvex's own.
   _instance: 9_999,
   _storage_deletions: 9_998,
@@ -168,7 +174,7 @@ export class IndexBackfillingError extends Error {
  * A search or vector index still being rebuilt after the process started (STUDY-79): Convex's
  * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
  * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
- * hitting it is skipped and retried later.
+ * hitting it is skipped and retried later. The table summaries' (`count()`, STUDY-107) are one too.
  *
  * Also a write refused because an index's memory part is too large (STUDY-111, `TextIndexTooLarge` /
  * `VectorIndexTooLarge`): Convex's `ErrorMetadata::overloaded`, which it handles as it does the above — HTTP
@@ -180,6 +186,7 @@ export class IndexesUnavailableError extends Error {
     readonly code:
       | "SearchIndexesUnavailable"
       | "VectorIndexesUnavailable"
+      | "TableSummariesUnavailable"
       | "TextIndexTooLarge"
       | "VectorIndexTooLarge",
     message: string,
@@ -369,6 +376,8 @@ export type CatalogChanges = {
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
   restageIndexes: { _id: string; staged: boolean }[];
+  /** The index id allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller writes it. */
+  nextIndexId: number;
 };
 
 const sameFields = (a: string[], b: string[]) => a.length === b.length && a.every((f, i) => f === b[i]);
@@ -388,7 +397,8 @@ function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged
 /**
  * The first half of a schema change, as Convex's `prepare_new_and_mutated_indexes` (the push's start):
  * new tables get the next free Convex number and a fresh tablet; a new index (or a new version of one
- * whose fields changed) gets a fresh index id and starts `backfilling`, unless its table is new (then it
+ * whose fields changed) gets the next index id from the allocator (`nextIndexId`, from
+ * `_next_persistence_index_id`: never a dropped index's, STUDY-128) and starts `backfilling`, unless its table is new (then it
  * is `enabled` at once). A PENDING index the schema no longer asks for is dropped now; an ENABLED one keeps
  * serving until the push finishes (`finishCatalog`), so a changed index is replaced atomically. Pure: the
  * caller commits. A new user table past `MAX_USER_TABLES` active ones throws `TooManyTablesError`; `userTables`
@@ -399,10 +409,18 @@ export function planCatalog(
   tables: TableMeta[],
   indexes: IndexMeta[],
   userTables = true,
+  allocator?: number,
 ): CatalogChanges {
-  const changes: CatalogChanges = { insertTables: [], insertIndexes: [], deleteIndexes: [], restageIndexes: [] };
   let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
-  let nextIndexId = Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  // Only the store's first catalog commit runs before the allocator exists: nothing was dropped yet.
+  let nextIndexId = allocator ?? Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  const changes: CatalogChanges = {
+    insertTables: [],
+    insertIndexes: [],
+    deleteIndexes: [],
+    restageIndexes: [],
+    nextIndexId,
+  };
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
   const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
   const active = activeTables(tables);
@@ -448,6 +466,7 @@ export function planCatalog(
     }
     for (const i of stored) if (!wanted.has(i.name) && i.state !== "enabled") changes.deleteIndexes.push(i._id);
   }
+  changes.nextIndexId = nextIndexId;
   return changes;
 }
 
