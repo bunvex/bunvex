@@ -382,6 +382,17 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       return (a._creationTime as number) > (b._creationTime as number) ? a : b;
     },
   },
+  // `bunvex dev` waits on it after a schema validation failure (STUDY-120, Convex's `_system/cli/queryTable`):
+  // it reads the whole table (its count) and returns a new random number each run, so a subscription to it
+  // gets a new result whenever any of the table's documents changes.
+  "_system/cli/queryTable": {
+    args: { tableName: v.string() },
+    op: "ViewData",
+    handler: async (db, { tableName }: { tableName: string }) => {
+      await db.asSystem(() => db.countTable(tableName));
+      return Math.random();
+    },
+  },
   // Convex's `tableSize` system functions (STUDY-52 PR 2): a table's document count, from the summaries.
   "_system/cli/tableSize": {
     args: { tableName: v.string() },

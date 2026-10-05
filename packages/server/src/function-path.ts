@@ -85,6 +85,21 @@ function checkModulePath(p: string): string | null {
   return null;
 }
 
+/**
+ * Convex's 400 for a module path that does not parse (`parse_module_path`, `BadConvexModuleIdentifier`), with
+ * bunvex's code (DV-312) and words.
+ */
+export function badModulePath(path: string): { status: 400; code: string; message: string } | null {
+  const why = checkModulePath(path);
+  return why === null
+    ? null
+    : {
+        status: 400,
+        code: "BadBunvexModuleIdentifier",
+        message: `${path} is not a valid path to a bunvex module. ${why}`,
+      };
+}
+
 /** Why a function path does not parse (`module[:function]`), or null when it does. */
 export function functionPathError(path: string): string | null {
   const i = path.lastIndexOf(":");
