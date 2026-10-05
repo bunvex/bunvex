@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch Convex's prebuilt local backend, the oracle of the differential tests (STUDY-129 D2), into
+# Fetch Convex's prebuilt local backend, the oracle of the differential tests (STUDY-122 D2), into
 # packages/differential/.cache. Pinned so runs are reproducible; CONVEX_RELEASE overrides the tag.
 # The binary is run, never vendored, and always with --disable-beacon (harness/backends.ts).
 set -euo pipefail
