@@ -303,6 +303,7 @@ export {
   Tx,
   type TxLimits,
   type TxQuery,
+  type TxQueryChained,
 } from "./tx.ts";
 export {
   formatByteCount,

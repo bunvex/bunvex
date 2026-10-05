@@ -9,7 +9,7 @@ import type { FilterBuilder } from "../src/filter.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { MAX_QUERY_OPERATORS } from "../src/query-ops.ts";
 import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
-import { QueryCursorError, type Tx, type TxQuery } from "../src/tx.ts";
+import { QueryCursorError, type Tx, type TxQueryChained } from "../src/tx.ts";
 import { runs } from "./property-runs.ts";
 
 const schema = defineSchema({
@@ -118,14 +118,14 @@ describe("limit(n), in chain order", () => {
 describe("limit(n) arguments, checked when the query starts", () => {
   test("no argument: TypeError at the call", async () => {
     const e = await engine();
-    await expect(e.query(async (db) => (byN(db) as unknown as { limit(): TxQuery }).limit().collect())).rejects.toThrow(
-      "Must provide arg 1 `n` to `limit`",
-    );
+    await expect(
+      e.query(async (db) => (byN(db) as unknown as { limit(): TxQueryChained }).limit().collect()),
+    ).rejects.toThrow("Must provide arg 1 `n` to `limit`");
   });
 
   test("a value that is not a usize, worded as Convex's backend", async () => {
     const e = await engine();
-    const bad = async (n: unknown, run: (q: TxQuery) => Promise<unknown> = (q) => q.collect()) =>
+    const bad = async (n: unknown, run: (q: TxQueryChained) => Promise<unknown> = (q) => q.collect()) =>
       e
         .query(async (db) => run(byN(db).limit(n as number)))
         .then(
@@ -156,7 +156,7 @@ describe("limit(n) arguments, checked when the query starts", () => {
 });
 
 describe("at most 256 operators (MAX_QUERY_OPERATORS)", () => {
-  const filters = (q: TxQuery, n: number) => {
+  const filters = (q: TxQueryChained, n: number) => {
     for (let i = 0; i < n; i++) q = q.filter(() => true);
     return q;
   };

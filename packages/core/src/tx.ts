@@ -208,7 +208,6 @@ type QState = {
   orderSet: boolean;
   /** The operators (`filter`, `limit`) in chain order (STUDY-66 §1). */
   ops: QueryOp[];
-  stage: "initializer" | "query";
   closed: boolean;
   iterated: boolean;
   /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
@@ -223,21 +222,28 @@ const SCANNED_TOO_MANY = `Search query scanned too many documents (fetched ${MAX
 /** Convex's MAX_FILTER_CONDITIONS: `eq`s in one search query. */
 const MAX_SEARCH_FILTER_CONDITIONS = 8;
 
-/** A query under construction (Convex's QueryInitializer / Query / OrderedQuery in one shape). */
-export type TxQuery = {
-  withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery;
-  withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery;
-  fullTableScan(): TxQuery;
-  order(dir: "asc" | "desc"): TxQuery;
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery;
+/**
+ * A query after its first operator (Convex's `QueryImpl`, for its Query and OrderedQuery stages): it has no
+ * `withIndex`, `withSearchIndex` or `fullTableScan`, so calling one is the engine's own TypeError, as in Convex.
+ */
+export type TxQueryChained = {
+  order(dir: "asc" | "desc"): TxQueryChained;
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained;
   /** Convex's `limit(n)` (internal in its published types): at most `n` documents from here on. */
-  limit(n: number): TxQuery;
+  limit(n: number): TxQueryChained;
   take(n: number): Promise<Doc[]>;
   first(): Promise<Doc | null>;
   unique(): Promise<Doc | null>;
   collect(): Promise<Doc[]>;
   paginate(opts: PaginationOptions): Promise<PaginationResult>;
   [Symbol.asyncIterator](): AsyncIterator<Doc>;
+};
+
+/** `db.query(table)` (Convex's `QueryInitializerImpl`): the only stage that picks an index or a scan. */
+export type TxQuery = TxQueryChained & {
+  withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained;
+  withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQueryChained;
+  fullTableScan(): TxQueryChained;
 };
 
 /** Convex's `PaginationOptions`. */
@@ -846,7 +852,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      stage: "initializer",
       closed: false,
       iterated: false,
     };
@@ -866,7 +871,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      stage: "initializer",
       closed: false,
       iterated: false,
     };
@@ -923,7 +927,7 @@ export class Tx {
   }
 
   private makeQuery(table: string, st: QState): TxQuery {
-    return new QueryImpl(this, table, st);
+    return new QueryInitializerImpl(this, table, st);
   }
 
   /** @internal (QueryImpl) */
@@ -1858,19 +1862,19 @@ export function isQueryObject(value: unknown): boolean {
   return value instanceof QueryImpl || value instanceof ProjectedQuery;
 }
 
-class QueryImpl implements TxQuery {
+class QueryImpl implements TxQueryChained {
   constructor(
-    private readonly tx: Tx,
-    private readonly table: string,
-    private readonly st: QState,
+    protected readonly tx: Tx,
+    protected readonly table: string,
+    protected readonly st: QState,
   ) {}
 
-  private chain(change: (next: QState) => void): TxQuery {
+  protected chain(change: (next: QState) => void): TxQueryChained {
     const st = this.st;
     if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
     if (st.closed) throw reusedError();
     st.closed = true;
-    const next: QState = { ...st, ops: [...st.ops], closed: false, iterated: false, stage: "query" };
+    const next: QState = { ...st, ops: [...st.ops], closed: false, iterated: false };
     change(next);
     return new QueryImpl(this.tx, this.table, next);
   }
@@ -1890,38 +1894,7 @@ class QueryImpl implements TxQuery {
     return take === null ? this.tx.runQuery(this.st, this.tx.collectLimit()) : this.tx.runQuery(this.st, take, true);
   }
 
-  private onlyInitializer(what: string) {
-    if (this.st.stage !== "initializer")
-      throw new Error(`${what} can only be called on db.query(table), before other operators.`);
-  }
-
-  withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQuery {
-    this.onlyInitializer("withIndex()");
-    const t = this.st.t;
-    return this.chain((n) => {
-      if (!t) return;
-      const found = this.tx.resolveIndex(t, name);
-      n.ix = found;
-      n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
-    });
-  }
-
-  /** Convex's `withSearchIndex`: results in relevance order (STUDY-45). */
-  withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQuery {
-    this.onlyInitializer("withSearchIndex()");
-    if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
-    const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
-    return this.chain((n) => {
-      n.search = { name, filters };
-    });
-  }
-
-  fullTableScan(): TxQuery {
-    this.onlyInitializer("fullTableScan()");
-    return this.chain(() => {});
-  }
-
-  order(dir: "asc" | "desc"): TxQuery {
+  order(dir: "asc" | "desc"): TxQueryChained {
     if (this.st.search)
       throw new Error("Search queries must always be in relevance order. Can not set order manually.");
     if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
@@ -1931,7 +1904,7 @@ class QueryImpl implements TxQuery {
     });
   }
 
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQuery {
+  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained {
     if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
     return this.chain((n) => {
       // Convex checks on the client, in `filter` only; `limit` and the start count too (`checkOps`).
@@ -1941,7 +1914,7 @@ class QueryImpl implements TxQuery {
   }
 
   /** Convex's `limit(n)`: `n` is checked when the query starts, as its backend does. */
-  limit(n: number): TxQuery {
+  limit(n: number): TxQueryChained {
     if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `limit`");
     return this.chain((next) => {
       next.ops.push({ limit: n });
@@ -1992,5 +1965,34 @@ class QueryImpl implements TxQuery {
   }
 }
 
+/**
+ * `db.query(table)`, as Convex's `QueryInitializerImpl`: the index or scan is picked here, before any other
+ * operator. Each operator returns a plain `QueryImpl`, which has none of these methods.
+ */
+class QueryInitializerImpl extends QueryImpl implements TxQuery {
+  withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
+    const t = this.st.t;
+    return this.chain((n) => {
+      if (!t) return;
+      const found = this.tx.resolveIndex(t, name);
+      n.ix = found;
+      n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
+    });
+  }
+
+  /** Convex's `withSearchIndex`: results in relevance order (STUDY-45). */
+  withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQueryChained {
+    if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
+    const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
+    return this.chain((n) => {
+      n.search = { name, filters };
+    });
+  }
+
+  fullTableScan(): TxQueryChained {
+    return this.chain(() => {});
+  }
+}
+
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
-opaqueToInspect(Tx, QueryImpl, ScanReads);
+opaqueToInspect(Tx, QueryImpl, QueryInitializerImpl, ScanReads);
