@@ -18,6 +18,7 @@ import { builtinModules } from "node:module";
 import { posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, runImportPhase } from "@bunvex/core";
+import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
 import { describeUncaught } from "./errors.ts";
@@ -60,6 +61,27 @@ export class InvalidModulesError extends Error {
     super(`Loading the pushed modules encountered the following error:\n${detail}`);
     this.name = "InvalidModulesError";
   }
+}
+
+/**
+ * An error thrown by a function's `exportArgs()` / `exportReturns()` at analysis: Convex reports it as the
+ * push's error (a 400 with code `Error`), not as an `InvalidModules` one.
+ */
+export class FunctionExportError extends Error {
+  readonly status = 400;
+  readonly code = "Error";
+}
+
+/** A function's validator JSON, as Convex's analyze reads it (`exportedValidator`); its errors fail the push. */
+function analyzeExport(f: FunctionDef, method: ValidatorExport, id: string): string {
+  let r: ReturnType<typeof exportedValidator>;
+  try {
+    r = exportedValidator(f, method, id);
+  } catch (e) {
+    throw new FunctionExportError(uncaught(e));
+  }
+  if ("problem" in r) throw new InvalidModulesError(r.problem);
+  return r.json;
 }
 
 /**
@@ -326,8 +348,8 @@ export class CodeVersion {
           pos: maps.position(path, l.source.source, value.handler, exported),
           udfType: value.kind === "query" ? "Query" : value.kind === "mutation" ? "Mutation" : "Action",
           visibility: { kind: value.visibility },
-          args: JSON.stringify(value.args?.json ?? { type: "any" }),
-          returns: JSON.stringify(value.returns?.json ?? { type: "any" }),
+          args: analyzeExport(value, "exportArgs", `${path}:${exported}`),
+          returns: analyzeExport(value, "exportReturns", `${path}:${exported}`),
         });
       }
       // Convex sorts them by position, those without one first.

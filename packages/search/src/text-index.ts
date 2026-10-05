@@ -27,9 +27,10 @@ export type TextQuery = { tokens: string[]; prefixLast: boolean; filters: [strin
 export type TextHit = { id: string; score: number; creationTime: number };
 
 /** A query term chosen for the search (Convex's step 1: exact matches first, then prefix expansions). */
-type QueryTerm = { term: string; prefix: boolean; ord: number };
+export type QueryTerm = { term: string; prefix: boolean; ord: number };
 
-type Stored = {
+/** A document as an index keeps it: its terms' frequencies rather than its tokens. */
+export type Stored = {
   tf: Map<string, number>;
   length: number;
   filters: Record<string, string>;
@@ -37,9 +38,9 @@ type Stored = {
   bytes: number;
 };
 
-const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
+export const byteOrder = (a: string, b: string) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
-function store(d: IndexedDoc): Stored {
+export function store(d: IndexedDoc): Stored {
   const tf = new Map<string, number>();
   for (const t of d.tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
   return { tf, length: d.tokens.length, filters: d.filters, creationTime: d.creationTime, bytes: d.bytes ?? 0 };
@@ -89,6 +90,21 @@ export class TextIndex {
     }
   }
 
+  /** A document as stored (the segmented index's merged search reads it). */
+  stored(id: string): Stored | undefined {
+    return this.docs.get(id);
+  }
+
+  /** The documents having `term`. */
+  docsWith(term: string): ReadonlySet<string> | undefined {
+    return this.postings.get(term);
+  }
+
+  /** The search field's tokens over every document. */
+  get tokenCount(): number {
+    return this.totalTokens;
+  }
+
   /** Every indexed document's id (a snapshot of the index, STUDY-96). */
   ids(): IterableIterator<string> {
     return this.docs.keys();
@@ -104,7 +120,7 @@ export class TextIndex {
   }
 
   /** Terms starting with `prefix`, in byte order. */
-  private termsWithPrefix(prefix: string): string[] {
+  termsWithPrefix(prefix: string): string[] {
     this.sorted ??= [...this.postings.keys()].sort(byteOrder);
     const out: string[] = [];
     let lo = 0;
@@ -208,6 +224,6 @@ export class TextIndex {
 }
 
 /** Descending by the ids' internal bytes (Convex's tie-break after `_creationTime`). */
-function compareIdsDesc(a: string, b: string): number {
+export function compareIdsDesc(a: string, b: string): number {
   return Buffer.compare(Buffer.from(decodeId(b).internalId), Buffer.from(decodeId(a).internalId));
 }

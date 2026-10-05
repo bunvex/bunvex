@@ -24,7 +24,8 @@ function checkPathComponent(s: string): string | null {
   return null;
 }
 
-function checkIdentifier(s: string): string | null {
+/** Convex's `check_valid_identifier`: the reason `s` is not an identifier, or null. */
+export function checkIdentifier(s: string): string | null {
   const chars = [...s];
   const first = chars[0];
   if (first === undefined) return "Identifier cannot be empty";
