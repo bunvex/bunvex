@@ -170,7 +170,6 @@ gaps.
   - `.count()` on the query builder;
   - typed limit error codes.
 - Limits and checks:
-  - the 10 000-table cap;
   - nesting 64 for arguments and results;
   - `check_index_references` at push;
   - the 1024-concurrent-request and upload-concurrency (4) limits.

@@ -1303,7 +1303,13 @@ export class Engine {
       async (db) => {
         const { tables, indexes: stored } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
-        const plan = planCatalog([{ name: `\u0000hidden`, indexes, document: v.any() }], tables, stored);
+        // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
+        const plan = planCatalog(
+          [{ name: `\u0000hidden`, indexes, document: v.any() }],
+          tables,
+          stored,
+          !name.startsWith("_"),
+        );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
           const holder = tables.find(

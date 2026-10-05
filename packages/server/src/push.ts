@@ -24,6 +24,7 @@ import {
   SchemaPushError,
   SYSTEM_ACTOR,
   schemaToJson,
+  TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { auditEvents } from "./audit-log.ts";
@@ -257,7 +258,14 @@ export class PushService {
     // As Convex's `start_push`: what the push does to the indexes, against the active schema (dry run too).
     const indexDiff = indexDiffJson(indexAuditDiff(this.deps.engine.schema, schema));
     if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff });
-    const { schemaId } = await this.deps.engine.startSchemaPush(schema);
+    let schemaId: string;
+    try {
+      ({ schemaId } = await this.deps.engine.startSchemaPush(schema));
+    } catch (e) {
+      // Convex's `TooManyTables`, a 400 with its message, when the schema adds tables past the cap.
+      if (e instanceof TooManyTablesError) throw new PushError(e.code, e.message);
+      throw e;
+    }
     this.pending.set(schemaId, {
       version,
       modules,
