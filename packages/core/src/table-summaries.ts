@@ -5,7 +5,8 @@
 // and restored on start from it and the document log (STUDY-72, table-summary-checkpoint.ts), else rebuilt
 // from the documents at one snapshot; the commits meanwhile applied once that is done. Counts and sizes move with each commit; shapes are folded in when
 // asked or in the background, so a commit costs little more than Convex's.
-import { rawValueSize, type Value } from "@bunvex/values";
+
+import type { Value } from "@bunvex/values";
 import type { Doc } from "./schema.ts";
 import {
   NEVER,
@@ -18,6 +19,7 @@ import {
   shapeToJson,
   union,
 } from "./shapes.ts";
+import { sizeOfVersion } from "./staged-size.ts";
 
 export type TableSummary = { count: number; size: number; shape: Shape };
 
@@ -101,11 +103,11 @@ export class TableSummaries {
     const s = this.tables.get(w.tablet) ?? { count: 0, size: 0, shape: NEVER };
     if (w.old) {
       s.count--;
-      s.size -= rawValueSize(w.old as Value);
+      s.size -= sizeOfVersion(w.old);
     }
     if (w.next) {
       s.count++;
-      s.size += rawValueSize(w.next as Value);
+      s.size += sizeOfVersion(w.next);
     }
     this.tables.set(w.tablet, s);
     this.pendingShapes.push(w);
