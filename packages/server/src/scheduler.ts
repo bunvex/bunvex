@@ -29,6 +29,7 @@ import {
   OccError,
   patchJob,
   readBackendState,
+  SPAN_KIND,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -342,7 +343,19 @@ export class ScheduledJobExecutor {
     return now !== null && stringifyValue(now) === stringifyValue(job);
   }
 
-  private async execute(job: JobDoc) {
+  /**
+   * Traced (STUDY-131 AD-26), each run is a `scheduler/run` trace of its own, with the function's execution
+   * under it (Convex's scheduler opens a root span per job too).
+   */
+  private execute(job: JobDoc): Promise<void> {
+    const tracer = this.engine.tracer;
+    if (!tracer.on) return this.executeJob(job);
+    const span = tracer.root("scheduler/run", SPAN_KIND.consumer);
+    span?.set("bunvex.scheduler.job_id", job._id).set("bunvex.function.path", job.name);
+    return tracer.within(span, () => this.executeJob(job)).finally(() => span?.finish());
+  }
+
+  private async executeJob(job: JobDoc) {
     this.stats.started++;
     const target = this.functions.scheduledKind(job.name);
     try {

@@ -40,7 +40,7 @@ import {
 } from "./catalog.ts";
 import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -75,6 +75,7 @@ import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } f
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import type { IndexReadSpans } from "./tracing.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
@@ -368,6 +369,11 @@ export class Tx {
    * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
    */
   retention: { check(ts: number): void } | null = null;
+  /**
+   * Its index reads, one span per index (STUDY-131 AD-26): set by the engine when the transaction runs under
+   * a traced span, else null and no read looks at the clock.
+   */
+  indexSpans: IndexReadSpans | null = null;
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
@@ -846,7 +852,10 @@ export class Tx {
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
+    const spans = this.indexSpans;
+    const start = spans ? monotonicNow() : 0;
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
+    if (spans) spans.record(t.byId, json ? 1 : 0, start);
     this.retention?.check(this.snapshot);
     if (!json) return null;
     const doc = decodeDoc(json);
@@ -986,7 +995,26 @@ export class Tx {
     }
   }
 
-  private async storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+  /** Not async: untraced, the store's promise is returned as is, with no extra turn. */
+  private storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    const spans = this.indexSpans;
+    return spans ? this.tracedStoreRange(spans, st, lo, hi, limit) : this.storeRangeOf(st, lo, hi, limit);
+  }
+
+  private async tracedStoreRange(
+    spans: IndexReadSpans,
+    st: QState,
+    lo: Uint8Array,
+    hi: Uint8Array,
+    limit: number,
+  ): Promise<Doc[]> {
+    const start = monotonicNow();
+    const out = await this.storeRangeOf(st, lo, hi, limit);
+    spans.record(st.ix!, out.length, start);
+    return out;
+  }
+
+  private async storeRangeOf(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     const p = this.persistence as Persistence & Partial<ScanDocs>;

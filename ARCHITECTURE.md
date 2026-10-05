@@ -44,6 +44,8 @@ bunvex/
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── write-throughput         the 4 MiB/s write throughput limit (STUDY-78)                ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
+│   │   ├── tracing                  spans, W3C trace context, samplers; index reads and commits
+│   │   │                            traced when a span is current (STUDY-131 AD-26)              ✅
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
@@ -77,6 +79,8 @@ bunvex/
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
+│   │   ├── traces                   OTLP/HTTP JSON exporter, OTEL_* configuration, spans per request,
+│   │   │                            WebSocket message, function, transition, job (STUDY-131 AD-26) ✅
 │   │   └── metrics                  Prometheus                                                D
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅

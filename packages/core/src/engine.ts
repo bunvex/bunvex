@@ -127,6 +127,7 @@ import {
   SummaryCheckpointer,
   type SummaryCheckpointOptions,
 } from "./table-summary-checkpoint.ts";
+import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
@@ -266,6 +267,25 @@ export class Engine {
    * `log_mutation_occ_error` with `will_retry` (STUDY-47).
    */
   onOccRetry: ((error: OccError, failures: number) => void) | null = null;
+
+  private tracerOf: Tracer = NO_TRACER;
+  /**
+   * Where spans go (STUDY-131 AD-26): `NO_TRACER` unless the server configured an exporter. A traced
+   * transaction reports its index reads under the current span, and a traced mutation its commit.
+   */
+  get tracer(): Tracer {
+    return this.tracerOf;
+  }
+  set tracer(t: Tracer) {
+    this.tracerOf = t;
+    this.committer.traced = t.on;
+  }
+
+  /** The index reads of a transaction run under the current span, if one is current. */
+  private indexSpansOf(tx: Tx) {
+    const parent = this.tracerOf.current();
+    if (parent) tx.indexSpans = new IndexReadSpans(parent);
+  }
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
@@ -1645,9 +1665,14 @@ export class Engine {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
     }
+    if (this.tracerOf.on) this.indexSpansOf(tx);
     const observed: Observed = { time: false };
-    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
-    return { tx, value, observed, now };
+    try {
+      const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      return { tx, value, observed, now };
+    } finally {
+      tx.indexSpans?.finish();
+    }
   }
 
   /**
@@ -1840,12 +1865,15 @@ export class Engine {
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
     });
+    if (this.tracerOf.on) this.indexSpansOf(tx);
     try {
       const observed: Observed = { time: false };
       const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };
+    } finally {
+      tx.indexSpans?.finish();
     }
   }
 
@@ -1958,7 +1986,7 @@ export class Engine {
       }
       const { docs, idx } = tx.toWrites();
       try {
-        const ts = await this.committer.commit({
+        const pending: Parameters<Committer["commit"]>[0] = {
           snapshot: tx.snapshot,
           reads: tx.reads,
           docs,
@@ -1973,7 +2001,12 @@ export class Engine {
                 },
               }
             : {}),
-        });
+        };
+        if (this.tracerOf.on) {
+          const parent = this.tracerOf.current();
+          if (parent) pending.trace = new CommitSpans(parent, docs.length, idx.length);
+        }
+        const ts = await this.committer.commit(pending);
         const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).

@@ -129,6 +129,7 @@ export {
   failExecution,
   formatDuration,
   installDeterminismIn,
+  monotonicNow,
   newUserTimer,
   observeTime,
   outsideExecution,
@@ -288,6 +289,28 @@ export {
 export { SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
+export {
+  type AttributeValue,
+  CommitSpans,
+  DEFAULT_SAMPLER,
+  detached,
+  IndexReadSpans,
+  NO_TRACER,
+  newSpanId,
+  newTraceId,
+  parseSampler,
+  parseTraceparent,
+  type RemoteParent,
+  type Sampler,
+  SPAN_KIND,
+  Span,
+  type SpanKind,
+  type SpanSink,
+  STATUS,
+  sampled,
+  Tracer,
+  unixNanos,
+} from "./tracing.ts";
 export {
   formatBytes,
   ImportIdError,

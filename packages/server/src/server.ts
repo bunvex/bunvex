@@ -6,6 +6,7 @@ import {
   BackendIsNotRunningError,
   type Caller,
   checkIdentifier,
+  DEFAULT_SAMPLER,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   directFetch,
   type Engine,
@@ -13,6 +14,7 @@ import {
   type EnvVarChange,
   IndexesUnavailableError,
   insertAuditLogEvents,
+  NO_TRACER,
   OccError,
   orderEnvVarChanges,
   parseValue,
@@ -22,6 +24,7 @@ import {
   stringifyValue,
   TableSummariesUnavailableError,
   TooManyWritesError,
+  Tracer,
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
@@ -88,7 +91,16 @@ import { AuditLogLimitError } from "./log.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import {
+  DEFAULT_SERVICE_NAME,
+  OTLP_DEFAULTS,
+  type OtlpConfig,
+  OtlpExporter,
+  tracingFromEnv,
+  withInstance,
+} from "./otlp.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
+import { withRequestTracing } from "./request-tracing.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
@@ -256,6 +268,12 @@ export type ServerOptions = {
    * Bun's largest, 2³² − 1. For tests.
    */
   wsBackpressureLimit?: number;
+  /**
+   * Traces over OTLP (STUDY-131 AD-26, beyond Convex): where spans are sent and how they are sampled.
+   * Default: the OpenTelemetry environment variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`,
+   * …), off when no endpoint is set; null: off, whatever the environment says.
+   */
+  tracing?: (Partial<OtlpConfig> & { url: string }) | null;
 };
 
 /**
@@ -320,6 +338,22 @@ const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  // Traces (STUDY-131 AD-26): spans go to the OTLP exporter when an endpoint is configured.
+  const tracingConfig =
+    opts.tracing === null
+      ? null
+      : opts.tracing === undefined
+        ? tracingFromEnv()
+        : ({
+            ...OTLP_DEFAULTS,
+            headers: {},
+            sampler: DEFAULT_SAMPLER,
+            resource: { "service.name": DEFAULT_SERVICE_NAME },
+            ...opts.tracing,
+          } satisfies OtlpConfig);
+  const spanExporter = tracingConfig ? new OtlpExporter(withInstance(tracingConfig, engine.instanceName)) : null;
+  const tracer = spanExporter ? new Tracer(spanExporter, tracingConfig!.sampler) : NO_TRACER;
+  engine.tracer = tracer;
   if (opts.auditLogRetentionDays !== undefined) functions.auditLogRetentionDays = opts.auditLogRetentionDays;
   // The function execution log (STUDY-47): every execution, and each OCC attempt a mutation lost.
   const functionLog = new FunctionLog();
@@ -880,6 +914,8 @@ export function createServer(opts: ServerOptions) {
         conflicts: c.conflicts,
         syncSessions: sync.sessions.size,
         sync: sync.stats,
+        // Spans exported, dropped (queue full) and failed (STUDY-131 AD-26); null when tracing is off.
+        tracing: spanExporter?.stats ?? null,
       });
     }
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
@@ -1302,7 +1338,7 @@ export function createServer(opts: ServerOptions) {
     },
   };
   // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
-  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
+  server = Bun.serve<WsData, never>(withRequestTracing(tracer, withClientVersionCheck(withApiCors(apiOptions))));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
@@ -1330,18 +1366,22 @@ export function createServer(opts: ServerOptions) {
     sitePort === null
       ? null
       : Bun.serve(
-          withClientVersionCheck({
-            port: sitePort,
-            ...(opts.hostname ? { hostname: opts.hostname } : {}),
-            idleTimeout: 120,
-            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-            fetch(req, srv) {
-              const url = new URL(req.url);
-              if (url.pathname === "/version") return new Response("bunvex");
-              srv.timeout(req, 0);
-              return serveHttpAction(req, url.pathname, url.search);
-            },
-          } as Bun.Serve.Options<undefined, never>),
+          withRequestTracing(
+            tracer,
+            withClientVersionCheck({
+              port: sitePort,
+              ...(opts.hostname ? { hostname: opts.hostname } : {}),
+              idleTimeout: 120,
+              ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+              fetch(req, srv) {
+                const url = new URL(req.url);
+                if (url.pathname === "/version") return new Response("bunvex");
+                srv.timeout(req, 0);
+                return serveHttpAction(req, url.pathname, url.search);
+              },
+            } as Bun.Serve.Options<undefined, never>),
+            true,
+          ),
         );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
@@ -1844,6 +1884,8 @@ export function createServer(opts: ServerOptions) {
     usageLimitWorker,
     /** Storage usage gauges (STUDY-73). */
     usageGauges,
+    /** The OTLP span exporter (STUDY-131 AD-26), when tracing is on. */
+    spanExporter,
     stop: () => {
       builtinScreen?.stop();
       functionLog.close();
@@ -1859,6 +1901,7 @@ export function createServer(opts: ServerOptions) {
       sync.stop();
       site?.stop(true);
       server?.stop(true);
+      void spanExporter?.close();
     },
     /** A clean exit: stop serving, let the last commits land, release the store's lease (PERSIST-01 C7, so
      *  a replacement process opens at once instead of after the lease's TTL) and close the store. */
@@ -1880,6 +1923,8 @@ export function createServer(opts: ServerOptions) {
       builtinScreen?.stop();
       functionLog.close();
       await engine.close();
+      // The last spans (the final commits' included) are sent before the process goes.
+      await spanExporter?.close();
     },
   };
 }

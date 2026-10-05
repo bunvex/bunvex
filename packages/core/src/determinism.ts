@@ -207,6 +207,11 @@ export const wallClock = (): number => realNow();
 const realPerformanceNow = performance.now.bind(performance);
 const origin = performance.timeOrigin;
 
+/** The real monotonic clock (`performance.now()`), frozen in no execution: trace spans are timed by it. */
+export const monotonicNow = (): number => realPerformanceNow();
+/** Real random bytes, whether or not an execution is running (trace and span ids). */
+export const realRandomBytes = (out: Uint8Array): Uint8Array => realGetRandomValues(out);
+
 /**
  * The wall clock in whole microseconds, whether or not an execution is running: the unit of commit
  * timestamps (STUDY-06 D9). Convex counts nanoseconds in a u64, which a JS number cannot hold exactly;

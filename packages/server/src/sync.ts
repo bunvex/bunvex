@@ -29,6 +29,8 @@ import {
   OutOfRetentionError,
   type QueryJournal,
   ReadSetIndex,
+  SPAN_KIND,
+  type Span,
   stringifyValue,
   TooManyWritesError,
 } from "@bunvex/core";
@@ -727,6 +729,16 @@ export class SyncHub {
 
 type Socket = ServerWebSocket<{ session: SyncSession }>;
 
+/** A client message's span name, after `sync-worker/` (Convex's sync worker names its roots so). */
+const MESSAGE_SPANS: Record<v1.ClientMessage["type"], string> = {
+  Connect: "connect",
+  ModifyQuerySet: "modify-query-set",
+  Mutation: "mutation",
+  Action: "action",
+  Authenticate: "authenticate",
+  Event: "event",
+};
+
 /** One connection's sync state and its message handling. */
 export class SyncSession {
   sessionId: string | null = null;
@@ -894,8 +906,41 @@ export class SyncSession {
     } catch (e) {
       return this.fail({ fatal: (e as Error).message });
     }
-    this.inbox = this.inbox.then(() => (this.closed ? undefined : this.handle(m))).catch((e) => this.internalError(e));
+    const tracer = this.hub.deps.engine.tracer;
+    if (tracer.on) return this.tracedMessage(m, Buffer.byteLength(frame));
+    this.inbox = this.inbox
+      .then(() => (this.closed ? undefined : this.handle(m, null)))
+      .catch((e) => this.internalError(e));
   }
+
+  /**
+   * A message with its trace (STUDY-131 AD-26): a root span per message, as Convex's sync worker opens
+   * `sync-worker/mutation` and `sync-worker/action` roots. The sync protocol carries no trace context (nor
+   * does Convex's), so a message cannot continue a client's trace. A mutation's or action's span ends with
+   * its response; a query set or identity change is the parent of the transition it starts.
+   */
+  private tracedMessage(m: v1.ClientMessage, bytes: number) {
+    const tracer = this.hub.deps.engine.tracer;
+    const span = tracer.root(`sync-worker/${MESSAGE_SPANS[m.type]}`, SPAN_KIND.server);
+    span?.set("bunvex.sync.message_bytes", bytes).set("bunvex.sync.session_id", this.sessionId ?? undefined);
+    const owned = m.type === "Mutation" || m.type === "Action";
+    this.inbox = this.inbox
+      .then(async () => {
+        if (this.closed) return span?.finish();
+        try {
+          await tracer.within(span, () => this.handle(m, span));
+        } catch (e) {
+          span?.fail(e);
+          throw e;
+        } finally {
+          if (!owned) span?.finish();
+        }
+      })
+      .catch((e) => this.internalError(e));
+  }
+
+  /** The traced message (its span) a transition about to run was asked for by, if any. */
+  private transitionParent: Span | null = null;
 
   /** End the connection with an `AuthError` (Convex: the error message, the identity version, no close frame). */
   private authError(error: string, authUpdateAttempted: boolean) {
@@ -940,7 +985,7 @@ export class SyncSession {
     return this.caller;
   }
 
-  private async handle(m: v1.ClientMessage) {
+  private async handle(m: v1.ClientMessage, span: Span | null) {
     switch (m.type) {
       case "Connect": {
         this.sessionId = m.sessionId;
@@ -964,11 +1009,12 @@ export class SyncSession {
           return this.internalError(new Error(`query set version ${m.newVersion} does not follow ${m.baseVersion}`));
         this.pending.push(...m.modifications);
         this.received.querySet = m.newVersion;
+        if (span) this.transitionParent = span.set("bunvex.sync.modifications", m.modifications.length);
         return this.schedule();
       case "Mutation":
-        return this.mutation(m);
+        return this.mutation(m, span);
       case "Action":
-        return this.action(m);
+        return this.action(m, span);
       case "Authenticate": {
         if (m.baseVersion !== this.received.identity)
           return this.internalError(
@@ -1006,6 +1052,7 @@ export class SyncSession {
         }
         this.received.identity++;
         this.identityChanged = true;
+        if (span) this.transitionParent = span;
         return this.schedule();
       }
       case "Event":
@@ -1083,7 +1130,34 @@ export class SyncSession {
     }
   }
 
-  private async transition() {
+  /**
+   * Traced, a transition is a `sync-worker/update-queries` span (Convex's root of the same name): under the
+   * message that asked for it, else (a commit invalidated a query) a trace of its own, with the queries it
+   * re-ran under it.
+   */
+  private transition(): Promise<void> {
+    // Not async: untraced, the transition's own promise, with no extra turn.
+    return this.hub.deps.engine.tracer.on ? this.tracedTransition() : this.runTransition(null);
+  }
+
+  private async tracedTransition() {
+    const tracer = this.hub.deps.engine.tracer;
+    const parent = this.transitionParent;
+    this.transitionParent = null;
+    const span = parent
+      ? parent.child("sync-worker/update-queries")
+      : tracer.root("sync-worker/update-queries", SPAN_KIND.internal);
+    try {
+      await tracer.within(span, () => this.runTransition(span));
+    } catch (e) {
+      span?.fail(e);
+      throw e;
+    } finally {
+      span?.finish();
+    }
+  }
+
+  private async runTransition(span: Span | null) {
     const { engine } = this.hub.deps;
     const caller = this.currentCaller();
     if (caller === null) return;
@@ -1186,13 +1260,20 @@ export class SyncSession {
 
     const end: v1.StateVersion = { querySet, ts: wireTs(ts), identity };
     const endText = versionJson(end);
-    this.sendTransition(
+    const transition =
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
-        `"modifications":[${[...modifications.values()].join(",")}],` +
-        // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
-        // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
-        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`,
-    );
+      `"modifications":[${[...modifications.values()].join(",")}],` +
+      // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
+      // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
+      `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`;
+    this.sendTransition(transition);
+    if (span)
+      span
+        .set("bunvex.sync.queries", this.queries.size)
+        .set("bunvex.sync.queries_rerun", stale.length)
+        .set("bunvex.sync.modifications", modifications.size)
+        .set("bunvex.sync.bytes", Buffer.byteLength(transition))
+        .set("bunvex.sync.ts", ts);
     this.version = end;
     this.versionText = endText;
     this.hub.stats.transitions++;
@@ -1244,11 +1325,15 @@ export class SyncSession {
     }
   }
 
-  private mutation(m: v1.MutationRequest) {
+  /** `span`: the message's, traced; it ends once the mutation is answered (its time in the queue included). */
+  private mutation(m: v1.MutationRequest, span: Span | null) {
     // Convex's `mutation_queue_length`: the mutations still waiting when this one arrives (not the running one).
     const queued = this.pendingMutations - (this.mutationRunning ? 1 : 0);
-    if (queued >= MAX_PENDING_MUTATIONS)
+    if (queued >= MAX_PENDING_MUTATIONS) {
+      span?.fail("TooManyConcurrentMutations").finish();
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyConcurrentMutations" });
+    }
+    span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
     this.pendingMutations++;
     // Queued before any await, so the queue order is the order frames arrived (STUDY-22).
     this.mutations = this.mutations.then(async () => {
@@ -1318,29 +1403,38 @@ export class SyncSession {
             this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null),
           );
         }
+        // Traced, the transition that follows the response belongs to this message's trace.
+        if (span) this.transitionParent = span;
         this.schedule();
       } finally {
         this.pendingMutations--;
         this.mutationRunning = false;
+        span?.finish();
       }
     });
   }
 
-  private action(m: v1.ActionRequest) {
-    if (this.inflightActions > MAX_INFLIGHT_ACTIONS)
+  /** `span`: the message's, traced; it ends once the action is answered. */
+  private action(m: v1.ActionRequest, span: Span | null) {
+    span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
+    if (this.inflightActions > MAX_INFLIGHT_ACTIONS) {
+      span?.fail("TooManyInflightActionsForSingleClient").finish();
       return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
+    }
     const caller = this.requestCaller(m.requestId);
-    if (caller === null) return;
+    if (caller === null) return span?.finish();
     let component: string | null;
     try {
       component = componentOf(m.componentPath, caller);
     } catch (e) {
+      span?.fail(e).finish();
       return this.internalError(e);
     }
     if (component !== null) {
-      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) =>
-        this.send(this.response("ActionResponse", m.requestId, r)),
-      );
+      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) => {
+        this.send(this.response("ActionResponse", m.requestId, r));
+        span?.finish();
+      });
       return;
     }
     this.inflightActions++;
@@ -1354,9 +1448,11 @@ export class SyncSession {
         if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
           return this.internalError(r.error);
         this.send(this.response("ActionResponse", m.requestId, r));
+        if (span) this.transitionParent = span;
         this.schedule();
       } finally {
         this.inflightActions--;
+        span?.finish();
       }
     })();
   }

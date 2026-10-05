@@ -1,6 +1,6 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
 
-- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module
+- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§7).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-08](STUDY-08-cache-and-subscriptions.md) (read sets, invalidation), [STUDY-12](STUDY-12-dashboard.md)
   (dashboard), [STUDY-58](STUDY-58-app-metrics.md) (app metrics), STUDY-114 (Prometheus `/metrics`), STUDY-125–130
@@ -199,3 +199,298 @@ The questions, as asked:
 3. **T1:** accept the deterministic test runtime as a roadmap item. Recommendation: yes, module by module,
    starting with the flaky tests.
 4. **Order:** AD-24 (small, and it pairs with STUDY-125–130), then AD-25, then AD-26, then AD-27 and T1.
+
+## 7. AD-26 built: traces over OpenTelemetry
+
+### 7.1 What Convex does, in detail
+
+- **Spans.** `fastrace` spans are opened all over the backend. The roots matter for the shape of a trace:
+  - `stats_middleware` (`crates/common/src/http/mod.rs`, around line 755) wraps every HTTP request in a root
+    span named after the matched route, with `span.kind = server`. It continues a W3C `traceparent` header
+    (`ExtractTraceparent`, around line 1129) when `PROPAGATE_UPSTREAM_TRACES` is on (its default), and
+    otherwise opens a no-op span: sampling "should be done upstream".
+  - The sync worker (`crates/sync/src/worker.rs`) opens its own sampled roots: `sync-worker/mutation` (line
+    681) and `sync-worker/action` (line 791), with `udf_type` and `udf_path`, and `sync-worker/update-queries`
+    for a transition (`begin_update_queries`, line 940).
+  - `get_sampled_span` (`crates/common/src/fastrace_helpers/mod.rs`) samples each root by
+    `REQUEST_TRACE_SAMPLE_CONFIG` (`knobs.rs` line 1786): a default fraction plus regex overrides per route and
+    per instance. The open-source default is an empty config, a fraction of 0.
+  - `EncodedSpan` carries a span to another process (an isolate, a Node action) as a `traceparent` string.
+- **Export.** Nothing in the open-source crates calls `fastrace::set_reporter`, so every span is dropped.
+- **WebSocket.** The sync protocol's client messages (`crates/convex/sync_types/src/types/mod.rs`) carry no trace
+  context, and a browser's `WebSocket` cannot set headers on its upgrade, so a client cannot continue its trace
+  over the socket. bunvex does the same: a WebSocket message is always the root of its trace.
+
+### 7.2 What an app observes
+
+Nothing. Tracing is off unless an OTLP endpoint is configured, and on it changes no response, timing contract or
+error. The collector sees the spans; `/stats` (ViewMetrics) gains a `tracing` object, `null` when off.
+
+### 7.3 How bunvex does it
+
+**Where the code lives.**
+
+- `packages/core/src/tracing.ts`: the `Span`, the `Tracer`, W3C `traceparent` parsing, the samplers, span
+  and trace ids, and the two aggregates the engine reports (`IndexReadSpans`, `CommitSpans`). Core has no HTTP,
+  so it only hands finished spans to a `SpanSink`.
+- `packages/server/src/otlp.ts`: the configuration from the environment and the exporter (the `SpanSink`).
+- `packages/server/src/request-tracing.ts`: the root span of each HTTP request, on both ports.
+- Hooks: `engine.ts`, `tx.ts` and `committer.ts` in core; `functions.ts` (`logged`), `sync.ts`,
+  `scheduler.ts`, `cron-executor.ts` and `server.ts` in the server.
+
+**The trace of a request.** Names follow Convex's where it has one.
+
+| Span | Kind | Parent | Attributes |
+|---|---|---|---|
+| `<METHOD> <route>`, e.g. `POST /api/mutation` | server | the `traceparent` caller, else none | `http.request.method`, `http.route`, `url.path`, `url.scheme`, `server.port`, `user_agent.original`, `bunvex.client`, `http.response.status_code`; failed on a 5xx |
+| `sync-worker/<message>`: `connect`, `modify-query-set`, `mutation`, `action`, `authenticate`, `event` | server | none | `bunvex.sync.message_bytes`, `bunvex.sync.session_id`; for a mutation or action `bunvex.function.path`, `bunvex.sync.request_id`. A mutation's span lasts until its response, its time in the session's queue included |
+| `sync-worker/update-queries` | internal | the message that asked for it (a query set, an identity, a mutation's or action's response), else none (a commit invalidated it) | `bunvex.sync.queries`, `bunvex.sync.queries_rerun`, `bunvex.sync.modifications`, `bunvex.sync.bytes` (the transition's UTF-8 bytes), `bunvex.sync.ts` |
+| `scheduler/run`, `cron/run` | consumer | none | `bunvex.scheduler.job_id` or `bunvex.cron.name`; `bunvex.function.path` |
+| `<kind> <path>`, e.g. `query messages:list` | internal | the current span | `bunvex.function.path`, `.kind`, `.environment`, `.cached`, `.documents_read`, `.bytes_read`, `bunvex.request_id`; failed when the function failed |
+| `index <table>.<index>` | internal | the function's | `bunvex.index`, `bunvex.index.intervals` (store reads of the index), `bunvex.index.rows`, `bunvex.index.read_us` (time inside those reads) |
+| `commit` → `commit.wait`, `commit.validate`, `commit.write` | internal | the function's | `bunvex.commit.documents`, `.index_entries`, `.ts`; the write span `bunvex.commit.batch_commits`, `.batch_documents`; failed when refused (a conflict) |
+
+- **Index reads are batched per index.** A transaction keeps one aggregate per index it reads: the number of
+  store reads, the rows they returned and the time spent in them. Each index becomes one span when the
+  transaction ends, from its first read to the end of its last. A query that pages through 10 000 rows makes one
+  span, not 10 000 (or 40 for its pages). A run-state check that reads `_backend_state` from the store shows up
+  too; one answered from its cache does not.
+- **The commit** is timed at the committer's steps: queued behind the group being written (`wait`), checked
+  against the commits since its snapshot (`validate`), applied and flushed with its write batch (`write`, shared
+  by the batch's commits). A mutation retried after a conflict shows each attempt's commit under the same
+  function span.
+- **An HTTP request's span** ends when its handler returns the response; a streamed body may still be sending.
+- **A transition caused by a commit** is a trace of its own, as Convex's `sync-worker/update-queries` is a root:
+  one commit can invalidate many sessions' queries. Linking it to the commit's trace is AD-27's subject, with
+  AD-25's invalidation record.
+
+**Propagation: AsyncLocalStorage, measured.** The current span travels in an `AsyncLocalStorage`, as the
+function log's and determinism's state already do. Explicit passing would thread a parameter through `Engine`,
+`Tx`, `Committer`, `Functions` and the sync hub. A micro-benchmark modeled a request with a function and five
+awaited reads, each looking up its parent, with two other `AsyncLocalStorage` instances active as in bunvex.
+Three rounds of 10⁶ requests each, Bun 1.4.2, on a loaded machine:
+
+| Per request | Round 1 | Round 2 | Round 3 |
+|---|--:|--:|--:|
+| no tracing | 593 ns | 580 ns | 759 ns |
+| explicit passing, traced | 687 ns | 512 ns | 805 ns |
+| AsyncLocalStorage, no span stored (tracing off) | 653 ns | 557 ns | 825 ns |
+| AsyncLocalStorage, a run per root and child (traced) | 800 ns | 670 ns | 1129 ns |
+
+AsyncLocalStorage costs about 100–300 ns more per traced request than explicit passing, and nothing measurable
+when no span is stored. Both are well under 1 % of a request (tens of µs). AsyncLocalStorage was chosen for its
+much smaller change.
+
+Where work crosses a queue, the parent is captured explicitly instead:
+
+- a commit takes its parent when it is queued (`CommitSpans`);
+- a transition takes the message that asked for it;
+- a sync message's handling runs `within` its own span, not the context of whatever ran the inbox before.
+
+The committer drains its group from a `setImmediate` set in the context of the group's first commit. Traced,
+the drain is `detached` (the AsyncLocalStorage exited): otherwise the commit listeners, and the queries or
+transitions they start, would join that one request's trace. A root the sampler leaves out still runs `within`
+a "not sampled" marker, so nothing under it opens a span or inherits one.
+
+**Off costs nothing.** With no endpoint, the engine's tracer is `NO_TRACER`. Every hook checks `tracer.on` and
+does nothing else: no span object, no clock read, no AsyncLocalStorage run, no extra promise.
+
+- The wrappers on hot paths (`Functions.logged`, `Tx.storeRange`, `SyncSession.transition`) are not `async`.
+  Untraced, they return the inner promise as is. An `async` wrapper first cost two microtask turns per call, and
+  `sync-retry`'s "a rerun after a commit is retried the same way" test caught the reordering.
+- `withRequestTracing` returns the server's options unchanged.
+
+**Sampling.** The OpenTelemetry SDK's samplers:
+
+- `always_on`, `always_off`, `traceidratio`, and their `parentbased_` forms. The default is
+  `parentbased_always_on`, and `OTEL_TRACES_SAMPLER_ARG` is the ratio (default 1.0).
+- A ratio decides from the trace id's last 7 bytes, against `ratio × 2⁵⁶`, so every service that sees a trace
+  decides the same way.
+- Parent-based follows a `traceparent`'s sampled flag: a caller that did not sample its trace gets no spans from
+  bunvex.
+- A sampled trace is whole: children never re-sample.
+- The decision comes first. An unsampled HTTP request costs a header read, an id and the marker run, not a URL
+  parse or a span.
+
+**`traceparent`.** It is parsed as W3C Trace Context §3.2 specifies:
+
+- lowercase hex fields;
+- version `ff` and all-zero ids are invalid;
+- version `00` has exactly four fields, and a later version is read by its first four;
+- a `tracestate` is kept on the spans.
+
+An invalid header starts a new trace.
+
+**Configuration**, read once when the server starts. The OpenTelemetry SDK's variables:
+
+| Variable | Use |
+|---|---|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | the traces URL, used as is |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | the base URL; `/v1/traces` is appended. Tracing is off when neither is set |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | `k=v,k2=v2`, values percent-decoded; the traces list overrides key by key |
+| `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` | one export's timeout, ms (10 000) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | only `http/json` is spoken; another value is reported and JSON is sent all the same |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | above; an unknown sampler or a bad ratio is reported, and the default used |
+| `OTEL_SERVICE_NAME` | `service.name` (default `bunvex`); it wins over one in `OTEL_RESOURCE_ATTRIBUTES` |
+| `OTEL_RESOURCE_ATTRIBUTES` | more resource attributes; bunvex adds `bunvex.instance_name` |
+| `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_EXPORT_TIMEOUT` | the batch processor's knobs (2048, 512, 5000 ms, 30 000 ms); a batch is never bigger than the queue |
+| `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none` | off |
+
+`createServer({ tracing })` takes the same settings directly (tests), and `tracing: null` turns tracing off
+whatever the environment says.
+
+**The exporter** behaves as the SDK's BatchSpanProcessor with an OTLP/HTTP exporter, written in-house (the
+owner's decision: no `@opentelemetry/*` dependency):
+
+- **Batching.** Finished spans go to a bounded queue. A batch is sent once it is full, or after the delay since
+  the first span waiting. One export runs at a time; the queue is taken on when it ends.
+- **A full queue drops the span** and counts it. The counts are in `/stats` as
+  `tracing: { exported, dropped, failed, queued }`. The Prometheus `/metrics` endpoint (#432) is not merged;
+  these counters can join it once it is.
+- **Retries.** A retryable answer (429, 502, 503, 504, as OTLP/HTTP lists them) or a network error is retried
+  with full-jitter backoff (1 s doubling to 30 s, 5 retries), honoring `Retry-After`. Another status fails the
+  batch at once.
+- **Partial success.** `partialSuccess.rejectedSpans` counts as failed.
+- **Warnings** about failures are printed at most once a minute.
+- **Close.** `stop()` and `shutdown()` close the exporter. It stops taking spans, cuts a backoff short (one last
+  attempt), and sends what is queued, for at most `OTEL_BSP_EXPORT_TIMEOUT`. `shutdown()` closes the engine
+  first, so the last commits' spans go too.
+- **Requests** use the real `fetch` (not an action's metered one, nor the operator's SSRF proxy), and its
+  timers are `unref`'d.
+
+**The JSON** follows the OTLP specification's JSON encoding of `ExportTraceServiceRequest`
+(opentelemetry-proto, `opentelemetry/proto/collector/trace/v1/trace_service.proto` and
+`trace/v1/trace.proto`):
+
+- one `resourceSpans` entry with the resource's attributes, and one `scopeSpans` entry with scope `bunvex`;
+- `traceId` and `spanId` as lowercase hex, the one exception to protobuf's base64 JSON mapping of `bytes`;
+  `parentSpanId` is omitted on a root;
+- `kind` and `status.code` as integers;
+- `startTimeUnixNano` and `endTimeUnixNano` (fixed64) as decimal strings. Span times are monotonic
+  `performance.now()` readings, converted with `performance.timeOrigin` in exact BigInt nanoseconds;
+- attributes as `KeyValue`s. A string is `stringValue`, a boolean `boolValue`, a safe integer `intValue` (int64,
+  a decimal string), any other number `doubleValue`, and a non-finite double `"NaN"`/`"Infinity"`, as protobuf's
+  JSON mapping writes them.
+
+Ids are drawn from 4 KiB blocks of `crypto.getRandomValues`, outside any deterministic execution, and are
+never all zero. Trace ids are fully random, so the W3C level-2 random flag holds, but bunvex does not set it.
+
+### 7.4 Divergences and additions
+
+None beyond AD-26 itself. Span names follow Convex's where it has them: the route for an HTTP root,
+`sync-worker/mutation`, `sync-worker/action` and `sync-worker/update-queries`. The others, and every attribute,
+are bunvex's, with OpenTelemetry's semantic conventions for HTTP.
+
+### 7.5 Tests
+
+- `packages/core/test/tracing.test.ts` (16 tests):
+  - `traceparent` validity cases;
+  - the samplers and their parsing; the ratio decided from the id, and about 10 % of 10 000 roots at 0.1;
+  - ids; nanosecond times;
+  - `within` and an unsampled root hiding the caller's span; a remote parent;
+  - index reads, one span per index: 303 rows in 4 reads make one span, plus one each for `by_creation_time`
+    and `by_id`;
+  - untraced work reports nothing;
+  - the commit's three steps, inside the commit span, in the request's trace; a refused commit fails;
+  - work a commit listener starts joins no trace.
+- `packages/server/test/otlp-traces.test.ts` (18 tests), with an in-process OTLP collector (`Bun.serve`) that
+  keeps every request:
+  - **JSON shape.** Every export is checked field by field against the proto: allowed keys only, hex ids, integer
+    kinds, 19-digit nanosecond strings, end ≥ start, typed `AnyValue`s. Also the configured headers and
+    `content-type`, and the resource (`service.name`, `OTEL_RESOURCE_ATTRIBUTES`, `bunvex.instance_name`).
+  - **A mutation over HTTP is one trace:**
+    `POST /api/mutation` → `mutation m:send` → {`index _backend_state.by_creation_time`,
+    `index messages.by_author`, `commit` → {wait, validate, write}}, all in one trace.
+  - **A query:** documents and bytes read and its index span; a cache hit is marked `cached` and has nothing
+    under it.
+  - **`traceparent`:** a sampled one is continued (trace id, parent span id, `tracestate`); an unsampled one
+    records nothing; an invalid one starts a new trace.
+  - **Sync:**
+    - the query set's message → its transition → the query → its index read;
+    - the socket mutation's trace, down to the commit;
+    - exactly one transition re-runs the query after the commit (`queries_rerun` 1, bytes > 50), with the query
+      and its index read under it;
+    - no transition joins the mutation's trace other than the one its response asks for.
+  - **Scheduler and crons:** a scheduled function's `scheduler/run` root with `mutation m:job` under it; a
+    1-second cron's `cron/run` root with its mutation.
+  - **Sampling:** `always_off` exports nothing; `traceidratio` 0.3 keeps 15–45 % of 300 requests, each kept
+    trace whole.
+  - **Exporter:**
+    - a full queue drops and counts (20 spans, a queue of 5: 15 dropped, 5 sent), also seen in `/stats`;
+    - a batch goes when full or after the delay;
+    - 503 twice then 200 is retried, exported once; 400 fails at once; retries spent fail; a partial success
+      counts its rejected spans;
+    - `close()` sends a queued batch that was due in an hour, then drops later spans; it cuts a 60-second
+      backoff short with one last attempt;
+    - `shutdown()` flushes the request's and commit's spans;
+    - exotic values: NaN, ±Infinity, negative ints, an error status.
+  - **Environment:** off without an endpoint, with `OTEL_SDK_DISABLED` or `OTEL_TRACES_EXPORTER=none`, or with a
+    bad URL; the endpoint rules; headers, timeout, sampler, service name, resource attributes and batch knobs
+    (with a malformed entry reported); another protocol reported; off, `engine.tracer` is `NO_TRACER` and no
+    exporter exists.
+- **Not run: a real collector.** A test against Jaeger or Tempo needs Docker, and the Docker daemon was not
+  running on the machine this was built on (the shared VPS is not used for this). The shape test checks the
+  proto's JSON mapping instead.
+
+**Sabotage.** Each change below was made, the two test files run, and the code restored (`git diff` clean).
+Every one was caught.
+
+| Sabotage | Caught by |
+|---|---|
+| span ids base64, not hex | JSON shape (mutation, query, sync) |
+| times in µs, not ns | nanosecond time test; JSON shape |
+| integer attributes as doubles | exotic values |
+| `within` does not make the span current | tracer children; index spans; commit spans |
+| an unsampled root lets the caller's span through | tracer children |
+| parent-based ignores the caller's flag | samplers; remote parent; `traceparent` |
+| ratio compared the wrong way | samplers; sampling |
+| `traceparent`'s span not the root's parent | remote parent; `traceparent` |
+| index reads not batched per index | index spans; `IndexReadSpans` |
+| the commit is not under the mutation | untraced work; commit spans; the mutation's tree |
+| commit listeners not detached | commit listener test |
+| the transition is not under its message | sync |
+| queue bound off | full queue |
+| close does not send the queue | close; shutdown flush |
+| 503 not retried | retries; close |
+| base endpoint without `/v1/traces` | endpoint rules |
+| `OTEL_SERVICE_NAME` not preferred | configuration |
+| function span without its cache flag | query test |
+| transition bytes wrong | sync |
+
+### 7.6 Measurements
+
+Bun 1.4.2, Apple Silicon (8 cores), memory store, while other sessions loaded the machine (load average
+7–12). The runs are interleaved, so the medians and bests compare.
+
+**HTTP, in process.** 64 concurrent clients in the same process as the server, 8 rounds of 3 s per
+configuration:
+
+- *query*: a cache miss every time, one index range of 10 rows;
+- *mutation*: an index read and an insert, one commit each.
+
+Spans go to a collector in another process.
+
+| Configuration | Query/s median (best) | Mutation/s median (best) |
+|---|--:|--:|
+| main | 10 205 (10 949) | 10 454 (10 466) |
+| this branch, tracing off | 10 554 (11 004) | 10 455 (10 465) |
+| this branch, 10 % sampled | 9 655 (10 599) | 10 420 (10 468) |
+| this branch, 100 % sampled | 8 459 (8 926) | 9 667 (10 381) |
+
+- **Off** is main's throughput, within the noise.
+- **At 10 %**, queries cost about 3–5 %: the unsampled requests' header read, id and context run. Commits are
+  unchanged.
+- **At 100 %**, the trivial query costs about 17 %. It is a sub-millisecond request that produces 3–4 spans,
+  each encoded to JSON and sent. Commits cost up to 7 %: about 8 spans per mutation, and a committer that paces
+  the commits more than the CPU does. A real request does more work per span, so the share is smaller. The
+  sampler is the knob for production.
+
+**Engine only.** The disabled path without HTTP: sequential uncached queries (two index reads) and mutations
+(a read and an insert), 10 runs per side in alternating order.
+
+| | Query/s median (best) | Mutation/s median (best) |
+|---|--:|--:|
+| main | 52 618 (56 167) | 29 574 (33 118) |
+| this branch, tracing off | 53 655 (56 112) | 29 861 (32 587) |
+
+The same, within the noise.

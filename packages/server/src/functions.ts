@@ -22,6 +22,7 @@ import {
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
+  type Span,
   setFetchMeter,
   setFetchSender,
   stringifyValue,
@@ -343,6 +344,26 @@ function runReason(caller: CallerName, udfType: UdfType): RunReason {
 
 const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
 
+/** A function span's kind word: `query`, `mutation`, `action`, `http_action`. */
+const spanKindOf = (udfType: UdfType) => (udfType === "HttpAction" ? "http_action" : udfType.toLowerCase());
+
+/** End an execution's span with what it did: its path and kind, whether the cache answered, what it read. */
+function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unknown }) {
+  span
+    .set("bunvex.function.path", r.identifier)
+    .set("bunvex.function.kind", spanKindOf(r.udfType))
+    .set("bunvex.function.environment", r.environment)
+    .set("bunvex.function.cached", r.cached)
+    .set("bunvex.request_id", r.requestId);
+  const tx = r.tx as Tx | null;
+  if (tx) {
+    const used = tx.usage;
+    span.set("bunvex.function.documents_read", used.documentsRead).set("bunvex.function.bytes_read", used.bytesRead);
+  }
+  if (!res.ok) span.fail(res.error);
+  span.finish();
+}
+
 /** The transaction the current logged execution runs in, for its usage. */
 function noteTx(db: Tx) {
   const owner = currentOwner();
@@ -615,7 +636,7 @@ export class Functions {
    * action or HTTP action each line as a Progress event as it is printed. A function an action calls is
    * logged with the action as its parent, in its request. System functions are not logged, as in Convex.
    */
-  async logged<T>(
+  logged<T>(
     udfType: UdfType,
     name: string,
     caller: Caller | undefined,
@@ -631,10 +652,42 @@ export class Functions {
      */
     settled?: (value: T) => Promise<() => void> | null,
   ): Promise<T> {
+    // Traced (STUDY-131 AD-26): a span for the execution, under the request's, with what it read.
+    const tracer = this.engine.tracer;
+    const span = tracer.on ? tracer.child(`${spanKindOf(udfType)} ${strippedPath(name)}`) : null;
+    if (span)
+      return tracer.within(span, () =>
+        this.loggedRun(span, udfType, name, caller, run, outcome, routePath, args, settled),
+      );
+    return this.loggedRun(null, udfType, name, caller, run, outcome, routePath, args, settled);
+  }
+
+  private async loggedRun<T>(
+    span: Span | null,
+    udfType: UdfType,
+    name: string,
+    caller: Caller | undefined,
+    run: () => Promise<T>,
+    outcome: ((value: T) => Outcome) | undefined,
+    routePath: string | undefined,
+    args: unknown,
+    settled: ((value: T) => Promise<() => void> | null) | undefined,
+  ): Promise<T> {
     const log = this.functionLog;
     // System functions are not logged, as in Convex, but their compute and bandwidth are metered.
     const system = isSystemPath(name);
-    if (!log || (system && !this.usageMeter)) return run();
+    if (!log || (system && !this.usageMeter)) {
+      if (!span) return run();
+      span.set("bunvex.function.path", strippedPath(name)).set("bunvex.function.kind", spanKindOf(udfType));
+      try {
+        return await run();
+      } catch (e) {
+        span.fail(e);
+        throw e;
+      } finally {
+        span.finish();
+      }
+    }
     const up = currentOwner();
     const parent = up instanceof Running ? up : null;
     const r = new Running(
@@ -683,6 +736,7 @@ export class Functions {
       }
     }
     const res = await withOwner(r, run);
+    if (span) functionSpanEnd(span, r, res);
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
     const later = res.ok && !o.skip ? settled?.(res.value) : null;
