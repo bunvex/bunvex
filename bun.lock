@@ -558,6 +558,17 @@
         "react-dom": "^19.3.0",
       },
     },
+    "packages/differential": {
+      "name": "@bunvex/differential",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+      },
+      "devDependencies": {
+        "convex": "1.46.0",
+        "fast-check": "4.10.2",
+      },
+    },
     "packages/file-storage": {
       "name": "@bunvex/file-storage",
       "version": "0.1.0-alpha.0",
@@ -887,6 +898,8 @@
     "@bunvex/dashboard": ["@bunvex/dashboard@workspace:packages/dashboard"],
 
     "@bunvex/dashboard-app": ["@bunvex/dashboard-app@workspace:apps/dashboard"],
+
+    "@bunvex/differential": ["@bunvex/differential@workspace:packages/differential"],
 
     "@bunvex/file-storage": ["@bunvex/file-storage@workspace:packages/file-storage"],
 
