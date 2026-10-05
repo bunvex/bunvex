@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure) and PR 4 (the paged backfill) implemented
+  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill) and PR 5 (the compactor) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),
@@ -331,7 +331,33 @@ a process of its own):
 | Building both indexes from the table | 11.8 s; heap 614 MiB, RSS 1200 MiB once built | 11.6 s, 4 steps; heap 126 MiB, RSS 1797 MiB once built (the steps' garbage, not returned to the system) |
 | A restart, until ready | 1170 ms (the snapshot); heap 548 MiB, RSS 1137 MiB | 25 ms (the segments); heap 125 MiB, RSS 164 MiB |
 
-### 3.6 The rest of the series (planned; each PR updates this section)
+### 3.6 The compactor (PR 5)
+
+- **When:** after every flush and backfill step, and after a start loads an index, the index's segments are
+  weighed as Convex's `find_segments_to_compact` (§1.5): small segments (at most 100 MiB) first, three to ten of
+  them, smallest first, within `SEGMENT_MAX_SIZE_BYTES`, chosen at random among the candidates as Convex's
+  shuffle; then large ones the same way; then a large segment more than 20 % deleted, alone. Segments with no
+  live document are dropped whatever else is merged. Sizes are Convex's: a text segment's bytes, a vector
+  segment's vectors × dimensions × 4. The knobs are Convex's env names (`MIN_COMPACTION_SEGMENTS`,
+  `MAX_COMPACTION_SEGMENTS`, `MAX_SEGMENT_DELETED_PERCENTAGE`, `SEGMENT_MAX_SIZE_BYTES`,
+  `VECTOR_INDEX_SIZE_HARD_LIMIT`).
+- **The merge** (`TextSegment.merge`, `VectorSegment.merge`) reads the segments in place: their id and term
+  tables are sorted, so they are merged (each id and term once), each live document's forward index is remapped
+  to the merged term ordinals (which keep their order), and the posting lists are rebuilt. A term no live
+  document has is left out. It pauses every 8 192 documents so other work runs, and a close stops it.
+- **The writer.** The merge is built outside the index's lock. Under it (the lock flushes and backfill steps
+  hold from their build to their commit), the deletes the merged segments got meanwhile — flushes' included —
+  are carried into the new segment and stored with it (Convex's `merge_deletes`), the state names it in their
+  place; their blobs stay, as every search blob (DV-370). The deletes made after that are carried in memory and stored by
+  the next flush.
+- A clean shutdown stops a compaction in progress before the last flush.
+
+**Measured** (`bench/search-segments.ts`, 200 000 documents, same machine, heavier load than PR 3's run): 9 blobs
+instead of 17 after the load; text search median 53.5 ms, vector 13.1 ms; a restart after a clean shutdown 286–347
+ms until ready, RSS 394–423 MiB (the compaction of the three small text segments the load left starts as soon as
+the index is ready); after a crash with 20 000 writes since, 1.3 s.
+
+### 3.7 The rest of the series (planned; each PR updates this section)
 
 - **Compactor (PR 5).** Convex's thresholds (§1.5) and the writer's reconciliation.
 - **Fast-forward, retention, GC (PR 6).** §1.6; a state whose ts is older than `document_min_snapshot_ts` is not
@@ -437,6 +463,25 @@ reached; the refusal not waking the flusher; the wrong code; refusing without a 
 Sabotage checks (each made a test fail): no log walk for the earlier pages; the memory part truncated past the
 step's ts; no resume; a resumed index answering as bootstrapping; the earlier copies of updated documents kept;
 the cursor not stored; the log walk taking later pages too.
+
+**PR 5** (`packages/core/test/search-compaction.test.ts`; the PR 2 differential tests now compact with
+`merge`):
+
+- which segments are merged: Convex's rules (fewer than three small ones, smallest first, ten at most, large
+  ones only when three fit, a large one more than 20 % deleted alone, a small one not, random among the
+  candidates);
+- one segment per commit: the compactor keeps their number under five; every blob the state names is stored,
+  and none is deleted; the answers are the table's, and a restart's;
+- a compaction held between its build and its commit while documents in its segments change and are deleted and
+  flushes store those deletes: the merged segment carries them; after a crash right then, the start (no replay)
+  answers the same;
+- a large segment more than 20 % deleted is rewritten (15 documents, none deleted); with every document deleted
+  the segments are dropped (their blobs stay).
+
+Sabotage checks (each made tests fail): the deletes since the prepare not carried; the carried deletes not
+stored; no compaction after a flush; the largest segments first; the deleted
+fraction not checked; fewer than the minimum merged; merge: term frequencies off by one, deleted documents kept,
+filter keys not remapped, a wrong document's vector, duplicates kept in a merged table (hangs).
 
 ## 6. Open questions
 

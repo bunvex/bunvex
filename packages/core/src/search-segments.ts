@@ -47,6 +47,68 @@ export function searchSegmentLimitsFromEnv(env: Record<string, string | undefine
   };
 }
 
+/**
+ * Convex's `CompactionConfig::default()` (search_compactor.rs), for text and vector alike: a segment of at most
+ * `smallSegmentBytes` (VECTOR_INDEX_SIZE_HARD_LIMIT, 100 MiB) is small; at least `minSegments`
+ * (MIN_COMPACTION_SEGMENTS, 3) and at most `maxSegments` (MAX_COMPACTION_SEGMENTS, 10) are merged at a time,
+ * their total at most `maxSegmentBytes` (SEGMENT_MAX_SIZE_BYTES); a large segment more than
+ * `maxDeletedFraction` (MAX_SEGMENT_DELETED_PERCENTAGE, 0.2) deleted is rewritten alone.
+ */
+export type SearchCompactionConfig = {
+  smallSegmentBytes: number;
+  minSegments: number;
+  maxSegments: number;
+  maxSegmentBytes: number;
+  maxDeletedFraction: number;
+};
+
+export function searchCompactionFromEnv(env: Record<string, string | undefined> = process.env): SearchCompactionConfig {
+  const num = (name: string, fallback: number) => {
+    const n = Number(env[name]);
+    return env[name] !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  return {
+    smallSegmentBytes: num("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
+    minSegments: num("MIN_COMPACTION_SEGMENTS", 3),
+    maxSegments: num("MAX_COMPACTION_SEGMENTS", 10),
+    maxSegmentBytes: num("SEGMENT_MAX_SIZE_BYTES", Math.floor((1_100_000 * 2048 * 4) / 3)),
+    maxDeletedFraction: num("MAX_SEGMENT_DELETED_PERCENTAGE", 0.2),
+  };
+}
+
+/** A segment as the compactor weighs it: its size (Convex's `total_size_bytes`) and its documents. */
+export type CompactionCandidate = { size: number; docs: number; deleted: number };
+
+/**
+ * Convex's `find_segments_to_compact`: the positions of the segments to merge, or null. Small segments first
+ * (the smallest that fit in `maxSegmentBytes`, if there are `minSegments` of them), then large ones the same
+ * way, then one large segment with too many deletes. At most `maxSegments`, chosen among the candidates at
+ * random (`shuffle`) as Convex's.
+ */
+export function segmentsToCompact(
+  segments: readonly CompactionCandidate[],
+  c: SearchCompactionConfig,
+  shuffle: <T>(xs: T[]) => T[] = (xs) => xs,
+): number[] | null {
+  const indexed = segments.map((s, i) => ({ ...s, i }));
+  const fitting = (group: typeof indexed) => {
+    let total = 0;
+    const out: number[] = [];
+    for (const s of [...group].sort((a, b) => a.size - b.size)) {
+      total += s.size;
+      if (total > c.maxSegmentBytes) break;
+      out.push(s.i);
+    }
+    return out.length >= c.minSegments ? shuffle(out).slice(0, c.maxSegments) : null;
+  };
+  const small = indexed.filter((s) => s.size <= c.smallSegmentBytes);
+  const large = indexed.filter((s) => s.size > c.smallSegmentBytes);
+  const merge = fitting(small) ?? fitting(large);
+  if (merge) return merge;
+  const deleted = large.find((s) => s.docs > 0 && s.deleted / s.docs > c.maxDeletedFraction);
+  return deleted ? [deleted.i] : null;
+}
+
 /** Where segments are kept (the server's `search` blob use case): blobs by the key `put` gives them. */
 export type SearchSegmentStore = {
   put(data: Uint8Array): Promise<string>;

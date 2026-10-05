@@ -102,7 +102,13 @@ test("a new index is built in steps, with writes between them, and answers as in
       next++;
     });
   };
-  e = new Engine(indexed, p, { searchSnapshots: blobs(), searchSegmentLimits: SMALL, beforeSearchBackfillPage: hook });
+  e = new Engine(indexed, p, {
+    searchSnapshots: blobs(),
+    searchSegmentLimits: SMALL,
+    // No compaction, to see the steps' segments.
+    searchCompaction: { minSegments: 1e9, maxDeletedFraction: 1 },
+    beforeSearchBackfillPage: hook,
+  });
   await e.init();
   await e.searchReady();
   expect(e.searchStats.backfillSteps).toBeGreaterThan(10);

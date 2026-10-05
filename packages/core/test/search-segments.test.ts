@@ -45,8 +45,15 @@ function blobs(): SearchSnapshotStore & { map: Map<string, Uint8Array> } {
 const EVERY = { textSoftLimitBytes: 1, vectorSoftLimitBytes: 1 };
 const NEVER = { textSoftLimitBytes: 2 ** 40, vectorSoftLimitBytes: 2 ** 40 };
 
+/** No compaction (segments with no live document are still dropped), to see the flushes' segments. */
+const NO_COMPACTION = { minSegments: 1e9, maxDeletedFraction: 1 };
+
 async function open(p: MemoryPersistence, store?: SearchSnapshotStore, limits = NEVER, s = schema) {
-  const e = await new Engine(s, p, store ? { searchSnapshots: store, searchSegmentLimits: limits } : {}).init();
+  const e = await new Engine(
+    s,
+    p,
+    store ? { searchSnapshots: store, searchSegmentLimits: limits, searchCompaction: NO_COMPACTION } : {},
+  ).init();
   await e.searchReady();
   return e;
 }

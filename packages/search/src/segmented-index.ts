@@ -166,13 +166,11 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     return docs.length ? this.build(docs) : null;
   }
 
-  /** The live documents of `parts` as one segment (null: none). */
-  protected buildLive(parts: SegmentPart<S, D>[]): Uint8Array | null {
-    const docs: [string, Doc][] = [];
-    for (const p of parts)
-      for (let d = 0; d < p.segment.numDocs; d++) if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.get(d)]);
-    return docs.length ? this.build(docs) : null;
-  }
+  /**
+   * The live documents of `parts` merged into one segment. Which documents are live is read before the first
+   * `pause`: the deletes made after it are not in it.
+   */
+  protected abstract merge(parts: SegmentPart<S, D>[], pause: () => Promise<void>): Promise<Uint8Array>;
 
   /** Prepares a flush of the memory part (see `PreparedFlush`). */
   prepareFlush(): PreparedFlush<S, D> {
@@ -271,8 +269,15 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   }
 
   /** Prepares merging `parts` (segments of this index) into one segment of their live documents. */
-  prepareCompaction(parts: SegmentPart<S, D>[]): PreparedCompaction<S, D> {
-    return { parts, captured: parts.map((p) => p.deletes.clone()), segment: this.buildLive(parts) };
+  async prepareCompaction(
+    parts: SegmentPart<S, D>[],
+    pause: () => Promise<void> = async () => {},
+  ): Promise<PreparedCompaction<S, D>> {
+    // The deletes as the merge reads them: both at once, before it first pauses.
+    const captured = parts.map((p) => p.deletes.clone());
+    const live = parts.some((p) => p.deletes.live > 0);
+    const merged = live ? this.merge(parts, pause) : null;
+    return { parts, captured, segment: merged && (await merged) };
   }
 
   /** The deletes `c`'s parts got since `c.captured`, applied to `part`; `c.captured` brought up to date. */

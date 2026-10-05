@@ -42,7 +42,7 @@ const DIMS = 4;
 const KEYS = ["00", "01", "02"];
 type Stored = { segment: Uint8Array; deletes: Uint8Array | null };
 
-function run(seed: number, steps: number) {
+async function run(seed: number, steps: number) {
   const r = rng(seed);
   const int = (n: number) => Math.floor(r() * n);
   const pick = <T>(xs: readonly T[]) => xs[int(xs.length)]!;
@@ -110,7 +110,7 @@ function run(seed: number, steps: number) {
       if (!compaction) {
         if (index.segments.length >= 2) {
           const parts = index.segments.filter(() => r() < 0.7);
-          if (parts.length) compaction = index.prepareCompaction(parts);
+          if (parts.length) compaction = await index.prepareCompaction(parts);
         }
       } else if (!flush) {
         const deletes = index.reconcileCompaction(compaction);
@@ -140,10 +140,10 @@ function run(seed: number, steps: number) {
   return counts;
 }
 
-test("random writes, flushes, compactions and restarts: the same results as one in-memory index", () => {
+test("random writes, flushes, compactions and restarts: the same results as one in-memory index", async () => {
   const total = { flushes: 0, compactions: 0, restarts: 0 };
   for (let seed = 1; seed <= 12; seed++) {
-    const c = run(seed, 500);
+    const c = await run(seed, 500);
     for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += c[k];
   }
   expect(total.flushes).toBeGreaterThan(100);

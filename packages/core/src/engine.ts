@@ -109,11 +109,14 @@ import {
   canPersistSegments,
   changedSince,
   type IndexSegmentsState,
+  type SearchCompactionConfig,
   type SearchSegmentLimits,
   SearchSegmentsState,
   SegmentReplay,
+  searchCompactionFromEnv,
   searchSegmentLimitsFromEnv,
   segmentRefs,
+  segmentsToCompact,
   stateKey,
 } from "./search-segments.ts";
 import { canSnapshotSearch, loadSearchSnapshot, SearchRestore, type SearchSnapshotStore } from "./search-snapshot.ts";
@@ -144,6 +147,17 @@ import {
   vectorEntry,
 } from "./vector-indexes.ts";
 import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
+
+/** A shuffled copy of `xs` (the compactor picks among candidates at random, as Convex's). */
+function shuffled<T>(xs: T[]): T[] {
+  const out = [...xs];
+  const r = outsideExecution(() => crypto.getRandomValues(new Uint32Array(out.length)));
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = r[i]! % (i + 1);
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -322,6 +336,10 @@ export class Engine {
       searchSnapshots?: SearchSnapshotStore;
       /** The memory parts' flush thresholds (default: SEARCH_INDEX_SIZE_SOFT_LIMIT / VECTOR_INDEX_SIZE_SOFT_LIMIT). */
       searchSegmentLimits?: Partial<SearchSegmentLimits>;
+      /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
+      searchCompaction?: Partial<SearchCompactionConfig>;
+      /** Awaited between a compaction's build and its commit (tests interleave flushes there). */
+      beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -491,6 +509,8 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
+    // A compaction in progress stops (its blobs deleted); then every index is flushed.
+    await Promise.allSettled([...this.compacting.values()]);
     await this.flushSearchSegments();
     if (this.lease) {
       clearInterval(this.lease.timer);
@@ -790,12 +810,19 @@ export class Engine {
    * How many indexes the last start loaded from their segments (STUDY-111), and restored from an earlier
    * version's snapshot (STUDY-96). Tests and measurements.
    */
+  private get compactionConfig(): SearchCompactionConfig {
+    this.compaction ??= { ...searchCompactionFromEnv(), ...this.opts.searchCompaction };
+    return this.compaction;
+  }
+  private compaction: SearchCompactionConfig | null = null;
+
   readonly searchStats = {
     fromSegments: 0,
     restored: 0,
     replayed: 0,
     flushes: 0,
     backfillSteps: 0,
+    compactions: 0,
     backfilled: 0,
     resumed: 0,
   };
@@ -955,7 +982,29 @@ export class Engine {
    * index drops what they hold from its memory part. No blob is ever deleted, as Convex's (DV-370). With nothing to
    * write, only the ts moves (no log to replay up to it).
    */
-  private async flushIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+  private flushIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    return this.withIndexLock(e, () => this.flushLocked(kind, e));
+  }
+
+  /**
+   * Runs `fn` once the index's earlier flush, backfill step or compaction commit is done: what each prepares
+   * against the segments stays valid until it commits, as Convex's writer serializes its flusher and compactor.
+   */
+  private withIndexLock<T>(e: SearchIndexEntry | VectorIndexEntry, fn: () => Promise<T>): Promise<T> {
+    const run = (this.indexLocks.get(e) ?? Promise.resolve()).then(fn);
+    const done = run.then(
+      () => {},
+      () => {},
+    );
+    this.indexLocks.set(e, done);
+    void done.then(() => {
+      if (this.indexLocks.get(e) === done) this.indexLocks.delete(e);
+    });
+    return run;
+  }
+  private indexLocks = new Map<SearchIndexEntry | VectorIndexEntry, Promise<void>>();
+
+  private async flushLocked(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
     const state = this.searchSegments;
     if (!state || e.staged || !this.isCurrent(kind, e)) return;
     const ts = this.committer.visibleTs;
@@ -992,6 +1041,92 @@ export class Engine {
       },
     );
     if (stored) this.searchStats.flushes++;
+    else return;
+    this.scheduleCompaction(kind, e);
+  }
+
+  /** Each index's compaction in progress (one at a time per index). */
+  private compacting = new Map<SearchIndexEntry | VectorIndexEntry, Promise<void>>();
+
+  /** Compacts `e` in the background when its segments call for it, and again after while they still do. */
+  private scheduleCompaction(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    if (this.compacting.has(e) || this.closed || !this.searchSegments) return;
+    const p = this.compactIndex(kind, e)
+      .catch((err) => {
+        if (!this.closed) console.error(`bunvex: ${kind} index ${e.table}.${e.name} failed to compact: ${err.message}`);
+        return false;
+      })
+      .then((compacted) => {
+        this.compacting.delete(e);
+        if (compacted && !this.closed) this.scheduleCompaction(kind, e);
+      });
+    this.compacting.set(e, p);
+  }
+
+  /** Wait until no index is being flushed or compacted (tests). */
+  async searchCompacted() {
+    while (this.flushing.size || this.compacting.size)
+      await Promise.allSettled([...this.flushing.values(), ...this.compacting.values()]);
+  }
+
+  /**
+   * Convex's compactor for one index (STUDY-111 PR 5, `search_compactor.rs`): the segments
+   * `segmentsToCompact` picks are merged into one of their live documents, built outside the index's lock; then,
+   * under it, the deletes they got meanwhile (flushes' included) are carried into it and stored with it
+   * (Convex's writer `merge_deletes`), and the state names it in their place. Their blobs stay, as every
+   * search blob (DV-370). True when it compacted.
+   */
+  private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
+    const state = this.searchSegments;
+    if (!state || e.staged || !this.isCurrent(kind, e)) return false;
+    const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
+    const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
+    const candidates = index.segments.map((p) => ({
+      size: kind === "text" ? p.segment.bytes.length : p.segment.numDocs * dims * 4,
+      docs: p.segment.numDocs,
+      deleted: p.deletes.count,
+    }));
+    // Segments with no live document are dropped whatever else is merged (Convex never reads them).
+    const picked = segmentsToCompact(candidates, this.compactionConfig, shuffled);
+    const empty = index.segments.filter((p) => p.deletes.live === 0);
+    const chosen = [...new Set([...(picked ?? []).map((i) => index.segments[i]!), ...empty])];
+    if (!chosen.length) return false;
+    // Built in the background: other work runs between its chunks, and a close stops it.
+    const c = await index.prepareCompaction(chosen, async () => {
+      await new Promise((r) => setImmediate(r));
+      if (this.closed) throw new Error("the engine closed");
+    });
+    const segment = c.segment ? await state.blobs.put(c.segment) : null;
+    await this.opts.beforeSearchCompactionCommit?.();
+    return this.withIndexLock(e, async () => {
+      if (this.closed || !this.isCurrent(kind, e) || chosen.some((p) => !index.segments.includes(p))) return false;
+      const carried = index.reconcileCompaction(c);
+      const deletes = carried ? await state.blobs.put(carried) : null;
+      const stored = await state.update(
+        (states) => {
+          const before = states.get(stateKey(kind, e.tablet, e.name));
+          if (!before || !this.isCurrent(kind, e)) return false;
+          // The segments as they will be: the merged one in the place of the first it replaces.
+          const kept = index.segments.filter((p) => !chosen.includes(p));
+          const refs = segmentRefs(kept);
+          if (segment && c.merged)
+            refs.splice(Math.min(index.segments.indexOf(chosen[0]!), refs.length), 0, {
+              segment,
+              deletes,
+              docs: c.merged.segment.numDocs,
+              deleted: c.merged.deletes.count,
+            });
+          states.set(stateKey(kind, e.tablet, e.name), { ...before, segments: refs });
+          return true;
+        },
+        () => {
+          index.commitCompaction(c, segment ? { segment, deletes } : undefined);
+        },
+      );
+      if (!stored) return false;
+      this.searchStats.compactions++;
+      return true;
+    });
   }
 
   /**
@@ -1091,47 +1226,53 @@ export class Engine {
         for (const [id, c] of changed) updates.push([id, c.doc]);
       }
       if (this.closed || !this.isCurrent(kind, e)) return false;
-      // Built at once: the new segment, and the earlier segments' deletes.
-      index.deleteFromAll(updates.map(([id]) => id));
-      for (const [id, doc] of updates) {
-        const entry = doc && toDoc(doc);
-        if (entry) docs.push([id, entry]);
-      }
-      const bytes = index.buildSegment(docs);
-      const deletes = index.changedDeletes();
-      const segment = bytes ? await state.blobs.put(bytes) : null;
-      const deleteKeys = await Promise.all(deletes.map((d) => state.blobs.put(d.bytes)));
-      const stored = await state.update(
-        (states) => {
-          if (!this.isCurrent(kind, e)) return false;
-          const refs = segmentRefs(index.segments).map((r, i) => {
-            const at = deletes.findIndex((d) => d.part === index.segments[i]);
-            return at < 0 ? r : { ...r, deletes: deleteKeys[at]! };
-          });
-          if (segment) refs.push({ segment, deletes: null, docs: docs.length, deleted: 0 });
-          const s: IndexSegmentsState = {
-            kind,
-            tablet: e.tablet,
-            name: e.name,
-            def: e.def,
-            ts,
-            segments: refs,
-            ...(end ? {} : { backfill: { cursor: next } }),
-          };
-          states.set(stateKey(kind, e.tablet, e.name), s);
-          return true;
-        },
-        () => {
-          deletes.forEach((d, i) => {
-            const part = d.part as { keys?: { segment: string; deletes: string | null } };
-            part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
-          });
-          index.commitBackfill(bytes, deletes, ts, segment ? { segment, deletes: null } : undefined);
-        },
-      );
-      // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
-      if (!stored) return false;
-      this.searchStats.backfillSteps++;
+      const stepped = await this.withIndexLock(e, async () => {
+        // Built at once: the new segment, and the earlier segments' deletes.
+        index.deleteFromAll(updates.map(([id]) => id));
+        for (const [id, doc] of updates) {
+          const entry = doc && toDoc(doc);
+          if (entry) docs.push([id, entry]);
+        }
+        const bytes = index.buildSegment(docs);
+        const deletes = index.changedDeletes();
+        const segment = bytes ? await state.blobs.put(bytes) : null;
+        const deleteKeys = await Promise.all(deletes.map((d) => state.blobs.put(d.bytes)));
+        const stored = await state.update(
+          (states) => {
+            if (!this.isCurrent(kind, e)) return false;
+            const refs = segmentRefs(index.segments).map((r, i) => {
+              const at = deletes.findIndex((d) => d.part === index.segments[i]);
+              return at < 0 ? r : { ...r, deletes: deleteKeys[at]! };
+            });
+            if (segment) refs.push({ segment, deletes: null, docs: docs.length, deleted: 0 });
+            const s: IndexSegmentsState = {
+              kind,
+              tablet: e.tablet,
+              name: e.name,
+              def: e.def,
+              ts,
+              segments: refs,
+              ...(end ? {} : { backfill: { cursor: next } }),
+            };
+            states.set(stateKey(kind, e.tablet, e.name), s);
+            return true;
+          },
+          () => {
+            deletes.forEach((d, i) => {
+              const part = d.part as { keys?: { segment: string; deletes: string | null } };
+              part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
+            });
+            index.commitBackfill(bytes, deletes, ts, segment ? { segment, deletes: null } : undefined);
+          },
+        );
+        // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
+        if (!stored) return false;
+        this.searchStats.backfillSteps++;
+        return true;
+      });
+      if (!stepped) return false;
+      // Convex compacts a backfilling index's segments too.
+      this.scheduleCompaction(kind, e);
       if (end) return true;
       cursor = next;
       lastTs = ts;
@@ -1190,6 +1331,7 @@ export class Engine {
     ) {
       this.searchStats.fromSegments++;
       this.vectorIndexes.done(e);
+      this.scheduleCompaction("vector", e);
       return;
     }
     if (
@@ -1314,6 +1456,7 @@ export class Engine {
     ) {
       this.searchStats.fromSegments++;
       this.searchIndexes.done(e);
+      this.scheduleCompaction("text", e);
       return;
     }
     if (
