@@ -29,6 +29,8 @@ export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
 /** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
 export const SCHEMAS_TABLE = "_schemas";
+/** The deployed auth providers (STUDY-129), as Convex's `_auth`: one document per provider. */
+export const AUTH_TABLE = "_auth";
 /** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
@@ -72,6 +74,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index: 514,
   _exports: 516,
   _udf_config: 518,
+  _auth: 519,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,

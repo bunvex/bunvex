@@ -1,6 +1,6 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
-import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
+import { type AuthConfig, AuthenticationError, type AuthInfo, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
@@ -43,6 +43,7 @@ import {
 import { AppMetrics } from "./app-metrics.ts";
 import { APP_METRICS_ROUTES, appMetricsRoute, MetricsRequestError } from "./app-metrics-routes.ts";
 import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
+import { putAuthInfo, readAuthInfo } from "./auth-info.ts";
 import {
   REQUEST_DESTINATIONS,
   type RequestDestination,
@@ -367,13 +368,13 @@ export function createServer(opts: ServerOptions) {
   usageLimitWorker.start();
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
-  const makeVerifier = (auth: AuthConfig | undefined) =>
-    new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
+  const makeVerifier = (infos: AuthInfo[]) =>
+    new TokenVerifier(infos, {
       redactErrors: redact,
       fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
-  let verifier = makeVerifier(opts.auth);
+  let verifier = makeVerifier(opts.auth === undefined ? [] : parseAuthConfig(opts.auth));
   /** This deployment's admin keys (STUDY-34): checked against its instance name and secret. */
   const adminKeys = new AdminKeys(engine.instanceName, engine.derivedKey(ADMIN_KEY_PURPOSE));
   /**
@@ -1363,12 +1364,13 @@ export function createServer(opts: ServerOptions) {
   };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
-  /** The auth providers in force, for a push's audit-log auth diff. */
-  let installedAuth: unknown[] | null = null;
-  const useAuth = (providers: unknown[] | null) => {
-    installedAuth = providers;
-    verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
+  /** Check tokens against these providers: the ones a commit just stored in `_auth` (STUDY-129). */
+  const useAuth = (infos: AuthInfo[]) => {
+    verifier = makeVerifier(infos);
   };
+  /** An evaluated `auth.config`'s providers, as `_auth` stores them. */
+  const authInfos = (providers: unknown[] | null) =>
+    providers === null ? [] : parseAuthConfig({ providers } as never);
   /**
    * Make a code version live (STUDY-35): its functions replace every function at once, its router the
    * HTTP actions', its crons the stored ones (the same diff as at start); then every subscription to a
@@ -1589,7 +1591,9 @@ export function createServer(opts: ServerOptions) {
         if (!code) return;
         await installCodeVersion(code.version);
         authModule = code.authConfig;
-        if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
+        // The providers stored by the last push or variable change, as Convex's token checks read `_auth`:
+        // nothing is evaluated at a start.
+        useAuth(await engine.query((db) => readAuthInfo(db)));
       })
     : // An embedded server's functions are registered in process: their handles now.
       engine
@@ -1599,13 +1603,12 @@ export function createServer(opts: ServerOptions) {
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
-  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
+  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
-    if (o.auth !== undefined)
-      verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));
+    if (o.auth !== undefined) useAuth(o.auth);
     const crons =
       o.crons === false
         ? undefined
@@ -1622,10 +1625,8 @@ export function createServer(opts: ServerOptions) {
     cronExecutor,
     install: (version, auth, module) => {
       authModule = module;
-      installedAuth = auth;
       return installCodeVersion(version, { crons: false, auth });
     },
-    currentAuth: () => installedAuth,
     deploymentEnv,
   });
   /**
@@ -1672,8 +1673,11 @@ export function createServer(opts: ServerOptions) {
         else env[name] = value;
         providers = await evaluateAuthConfig(engine, authModule, env, "This change would make the auth config invalid");
       }
+      const infos = authInfos(providers);
       await engine.mutation(async (db) => {
         await setCanonicalUrl(db, destination, next);
+        // Convex's `reevaluate_existing_auth_config`, in the change's transaction.
+        if (authModule) await putAuthInfo(db, infos);
         await insertAuditLogEvents(
           db,
           [
@@ -1684,7 +1688,7 @@ export function createServer(opts: ServerOptions) {
           auditActor(caller),
         );
       }, "update_canonical_url");
-      if (authModule) useAuth(providers);
+      if (authModule) useAuth(infos);
       return new Response(null, { status: 200 });
     } catch (e) {
       if (e instanceof TableSummariesUnavailableError) return requestError(503, e.code, e.message);
@@ -1735,10 +1739,13 @@ export function createServer(opts: ServerOptions) {
             { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
           );
+        const infos = authInfos(providers);
         const same = await engine.mutation(async (db) => {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
+          // Convex's `reevaluate_existing_auth_config`, in the update's transaction.
+          if (authModule) await putAuthInfo(db, infos);
           // Convex's events (lib.rs `update_environment_variables`), one per change in the order it is applied:
           // a set creates or updates, an unset of an existing variable deletes (so an unset and a set of one
           // name are a delete and a create); in the update's transaction.
@@ -1760,7 +1767,7 @@ export function createServer(opts: ServerOptions) {
         if (same) break;
         if (attempt >= 4) return requestError(409, "RaceDetected", "Environment variables changed during the update");
       }
-      if (authModule) useAuth(providers);
+      if (authModule) useAuth(authInfos(providers));
       return new Response(null, { status: 200 });
     } catch (e) {
       if (e instanceof EnvironmentVariableError || e instanceof PushError) return requestError(400, e.code, e.message);

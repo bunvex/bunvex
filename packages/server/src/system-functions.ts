@@ -7,6 +7,7 @@
 // Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
+  AUTH_TABLE,
   type AuditLogActor,
   type Caller,
   CRON_JOB_LOGS_TABLE,
@@ -162,6 +163,11 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         return { ...r, config };
       });
     },
+  },
+  // The deployed auth providers (STUDY-129), as Convex's: the `_auth` documents as stored, oldest first.
+  "_system/frontend/listAuthProviders": {
+    args: {},
+    handler: (db) => db.asSystem(() => db.query(AUTH_TABLE).order("asc").collect()),
   },
   // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
   "_system/frontend/backendState": {

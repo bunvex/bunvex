@@ -511,7 +511,7 @@ describe("deploy2 over HTTP", () => {
     const r = await d.push([who, auth]);
     expect(r.start.body.appAuth).toEqual([{ domain: issuer.url, applicationID: "app" }]);
     expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
-    // A restart re-evaluates the stored auth config.
+    // A restart checks tokens against the providers stored in `_auth` (STUDY-129).
     await d.s.shutdown();
     await d.engine.close();
     const again = await deployment(dir, { store });
@@ -601,6 +601,107 @@ describe("deploy2 over HTTP", () => {
     await b.s.codeReady;
     expect((await b.call("query", "messages:list")).value).toEqual(["kept v1"]);
     expect((await b.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
+  });
+});
+
+describe("`_auth`, the stored auth providers (STUDY-129)", () => {
+  const who = mod(
+    "who.js",
+    `import { query } from "@bunvex/server"; export const me = query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null);`,
+  );
+  const jwt = {
+    type: "customJwt",
+    issuer: "https://jwt.example",
+    jwks: "https://jwt.example/jwks",
+    algorithm: "RS256",
+  };
+  const authConfig = (providers: string) => mod("auth.config.js", `export default { providers: ${providers} };`);
+  type Row = Record<string, unknown> & { _id: string };
+  const rows = async (d: Awaited<ReturnType<typeof deployment>>) =>
+    ((await d.engine.query((db) => db.asSystem(() => db.query("_auth").collect()))) as unknown as Row[]).map(
+      ({ _creationTime, ...r }) => r,
+    );
+  const strip = (r: Row[]) => r.map(({ _id, ...rest }) => rest);
+
+  test("a push stores its providers as Convex's documents; its authDiff; listAuthProviders", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const r = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "app" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(r.finish!.status).toBe(200);
+    const stored = await rows(d);
+    expect(strip(stored)).toEqual([
+      { applicationID: "app", domain: "https://oidc.example" },
+      {
+        type: "customJwt",
+        applicationID: null,
+        issuer: "https://jwt.example",
+        jwks: "https://jwt.example/jwks",
+        algorithm: '"RS256"',
+      },
+    ]);
+    const oidcJson = '{"applicationID":"app","domain":"https://oidc.example"}';
+    const jwtJson =
+      '{"algorithm":"\\"RS256\\"","applicationID":null,"issuer":"https://jwt.example","jwks":"https://jwt.example/jwks","type":"customJwt"}';
+    expect(r.finish!.body.authDiff).toEqual({ added: [oidcJson, jwtJson], removed: [] });
+    const audit = (await d.engine.query((db) =>
+      db.asSystem(() => db.query("_deployment_audit_log").collect()),
+    )) as unknown as { action: string; metadata: Record<string, any> }[];
+    expect(audit.find((e) => e.action === "push_config_with_components")!.metadata.auth_diff).toEqual({
+      added: [oidcJson, jwtJson],
+      removed: [],
+    });
+    const listed = await d.call("query", "_system/frontend/listAuthProviders", {}, `Bunvex ${KEY}`);
+    expect((listed.value as Row[]).map(({ _creationTime, ...x }) => x)).toEqual(stored);
+    // The same providers again: the documents stay, nothing in the diff.
+    const same = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "app" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(same.finish!.body.authDiff).toEqual({ added: [], removed: [] });
+    expect(await rows(d)).toEqual(stored);
+    // One provider changed: only its document is replaced.
+    const changed = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "other" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(changed.finish!.body.authDiff).toEqual({
+      added: ['{"applicationID":"other","domain":"https://oidc.example"}'],
+      removed: [oidcJson],
+    });
+    const after = await rows(d);
+    expect(after.find((x) => x.type === "customJwt")!._id).toBe(stored[1]!._id);
+    // No auth.config: no providers.
+    const none = await d.push([who]);
+    expect(none.finish!.body.authDiff.removed).toHaveLength(2);
+    expect(await rows(d)).toEqual([]);
+  });
+
+  test("a variable change re-evaluates auth.config and stores its providers; a start reads `_auth`", async () => {
+    const issuer = await startIssuer();
+    stops.push(issuer.stop);
+    const dir = tmp();
+    const store = new MemoryBlobStore();
+    const d = await deployment(dir, { store });
+    await d.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: "https://a.example" }] });
+    await d.push([who, authConfig(`[{ domain: process.env.ISSUER, applicationID: "app" }]`)]);
+    expect(strip(await rows(d))).toEqual([{ applicationID: "app", domain: "https://a.example" }]);
+    await d.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: issuer.url }] });
+    expect(strip(await rows(d))).toEqual([{ applicationID: "app", domain: issuer.url }]);
+    expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    // A start checks tokens against `_auth`, not a fresh evaluation: with the documents gone, none is accepted.
+    await d.engine.mutation(async (db) => {
+      for (const r of await db.asSystem(() => db.query("_auth").collect()))
+        await db.asSystem(() => db.delete("_auth", r._id as string));
+    });
+    await d.s.shutdown();
+    await d.engine.close();
+    const again = await deployment(dir, { store });
+    stops.push(() => again.s.shutdown());
+    await again.s.codeReady;
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
   });
 });
 

@@ -15,6 +15,7 @@ import {
 } from "@bunvex/values";
 import { BackendStateCache } from "./backend-state.ts";
 import {
+  AUTH_TABLE,
   activeTables,
   BACKEND_STATE_TABLE,
   bootstrapCatalog,
@@ -598,6 +599,7 @@ export class Engine {
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
       { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
       { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
+      { name: AUTH_TABLE, indexes: {}, document: v.any() },
       {
         name: EXPORTS_TABLE,
         indexes: { by_state_and_ts: ["state", "start_ts"], by_requestor: ["requestor", "_creationTime"] },
