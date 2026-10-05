@@ -26,8 +26,18 @@ describe("v.* builders and checking (STUDY-13)", () => {
   test("literals compare by type and value", () => {
     ok(v.literal("a"), "a");
     ok(v.literal(3n), 3n);
-    expect(err(v.literal(3n), 3)).toBe("`3.0` does not match literal validator `v.literal(3)`.");
+    // A bigint literal shows as Convex's `<bigint>`; NaN and the infinities as `<number>` (STUDY-13 §7).
+    expect(err(v.literal(3n), 3)).toBe("`3.0` does not match literal validator `v.literal(<bigint>)`.");
     expect(err(v.literal("a"), "b")).toBe('`"b"` does not match literal validator `v.literal("a")`.');
+    expect(err(v.literal(2), 3)).toBe("`3.0` does not match literal validator `v.literal(2.0)`.");
+    // A finite literal is serde_json's text, which keeps 1e-5..1e-4 as a decimal (a value's `{:?}` does not).
+    expect(err(v.literal(0.00005), 3)).toBe("`3.0` does not match literal validator `v.literal(0.00005)`.");
+    expect(err(v.literal(Number.NaN), 3)).toBe("`3.0` does not match literal validator `v.literal(<number>)`.");
+    expect(err(v.literal(true), false)).toBe("`false` does not match literal validator `v.literal(true)`.");
+    expect(err(v.union(v.literal(1n), v.literal("x")), "y")).toBe(
+      'Value does not match validator.\n\nValue: "y"\nValidator: v.union(v.literal(<bigint>), v.literal("x"))',
+    );
+    expect(displayValidator(v.array(v.literal(Number.NEGATIVE_INFINITY)))).toBe("v.array(v.literal(<number>))");
   });
 
   test("objects: required, optional and extra fields; nested paths", () => {

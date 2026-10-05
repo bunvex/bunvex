@@ -8,6 +8,7 @@
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
   APP_VISIBLE_SYSTEM_TABLES,
+  AUTH_TABLE,
   type AuditLogActor,
   type Caller,
   CRON_JOB_LOGS_TABLE,
@@ -25,6 +26,7 @@ import {
   type PaginationResult,
   readBackendState,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
@@ -169,6 +171,31 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         const { secretAccessKey: _, ...config } = r.config;
         return { ...r, config };
       });
+    },
+  },
+  // The deployed auth providers (STUDY-129), as Convex's: the `_auth` documents as stored, oldest first.
+  "_system/frontend/listAuthProviders": {
+    args: {},
+    handler: (db) => db.asSystem(() => db.query(AUTH_TABLE).order("asc").collect()),
+  },
+  // The schemas (Convex's `_system/frontend/getSchemas`; the MCP server's `tables` tool, STUDY-121): the
+  // active one's JSON, and the one being validated (pending or validated), each left out when there is none.
+  "_system/frontend/getSchemas": {
+    args: { componentId },
+    op: "ViewData",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as {
+        state: string;
+        schema: string;
+      }[];
+      const one = (state: string) => rows.find((r) => r.state === state);
+      const [active, pending, validated] = [one("active"), one("pending"), one("validated")];
+      if (pending && validated) throw new Error("Unexpectedly found both pending and validated schemas");
+      const inProgress = pending ?? validated;
+      return {
+        ...(active ? { active: active.schema } : {}),
+        ...(inProgress ? { inProgress: inProgress.schema } : {}),
+      };
     },
   },
   // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
@@ -434,6 +461,17 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       if (!a) return b;
       if (!b) return a;
       return (a._creationTime as number) > (b._creationTime as number) ? a : b;
+    },
+  },
+  // `bunvex dev` waits on it after a schema validation failure (STUDY-120, Convex's `_system/cli/queryTable`):
+  // it reads the whole table (its count) and returns a new random number each run, so a subscription to it
+  // gets a new result whenever any of the table's documents changes.
+  "_system/cli/queryTable": {
+    args: { tableName: v.string() },
+    op: "ViewData",
+    handler: async (db, { tableName }: { tableName: string }) => {
+      await db.asSystem(() => db.countTable(tableName));
+      return Math.random();
     },
   },
   // Convex's `tableSize` system functions (STUDY-52 PR 2): a table's document count, from the summaries.
