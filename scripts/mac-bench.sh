@@ -15,7 +15,7 @@ fresh() {
   rm -rf .data/bunvex.sqlite* .data/bunvex.log
   "$PGB/psql" -h 127.0.0.1 -p 5434 -d postgres -qc "drop database if exists bunvex" -c "create database bunvex" 2>/dev/null
   "$MYB/mysql" -h127.0.0.1 -P3307 -uroot -e "drop database if exists bunvex; create database bunvex"
-  bun -e 'const {MongoClient}=require("mongodb");const c=new MongoClient(process.env.MONGO_URL);await c.connect();await c.db().dropDatabase();await c.close()'
+  (cd bench && bun -e 'const {MongoClient}=require("mongodb");const c=new MongoClient(process.env.MONGO_URL);await c.connect();await c.db().dropDatabase();await c.close()')
 }
 for st in ${STORES:-memory sqlite postgres mysql mongodb}; do
   if [ -z "${SKIP_HTTP:-}" ]; then
