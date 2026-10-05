@@ -10,8 +10,10 @@ import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from
 
 export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
-/** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
+/** The instance secret (and name) when none is configured (STUDY-17, DV-07, DV-159). */
 export const INSTANCE_TABLE = "_instance";
+/** The database's globals (STUDY-126), as Convex's `_db`: the data's version and the pinned storage type. */
+export const DATABASE_GLOBALS_TABLE = "_db";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
@@ -72,6 +74,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index: 514,
   _exports: 516,
   _udf_config: 518,
+  _db: 520,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,

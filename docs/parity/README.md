@@ -174,7 +174,7 @@ gaps.
     the paged backfill, the compactor and fast-forward are not yet;
   - `/instance_version`, `/`, `/echo`;
   - Prometheus `/metrics`;
-  - `_index_worker_metadata`, `_auth`, `_db`;
+  - `_index_worker_metadata`, `_auth`;
   - an upgrade guide.
 - CLI:
   - `typecheck`, `mcp` commands;
