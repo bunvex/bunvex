@@ -1252,7 +1252,9 @@ export class Tx {
       const k = indexKey(ix, d);
       if (!shadowed.has(Buffer.from(k).toString("hex"))) rows.push([k, d]);
     }
-    for (const [k, d] of pend) if (d) rows.push([k, d]);
+    // The transaction's own versions as copies, as `get` hands them out: a function mutating what a query
+    // returned must not change what it wrote (Convex's values cross into the function's runtime).
+    for (const [k, d] of pend) if (d) rows.push([k, structuredClone(d)]);
     rows.sort((a, b) => (desc ? compareKeys(b[0], a[0]) : compareKeys(a[0], b[0])));
     return rows.slice(0, limit).map(([, d]) => d);
   }

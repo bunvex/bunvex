@@ -29,6 +29,15 @@ decided by the owner.
 Record each decision in [docs/parity/divergences.md](../parity/divergences.md) too (decided, resolved or
 pending), keeping this table's IDs in its Source column.
 
+## 4b. Additions (beyond Convex)
+
+What bunvex adds that Convex does not have, if anything: why, and how an app gets it (opt-in or on by default).
+Each one is decided by the owner and recorded in [docs/parity/additions.md](../parity/additions.md) (`AD-NN`);
+one that is on by default and changes something a Convex app observes is also a divergence (above).
+
+| # | Addition | Why | Decision |
+|---|---|---|---|
+
 ## 5. Tests
 
 How we check that bunvex matches: the cases and properties, and ideally the same scenario run against
