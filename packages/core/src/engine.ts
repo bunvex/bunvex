@@ -344,6 +344,8 @@ export class Engine {
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
+    // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
+    this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -1433,7 +1435,7 @@ export class Engine {
     }
   }
 
-  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+  private readonly tableCountOf = (tablet: number, snapshot: number) => this.tableSummaries.countAt(tablet, snapshot);
 
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
@@ -1966,6 +1968,26 @@ export class Engine {
       }
   }
 
+  /**
+   * Replace tables with empty ones in one commit (Convex's `TableModel::replace_with_empty_table`): each gets a
+   * new table of the same name, number and indexes, and the old one is deleted in the background. System
+   * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction.
+   */
+  async replaceWithEmptyTables(names: string[], body?: (db: Tx) => Promise<void>) {
+    const tablets: number[] = [];
+    try {
+      for (const name of names) {
+        const { number } = this.catalog.table(name);
+        tablets.push((await this.createHiddenTable(name, { number, copyIndexesOf: name })).id);
+      }
+      await this.activateTables(tablets, [], body);
+    } catch (e) {
+      // The empty tables were never made active: drop them rather than leave them to the stale-table sweep.
+      if (tablets.length) await this.dropHiddenTables(tablets).catch(() => {});
+      throw e;
+    }
+  }
+
   /** Delete an active table: invisible at once, its documents removed in the background. */
   async deleteTable(name: string) {
     await this.activateTables([], [name]);
@@ -2078,8 +2100,14 @@ export class Engine {
       tx.pendingValidators = this.pendingValidators;
     }
     const observed: Observed = { time: false };
-    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
-    return { tx, value, observed, now };
+    // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
+    const unpin = this.tableSummaries.pin(snapshot);
+    try {
+      const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      return { tx, value, observed, now };
+    } finally {
+      unpin();
+    }
   }
 
   /**
@@ -2272,12 +2300,15 @@ export class Engine {
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
     });
+    const unpin = this.tableSummaries.pin(snapshot); // as in execute()
     try {
       const observed: Observed = { time: false };
       const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };
+    } finally {
+      unpin();
     }
   }
 

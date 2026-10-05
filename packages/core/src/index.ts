@@ -257,6 +257,7 @@ export {
   type SchemaValidators,
   type SearchIndexDef,
   type SystemFieldValidators,
+  stagedDocumentError,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";

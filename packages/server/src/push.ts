@@ -25,6 +25,7 @@ import {
   SchemaPushError,
   SYSTEM_ACTOR,
   schemaToJson,
+  stagedDocumentError,
   TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -38,7 +39,13 @@ import {
   writeCodeRows,
   writePackage,
 } from "./code-store.ts";
-import { type AnalyzedModule, CodeVersion, InvalidModulesError, type ModuleSource } from "./code-version.ts";
+import {
+  type AnalyzedModule,
+  CodeVersion,
+  FunctionExportError,
+  InvalidModulesError,
+  type ModuleSource,
+} from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
 import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
@@ -49,6 +56,21 @@ import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
 function checkIndexReferences(schema: SchemaDefinition) {
+  // First Convex exports the schema (`schemaToJson` here). An error there, such as a staged validator whose
+  // JSON is not an object, is answered with `invalid_schema_export_error`, its own message dropped (STUDY-106).
+  try {
+    schemaToJson(schema);
+  } catch {
+    throw new PushError(
+      "InvalidSchemaExport",
+      "Hit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
+  }
+  // Then Convex's parse of the schema's JSON refuses a staged validator a table could not have
+  // (`InvalidTopLevelTypeInSchemaError`, STUDY-106).
+  const staged = stagedDocumentError(schema);
+  if (staged)
+    throw new PushError("InvalidTopLevelTypeInSchemaError", `Hit an error while evaluating your schema:\n${staged}`);
   const error = indexReferenceError(schema);
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
@@ -250,6 +272,7 @@ export class PushService {
       version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
     } catch (e) {
       if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
+      if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
       throw e;
     }
     let schema = emptySchema;
