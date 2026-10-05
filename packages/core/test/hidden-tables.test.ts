@@ -188,8 +188,12 @@ test("deleteTables: one commit; a pending schema that uses a deleted table fails
   expect(e.catalog.tables.has("loose")).toBe(false);
   expect(e.catalog.tables.has("other")).toBe(false);
   const row = (await e.query((db) => db.asSystem(() => db.get("_schemas", schemaId)))) as Record<string, unknown>;
-  expect(row.state).toBe("failed");
-  expect(row.error).toBe('Failed to delete table "loose" because it appears in the schema');
+  // Convex's failed state: the error and the table in it.
+  expect(row.state).toEqual({
+    state: "failed",
+    error: 'Failed to delete table "loose" because it appears in the schema',
+    table_name: "loose",
+  });
   await e.close();
 });
 

@@ -117,7 +117,15 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { type SchemaJson, schemaFromJson, schemaKey, schemaToJson } from "./schema-json.ts";
+import {
+  type SchemaJson,
+  schemaFailureOf,
+  schemaFromJson,
+  schemaJsonText,
+  schemaKey,
+  schemaStateOf,
+  schemaToJson,
+} from "./schema-json.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   canPersistSegments,
@@ -419,7 +427,7 @@ export class Engine {
     // A deployable deployment's schema is the last one pushed (STUDY-35): read before reconciling, or the
     // constructor's (empty) schema would drop every index.
     if (this.opts.storedSchema) {
-      const active = (await readSystemRows(this.persistence, SCHEMAS_TABLE)).find((r) => r.state === "active");
+      const active = (await readSystemRows(this.persistence, SCHEMAS_TABLE)).find((r) => schemaStateOf(r) === "active");
       if (active) {
         this.schema = schemaFromJson(JSON.parse(active.schema as string) as SchemaJson);
         this.installValidators(this.schema);
@@ -1935,8 +1943,9 @@ export class Engine {
     await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row && (row.state === "pending" || row.state === "validated"))
-          await db.patch(SCHEMAS_TABLE, schemaId, { state: "failed", error, tableName });
+        const state = schemaStateOf(row);
+        if (state === "pending" || state === "validated")
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "failed", error, table_name: tableName } });
       },
       true,
       "schema_worker",
@@ -1980,7 +1989,8 @@ export class Engine {
     await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row?.state === "pending") await db.patch(SCHEMAS_TABLE, schemaId, { state: "validated" });
+        if (schemaStateOf(row) === "pending")
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "validated" } });
       },
       true,
       "schema_worker",
@@ -2010,21 +2020,24 @@ export class Engine {
         await writeNextIndexId(db, changes.nextIndexId);
         // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
         // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
-        const json = schemaToJson(schema);
-        const key = schemaKey(json);
+        const key = schemaKey(schemaToJson(schema));
         const rows = await db.query(SCHEMAS_TABLE).collect();
         const same = (row: Record<string, unknown>) => schemaKey(JSON.parse(row.schema as string)) === key;
-        const active = rows.find((row) => row.state === "active");
-        const unfinished = rows.filter((row) => row.state === "pending" || row.state === "validated");
+        const active = rows.find((row) => schemaStateOf(row) === "active");
+        const unfinished = rows.filter((row) => {
+          const s = schemaStateOf(row);
+          return s === "pending" || s === "validated";
+        });
         let schemaId: string;
         let state = "pending" as "active" | "pending" | "validated";
         const reused = active && same(active) ? active : unfinished.find(same);
         for (const row of unfinished)
-          if (row !== reused) await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+          if (row !== reused) await db.patch(SCHEMAS_TABLE, row._id as string, { state: { state: "overwritten" } });
         if (reused) {
           schemaId = reused._id as string;
-          state = reused.state as typeof state;
-        } else schemaId = await db.insert(SCHEMAS_TABLE, { state: "pending", schema: JSON.stringify(json) });
+          state = schemaStateOf(reused) as typeof state;
+        } else
+          schemaId = await db.insert(SCHEMAS_TABLE, { state: { state: "pending" }, schema: schemaJsonText(schema) });
         const tableName = (tablet: number) =>
           current.tables.find((t) => t.tablet === tablet)?.name ??
           changes.insertTables.find((t) => t.tablet === tablet)?.name;
@@ -2070,11 +2083,12 @@ export class Engine {
     return this.query((db) =>
       db.asSystem(async () => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (!row || row.state === "overwritten") return { type: "raceDetected" as const };
-        if (row.state === "failed")
-          return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
-        if (row.state === "active") return { type: "complete" as const };
-        const validated = row.state === "validated";
+        const state = schemaStateOf(row);
+        if (!row || state === "overwritten") return { type: "raceDetected" as const };
+        const failed = schemaFailureOf(row);
+        if (failed) return { type: "failed" as const, ...failed };
+        if (state === "active") return { type: "complete" as const };
+        const validated = state === "validated";
         const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
@@ -2121,11 +2135,12 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row?.state === "failed")
-          throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${row.error as string}`);
-        if (!row || (row.state !== "pending" && row.state !== "validated" && row.state !== "active"))
+        const state = schemaStateOf(row);
+        const failed = schemaFailureOf(row);
+        if (failed) throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${failed.error}`);
+        if (!row || (state !== "pending" && state !== "validated" && state !== "active"))
           throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-        if (row.state === "pending")
+        if (state === "pending")
           throw new SchemaPushError(
             "SchemaNotReady",
             "The existing documents are still being checked against the schema.",
@@ -2140,10 +2155,10 @@ export class Engine {
         for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
         for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
         // Already active (a push of the same schema): Convex's `mark_active` does nothing.
-        if (row.state !== "active") {
+        if (state !== "active") {
           for (const old of await db.query(SCHEMAS_TABLE).collect())
-            if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
-          await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+            if (schemaStateOf(old) === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
         }
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);

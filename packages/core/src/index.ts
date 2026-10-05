@@ -275,8 +275,12 @@ export {
 } from "./schema.ts";
 export {
   type SchemaJson,
+  type SchemaStateJson,
   type SearchIndexJson,
+  schemaFailureOf,
   schemaFromJson,
+  schemaJsonText,
+  schemaStateOf,
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";

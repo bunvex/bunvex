@@ -30,8 +30,11 @@ test("searchIndex: declared, staged, filter fields as a set; the schema JSON rou
     stagedSearchIndexes: [{ indexDescriptor: "search_author", searchField: "author", filterFields: [] }],
   });
   expect(schemaToJson(schemaFromJson(json))).toEqual(json);
-  // A table without search indexes has no such keys, as Convex's optional fields.
-  expect("searchIndexes" in schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]!).toBe(false);
+  // A table without search indexes has empty lists, as Convex's export writes them.
+  expect(schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]).toMatchObject({
+    searchIndexes: [],
+    stagedSearchIndexes: [],
+  });
 });
 
 test("Convex's push-time checks and messages", () => {

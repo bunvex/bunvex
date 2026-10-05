@@ -495,7 +495,7 @@ describe("deploy2 over HTTP", () => {
     expect(staged.finish!.status).toBe(200);
     const diff = (await schemaDiffs())[1];
     expect(diff).not.toBeNull();
-    expect(JSON.parse(diff.previous_schema).tables[0].stagedDocumentType).toBeUndefined();
+    expect(JSON.parse(diff.previous_schema).tables[0].stagedDocumentType).toBeNull();
     expect(JSON.parse(diff.next_schema).tables[0].stagedDocumentType).toEqual({
       type: "object",
       value: {
@@ -594,9 +594,9 @@ describe("deploy2 over HTTP", () => {
     expect(second.finish!.status).toBe(200);
     expect(second.start.body.schemaChange.schemaIds[""]).toBe(first.start.body.schemaChange.schemaIds[""]);
     const states = (await d.engine.query((db) => db.asSystem(() => db.query("_schemas").collect()))) as unknown as {
-      state: string;
+      state: { state: string };
     }[];
-    expect(states.map((r) => r.state)).toEqual(["active"]);
+    expect(states.map((r) => r.state.state)).toEqual(["active"]);
     expect((await d.call("query", "messages:list")).value).toEqual([]);
   });
 

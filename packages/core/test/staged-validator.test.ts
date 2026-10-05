@@ -48,7 +48,7 @@ const push = async (e: Engine, s: SchemaDefinition) => {
 };
 const schemaRows = (e: Engine) =>
   e.query((db) => db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as Promise<
-    { _id: string; state: string; schema: string }[]
+    { _id: string; state: { state: string }; schema: string }[]
   >;
 
 describe("defining it", () => {
@@ -97,7 +97,7 @@ describe("defining it", () => {
 });
 
 describe("the schema JSON", () => {
-  test("stagedDocumentType: the validator's JSON, absent without one; it round-trips", () => {
+  test("stagedDocumentType: the validator's JSON (Convex's form), null without one; it round-trips", () => {
     const s = defineSchema({
       staged: defineTable({ a: v.string() })
         .index("by_a", ["a"])
@@ -106,17 +106,20 @@ describe("the schema JSON", () => {
       anyStaged: defineTable(v.any()).staged(v.any()),
     });
     const j = schemaToJson(s);
-    expect(j.tables[0]!.stagedDocumentType).toEqual({
+    const table = (name: string) => j.tables.find((t) => t.tableName === name)!;
+    // Tables by name, as Convex's `BTreeMap`.
+    expect(j.tables.map((t) => t.tableName)).toEqual(["anyStaged", "plain", "staged"]);
+    expect(table("staged").stagedDocumentType).toEqual({
       type: "object",
       value: {
         a: { fieldType: { type: "array", value: { type: "string" } }, optional: false },
         b: { fieldType: { type: "bigint" }, optional: true },
       },
     });
-    expect("stagedDocumentType" in j.tables[1]!).toBe(false);
-    expect(j.tables[2]!.stagedDocumentType).toEqual({ type: "any" });
+    expect(table("plain").stagedDocumentType).toBeNull();
+    expect(table("anyStaged").stagedDocumentType).toEqual({ type: "any" });
     // The document type is still `defineTable`'s.
-    expect(j.tables[0]!.documentType).toEqual(v.object({ a: v.string() }).json);
+    expect(table("staged").documentType).toEqual(v.object({ a: v.string() }).json);
     const back = schemaFromJson(JSON.parse(JSON.stringify(j)));
     expect(schemaToJson(back)).toEqual(j);
     expect(back.tables.get("plain")!.stagedDocument).toBeUndefined();
@@ -127,7 +130,7 @@ describe("pushing it", () => {
   test("only the staged validator changed: a different stored schema; the same schema again: the same", async () => {
     const e = await open(tmp());
     const base = () => defineTable({ n: v.number() }).index("by_n", ["n"]);
-    const stored = async () => (await schemaRows(e)).find((r) => r.state === "active")!;
+    const stored = async () => (await schemaRows(e)).find((r) => r.state.state === "active")!;
     await push(e, defineSchema({ items: base() }));
     const first = await stored();
     await push(e, defineSchema({ items: base() }));
@@ -139,7 +142,7 @@ describe("pushing it", () => {
     expect(JSON.parse(active.schema).tables[0].stagedDocumentType).toEqual(v.object({ n: v.string() }).json);
     // The staged validator changes again: the stored schema changes again.
     await push(e, defineSchema({ items: base().staged({ n: v.boolean() }) }));
-    const third = (await schemaRows(e)).find((r) => r.state === "active")!;
+    const third = (await schemaRows(e)).find((r) => r.state.state === "active")!;
     expect(third.schema).not.toBe(active.schema);
   });
 

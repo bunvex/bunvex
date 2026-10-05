@@ -25,6 +25,7 @@ import {
   type SchemaDefinition,
   SchemaPushError,
   SYSTEM_ACTOR,
+  schemaStateOf,
   schemaToJson,
   stagedDocumentError,
   TooManyTablesError,
@@ -407,12 +408,8 @@ export class PushService {
     // The schemas as `_schemas` stores them (JSON), before the push's commit replaces the active one.
     const schemaRows = (await this.deps.engine.query((db) =>
       db.asSystem(() => db.query(SCHEMAS_TABLE).collect()),
-    )) as unknown as {
-      _id: string;
-      state: string;
-      schema: string;
-    }[];
-    const previousSchema = schemaRows.find((r) => r.state === "active")?.schema ?? null;
+    )) as unknown as ({ _id: string; schema: string } & Record<string, unknown>)[];
+    const previousSchema = schemaRows.find((r) => schemaStateOf(r) === "active")?.schema ?? null;
     const nextSchema = schemaRows.find((r) => r._id === p.schemaId)?.schema ?? null;
     const activeSchema = this.deps.engine.schema;
     // Convex's index diff of the push: in its audit event, and in the answer (as `SerializedIndexDiff`).

@@ -31,6 +31,7 @@ import {
   STORAGE_TABLE,
   SYSTEM_ACTOR,
   SYSTEM_TABLE_DESCRIPTIONS,
+  schemaStateOf,
   stringifyValue,
   TableSummariesUnavailableError,
   type Tx,
@@ -184,11 +185,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
     args: { componentId },
     op: "ViewData",
     handler: async (db) => {
-      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as {
-        state: string;
-        schema: string;
-      }[];
-      const one = (state: string) => rows.find((r) => r.state === state);
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as Record<string, unknown>[];
+      const one = (state: string) => rows.find((r) => schemaStateOf(r) === state) as { schema: string } | undefined;
       const [active, pending, validated] = [one("active"), one("pending"), one("validated")];
       if (pending && validated) throw new Error("Unexpectedly found both pending and validated schemas");
       const inProgress = pending ?? validated;
