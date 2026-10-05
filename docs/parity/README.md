@@ -6,16 +6,16 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 227 | 5 | 13 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 187 | 37 | 27 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 232 | 3 | 10 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 200 | 33 | 23 |
 
 Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
 mock), 2 accepted, 1 deferred, none proposed (2026-10-05).
 
 These counts were recounted on 2026-10-05 (with #398–#408) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
-are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
+are not counted: 1 in server-api.md, 1 in client-sync.md, 2 in platform.md.
 
 ## How to use it
 
@@ -159,37 +159,30 @@ gaps.
 **Low: rare, ops-only, or a missing nicety**
 
 - Client:
-  - `convexQueryOptions`;
-  - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
-  - close 1000 with a reason for NotFound and Forbidden;
-  - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
-  - `.staged(validator)`;
-  - `.count()` on the query builder;
-  - typed limit error codes.
+  - `.count()` on the query builder.
 - Limits and checks:
-  - nesting 64 for arguments and results;
-  - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
-  - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
-  - `/api/delete_scheduled_functions_table`;
+  - the `clear_tables` audit event, which comes with streaming import (missing). The other audit events
+    bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
+    `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
+    backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - persisted search segments (STUDY-79 option E): a restart restores the clean-shutdown snapshot and replays
-    the log since (STUDY-96), but after a crash the replay runs from the last clean shutdown, or the whole
-    table without one;
-  - `/instance_version`, `/`, `/echo`;
-  - OpenAPI;
+  - persisted search segments (STUDY-111, being built): segments, the flusher and the start from them are in;
+    the paged backfill, the compactor and fast-forward are not yet;
   - Prometheus `/metrics`;
-  - `_index_worker_metadata`, `_auth`, `_db`;
+  - `_index_worker_metadata`, `_db`;
+  - `_index_worker_metadata`, `_auth`;
   - an upgrade guide.
 - CLI:
-  - `codegen` flags;
-  - `run --component` / `--inline-query`;
-  - `typecheck`, `mcp`, `usage-limits` commands;
-  - `dev` waiting on an env var or a table.
+  - `typecheck`, `usage-limits` commands;
+  - `typecheck`, `mcp` commands;
+  - `mcp`, `usage-limits` commands;
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;
-  - what is missing is a data source that calls it.
+  - what is missing is a data source that calls it;
+  - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
+    `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
+    audit events.

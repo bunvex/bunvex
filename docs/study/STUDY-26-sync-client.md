@@ -336,7 +336,9 @@ shapes and `asPaginationResult`.
 
 **A server fix found by these tests.** bunvex's `paginate` (STUDY-17) answered "after the last row read"
 for a pinned page stopped by `maximumRowsRead`, so the split halves lost the rest of the page. It now
-answers the pinned end, as Convex does. There is a regression test in `core/test/paginate.test.ts`.
+answers the pinned end, as Convex does. There is a regression test in `core/test/paginate.test.ts`. (Since
+STUDY-108, a pinned page ignores `maximumRowsRead`, as Convex's; the pinned end still answers a page stopped by
+a transaction read limit.)
 
 The tests (`packages/sync-e2e/react/pagination.test.tsx`) cover:
 - first page, `loadMore`, and exhaustion;

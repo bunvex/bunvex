@@ -70,6 +70,21 @@ check<Equal<AnyDataModel[string]["indexes"], {}>>(true);
 const userId = "u" as GenericId<"users">;
 // @ts-expect-error a users id is not a messages id
 const _wrong: GenericId<"messages"> = userId;
+// `.staged()` (STUDY-106) changes neither the document type nor the indexes, as Convex's.
+const withStaged = defineSchema({
+  drafts: defineTable({ author: v.string() })
+    .index("by_author", ["author"])
+    .staged({ author: v.array(v.string()) }),
+  notes: defineTable({ body: v.string() }).staged(v.object({ body: v.string(), done: v.boolean() })),
+});
+type Staged = DataModelFromSchemaDefinition<typeof withStaged>;
+check<Equal<DocumentByName<Staged, "drafts">, { _id: GenericId<"drafts">; _creationTime: number; author: string }>>(
+  true,
+);
+check<Equal<DocumentByName<Staged, "notes">, { _id: GenericId<"notes">; _creationTime: number; body: string }>>(true);
+check<Equal<NamedIndex<Staged["drafts"], "by_author">, ["author", "_creationTime"]>>(true);
+// @ts-expect-error a staged validator is an object's: a string validator is refused
+defineTable({ a: v.string() }).staged(v.string());
 // The runtime is unchanged: the same declared tables.
 test("the schema's runtime shape is unchanged by its types", () => {
   expect([...schema.tables.keys()]).toEqual(["users", "messages", "events", "loose"]);
