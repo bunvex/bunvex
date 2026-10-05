@@ -281,7 +281,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_db` (database globals: version, storage type, S3 prefix) | `crates/model/database_globals` | missing | |
 | `_usage_limits` | `crates/model/usage_limits` | done (STUDY-61) | Number 552, `by_selector`; `{metric, window, limitType, limit, enabled}`. |
 | `_data_sync_progress` | `crates/model/data_sync_progress` | done (STUDY-69) | Number 553, `by_sync_id`, `by_last_updated`; Convex's states and write rules; `create_data_sync`. |
-| `_backend_info`, `_aws_lambda_versions`, `_next_persistence_index_id` | `crates/model/*` | missing | Internal bookkeeping (cloud entitlements, Lambda, id allocation); `_backend_info` can be skipped. |
+| `_backend_info`, `_aws_lambda_versions` | `crates/model/*` | missing | Internal bookkeeping (cloud entitlements, Lambda); `_backend_info` can be skipped. |
+| `_next_persistence_index_id` | `crates/database/bootstrap_model/next_persistence_index_id` | done (STUDY-128) | Number 554, `{nextId}`; every new index takes its id from it in its own transaction; never lowered, so a dropped index's id is never reused. |
 
 ### 18. Import / export / backups
 

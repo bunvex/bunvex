@@ -42,6 +42,7 @@ import type { Interval, SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
@@ -581,6 +582,11 @@ export class Tx {
     return t;
   }
 
+  /** Whether the catalog this transaction runs on has table `name` (system code: a table it may write). */
+  hasTable(name: string): boolean {
+    return this.catalog.tables.has(name);
+  }
+
   /** A table visible to this transaction (the catalog, or one it created), or undefined. */
   private findTable(name: string): TableDef | undefined {
     if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
@@ -677,11 +683,18 @@ export class Tx {
     try {
       const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
       const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
-      const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
+      const plan = planCatalog(
+        [{ name, indexes: {}, document: ANY }],
+        tables,
+        indexes,
+        true,
+        await readNextIndexId(this),
+      );
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
       for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
+      await writeNextIndexId(this, plan.nextIndexId);
       const def = new Catalog().add(
         name,
         meta.tablet,

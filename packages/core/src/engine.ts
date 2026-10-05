@@ -42,6 +42,7 @@ import {
   IndexStagedError,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
+  NEXT_PERSISTENCE_INDEX_ID_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,
@@ -78,6 +79,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
+import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
@@ -583,6 +585,7 @@ export class Engine {
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      { name: NEXT_PERSISTENCE_INDEX_ID_TABLE, indexes: {}, document: v.any() },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
@@ -636,9 +639,12 @@ export class Engine {
    * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
   private async reconcileCatalog(): Promise<boolean> {
+    // The stored catalog first, so the change below sees the system tables it reads (the index id allocator).
+    const stored = await this.runMutation((db) => readCatalog(db), true);
+    this.catalog = buildCatalog(stored.tables, stored.indexes);
     const { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes);
+      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
       for (const id of changes.deleteIndexes) {
@@ -647,9 +653,16 @@ export class Engine {
       }
       for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, { staged: r.staged });
       for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      await writeNextIndexId(db, changes.nextIndexId);
       return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
     }, true);
     this.catalog = buildCatalog(tables, indexes);
+    // The store's first start created the allocator's table in that commit: its counter is written now, with
+    // the ids that commit took (Convex writes it in its bootstrap).
+    await this.runMutation(async (db) => {
+      if ((await readNextIndexId(db)) === undefined)
+        await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
+    }, true);
     if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
     return indexes.some((i) => i.state === "backfilling");
   }
@@ -1207,7 +1220,7 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
-        const changes = planCatalog(declared, current.tables, current.indexes);
+        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
         for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
@@ -1215,6 +1228,7 @@ export class Engine {
         }
         for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
         for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+        await writeNextIndexId(db, changes.nextIndexId);
         for (const row of await db.query(SCHEMAS_TABLE).collect())
           if (row.state === "pending" || row.state === "validated")
             await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
@@ -1378,7 +1392,7 @@ export class Engine {
     let def: TableDef | undefined;
     await this.runMutation(
       async (db) => {
-        const { tables, indexes: stored } = await readCatalog(db);
+        const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
@@ -1386,6 +1400,7 @@ export class Engine {
           tables,
           stored,
           !name.startsWith("_"),
+          nextIndexId,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
@@ -1402,6 +1417,7 @@ export class Engine {
         meta.state = "hidden";
         const metaId = await db.insert(TABLES_TABLE, meta);
         for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
+        await writeNextIndexId(db, plan.nextIndexId);
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
           def = c.add(
@@ -2085,6 +2101,7 @@ async function readCatalog(db: Tx) {
   return {
     tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
     indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
+    nextIndexId: await readNextIndexId(db),
   };
 }
 
