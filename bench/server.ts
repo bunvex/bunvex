@@ -6,6 +6,10 @@ import { Engine } from "@bunvex/core";
 import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "bunvex/server";
 import { bench, benchSchema } from "./functions.ts";
 
+// The benchmark measures capacity: Convex's 4 MiB/s write throughput limit (MAX_BYTES_WRITTEN_PER_SECOND,
+// STUDY-78) is lifted unless the environment sets it, so runs compare with those before the limit existed.
+// MAX_BYTES_WRITTEN_PER_SECOND=4194304 measures with Convex's default.
+process.env.MAX_BYTES_WRITTEN_PER_SECOND ||= String(Number.MAX_SAFE_INTEGER);
 const config = persistenceConfigFromEnv();
 const engine = await new Engine(benchSchema, await openPersistence(config), {
   // The query cache's byte budget comes from UDF_CACHE_MAX_SIZE (default 100 MiB), as in Convex.
@@ -21,4 +25,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     await app.shutdown();
     process.exit(0);
   });
-console.log(`bunvex: persistence=${config.kind} durable=${config.durable} port=${process.env.PORT ?? 3210}`);
+console.log(
+  `bunvex: persistence=${config.kind} durable=${config.durable} port=${process.env.PORT ?? 3210} ` +
+    `max-bytes-written-per-second=${process.env.MAX_BYTES_WRITTEN_PER_SECOND}`,
+);
