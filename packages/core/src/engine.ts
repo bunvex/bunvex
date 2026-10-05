@@ -26,7 +26,9 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
+  databaseIndexRows,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   FUNCTION_HANDLES_TABLE,
@@ -41,8 +43,10 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   IndexStagedError,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
+  NEXT_PERSISTENCE_INDEX_ID_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEMAS_TABLE,
@@ -68,6 +72,13 @@ import {
 } from "./committer.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
+  DATABASE_VERSION,
+  initializeDatabaseGlobals,
+  initializeStorageType,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
+import {
   type ExecutionKind,
   installDeterminism,
   nextUp,
@@ -79,6 +90,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
+import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
@@ -103,15 +115,27 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
-import { filterKey, indexedDoc, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import { type SchemaJson, schemaFromJson, schemaKey, schemaToJson } from "./schema-json.ts";
+import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
-  canSnapshotSearch,
-  loadSearchSnapshot,
-  SearchRestore,
-  type SearchSnapshotStore,
-  saveSearchSnapshot,
-} from "./search-snapshot.ts";
+  canPersistSegments,
+  changedSince,
+  type IndexRowWrite,
+  type IndexSegmentsState,
+  isSearchIndexRow,
+  rowToState,
+  type SearchCompactionConfig,
+  type SearchSegmentLimits,
+  type SearchSegmentStore,
+  SearchSegmentsState,
+  SegmentReplay,
+  sameSpec,
+  searchCompactionFromEnv,
+  searchSegmentLimitsFromEnv,
+  segmentRefs,
+  segmentsToCompact,
+  stateKey,
+} from "./search-segments.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -139,6 +163,17 @@ import {
   vectorEntry,
 } from "./vector-indexes.ts";
 import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
+
+/** A shuffled copy of `xs` (the compactor picks among candidates at random, as Convex's). */
+function shuffled<T>(xs: T[]): T[] {
+  const out = [...xs];
+  const r = outsideExecution(() => crypto.getRandomValues(new Uint32Array(out.length)));
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = r[i]! % (i + 1);
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
+}
 
 /** The instance name a deployment gets when none is configured (Convex's image: its own name; DV-159). */
 export const DEFAULT_INSTANCE_NAME = "bunvex-self-hosted";
@@ -309,10 +344,17 @@ export class Engine {
       /** Table summary checkpoints' knobs (STUDY-72); `false`: none, the summaries scanned on every start. */
       summaryCheckpoints?: SummaryCheckpointOptions | false;
       /**
-       * Where the search indexes' snapshot is kept (STUDY-96): written at a clean shutdown, restored from at
-       * start with the log since. None: the indexes are read from their tables at every start.
+       * Where the search and vector indexes' segments are kept (the `search` blob use case, STUDY-111): flushed
+       * as their memory parts grow and at a clean shutdown, loaded at start with the log since. None: the
+       * indexes are in memory only, read from their tables at every start.
        */
-      searchSnapshots?: SearchSnapshotStore;
+      searchStorage?: SearchSegmentStore;
+      /** The memory parts' flush thresholds (default: SEARCH_INDEX_SIZE_SOFT_LIMIT / VECTOR_INDEX_SIZE_SOFT_LIMIT). */
+      searchSegmentLimits?: Partial<SearchSegmentLimits>;
+      /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
+      searchCompaction?: Partial<SearchCompactionConfig>;
+      /** Awaited between a compaction's build and its commit (tests interleave flushes there). */
+      beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -335,6 +377,8 @@ export class Engine {
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
+    // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
+    this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -376,17 +420,19 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
-    // The search and vector indexes of the schema the process starts on existed before it: they are rebuilt
-    // in memory (DV-227, DV-270), and searches meanwhile are Convex's bootstrapping answer (STUDY-79).
-    await this.loadSearchSnapshot();
+    // The search and vector indexes of the schema the process starts on existed before it: each loads its
+    // segments and replays the log since (STUDY-111), or is read from its table, and searches meanwhile are
+    // Convex's bootstrapping answer (STUDY-79).
+    await this.loadSearchSegments();
     this.reconcileSearch(true);
     this.reconcileVector(true);
-    // The snapshot is held only while the indexes it restores are being built.
+    // The log since the segments is held only while the indexes it restores are being built.
     void Promise.allSettled([...this.searchBackfills]).then(() => {
-      this.searchRestore = null;
+      this.segmentReplay = null;
     });
     await this.loadInstanceSecret();
     await this.loadInstanceName();
+    await this.loadDatabaseGlobals();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -479,7 +525,9 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
-    await this.saveSearchSnapshot();
+    // A compaction in progress stops; then every index is flushed.
+    await Promise.allSettled([...this.compacting.values()]);
+    await this.flushSearchSegments();
     if (this.lease) {
       clearInterval(this.lease.timer);
       if (!this.committer.stopped) await this.lease.store.releaseLease();
@@ -506,6 +554,17 @@ export class Engine {
       await db.insert(INSTANCE_TABLE, { instanceSecret: secret });
       return secret;
     }, true);
+  }
+
+  /**
+   * The database's globals (`_db`, STUDY-126), written at the store's first start as Convex's bootstrap
+   * does. A version above this bunvex's is warned about, as Convex's migration worker does.
+   */
+  private async loadDatabaseGlobals() {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    const version = await this.runMutation((db) => initializeDatabaseGlobals(db, () => uuid), true);
+    if (version > DATABASE_VERSION)
+      console.warn(`persisted db metadata version is ahead at ${version}, this binary is at ${DATABASE_VERSION}`);
   }
 
   /**
@@ -561,29 +620,32 @@ export class Engine {
     return this.cursorCodecCache;
   }
 
-  /** A deployment setting kept in `_instance` (e.g. the S3 key prefix): the stored one, else `make()`'s, stored. */
-  async instanceSetting(name: string, make: () => string): Promise<string> {
-    return this.runMutation(async (db) => {
-      const doc = (await db.query(INSTANCE_TABLE).first()) as Record<string, unknown> | null;
-      const have = doc?.[name];
-      if (typeof have === "string") return have;
-      const value = make();
-      if (doc) await db.patch(INSTANCE_TABLE, doc._id as string, { [name]: value });
-      else await db.insert(INSTANCE_TABLE, { [name]: value });
-      return value;
-    }, true);
+  /**
+   * The storage this start uses, checked against the one the store was initialized with (STUDY-126, Convex's
+   * `initialize_storage_tag`): the first start records it; S3's key prefix is `<instance name>-<uuid>/`.
+   * Throws when the store was initialized with another kind of storage.
+   */
+  async initializeStorage(init: StorageTagInitializer): Promise<StorageType> {
+    const uuid = outsideExecution(() => crypto.randomUUID());
+    return this.runMutation(
+      (db) => initializeStorageType(db, init, this.instanceName, () => uuid),
+      true,
+      "init_storage",
+    );
   }
 
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+      { name: DATABASE_GLOBALS_TABLE, indexes: {}, document: v.any() },
       {
         name: SESSION_REQUESTS_TABLE,
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      { name: NEXT_PERSISTENCE_INDEX_ID_TABLE, indexes: {}, document: v.any() },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
@@ -638,9 +700,12 @@ export class Engine {
    * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
   private async reconcileCatalog(): Promise<boolean> {
+    // The stored catalog first, so the change below sees the system tables it reads (the index id allocator).
+    const stored = await this.runMutation((db) => readCatalog(db), true);
+    this.catalog = buildCatalog(stored.tables, stored.indexes);
     const { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes);
+      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
       for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
       for (const id of changes.deleteIndexes) {
@@ -649,9 +714,16 @@ export class Engine {
       }
       for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, { staged: r.staged });
       for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
+      await writeNextIndexId(db, changes.nextIndexId);
       return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
     }, true);
     this.catalog = buildCatalog(tables, indexes);
+    // The store's first start created the allocator's table in that commit: its counter is written now, with
+    // the ids that commit took (Convex writes it in its bootstrap).
+    await this.runMutation(async (db) => {
+      if ((await readNextIndexId(db)) === undefined)
+        await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
+    }, true);
     if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
     return indexes.some((i) => i.state === "backfilling");
   }
@@ -718,7 +790,8 @@ export class Engine {
         own?.(ts);
         const final = resolvesLater ? tx.writtenDocs() : writes;
         this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
-        this.vectorIndexes.apply(final);
+        this.vectorIndexes.apply(ts, final);
+        this.flushFull(final);
         this.tableSummaries.apply(
           ts,
           final.map((w) => ({ tablet: w.table.id, old: w.old, next: w.next })),
@@ -749,6 +822,7 @@ export class Engine {
       this.searchBackfills.add(p);
       void p.finally(() => this.searchBackfills.delete(p));
     }
+    this.scheduleIndexRowsSync();
   }
 
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
@@ -768,54 +842,634 @@ export class Engine {
       this.searchBackfills.add(p);
       void p.finally(() => this.searchBackfills.delete(p));
     }
+    this.scheduleIndexRowsSync();
   }
 
-  /** The snapshot the bootstrapping indexes are restored from (STUDY-96), while they are. */
-  private searchRestore: SearchRestore | null = null;
-  /** How many indexes the last start restored from a snapshot (tests, STUDY-96). */
-  readonly searchStats = { restored: 0 };
+  private get compactionConfig(): SearchCompactionConfig {
+    this.compaction ??= { ...searchCompactionFromEnv(), ...this.opts.searchCompaction };
+    return this.compaction;
+  }
+  private compaction: SearchCompactionConfig | null = null;
 
-  private async loadSearchSnapshot() {
-    const blobs = this.opts.searchSnapshots;
+  /** What the search and vector indexes' segments did since the start (tests and measurements). */
+  readonly searchStats = {
+    fromSegments: 0,
+    replayed: 0,
+    flushes: 0,
+    backfillSteps: 0,
+    compactions: 0,
+    backfilled: 0,
+    resumed: 0,
+  };
+
+  /** Wait until no index is being flushed (tests). */
+  async searchFlushed() {
+    while (this.flushing.size) await Promise.allSettled([...this.flushing.values()]);
+  }
+
+  /**
+   * The search and vector indexes' `_index` rows (STUDY-111): kept for every such index, as Convex's. With a
+   * segment store and a persistence that has the document log, `searchSegments` is the same, and segments are
+   * persisted; otherwise null, and every index is read from its table at each start.
+   */
+  private indexRows: SearchSegmentsState | null = null;
+  private searchSegments: SearchSegmentsState | null = null;
+  /** The log since the segments' ts, read once per table while the indexes are restored at a start. */
+  private segmentReplay: SegmentReplay | null = null;
+  private limits: SearchSegmentLimits | null = null;
+  private get segmentLimits(): SearchSegmentLimits {
+    this.limits ??= { ...searchSegmentLimitsFromEnv(), ...this.opts.searchSegmentLimits };
+    return this.limits;
+  }
+  /** Each index's flush in progress, and the indexes to flush again once it is done. */
+  private flushing = new Map<SearchIndexEntry | VectorIndexEntry, Promise<void>>();
+  private flushAgain = new Set<SearchIndexEntry | VectorIndexEntry>();
+
+  /** Reads the segments' state at start (STUDY-111): what each index restores from. */
+  private async loadSearchSegments() {
     const p = this.persistence;
-    if (!blobs || !canSnapshotSearch(p)) return;
-    const at = this.committer.visibleTs;
+    const store = canPersistSegments(p) ? p : null;
+    const blobs = store ? (this.opts.searchStorage ?? null) : null;
+    const state = new SearchSegmentsState(store, blobs, (writes) => this.writeIndexRows(writes));
+    state.load(
+      await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
+    );
+    this.indexRows = state;
+    if (!store || !blobs) return;
+    this.searchSegments = state;
+    // Each table's log is read once, from the oldest ts any of its indexes starts from.
+    const oldest = new Map<number, number>();
+    for (const s of state.all()) oldest.set(s.tablet, Math.min(oldest.get(s.tablet) ?? s.ts, s.ts));
+    this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest);
+  }
+
+  /** Writes search and vector indexes' `_index` rows, in one system transaction; the inserted rows' ids. */
+  private writeIndexRows(writes: IndexRowWrite[]): Promise<string[]> {
+    return this.runMutation(async (db) => {
+      const ids: string[] = [];
+      for (const w of writes)
+        if (w._id === undefined) ids.push((await db.insert(INDEX_TABLE, w.row!)) as string);
+        else if (w.row) await db.patch(INDEX_TABLE, w._id, { config: w.row.config });
+        else await db.delete(INDEX_TABLE, w._id);
+      return ids;
+    }, true);
+  }
+
+  /** Stores a new segment and its (empty) deletes, as Convex stores every segment with its deletes files. */
+  private async storeSegment(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry, bytes: Uint8Array) {
+    const blobs = this.searchSegments!.blobs!;
+    const { segment, deletes } = (e.index as SearchIndexEntry["index"]).describe(bytes) as unknown as {
+      segment: { numDocs: number; uid: string };
+      deletes: Uint8Array;
+    };
+    const [segmentKey, deletesKey] = await Promise.all([blobs.put(bytes), blobs.put(deletes)]);
+    return {
+      keys: { segment: segmentKey, deletes: deletesKey },
+      ref: {
+        segment: segmentKey,
+        deletes: deletesKey,
+        docs: segment.numDocs,
+        deleted: 0,
+        bytes: this.segmentSize(kind, e)(segment),
+        id: segment.uid,
+      },
+    };
+  }
+
+  /** The bytes a segment counts for (Convex's `size_bytes_total`, or vectors × dimensions × 4). */
+  private segmentSize(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
+    return (segment: { numDocs: number; uid: string }) =>
+      kind === "text" ? (segment as unknown as { bytes: Uint8Array }).bytes.length : segment.numDocs * dims * 4;
+  }
+
+  /**
+   * A bootstrapping index from its stored segments and the log since their ts (Convex's bootstrap, STUDY-111);
+   * false when there are none it can trust (the index is then built another way).
+   */
+  private async restoreFromSegments<Doc>(
+    kind: "text" | "vector",
+    e: SearchIndexEntry | VectorIndexEntry,
+    load: (parts: NonNullable<Awaited<ReturnType<SearchSegmentsState["fetch"]>>>) => void,
+    replay: (id: string, doc: Doc | null) => void,
+  ): Promise<boolean> {
+    const state = this.searchSegments;
+    const log = this.segmentReplay;
+    if (!state || !log || !e.bootstrapping) return false;
     try {
-      const snapshot = await loadSearchSnapshot(p, blobs, at);
-      if (snapshot) this.searchRestore = new SearchRestore(p, snapshot, at, decodeDoc);
-    } catch (e) {
+      const s = await state.usable(kind, e.tablet, e.name, e.def, log.at);
+      // An index whose build was interrupted resumes it instead (`backfillPaged`).
+      if (!s || s.backfill) return false;
+      const parts = await state.fetch(s);
+      if (!parts) return false;
+      load(parts);
+      const changes = await log.since(e.tablet, s.ts);
+      await this.opts.beforeSearchBackfillPage?.();
+      for (const [id, doc] of changes) {
+        replay(id, doc as Doc | null);
+        this.searchStats.replayed++;
+      }
+      return true;
+    } catch (err) {
       console.error(
-        `bunvex: the search index snapshot could not be read, indexing the tables: ${(e as Error).message}`,
+        `bunvex: the segments of ${e.table}.${e.name} could not be loaded, indexing the table: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 
-  /** At a clean shutdown: the ready search and vector indexes, as of the last commit (STUDY-96). */
-  private async saveSearchSnapshot() {
-    const blobs = this.opts.searchSnapshots;
-    const p = this.persistence;
-    if (!blobs || !canSnapshotSearch(p) || this.committer.stopped) return;
-    try {
-      await saveSearchSnapshot(p, blobs, this.committer.visibleTs, this.searchIndexes.all(), this.vectorIndexes.all());
-    } catch (e) {
-      console.error(`bunvex: the search index snapshot could not be written: ${(e as Error).message}`);
+  /** Whether `e` is still the index of its table and name (not dropped or replaced by a push). */
+  private isCurrent(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): boolean {
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return false;
+    return (kind === "text" ? this.searchIndexes.get(t, e.name) : this.vectorIndexes.get(t, e.name)) === e;
+  }
+
+  /**
+   * Convex's `validate_memory_index_sizes` (STUDY-111, DV-228): a transaction writing a table one of whose ready
+   * search or vector indexes has a memory part at its hard limit (100 MiB) is refused, `TextIndexTooLarge` /
+   * `VectorIndexTooLarge`, until a flush brings it down. Indexes being built never refuse writes. Only with
+   * segments: without a store there is nothing to flush into.
+   */
+  private checkMemoryIndexSizes(tx: Tx) {
+    if (!this.searchSegments) return;
+    const limits = this.segmentLimits;
+    for (const t of tx.writtenTables()) {
+      for (const e of this.searchIndexes.forTablet(t.id))
+        if (e.ready && !e.staged && e.index.memoryBytes >= limits.textHardLimitBytes) {
+          this.scheduleFlush("text", e);
+          throw indexTooLarge("text", `${e.table}.${e.name}`);
+        }
+      for (const e of this.vectorIndexes.forTablet(t.id))
+        if (e.ready && !e.staged && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
+          this.scheduleFlush("vector", e);
+          throw indexTooLarge("vector", `${e.table}.${e.name}`);
+        }
     }
+  }
+
+  /** After a commit: the ready indexes of its tables whose memory part passed the soft limit are flushed. */
+  private flushFull(writes: readonly { table: TableDef }[]) {
+    if (!this.searchSegments || this.closed) return;
+    let last = -1;
+    for (const w of writes) {
+      if (w.table.id === last) continue;
+      last = w.table.id;
+      for (const e of this.searchIndexes.forTablet(last))
+        if (e.ready && e.index.memoryBytes > this.segmentLimits.textSoftLimitBytes) this.scheduleFlush("text", e);
+      for (const e of this.vectorIndexes.forTablet(last))
+        if (e.ready && e.index.memoryBytes > this.segmentLimits.vectorSoftLimitBytes) this.scheduleFlush("vector", e);
+    }
+  }
+
+  /** Flushes `e` in the background: one flush per index at a time, and again after it if asked meanwhile. */
+  private scheduleFlush(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    if (this.flushing.has(e)) {
+      this.flushAgain.add(e);
+      return;
+    }
+    const p = this.flushIndex(kind, e)
+      .catch((err) => {
+        if (!this.closed) console.error(`bunvex: ${kind} index ${e.table}.${e.name} failed to flush: ${err.message}`);
+      })
+      .finally(() => {
+        this.flushing.delete(e);
+        if (this.flushAgain.delete(e) && !this.closed) this.scheduleFlush(kind, e);
+      });
+    this.flushing.set(e, p);
+  }
+
+  /**
+   * Convex's flusher for one index (STUDY-111): its memory part as a new segment and the older segments' new
+   * deletes, as of the visible ts, written to the blob store; then the state names them (and the ts); then the
+   * index drops what they hold from its memory part. No blob is ever deleted, as Convex's (DV-370). With nothing to
+   * write, only the ts moves (no log to replay up to it).
+   */
+  private flushIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    return this.withIndexLock(e, () => this.flushLocked(kind, e));
+  }
+
+  /**
+   * Runs `fn` once the index's earlier flush, backfill step or compaction commit is done: what each prepares
+   * against the segments stays valid until it commits, as Convex's writer serializes its flusher and compactor.
+   */
+  private withIndexLock<T>(e: SearchIndexEntry | VectorIndexEntry, fn: () => Promise<T>): Promise<T> {
+    const run = (this.indexLocks.get(e) ?? Promise.resolve()).then(fn);
+    const done = run.then(
+      () => {},
+      () => {},
+    );
+    this.indexLocks.set(e, done);
+    void done.then(() => {
+      if (this.indexLocks.get(e) === done) this.indexLocks.delete(e);
+    });
+    return run;
+  }
+  private indexLocks = new Map<SearchIndexEntry | VectorIndexEntry, Promise<void>>();
+
+  private async flushLocked(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const state = this.searchSegments;
+    if (!state || e.staged || !this.isCurrent(kind, e)) return;
+    const ts = this.committer.visibleTs;
+    // Prepared at once: the memory part and the deletes as of `ts`.
+    const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
+    const f = index.prepareFlush();
+    const before = state.get(kind, e.tablet, e.name);
+    if (!f.segment && !f.deletes.length && before && before.ts >= ts) return;
+    const added = f.segment ? await this.storeSegment(kind, e, f.segment) : null;
+    const deletes = await Promise.all(f.deletes.map((d) => state.blobs!.put(d.bytes)));
+    const stored = await state.update(
+      (states) => {
+        if (!this.isCurrent(kind, e)) return false;
+        const refs = segmentRefs(index.segments, this.segmentSize(kind, e)).map((r, i) => {
+          const at = f.deletes.findIndex((d) => d.part === index.segments[i]);
+          return at < 0 ? r : { ...r, deletes: deletes[at]!, deleted: f.deletes[at]!.part.deletes.count };
+        });
+        if (added) refs.push(added.ref);
+        const s: IndexSegmentsState = {
+          kind,
+          tablet: e.tablet,
+          name: e.name,
+          def: e.def,
+          ts,
+          segments: refs,
+          staged: false,
+        };
+        states.set(stateKey(kind, e.tablet, e.name), s);
+        return true;
+      },
+      () => {
+        f.deletes.forEach((d, i) => {
+          d.part.keys = { segment: d.part.keys!.segment, deletes: deletes[i]! };
+        });
+        index.commitFlush(f, added?.keys);
+      },
+    );
+    if (stored) this.searchStats.flushes++;
+    else return;
+    this.scheduleCompaction(kind, e);
+  }
+
+  /** Each index's compaction in progress (one at a time per index). */
+  private compacting = new Map<SearchIndexEntry | VectorIndexEntry, Promise<void>>();
+
+  /** Compacts `e` in the background when its segments call for it, and again after while they still do. */
+  private scheduleCompaction(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    if (this.compacting.has(e) || this.closed || !this.searchSegments) return;
+    const p = this.compactIndex(kind, e)
+      .catch((err) => {
+        if (!this.closed) console.error(`bunvex: ${kind} index ${e.table}.${e.name} failed to compact: ${err.message}`);
+        return false;
+      })
+      .then((compacted) => {
+        this.compacting.delete(e);
+        if (compacted && !this.closed) this.scheduleCompaction(kind, e);
+      });
+    this.compacting.set(e, p);
+  }
+
+  /** Wait until no index is being flushed or compacted (tests). */
+  async searchCompacted() {
+    while (this.flushing.size || this.compacting.size)
+      await Promise.allSettled([...this.flushing.values(), ...this.compacting.values()]);
+  }
+
+  /**
+   * Convex's compactor for one index (STUDY-111 PR 5, `search_compactor.rs`): the segments
+   * `segmentsToCompact` picks are merged into one of their live documents, built outside the index's lock; then,
+   * under it, the deletes they got meanwhile (flushes' included) are carried into it and stored with it
+   * (Convex's writer `merge_deletes`), the state names it in their place, and their blobs are deleted. True when
+   * it compacted.
+   */
+  private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
+    const state = this.searchSegments;
+    if (!state || e.staged || !this.isCurrent(kind, e)) return false;
+    const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
+    const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
+    const candidates = index.segments.map((p) => ({
+      size: kind === "text" ? p.segment.bytes.length : p.segment.numDocs * dims * 4,
+      docs: p.segment.numDocs,
+      deleted: p.deletes.count,
+    }));
+    // Segments with no live document are dropped whatever else is merged (Convex never reads them).
+    const picked = segmentsToCompact(candidates, this.compactionConfig, shuffled);
+    const empty = index.segments.filter((p) => p.deletes.live === 0);
+    const chosen = [...new Set([...(picked ?? []).map((i) => index.segments[i]!), ...empty])];
+    if (!chosen.length) return false;
+    // Built in the background: other work runs between its chunks, and a close stops it.
+    const c = await index.prepareCompaction(chosen, async () => {
+      await new Promise((r) => setImmediate(r));
+      if (this.closed) throw new Error("the engine closed");
+    });
+    const segment = c.segment ? await state.blobs!.put(c.segment) : null;
+    await this.opts.beforeSearchCompactionCommit?.();
+    return this.withIndexLock(e, async () => {
+      if (this.closed || !this.isCurrent(kind, e) || chosen.some((p) => !index.segments.includes(p))) return false;
+      // Its deletes (none, or those carried over) are stored with it.
+      const carried = index.reconcileCompaction(c) ?? (c.merged ? c.merged.deletes.encode() : null);
+      const deletes = carried ? await state.blobs!.put(carried) : null;
+      const stored = await state.update(
+        (states) => {
+          const before = states.get(stateKey(kind, e.tablet, e.name));
+          if (!before || !this.isCurrent(kind, e)) return false;
+          // The segments as they will be: the merged one in the place of the first it replaces.
+          const kept = index.segments.filter((p) => !chosen.includes(p));
+          const refs = segmentRefs(kept, this.segmentSize(kind, e));
+          if (segment && deletes && c.merged)
+            refs.splice(Math.min(index.segments.indexOf(chosen[0]!), refs.length), 0, {
+              segment,
+              deletes,
+              docs: c.merged.segment.numDocs,
+              deleted: c.merged.deletes.count,
+              bytes: this.segmentSize(kind, e)(c.merged.segment),
+              id: c.merged.segment.uid,
+            });
+          states.set(stateKey(kind, e.tablet, e.name), { ...before, segments: refs });
+          return true;
+        },
+        () => {
+          index.commitCompaction(c, segment ? { segment, deletes } : undefined);
+        },
+      );
+      if (!stored) return false;
+      this.searchStats.compactions++;
+      return true;
+    });
+  }
+
+  /**
+   * Convex's paged backfill of an index (STUDY-111 PR 4, `search_flusher.rs` `build_multipart_segment`): each
+   * step reads the table by id from the cursor at a fresh ts, up to the soft limit's worth of documents, and
+   * takes the documents of the earlier pages the log changed since the last step; they become one segment (their
+   * old copies deleted in the earlier segments), stored with the new cursor, so a restart resumes from it. When
+   * the table is read, the index is ready at the last step's ts. True once built (false: closed or dropped).
+   */
+  private async backfillPaged<Doc2>(
+    kind: "text" | "vector",
+    e: SearchIndexEntry | VectorIndexEntry,
+    toDoc: (doc: Doc) => Doc2 | null,
+    sizeOf: (doc: Doc) => number,
+  ): Promise<boolean> {
+    const state = this.searchSegments!;
+    const t = this.catalog.byTablet(e.tablet);
+    if (!t) return false;
+    const index = e.index as unknown as {
+      load(parts: NonNullable<Awaited<ReturnType<SearchSegmentsState["fetch"]>>>): void;
+      buildSegment(docs: [string, Doc2][]): Uint8Array | null;
+      deleteFromAll(ids: Iterable<string>): void;
+      changedDeletes(): { part: unknown; version: number; bytes: Uint8Array }[];
+      commitBackfill(
+        segment: Uint8Array | null,
+        deletes: { part: unknown; version: number; bytes: Uint8Array }[],
+        ts: number,
+        keys?: { segment: string; deletes: string | null },
+      ): unknown;
+      segments: Parameters<typeof segmentRefs>[0];
+    };
+    const threshold = kind === "text" ? this.segmentLimits.textSoftLimitBytes : this.segmentLimits.vectorSoftLimitBytes;
+    // An interrupted build resumes from its stored cursor (Convex's `Backfilling { cursor, segments }`).
+    let cursor: string | null = null;
+    let lastTs: number | null = null;
+    const resume = await state.usable(kind, e.tablet, e.name, e.def, this.committer.visibleTs).catch(() => null);
+    if (resume?.backfill) {
+      const parts = await state.fetch(resume).catch(() => null);
+      if (parts) {
+        try {
+          index.load(parts);
+          cursor = resume.backfill.cursor;
+          lastTs = resume.ts;
+          this.searchStats.resumed++;
+          // Never ready before: a search meanwhile is Convex's `IndexBackfillingError`.
+          e.bootstrapping = false;
+        } catch {
+          cursor = null;
+        }
+      }
+    }
+    for (;;) {
+      const ts = this.committer.visibleTs;
+      // The table from the cursor, at `ts`, up to the threshold.
+      const docs: [string, Doc2][] = [];
+      let size = 0;
+      let next = cursor;
+      let end = false;
+      while (size < threshold) {
+        await this.opts.beforeSearchBackfillPage?.();
+        if (this.closed || !this.isCurrent(kind, e)) return false;
+        const from = next;
+        const page = (await this.query(
+          (db) =>
+            db.asSystem(() =>
+              db
+                .queryDef(t)
+                .withIndex("by_id", (q) => (from === null ? q : q.gt("_id", from)))
+                .take(1000),
+            ),
+          undefined,
+          undefined,
+          undefined,
+          ts,
+        )) as Doc[];
+        let k = 0;
+        for (; k < page.length && size < threshold; k++) {
+          const d = page[k]!;
+          next = d._id as string;
+          const entry = toDoc(d);
+          if (entry) {
+            docs.push([next, entry]);
+            size += sizeOf(d);
+          }
+        }
+        this.searchStats.backfilled += k;
+        if (k === page.length && page.length < 1000) {
+          end = true;
+          break;
+        }
+      }
+      // The earlier pages' documents the log changed since the last step, at `ts`.
+      const updates: [string, Doc | null][] = [];
+      if (cursor !== null && lastTs !== null) {
+        const upTo = cursor;
+        const changed = await changedSince(state.store!, e.tablet, lastTs, ts, decodeDoc, (id) => id <= upTo);
+        for (const [id, c] of changed) updates.push([id, c.doc]);
+      }
+      if (this.closed || !this.isCurrent(kind, e)) return false;
+      const stepped = await this.withIndexLock(e, async () => {
+        // Built at once: the new segment, and the earlier segments' deletes.
+        index.deleteFromAll(updates.map(([id]) => id));
+        for (const [id, doc] of updates) {
+          const entry = doc && toDoc(doc);
+          if (entry) docs.push([id, entry]);
+        }
+        const bytes = index.buildSegment(docs);
+        const deletes = index.changedDeletes();
+        const added = bytes ? await this.storeSegment(kind, e, bytes) : null;
+        const deleteKeys = await Promise.all(deletes.map((d) => state.blobs!.put(d.bytes)));
+        const stored = await state.update(
+          (states) => {
+            if (!this.isCurrent(kind, e)) return false;
+            const refs = segmentRefs(index.segments as never, this.segmentSize(kind, e)).map((r, i) => {
+              const at = deletes.findIndex((d) => d.part === index.segments[i]);
+              return at < 0 ? r : { ...r, deletes: deleteKeys[at]! };
+            });
+            if (added) refs.push(added.ref);
+            const s: IndexSegmentsState = {
+              kind,
+              tablet: e.tablet,
+              name: e.name,
+              def: e.def,
+              ts,
+              segments: refs,
+              staged: false,
+              ...(end ? {} : { backfill: { cursor: next } }),
+            };
+            states.set(stateKey(kind, e.tablet, e.name), s);
+            return true;
+          },
+          () => {
+            deletes.forEach((d, i) => {
+              const part = d.part as { keys?: { segment: string; deletes: string | null } };
+              part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
+            });
+            index.commitBackfill(bytes, deletes, ts, added?.keys);
+          },
+        );
+        // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
+        if (!stored) return false;
+        this.searchStats.backfillSteps++;
+        return true;
+      });
+      if (!stepped) return false;
+      // Convex compacts a backfilling index's segments too.
+      this.scheduleCompaction(kind, e);
+      if (end) return true;
+      cursor = next;
+      lastTs = ts;
+      // A background job: let the server's own work run between steps.
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+
+  /** At a clean shutdown: every ready index flushed, so the next start replays nothing (STUDY-111). */
+  private async flushSearchSegments() {
+    if (!this.searchSegments || this.committer.stopped) return;
+    await Promise.allSettled([...this.flushing.values()]);
+    const all = [
+      ...this.searchIndexes.all().map((e) => ["text", e] as const),
+      ...this.vectorIndexes.all().map((e) => ["vector", e] as const),
+    ];
+    for (const [kind, e] of all) {
+      if (!e.ready || e.staged) continue;
+      try {
+        await this.flushIndex(kind, e);
+      } catch (err) {
+        console.error(`bunvex: ${kind} index ${e.table}.${e.name} failed to flush: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /**
+   * Makes the search and vector indexes' `_index` rows the indexes': a row for each (a new one backfilling, as
+   * Convex inserts it), none for an index that is gone or redefined (its blobs kept, DV-370). A staged index is not
+   * built, so its row stays backfilling, staged, without segments (DV-368).
+   */
+  private rowsSyncScheduled = false;
+  /** Syncs the rows once the text and vector reconciles that run together are both done. */
+  private scheduleIndexRowsSync() {
+    if (this.rowsSyncScheduled) return;
+    this.rowsSyncScheduled = true;
+    queueMicrotask(() => {
+      this.rowsSyncScheduled = false;
+      this.syncIndexRows();
+    });
+  }
+
+  private syncIndexRows() {
+    const state = this.indexRows;
+    if (!state) return;
+    const wanted = new Map<string, ["text" | "vector", SearchIndexEntry | VectorIndexEntry]>();
+    for (const e of this.searchIndexes.all()) wanted.set(stateKey("text", e.tablet, e.name), ["text", e]);
+    for (const e of this.vectorIndexes.all()) wanted.set(stateKey("vector", e.tablet, e.name), ["vector", e]);
+    void state
+      .update((states) => {
+        let changed = false;
+        for (const [k, s] of states) {
+          const w = wanted.get(k);
+          if (w && sameSpec(w[1].def, s.def) && !(w[1].staged && s.segments.length)) {
+            if (s.staged !== w[1].staged) {
+              s.staged = w[1].staged;
+              changed = true;
+            }
+            continue;
+          }
+          states.delete(k);
+          changed = true;
+        }
+        for (const [k, [kind, e]] of wanted)
+          if (!states.has(k)) {
+            states.set(k, {
+              kind,
+              tablet: e.tablet,
+              name: e.name,
+              def: e.def,
+              ts: 0,
+              segments: [],
+              backfill: { cursor: null },
+              staged: e.staged,
+            });
+            changed = true;
+          }
+        return changed;
+      })
+      .catch((err) => {
+        if (!this.closed) console.error(`bunvex: the search indexes' _index rows could not be written: ${err.message}`);
+      });
+  }
+
+  /**
+   * Without segments, an index read from its table is ready with nothing stored: its row says so (`snapshotted`
+   * with no segments at ts 0, so a later start with a store replays from the beginning or reads the table).
+   */
+  private markRowReady(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const state = this.indexRows;
+    if (!state || this.searchSegments) return;
+    void state
+      .update((states) => {
+        if (!this.isCurrent(kind, e)) return false;
+        const k = stateKey(kind, e.tablet, e.name);
+        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: false });
+        return true;
+      })
+      .catch(() => {});
   }
 
   private async backfillVector(e: VectorIndexEntry) {
     const t = this.catalog.byTablet(e.tablet);
     if (!t) return;
     if (
-      e.bootstrapping &&
-      this.searchRestore &&
-      (await this.searchRestore.vector(
+      await this.restoreFromSegments<Doc>(
+        "vector",
         e,
-        (id, entry) => this.vectorIndexes.restore(e, id, entry),
-        (doc) => vectorEntry(e.def, doc),
-      ))
+        (parts) => e.index.load(parts),
+        (id, doc) => this.vectorIndexes.restore(e, id, doc ? vectorEntry(e.def, doc) : null),
+      )
     ) {
-      this.searchStats.restored++;
+      this.searchStats.fromSegments++;
       this.vectorIndexes.done(e);
+      this.scheduleCompaction("vector", e);
+      return;
+    }
+    if (this.searchSegments) {
+      const dims = e.def.dimensions;
+      if (
+        await this.backfillPaged(
+          "vector",
+          e,
+          (doc) => vectorEntry(e.def, doc),
+          () => dims * 4,
+        )
+      )
+        this.vectorIndexes.done(e);
       return;
     }
     const at = this.committer.visibleTs;
@@ -842,6 +1496,7 @@ export class Engine {
       await new Promise((r) => setImmediate(r));
     }
     this.vectorIndexes.done(e);
+    this.markRowReady("vector", e);
   }
 
   /**
@@ -894,7 +1549,7 @@ export class Engine {
     }
     if (v.length !== e.def.dimensions)
       throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
-    charge?.(e.docs.size * v.length * 4);
+    charge?.(e.index.size * v.length * 4);
     return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
   }
 
@@ -902,16 +1557,28 @@ export class Engine {
     const t = this.catalog.byTablet(e.tablet);
     if (!t) return;
     if (
-      e.bootstrapping &&
-      this.searchRestore &&
-      (await this.searchRestore.text(
+      await this.restoreFromSegments<Doc>(
+        "text",
         e,
-        (id, d) => this.searchIndexes.restore(e, id, d),
-        (doc) => indexedDoc(e.def, doc),
-      ))
+        (parts) => e.index.load(parts),
+        (id, doc) => this.searchIndexes.restore(e, id, doc ? indexedDoc(e.def, doc) : null),
+      )
     ) {
-      this.searchStats.restored++;
+      this.searchStats.fromSegments++;
       this.searchIndexes.done(e);
+      this.scheduleCompaction("text", e);
+      return;
+    }
+    if (this.searchSegments) {
+      if (
+        await this.backfillPaged(
+          "text",
+          e,
+          (doc) => indexedDoc(e.def, doc),
+          (doc) => indexedDocBytes(e.def, doc),
+        )
+      )
+        this.searchIndexes.done(e);
       return;
     }
     const at = this.committer.visibleTs;
@@ -939,6 +1606,7 @@ export class Engine {
       await new Promise((r) => setImmediate(r));
     }
     this.searchIndexes.done(e);
+    this.markRowReady("text", e);
   }
 
   /**
@@ -1003,7 +1671,7 @@ export class Engine {
     }
   }
 
-  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+  private readonly tableCountOf = (tablet: number, snapshot: number) => this.tableSummaries.countAt(tablet, snapshot);
 
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
@@ -1209,7 +1877,7 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
-        const changes = planCatalog(declared, current.tables, current.indexes);
+        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
         for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
@@ -1217,33 +1885,50 @@ export class Engine {
         }
         for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
         for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
-        for (const row of await db.query(SCHEMAS_TABLE).collect())
-          if (row.state === "pending" || row.state === "validated")
-            await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
-        const schemaId = await db.insert(SCHEMAS_TABLE, {
-          state: "pending",
-          schema: JSON.stringify(schemaToJson(schema)),
-        });
+        await writeNextIndexId(db, changes.nextIndexId);
+        // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
+        // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
+        const json = schemaToJson(schema);
+        const key = schemaKey(json);
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        const same = (row: Record<string, unknown>) => schemaKey(JSON.parse(row.schema as string)) === key;
+        const active = rows.find((row) => row.state === "active");
+        const unfinished = rows.filter((row) => row.state === "pending" || row.state === "validated");
+        let schemaId: string;
+        let state = "pending" as "active" | "pending" | "validated";
+        const reused = active && same(active) ? active : unfinished.find(same);
+        for (const row of unfinished)
+          if (row !== reused) await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+        if (reused) {
+          schemaId = reused._id as string;
+          state = reused.state as typeof state;
+        } else schemaId = await db.insert(SCHEMAS_TABLE, { state: "pending", schema: JSON.stringify(json) });
         const tableName = (tablet: number) =>
           current.tables.find((t) => t.tablet === tablet)?.name ??
           changes.insertTables.find((t) => t.tablet === tablet)?.name;
         const addedIndexes = changes.insertIndexes
           .filter((i) => !(i.name in SYSTEM_INDEXES))
           .map((i) => `${tableName(i.tablet)}.${i.name}`);
-        return { schemaId, addedIndexes, after: await readCatalog(db) };
+        return { schemaId, state, addedIndexes, after: await readCatalog(db) };
       },
       true,
       "start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
     const active = this.schema;
-    this.pendingPush = { id: r.schemaId, schema };
-    this.pendingValidators = validatorsOf(schema);
-    this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
-      this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
-        () => {},
-      ),
-    );
+    if (r.state === "active") {
+      // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
+      this.pendingPush = { id: r.schemaId, schema };
+      this.pendingValidators = null;
+    } else if (this.pendingPush?.id !== r.schemaId) {
+      this.pendingPush = { id: r.schemaId, schema };
+      this.pendingValidators = validatorsOf(schema);
+      this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
+        this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
+          () => {},
+        ),
+      );
+    }
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }
@@ -1268,7 +1953,7 @@ export class Engine {
           return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
         if (row.state === "active") return { type: "complete" as const };
         const validated = row.state === "validated";
-        const indexes = (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
+        const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
         const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
         // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
@@ -1316,9 +2001,9 @@ export class Engine {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
         if (row?.state === "failed")
           throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${row.error as string}`);
-        if (!row || (row.state !== "pending" && row.state !== "validated"))
+        if (!row || (row.state !== "pending" && row.state !== "validated" && row.state !== "active"))
           throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-        if (row.state !== "validated")
+        if (row.state === "pending")
           throw new SchemaPushError(
             "SchemaNotReady",
             "The existing documents are still being checked against the schema.",
@@ -1332,9 +2017,12 @@ export class Engine {
         }
         for (const i of f.enable) await db.patch(INDEX_TABLE, i._id, { state: "enabled", staged: false });
         for (const i of f.disable) await db.patch(INDEX_TABLE, i._id, { state: "backfilled", staged: true });
-        for (const old of await db.query(SCHEMAS_TABLE).collect())
-          if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
-        await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+        // Already active (a push of the same schema): Convex's `mark_active` does nothing.
+        if (row.state !== "active") {
+          for (const old of await db.query(SCHEMAS_TABLE).collect())
+            if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+        }
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
         const name = (i: IndexMeta) => `${tables.find((t) => t.tablet === i.tablet)?.name}.${i.name}`;
@@ -1380,7 +2068,7 @@ export class Engine {
     let def: TableDef | undefined;
     await this.runMutation(
       async (db) => {
-        const { tables, indexes: stored } = await readCatalog(db);
+        const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
@@ -1388,6 +2076,7 @@ export class Engine {
           tables,
           stored,
           !name.startsWith("_"),
+          nextIndexId,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
@@ -1404,6 +2093,7 @@ export class Engine {
         meta.state = "hidden";
         const metaId = await db.insert(TABLES_TABLE, meta);
         for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
+        await writeNextIndexId(db, plan.nextIndexId);
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
           def = c.add(
@@ -1536,6 +2226,26 @@ export class Engine {
       }
   }
 
+  /**
+   * Replace tables with empty ones in one commit (Convex's `TableModel::replace_with_empty_table`): each gets a
+   * new table of the same name, number and indexes, and the old one is deleted in the background. System
+   * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction.
+   */
+  async replaceWithEmptyTables(names: string[], body?: (db: Tx) => Promise<void>) {
+    const tablets: number[] = [];
+    try {
+      for (const name of names) {
+        const { number } = this.catalog.table(name);
+        tablets.push((await this.createHiddenTable(name, { number, copyIndexesOf: name })).id);
+      }
+      await this.activateTables(tablets, [], body);
+    } catch (e) {
+      // The empty tables were never made active: drop them rather than leave them to the stale-table sweep.
+      if (tablets.length) await this.dropHiddenTables(tablets).catch(() => {});
+      throw e;
+    }
+  }
+
   /** Delete an active table: invisible at once, its documents removed in the background. */
   async deleteTable(name: string) {
     await this.activateTables([], [name]);
@@ -1648,8 +2358,14 @@ export class Engine {
       tx.pendingValidators = this.pendingValidators;
     }
     const observed: Observed = { time: false };
-    const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
-    return { tx, value, observed, now };
+    // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
+    const unpin = this.tableSummaries.pin(snapshot);
+    try {
+      const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      return { tx, value, observed, now };
+    } finally {
+      unpin();
+    }
   }
 
   /**
@@ -1842,12 +2558,15 @@ export class Engine {
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
     });
+    const unpin = this.tableSummaries.pin(snapshot); // as in execute()
     try {
       const observed: Observed = { time: false };
       const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };
+    } finally {
+      unpin();
     }
   }
 
@@ -1958,6 +2677,7 @@ export class Engine {
         const value = resolved(tx.snapshot);
         return withTs ? { value, ts: tx.snapshot } : value;
       }
+      this.checkMemoryIndexSizes(tx);
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({
@@ -2086,7 +2806,8 @@ function deletionRefusal(schema: SchemaDefinition, table: string): string | null
 async function readCatalog(db: Tx) {
   return {
     tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
-    indexes: (await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[],
+    indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
+    nextIndexId: await readNextIndexId(db),
   };
 }
 
@@ -2106,6 +2827,17 @@ export async function readSystemRows(persistence: Persistence, table: string): P
   const { tables, indexes } = await readCatalog(read(bootstrapCatalog()));
   if (!tables.some((t) => t.name === table)) return [];
   return (await read(buildCatalog(tables, indexes)).query(table).collect()) as Record<string, unknown>[];
+}
+
+/**
+ * The search and vector indexes' states, from their `_index` rows read straight from a store at its latest commit
+ * (tests and tools, STUDY-111).
+ */
+export async function readSearchIndexStates(persistence: Persistence): Promise<{ indexes: IndexSegmentsState[] }> {
+  const ts = (await persistence.maxTs?.()) ?? 0;
+  const tx = new Tx(bootstrapCatalog(), persistence, ts, false, wallClock(), true);
+  const rows = (await tx.query(INDEX_TABLE).collect()) as Record<string, unknown>[];
+  return { indexes: rows.filter(isSearchIndexRow).flatMap((r) => rowToState(r) ?? []) };
 }
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */

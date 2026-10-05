@@ -25,6 +25,7 @@ export {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -33,6 +34,7 @@ export {
   IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MAX_USER_TABLES,
   MODULES_TABLE,
@@ -97,6 +99,13 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export {
+  DATABASE_VERSION,
+  type DatabaseGlobals,
+  readDatabaseGlobals,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 export type {
   BaseDatabaseReader,
   BaseDatabaseReaderWithTable,
@@ -240,6 +249,7 @@ export {
   type DocValidator,
   defineSchema,
   defineTable,
+  documentTypeError,
   docValidator,
   type Expand,
   type FieldValue,
@@ -257,6 +267,7 @@ export {
   type SchemaValidators,
   type SearchIndexDef,
   type SystemFieldValidators,
+  stagedDocumentError,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
@@ -267,7 +278,7 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
-export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
+export type { SearchSegmentStore } from "./search-segments.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,

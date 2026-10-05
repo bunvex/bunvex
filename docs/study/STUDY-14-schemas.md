@@ -58,3 +58,71 @@
 - the `defineTable` forms.
 
 Sabotage: skipping the check fails 3 tests.
+
+## 6. A document validator a table cannot have (2026-10-05)
+
+### 6.1 How Convex does it
+
+- **`defineTable`** (npm-packages/convex/src/server/schema.ts:708–718) checks nothing beyond wrapping an object of
+  fields in `v.object`. `defineTable(v.string())` is a `TableDefinition` like any other. The `TableDefinition`
+  constructor (:214–222) only stores it.
+- **`TableDefinition.export()`** (:619–625) throws "Invalid validator: please make sure that the parameter of
+  `defineTable` is valid (see https://docs.convex.dev/database/schemas)" when the validator's JSON is not an
+  object. At a push, the backend calls `export()` while it evaluates the schema
+  (crates/isolate/src/environment/schema.rs:270–289). It answers any exception there with
+  `invalid_schema_export_error()`: 400 `InvalidSchemaExport`, "Default export from schema file isn't a Convex
+  schema. To learn more, see the schema documentation at https://docs.convex.dev/database/schemas.".
+- **The parse** (`DocumentSchema::try_from`, crates/common/src/schemas/json.rs:554–587) accepts an object, a union
+  of objects, or `any`. Anything else is `invalid_top_level_type_in_schema` (schemas/mod.rs:744–752): 400
+  `InvalidTopLevelTypeInSchemaError`, "The document validator in a schema must be an object, a union of objects,
+  or `v.any()`. Found <validator>. To learn more, …". For a union, `<validator>` is its first member that is not
+  an object.
+- `application::evaluate_schema` prefixes both errors with "Hit an error while evaluating your schema:\n", and
+  `start_push` prefixes "Hit an error while pushing:\n".
+
+### 6.2 What bunvex did, and does now
+
+Before this section, bunvex's `TableDefinition` constructor threw "A table's document validator must be
+v.object(...), a v.union of objects, or v.any()." when `defineTable` was called. So the push failed while the
+schema module evaluated (`InvalidSchema`, "Uncaught Error: …").
+
+Now it follows Convex at both points (owner, 2026-10-05):
+
+- `defineTable` only wraps an object of fields.
+- `schemaToJson` (bunvex's `export()`) runs `documentJson`, Convex's export check, with its message.
+- The push (`push.ts`, after the schema evaluates) runs Convex's steps in Convex's order:
+  1. the export: an error there is a 400 `InvalidSchemaExport`, "Default export from schema file isn't a bunvex
+     schema.";
+  2. the parse: `documentTypeError`, a 400 `InvalidTopLevelTypeInSchemaError` with Convex's message;
+  3. `check_index_references`, as before.
+
+The messages leave out Convex's docs links and name bunvex where Convex names itself (DV-397).
+
+### 6.3 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| T1 | The three messages have no docs link, and "isn't a bunvex schema" names bunvex | DV-04's rule (rule 5) | DV-397 (owner, 2026-10-05) |
+
+### 6.4 Tests
+
+- `packages/core/test/schema.test.ts`:
+  - `defineTable(v.string())` declares;
+  - `documentTypeError` for an object, `any`, a union of objects, a string, and a union with a non-object
+    member (named);
+  - the export check's message.
+- `packages/server/test/push.test.ts`: over HTTP, a union with a string member is a 400
+  `InvalidTopLevelTypeInSchemaError`, and a validator whose JSON is not an object is a 400 `InvalidSchemaExport`,
+  with the full messages. Nothing is pushed.
+- `packages/sync-e2e/test/define-table-oracle.test.ts`: the oracle. Declaring such tables throws in neither
+  package, and the export message is the official package's without its link.
+
+Sabotage checks, each caught:
+
+| Sabotage | Caught by |
+|---|---|
+| Unions not checked | core, HTTP |
+| The top-level error's code changed | HTTP |
+| The export check off | core, HTTP, oracle |
+| The export error's code changed | HTTP |
+| No top-level check at all | core, HTTP |

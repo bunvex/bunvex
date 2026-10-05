@@ -1,7 +1,8 @@
 # STUDY-96 — Search index snapshots across restarts
 
-- **Status:** implemented (STUDY-79 §6 option D, decided by the owner 2026-10-04); storage and crash
-  behaviour decided by the owner (2026-10-04, §6)
+- **Status:** removed by [STUDY-111](STUDY-111-search-segments.md): persisted segments replace the snapshot (a clean
+  shutdown flushes them). Before: implemented (STUDY-79 §6 option D, decided by the owner 2026-10-04); storage and
+  crash behaviour decided by the owner (2026-10-04, §6)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (the rebuild window), [STUDY-45](STUDY-45-text-search.md)
   S1 (DV-227), [STUDY-51](STUDY-51-vector-search.md) V2 (DV-270), [STUDY-72](STUDY-72-table-summary-checkpoints.md)
