@@ -85,7 +85,7 @@ Every claim on the page must have a source in the repository. All numbers, lists
 2. **Hero** — headline *"The reactive backend of Convex, rewritten for Bun."*; a subline naming its own
    database engine, serializable transactions, reactive queries and pluggable persistence; a
    `pre-alpha` badge; CTAs **Star on GitHub** (primary) and **See the benchmarks** (secondary, anchor).
-3. **Benchmarks** — from the full report `docs/bench/E2E-VPS-2026-09-29.md`: Convex self-hosted (on
+3. **Benchmarks** — from the full report `docs/bench/E2E-VPS-2026-10-05.md` (until 5 Oct 2026: `E2E-VPS-2026-09-29.md`): Convex self-hosted (on
    Postgres 17) vs bunvex on Postgres (the same instance) vs bunvex on SQLite, for cached read, uncached
    indexed read, durable insert, action, and 10 000 subscribers. Caption: same 2-vCPU VPS, same harness,
    which database each ran on, and which direction is better; link to the full report on GitHub. (The

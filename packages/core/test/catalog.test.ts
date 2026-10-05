@@ -39,6 +39,7 @@ describe("catalog (_tables / _index)", () => {
           _index: 514,
           _exports: 516,
           _udf_config: 518,
+          _db: 520,
           _modules: 521,
           _source_packages: 524,
           _environment_variables: 525,

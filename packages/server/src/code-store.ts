@@ -65,6 +65,29 @@ export async function udfConfig(engine: Engine, serverVersion = "bunvex"): Promi
 }
 
 /**
+ * The import-phase seed and time for a module that is not deployed (the function tester, STUDY-119), as
+ * Convex's `execute_standalone_module`: the deployment's, whatever server version wrote them; with none yet, a
+ * fresh seed and the current time, as if the most recent version had pushed. Nothing is written: Convex sets
+ * them in a transaction it never commits.
+ */
+export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
+  // Drawn outside the transaction: randomness is refused inside one (determinism).
+  const fresh = crypto.getRandomValues(new Uint32Array(8));
+  const now = Date.now();
+  const row = (await engine.query((db) => db.asSystem(() => db.query(UDF_CONFIG_TABLE).first()))) as Record<
+    string,
+    unknown
+  > | null;
+  if (row)
+    return {
+      serverVersion: row.serverVersion as string,
+      seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
+      timestamp: row.importPhaseUnixTimestamp as number,
+    };
+  return { serverVersion: "bunvex", seed: fresh, timestamp: now };
+}
+
+/**
  * In the push's transaction (Convex's `ModuleModel.apply` / `SourcePackageModel.put`): the package row, and
  * the module rows replaced by the version's. Returns the packages no module points at any more.
  */
