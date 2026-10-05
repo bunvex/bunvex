@@ -918,7 +918,7 @@ export class Engine {
   /**
    * Convex's flusher for one index (STUDY-111): its memory part as a new segment and the older segments' new
    * deletes, as of the visible ts, written to the blob store; then the state names them (and the ts); then the
-   * index drops what they hold from its memory part. The replaced deletes blobs are deleted. With nothing to
+   * index drops what they hold from its memory part. No blob is ever deleted, as Convex's (DV-370). With nothing to
    * write, only the ts moves (no log to replay up to it).
    */
   private async flushIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
@@ -933,7 +933,6 @@ export class Engine {
     const blobs = state.blobs;
     const segment = f.segment ? await blobs.put(f.segment) : null;
     const deletes = await Promise.all(f.deletes.map((d) => blobs.put(d.bytes)));
-    const replaced: (string | null)[] = [];
     const stored = await state.update(
       (states) => {
         if (!this.isCurrent(kind, e)) return false;
@@ -948,7 +947,6 @@ export class Engine {
       },
       () => {
         f.deletes.forEach((d, i) => {
-          replaced.push(d.part.keys?.deletes ?? null);
           d.part.keys = { segment: d.part.keys!.segment, deletes: deletes[i]! };
         });
         const part = index.commitFlush(f, segment ? { segment, deletes: null } : undefined);
@@ -960,12 +958,6 @@ export class Engine {
       },
     );
     if (stored) this.searchStats.flushes++;
-    else {
-      // Dropped or replaced meanwhile: nothing names what was written.
-      await state.deleteBlobs([segment, ...deletes]);
-      return;
-    }
-    await state.deleteBlobs(replaced);
   }
 
   /** At a clean shutdown: every ready index flushed, so the next start replays nothing (STUDY-111). */
@@ -986,27 +978,22 @@ export class Engine {
     }
   }
 
-  /** The stored state of indexes that are gone (dropped, replaced, staged) is removed, and its blobs deleted. */
+  /** The stored state of indexes that are gone (dropped, replaced, staged) is removed; their blobs are kept. */
   private dropStaleSegments() {
     const state = this.searchSegments;
     if (!state) return;
-    const gone: IndexSegmentsState[] = [];
     void state
-      .update(
-        (states) => {
-          for (const [k, s] of states) {
-            const t = this.catalog.byTablet(s.tablet);
-            const e = t && (s.kind === "text" ? this.searchIndexes.get(t, s.name) : this.vectorIndexes.get(t, s.name));
-            if (e && !e.staged && JSON.stringify(e.def) === JSON.stringify(s.def)) continue;
-            gone.push(s);
-            states.delete(k);
-          }
-          return gone.length > 0;
-        },
-        () => {
-          void state.deleteBlobs(gone.flatMap((s) => s.segments.flatMap((r) => [r.segment, r.deletes])));
-        },
-      )
+      .update((states) => {
+        let gone = false;
+        for (const [k, s] of states) {
+          const t = this.catalog.byTablet(s.tablet);
+          const e = t && (s.kind === "text" ? this.searchIndexes.get(t, s.name) : this.vectorIndexes.get(t, s.name));
+          if (e && !e.staged && JSON.stringify(e.def) === JSON.stringify(s.def)) continue;
+          states.delete(k);
+          gone = true;
+        }
+        return gone;
+      })
       .catch((err) => console.error(`bunvex: the search segments' state could not be written: ${err.message}`));
   }
 

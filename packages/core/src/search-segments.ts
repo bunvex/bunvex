@@ -129,11 +129,6 @@ export class SearchSegmentsState {
     return run;
   }
 
-  /** Deletes blobs no state names any more (failures are left: an orphan only costs storage). */
-  async deleteBlobs(keys: Iterable<string | null>) {
-    await Promise.all([...keys].map((k) => (k ? this.blobs.delete(k).catch(() => {}) : undefined)));
-  }
-
   /**
    * The state to start `kind` index `name` of `tablet` from, when it can be trusted at `at`: the same definition,
    * a ts not ahead of the store and within document retention (so the log since is complete); null otherwise.

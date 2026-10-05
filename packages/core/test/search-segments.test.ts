@@ -128,7 +128,7 @@ test("over its soft limit a memory part is flushed; after a crash a start replay
   await scanned.close();
 });
 
-test("flushes with deletes: the replaced deletes blobs are deleted, the answers unchanged", async () => {
+test("flushes with deletes: no blob is deleted (as Convex), the answers unchanged", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
   const e = await open(p, store, EVERY);
@@ -143,12 +143,13 @@ test("flushes with deletes: the replaced deletes blobs are deleted, the answers 
     await e.searchFlushed();
   }
   const expected = await answers(e);
-  // Every blob is named by the state: no replaced deletes left.
+  // Every blob the state names is stored, and the replaced deletes are kept too (DV-370: as Convex).
   const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as {
     indexes: { segments: { segment: string; deletes: string | null }[] }[];
   };
   const named = new Set(state.indexes.flatMap((s) => s.segments.flatMap((r) => [r.segment, r.deletes])));
-  expect(new Set(store.map.keys())).toEqual(new Set([...named].filter((k) => k !== null)));
+  for (const k of named) if (k !== null) expect(store.map.has(k)).toBe(true);
+  expect(store.map.size).toBeGreaterThan(named.size);
   expect(state.indexes[0]!.segments.some((r) => r.deletes)).toBe(true);
   await e.close();
   const back = await open(p, store);
@@ -214,7 +215,7 @@ test("a state not trusted is not used: changed definition, outside retention, mi
   await none.close();
 });
 
-test("a dropped index's state and blobs are removed", async () => {
+test("a dropped index's state is removed; its blobs are kept, as Convex", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
   const e = await open(p, store);
@@ -227,12 +228,12 @@ test("a dropped index's state and blobs are removed", async () => {
   const named = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { def: { filterFields: string[] } }[] };
   expect(named.indexes.some((s) => s.def.filterFields?.[0] === "owner")).toBe(true);
   await rebuilt.close();
-  const before = store.map.size;
+  const before = [...store.map.keys()];
   const textOnly = await open(p, store, NEVER, schemaWith(["kind"], false));
   await textOnly.close();
   const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { kind: string }[] };
   expect(state.indexes.map((s) => s.kind)).toEqual(["text"]);
-  expect(store.map.size).toBeLessThan(before);
+  for (const k of before) expect(store.map.has(k)).toBe(true);
 });
 
 test("a commit landing while a start replays the log is kept", async () => {

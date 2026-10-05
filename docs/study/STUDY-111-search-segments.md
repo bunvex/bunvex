@@ -236,7 +236,8 @@ and 5160 on `main`.
     `search_segments` (DV-368).
   - One writer changes it, in order (`SearchSegmentsState.update`), as Convex's `SearchIndexMetadataWriter`
     serializes its flusher's and compactor's writes.
-  - Blobs are written before the state names them; what a write replaces is deleted after it (DV-370).
+  - Blobs are written before the state names them. None is ever deleted, as Convex's (DV-370, resolved): a
+    replaced segment or deletes blob, a removed index's, or one a failed write left, stays in the store.
 - **The flusher.** Convex's live flush:
   - after each commit, an index of a written table whose memory part passed its soft limit is flushed in the
     background: 10 MiB for text, 30 MiB for vectors (`SEARCH_INDEX_SIZE_SOFT_LIMIT`,
@@ -265,7 +266,7 @@ and 5160 on `main`.
 - **STUDY-96's snapshot** is no longer written. One an earlier version wrote is still read, for an index with no
   segments state; the last PR of the series removes it (§6).
 - **Removed state.** After every reconcile (start, push, table change), the state of an index that is gone,
-  staged or redefined is removed and its blobs deleted.
+  staged or redefined is removed; its blobs are kept (DV-370).
 
 **Measured** (`bench/search-segments.ts`: 200 000 documents of 12 words, a filter field and a 64-dimension
 vector, one text and one vector index, SQLite durable, file blobs; each restart in a process of its own, with the
@@ -292,7 +293,7 @@ milliseconds from a warm file cache. The write throughput is within the noise of
   since for the pages before; the cursor in the state.
 - **Compactor (PR 5).** Convex's thresholds (§1.5) and the writer's reconciliation.
 - **Fast-forward, retention, GC (PR 6).** §1.6; a state whose ts is older than `document_min_snapshot_ts` is not
-  used; replaced segment and deletes blobs are deleted once the state no longer names them.
+  used.
 - **Query from disk (PR 7, optional).** RAM until then: see §6.
 
 ## 4. Divergences
@@ -302,7 +303,7 @@ milliseconds from a warm file cache. The write throughput is within the noise of
 | E1 | Segments are bunvex's own binary format: a text segment is one blob (terms, postings, documents, forward index) plus a deletes blob, not a tantivy archive with an id tracker, an alive bitset and a deleted-terms table; a vector segment is a flat array of normalized vectors plus a deleted bitset, not a qdrant HNSW segment | Não dá pra fazer: tantivy and qdrant are Rust libraries. The flat vector segment follows DV-269 (exact search). Not observable: answers are the whole index's | owner, 2026-10-05 (build E; the format follows), DV-367 |
 | E2 | The segments' state is one persistence global, `search_segments`, not each index's `_index` row | Ainda não fizemos: bunvex has no `_index` rows for search indexes (their metadata is the schema's); the state moves there when they exist. Not observable | follows the owner's "build E" (2026-10-05); no other place today. DV-368 |
 | E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | carried from D (owner, 2026-10-04); question in the series' report. DV-369 |
-| E4 | Replaced segment and deletes blobs, and those of a removed index, are deleted from the `search` store | Convex never deletes search blobs. The owner asked for it (2026-10-05). Operational | owner, 2026-10-05. DV-370 |
+| E4 | ~~Replaced segment and deletes blobs, and those of a removed index, were deleted from the `search` store~~ | Resolved: no search blob is deleted, as Convex's | owner, 2026-10-05 (match Convex). DV-370 |
 | E5 | Segments are loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files | Ainda não fizemos: the format reads in place (PR 1), so a memory-mapped file can take a loaded blob's place (PR 7). Operational: memory | owner, 2026-10-05 (RAM first; disk as a later PR). DV-371 |
 
 ## 5. Tests
@@ -354,7 +355,7 @@ snapshot):
   crash a start loads them and replays only the three documents written since, for each index, with the
   answers of indexing the tables (text with and without a filter, vector);
 - a clean shutdown flushes: the next start replays nothing;
-- flushes with deletes: every blob in the store is one the state names (the replaced deletes are gone), and a
+- flushes with deletes: every blob the state names is stored, and the replaced deletes are kept (as Convex), and a
   start loads them with the same answers;
 - a state not trusted is not used, and the answers are the table's: a changed definition (that index only),
   outside retention, missing blobs, unreadable blobs, a store with no state;
@@ -365,7 +366,7 @@ snapshot):
   the segments, replays exactly those 30 documents per index, and answers as indexing the table does.
 
 Sabotage checks (each made a test fail): replaying from the start of the log; no replay; the flushed state's ts
-one behind; replaced deletes blobs kept; the definition, or retention, not checked; the replay overwriting a
+one behind; the definition, or retention, not checked; the replay overwriting a
 commit made during the start; no flush before a built index is ready; a dropped index's state kept; a memory
 part over its limit not flushed; no flush at a clean shutdown; keys above U+D800 sorted in UTF-16 order, or
 surrogates not swapped (segment term order).
