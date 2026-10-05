@@ -127,7 +127,7 @@ to a spec.
 | [STUDY-100](STUDY-100-index-reference-check.md) | Index field references checked at push (`check_index_references`) | implemented |
 | [STUDY-99](STUDY-99-http-client-function.md) | `BunvexHttpClient.function()`: any function by an admin, through `/api/function` | implemented |
 | [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
-| [STUDY-131](STUDY-131-debugging-and-observability.md) | Seeing inside a deployment: system tables, the subscriptions and invalidation inspector, OpenTelemetry traces, a deterministic test runtime | decision pending (owner): AD-24–AD-27, T1 |
+| [STUDY-131](STUDY-131-debugging-and-observability.md) | Seeing inside a deployment: system tables, the subscriptions and invalidation inspector, OpenTelemetry traces, a deterministic test runtime | accepted (owner, 2026-10-05): AD-24–AD-27, T1 |
 | [STUDY-98](STUDY-98-filter-api.md) | `filterApi` from `bunvex/server`: the api, filtered by type | implemented |
 | [STUDY-97](STUDY-97-value-size-and-base64.md) | `getDocumentSize`, `Base64` and `getConvexSize` (`valueSize`) from `bunvex/values`, as Convex's | implemented; the `getConvexSize` name kept as `valueSize` (owner, 2026-10-04, DV-347) |
 | [STUDY-96](STUDY-96-search-index-snapshots.md) | Search and vector indexes snapshotted at a clean shutdown, restored at start with the log since (STUDY-79 option D) | implemented; storage and crash behaviour decided by the owner (2026-10-04) |

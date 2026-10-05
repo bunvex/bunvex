@@ -1,6 +1,6 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
 
-- **Status:** proposed (additions AD-24 to AD-27 and one test-infrastructure item; the owner decides)
+- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-08](STUDY-08-cache-and-subscriptions.md) (read sets, invalidation), [STUDY-12](STUDY-12-dashboard.md)
   (dashboard), [STUDY-58](STUDY-58-app-metrics.md) (app metrics), STUDY-114 (Prometheus `/metrics`), STUDY-125–130
@@ -181,7 +181,11 @@ that advances virtual time.
   done module by module, starting with the ones whose tests flake: execution limits, http-actions,
   client-auth, index-backfill.
 
-## 6. Open questions (for the owner)
+## 6. Decisions
+
+Decided by the owner on 2026-10-05: all four additions accepted; AD-26's OTLP exporter written in-house (no dependency); T1 accepted, module by module, starting with the flaky tests. The order below stands.
+
+The questions, as asked:
 
 1. **Which additions to accept:**
    - AD-24, system tables: recommended.
