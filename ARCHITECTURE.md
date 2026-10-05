@@ -130,6 +130,7 @@ bunvex/
 │   │   ├── codegen                  _generated/ api, server, dataModel (STUDY-36)             🟡
 │   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
 │   │   ├── run, env                 run a function, env vars (STUDY-37)                       🟡
+│   │   ├── deployment               usage and usage limits (STUDY-118)                         ✅
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
 │   │   └── mcp                      for AI agents                                              D
