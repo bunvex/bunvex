@@ -59,6 +59,8 @@ import {
   STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
+  tableMeta,
+  tableRow,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
   vectorIndexesUnavailable,
@@ -720,7 +722,7 @@ export class Engine {
       const current = await readCatalog(db);
       const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
-      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
       for (const id of changes.deleteIndexes) {
         await db.delete(INDEX_TABLE, id);
         await deleteBackfillProgress(db, id);
@@ -2000,7 +2002,7 @@ export class Engine {
       async (db) => {
         const current = await readCatalog(db);
         const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
-        for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+        for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
           await deleteBackfillProgress(db, id);
@@ -2076,7 +2078,7 @@ export class Engine {
         if (row.state === "active") return { type: "complete" as const };
         const validated = row.state === "validated";
         const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
-        const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
+        const tables = (await db.query(TABLES_TABLE).collect()).map(tableMeta);
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
         // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
         // once not backfilling.
@@ -2213,7 +2215,7 @@ export class Engine {
         }
         meta.name = name;
         meta.state = "hidden";
-        const metaId = await db.insert(TABLES_TABLE, meta);
+        const metaId = await db.insert(TABLES_TABLE, tableRow(meta));
         for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, { ...i, state: "enabled", staged: undefined });
         await writeNextIndexId(db, plan.nextIndexId);
         db.onCommitVisible = () => {
@@ -2927,7 +2929,7 @@ function deletionRefusal(schema: SchemaDefinition, table: string): string | null
 
 async function readCatalog(db: Tx) {
   return {
-    tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
+    tables: (await db.query(TABLES_TABLE).collect()).map(tableMeta),
     indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
     nextIndexId: await readNextIndexId(db),
   };

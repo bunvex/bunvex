@@ -159,6 +159,14 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
  */
 export type TableState = "active" | "hidden" | "deleting";
 export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: TableState };
+/**
+ * A `_tables` row as stored: Convex's `SerializedTableMetadata` (crates/common/src/bootstrap_model/tables.rs), whose
+ * `number` is an int64 (STUDY-134). The catalog works on numbers; rows are converted when written and read.
+ */
+export const tableRow = <T extends { number: number }>(t: T) => ({ ...t, number: BigInt(t.number) });
+/** A `_tables` row read back, its `number` a number again. */
+export const tableMeta = (row: Record<string, unknown>): TableMeta =>
+  ({ ...row, number: Number(row.number as bigint | number) }) as TableMeta;
 /** Convex's `MAX_USER_TABLES` (crates/database/src/bootstrap_model/table.rs): active user tables, at most. */
 export const MAX_USER_TABLES = 10_000;
 

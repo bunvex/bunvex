@@ -40,6 +40,8 @@ import {
   searchIndexesUnavailable,
   TABLES_TABLE,
   type TableMeta,
+  tableMeta,
+  tableRow,
 } from "./catalog.ts";
 import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
@@ -726,7 +728,7 @@ export class Tx {
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
     this.systemDepth++;
     try {
-      const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
+      const tables = (await this.query(TABLES_TABLE).collect()).map(tableMeta);
       const indexes = databaseIndexRows(await this.query(INDEX_TABLE).collect());
       const plan = planCatalog(
         [{ name, indexes: {}, document: ANY }],
@@ -737,7 +739,7 @@ export class Tx {
       );
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
-      for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
+      for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, tableRow(t));
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
       await writeNextIndexId(this, plan.nextIndexId);
       const def = new Catalog().add(
