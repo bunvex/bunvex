@@ -134,7 +134,7 @@ bunvex/
 │   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
-│   │   └── mcp                      for AI agents                                              D
+│   │   └── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │

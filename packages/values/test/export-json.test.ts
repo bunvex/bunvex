@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import { formatExportFloat, fromExportJson, toExportJson } from "../src/export-json.ts";
 
-test("floats as serde_json with ryu writes them", () => {
+test("floats as serde_json writes them (Convex's 1.0.151: a positive exponent has a `+`)", () => {
   const cases: [number, string][] = [
     [0, "0.0"],
     [-0, "-0.0"],
@@ -12,13 +12,13 @@ test("floats as serde_json with ryu writes them", () => {
     [0.1, "0.1"],
     [-2.5, "-2.5"],
     [1e15, "1000000000000000.0"],
-    [1e16, "1e16"],
-    [12345678901234568, "1.2345678901234568e16"],
-    [1e21, "1e21"],
+    [1e16, "1e+16"],
+    [12345678901234568, "1.2345678901234568e+16"],
+    [1e21, "1e+21"],
     [0.00001, "0.00001"],
     [1e-6, "1e-6"],
     [1.5e-7, "1.5e-7"],
-    [1.7976931348623157e308, "1.7976931348623157e308"],
+    [1.7976931348623157e308, "1.7976931348623157e+308"],
     [5e-324, "5e-324"],
     [1790964624820.0051, "1790964624820.0051"],
   ];

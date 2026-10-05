@@ -61,7 +61,7 @@ Key bunvex facts behind the statuses:
 | Async iteration: `for await (const doc of query)` and `.next()` streaming | impl/query_impl.ts (`queryStream` / `queryStreamNext`) | done (#40) | |
 | A query is single-use (reusing or rechaining it throws) | impl/query_impl.ts | done (#40) | Reusing or rechaining throws Convex's "This query has been chained with another operator and can't be reused."; iteration only once. |
 | Returning a Query object from a function throws a helpful error | impl/registration_impl.ts (`validateReturnValue`) | done (STUDY-66) | Convex's message, for the top-level result of a query or mutation (`db.query` and its operators, `db.system.query`), before `returns` is checked. |
-| `.count()` (internal, not public) | impl/query_impl.ts | partial | The engine's count exists, for system functions only (`Tx.countTable`, `tableSize`); not on the query builder (Convex's `1.0/count`). |
+| `.count()` (internal, not public) | impl/query_impl.ts; isolate async_syscall.rs `count`; database transaction.rs `count` | done (STUDY-107) | On `db.query(t)` and `db.system.query(name)` (any system table, as Convex's: a private one counts its rows, an unknown `_` name 0), not in the public types: the snapshot's count with the transaction's own writes, a read of the whole table (no documents charged), 0 for a missing table, Convex's `TableSummariesUnavailable` while the summaries are built. A running transaction counts at its snapshot for its whole life (DV-360, DV-361 resolved). |
 | `.withSearchIndex(name, q => q.search(field, text).eq(filterField, v))` | server/search_filter_builder.ts | done (STUDY-45) | `SearchFilterBuilder` (`search` then `eq`s, single use), Convex's checks of the index and filters; the index is segments plus a memory part, loaded at start with the log since (STUDY-111; DV-227); writes refused with `TextIndexTooLarge` past 100 MiB unflushed, as Convex (DV-228 resolved). |
 | Search results come in relevance order (order can't be set), with prefix matching on the last term | impl/query_impl.ts; crates/search | done (STUDY-45) | BM25 ranking in relevance order, `order()` refused; the last term also matches as a prefix (DV-231). Reactive, with Convex's search read set (DV-230). |
 | Search limits: 16 query terms, 32-char term max, ≤8 filter conditions, ≤1024 results | crates/search/src/constants.rs | done (STUDY-45) | 16 query terms, tokens of 32+ bytes dropped (DV-229), ≤8 `eq` conditions, ≤1024 candidates ("Search query scanned too many documents"). |
@@ -187,7 +187,7 @@ Key bunvex facts behind the statuses:
 | VObject helpers `.omit()`, `.pick()`, `.partial()`, `.extend()` | values/validators.ts | done (#24) | |
 | Validator introspection (`.kind`, `.isOptional`, `.fields`, `.members`, `.element`, `.json`) | values/validators.ts | done (#24) | bunvex marker is `isValidator` (no "convex" in names). |
 | `Infer<typeof validator>`, `ObjectType`, `PropertyValidators`, `asObjectValidator`, `GenericValidator` | values/validator.ts | done (#24) | asObjectValidator not yet. |
-| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24) | |
+| Undefined-validator error (catches circular imports) | validators.ts; registration_impl.ts (`strictReplacer`) | done (#24; STUDY-13 §6) | Every builder throws Convex's message when called with `undefined`: `v.object` (the field), `v.array`, `v.record` (key, value), `v.union` (the member's index). Its other argument checks are Convex's in order and words too, `v.literal` and `v.id` included. No docs link (DV-358). The `strictReplacer` side is STUDY-105. |
 | Value `null` | values/value.ts | done | JSON. |
 | Value `boolean` | values/value.ts | done | |
 | Value `string` | values/value.ts | done | |
@@ -230,7 +230,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `defineSchema({ table: defineTable(...) })` | server/schema.ts | done (#29) | |
-| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29) | |
+| `defineTable(validatorFields \| v.object \| v.union of objects \| v.any)` | server/schema.ts | done (#29; STUDY-14 §6) | As Convex, `defineTable` itself checks nothing more. A push refuses a validator a table cannot have with `InvalidTopLevelTypeInSchemaError`, and one whose JSON is not an object with `InvalidSchemaExport`. Messages without the docs link (DV-397). |
 | `.index(name, [fields])` | server/schema.ts | done (#29) | `defineTable(...).index(name, fields)`. |
 | `.index(name, { fields, staged })`: staged indexes that don't block a push | server/schema.ts | done (STUDY-29) | `{ fields, staged: true }`: backfilled in the background, not enabled until un-staged; a query on it gets Convex's error. |
 | `.searchIndex(name, { searchField, filterFields, staged })` | server/schema.ts | done (STUDY-45) | Convex's push-time checks and messages; `staged` too. |
@@ -240,7 +240,7 @@ Key bunvex facts behind the statuses:
 | `strictTableNameTypes` option (type-level) | server/schema.ts | done (STUDY-36) | `false` adds `AnyDataModel` to the data model: any other table name is allowed. |
 | `schema.doc(table)` / `schema.id(table)` / `docValidator()` helpers | server/schema.ts | done (STUDY-66) | Convex's validators and types (`DocValidator`), and its error for a table the schema does not have; `TableDefinition.validator` too. |
 | `schema.tables` is the record of `TableDefinition`s (`schema.tables.messages.validator`) | server/schema.ts | missing (STUDY-66 §6) | bunvex's `schema.tables` is a `Map` of the engine's declared tables, so Convex's `docValidator("messages", schema.tables.messages)` does not work; `schema.doc("messages")` does. |
-| Pushing a schema validates existing documents against it | crates/model / schema worker | done (STUDY-35) | A pushed schema is pending until existing documents are checked: the first that does not match fails the push, named as Convex's; writes meanwhile fail the pending schema. |
+| Pushing a schema validates existing documents against it | crates/model / schema worker | done (STUDY-35) | A pushed schema is pending until existing documents are checked: the first that does not match fails the push, named as Convex's; writes meanwhile fail the pending schema. A push of the schema already active (or pending) reuses it, as Convex's `submit_pending` (STUDY-35 §7). |
 | Index backfill when an index is added to an existing table | crates/database/src/database_index_workers | done (STUDY-29) | In the background, as Convex: a worker, `backfilling` → `backfilled` → `enabled`, checkpoints and resume (DV-54 resolved; DV-126, DV-127). |
 | Table names: identifier ≤64, starts with a letter, `[A-Za-z0-9_]`; `_` prefix reserved | sync_types/identifier.rs; index_validation_error.rs | done (#6) | Convex's identifier rule; a leading `_` is reserved for system tables. |
 | Index names: identifier; not `by_id` / `by_creation_time` / `_`-prefixed; unique per table | index_validation_error.rs | done (#6) | Reserved and repeated names of database indexes fail in `defineSchema` with Convex's messages, naming the table (STUDY-65 M1). |
@@ -362,8 +362,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 231 |
-| partial | 4 |
+| done | 232 |
+| partial | 3 |
 | missing | 10 |
 | n/a (a decided divergence) | 1 |
 | **total** | **246** |

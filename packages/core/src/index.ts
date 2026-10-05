@@ -18,12 +18,14 @@ export {
 } from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  AUTH_TABLE,
   BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -42,6 +44,8 @@ export {
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  SYSTEM_TABLE_NUMBERS,
   searchIndexesUnavailable,
   TooManyTablesError,
   UDF_CONFIG_TABLE,
@@ -97,6 +101,13 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export {
+  DATABASE_VERSION,
+  type DatabaseGlobals,
+  readDatabaseGlobals,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 export type {
   BaseDatabaseReader,
   BaseDatabaseReaderWithTable,
@@ -240,6 +251,7 @@ export {
   type DocValidator,
   defineSchema,
   defineTable,
+  documentTypeError,
   docValidator,
   type Expand,
   type FieldValue,
@@ -268,7 +280,7 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
-export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
+export type { SearchSegmentStore } from "./search-segments.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
@@ -287,7 +299,7 @@ export {
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
-export { SystemReader } from "./system-reader.ts";
+export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {

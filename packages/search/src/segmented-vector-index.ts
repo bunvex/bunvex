@@ -60,6 +60,9 @@ export class SegmentedVectorIndex extends SegmentedIndex<VectorSegment, VectorSe
   protected build(docs: [string, VectorDoc][]) {
     return VectorSegment.build(docs, this.dimensions, this.filterFields);
   }
+  protected merge(parts: VectorSegmentPart[], pause: () => Promise<void>) {
+    return VectorSegment.merge(parts, this.dimensions, this.filterFields, pause);
+  }
   protected memorySet(id: string, doc: VectorDoc | null) {
     if (doc) this.memory.set(id, doc);
     else this.memory.delete(id);

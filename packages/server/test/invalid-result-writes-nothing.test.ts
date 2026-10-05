@@ -1,6 +1,6 @@
 // A mutation whose result is not a value fails, and fails as a whole: none of its writes commit. Convex
 // converts the result inside the function run (`invokeMutation`, registration_impl.ts), so the failure is
-// the function's own error and the transaction is dropped. Found by the differential tests (STUDY-129).
+// the function's own error and the transaction is dropped. Found by the differential tests (STUDY-122).
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";

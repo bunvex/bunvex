@@ -1,4 +1,4 @@
-// Making the two backends' records comparable (STUDY-129 §3.1): ids, random by design, become `<table>#<n>`
+// Making the two backends' records comparable (STUDY-122 §3.1): ids, random by design, become `<table>#<n>`
 // by first appearance; `_creationTime`, a clock, becomes its rank; an error keeps its kind and its message
 // without the request id and the stack, which differ by design. Everything else is compared exactly.
 

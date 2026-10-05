@@ -8,10 +8,10 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "../src/index.ts";
+import { readSearchIndexStates } from "../src/engine.ts";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { SEARCH_SEGMENTS_GLOBAL } from "../src/search-segments.ts";
 import { fileBlobs } from "./fixtures/segments-blobs.ts";
 
 const schemaWith = (filterFields: string[], vector = true) =>
@@ -24,7 +24,7 @@ const schemaWith = (filterFields: string[], vector = true) =>
   });
 const schema = schemaWith(["kind"]);
 
-function blobs(): SearchSnapshotStore & { map: Map<string, Uint8Array> } {
+function blobs(): SearchSegmentStore & { map: Map<string, Uint8Array> } {
   const map = new Map<string, Uint8Array>();
   let n = 0;
   return {
@@ -45,8 +45,15 @@ function blobs(): SearchSnapshotStore & { map: Map<string, Uint8Array> } {
 const EVERY = { textSoftLimitBytes: 1, vectorSoftLimitBytes: 1 };
 const NEVER = { textSoftLimitBytes: 2 ** 40, vectorSoftLimitBytes: 2 ** 40 };
 
-async function open(p: MemoryPersistence, store?: SearchSnapshotStore, limits = NEVER, s = schema) {
-  const e = await new Engine(s, p, store ? { searchSnapshots: store, searchSegmentLimits: limits } : {}).init();
+/** No compaction (segments with no live document are still dropped), to see the flushes' segments. */
+const NO_COMPACTION = { minSegments: 1e9, maxDeletedFraction: 1 };
+
+async function open(p: MemoryPersistence, store?: SearchSegmentStore, limits = NEVER, s = schema) {
+  const e = await new Engine(
+    s,
+    p,
+    store ? { searchStorage: store, searchSegmentLimits: limits, searchCompaction: NO_COMPACTION } : {},
+  ).init();
   await e.searchReady();
   return e;
 }
@@ -94,7 +101,7 @@ test("over its soft limit a memory part is flushed; after a crash a start replay
   });
   await e1.searchFlushed();
   expect(e1.searchStats.flushes).toBeGreaterThanOrEqual(2); // a text and a vector segment
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { kind: string; ts: number }[] };
+  const state = (await readSearchIndexStates(p)) as { indexes: { kind: string; ts: number }[] };
   expect(state.indexes.map((s) => s.kind).sort()).toEqual(["text", "vector"]);
   await crash(e1);
 
@@ -128,7 +135,7 @@ test("over its soft limit a memory part is flushed; after a crash a start replay
   await scanned.close();
 });
 
-test("flushes with deletes: the replaced deletes blobs are deleted, the answers unchanged", async () => {
+test("flushes with deletes: no blob is deleted (as Convex), the answers unchanged", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
   const e = await open(p, store, EVERY);
@@ -143,12 +150,13 @@ test("flushes with deletes: the replaced deletes blobs are deleted, the answers 
     await e.searchFlushed();
   }
   const expected = await answers(e);
-  // Every blob is named by the state: no replaced deletes left.
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as {
+  // Every blob the state names is stored, and the replaced deletes are kept too (DV-370: as Convex).
+  const state = (await readSearchIndexStates(p)) as {
     indexes: { segments: { segment: string; deletes: string | null }[] }[];
   };
   const named = new Set(state.indexes.flatMap((s) => s.segments.flatMap((r) => [r.segment, r.deletes])));
-  expect(new Set(store.map.keys())).toEqual(new Set([...named].filter((k) => k !== null)));
+  for (const k of named) if (k !== null) expect(store.map.has(k)).toBe(true);
+  expect(store.map.size).toBeGreaterThan(named.size);
   expect(state.indexes[0]!.segments.some((r) => r.deletes)).toBe(true);
   await e.close();
   const back = await open(p, store);
@@ -214,7 +222,7 @@ test("a state not trusted is not used: changed definition, outside retention, mi
   await none.close();
 });
 
-test("a dropped index's state and blobs are removed", async () => {
+test("a dropped index's state is removed; its blobs are kept, as Convex", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const store = blobs();
   const e = await open(p, store);
@@ -224,15 +232,15 @@ test("a dropped index's state and blobs are removed", async () => {
   const built = await open(p, undefined);
   await built.close();
   const rebuilt = await open(p, store, NEVER, schemaWith(["owner"]));
-  const named = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { def: { filterFields: string[] } }[] };
+  const named = (await readSearchIndexStates(p)) as { indexes: { def: { filterFields: string[] } }[] };
   expect(named.indexes.some((s) => s.def.filterFields?.[0] === "owner")).toBe(true);
   await rebuilt.close();
-  const before = store.map.size;
+  const before = [...store.map.keys()];
   const textOnly = await open(p, store, NEVER, schemaWith(["kind"], false));
   await textOnly.close();
-  const state = (await p.getGlobal(SEARCH_SEGMENTS_GLOBAL)) as { indexes: { kind: string }[] };
+  const state = (await readSearchIndexStates(p)) as { indexes: { kind: string }[] };
   expect(state.indexes.map((s) => s.kind)).toEqual(["text"]);
-  expect(store.map.size).toBeLessThan(before);
+  for (const k of before) expect(store.map.has(k)).toBe(true);
 });
 
 test("a commit landing while a start replays the log is kept", async () => {
@@ -250,7 +258,7 @@ test("a commit landing while a start replays the log is kept", async () => {
     release = r;
   });
   const e2 = await new Engine(schema, p, {
-    searchSnapshots: store,
+    searchStorage: store,
     searchSegmentLimits: NEVER,
     beforeSearchBackfillPage: () => held,
   }).init();
@@ -297,7 +305,7 @@ test("a process killed after a flush: the next start loads the segments and repl
     await new Promise((r) => child.on("close", r));
     expect(readdirSync(join(dir, "blobs")).length).toBeGreaterThan(0);
     const e = await new Engine(schema, new SqlitePersistence(path, { durable: true }), {
-      searchSnapshots: fileBlobs(join(dir, "blobs")),
+      searchStorage: fileBlobs(join(dir, "blobs")),
     }).init();
     await e.searchReady();
     expect(e.searchStats.fromSegments).toBe(2);
@@ -324,7 +332,7 @@ test("a write while a ready index's memory part is at its hard limit is refused 
   });
   const p = await MemoryPersistence.open(null, { durable: false });
   const limits = { ...NEVER, textHardLimitBytes: 1500, vectorHardLimitBytes: 10_000_000 };
-  const e = await new Engine(s, p, { searchSnapshots: blobs(), searchSegmentLimits: limits }).init();
+  const e = await new Engine(s, p, { searchStorage: blobs(), searchSegmentLimits: limits }).init();
   await e.searchReady();
   const text = () => e.searchIndexes.all()[0]!.index;
   while (text().memoryBytes < 1500) await e.mutation((db) => db.insert("notes", note(1)));
@@ -342,7 +350,7 @@ test("a write while a ready index's memory part is at its hard limit is refused 
   // The vector limit, the same way.
   const q = await MemoryPersistence.open(null, { durable: false });
   const v2 = await new Engine(s, q, {
-    searchSnapshots: blobs(),
+    searchStorage: blobs(),
     searchSegmentLimits: { ...NEVER, textHardLimitBytes: 10_000_000, vectorHardLimitBytes: 500 },
   }).init();
   await v2.searchReady();
