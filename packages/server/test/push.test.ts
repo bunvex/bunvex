@@ -345,6 +345,26 @@ describe("deploy2 over HTTP", () => {
     }
   }, 120_000);
 
+  test("a function's broken exportArgs: InvalidModules with Convex's message; one that throws, Convex's `Error` (STUDY-105)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const fn = (patch: string) =>
+      mod("m.js", `import { query } from "@bunvex/server"; export const q = query(async () => 1); ${patch}`);
+    const broken = await d.push([fn("q.exportArgs = 5;")]);
+    expect(broken.start.status).toBe(400);
+    expect(broken.start.body).toEqual({
+      code: "InvalidModules",
+      message:
+        "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nm.js:q.exportArgs is not a function or `undefined`.",
+    });
+    const throws = await d.push([fn(`q.exportReturns = () => { throw new Error("boom"); };`)]);
+    expect(throws.start.status).toBe(400);
+    expect(throws.start.body.code).toBe("Error");
+    expect(throws.start.body.message).toStartWith("Hit an error while pushing:\nUncaught Error: boom");
+    // Nothing was deployed.
+    expect((await d.call("query", "m:q")).status).toBe("error");
+  }, 60_000);
+
   test("a second push sends only what changed; a wrong hash is a 409", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
