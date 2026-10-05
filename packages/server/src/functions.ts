@@ -42,7 +42,10 @@ import {
   hasCommitTs,
   isBunvexError,
   isSimpleObject,
+  MAX_VALUE_NESTING,
+  measureRawValue,
   rawValueSize,
+  TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   v,
@@ -56,6 +59,25 @@ import { isolateFetch, nodeFetch } from "./action-fetch.ts";
  * same as that round trip, without building the JSON).
  */
 const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
+
+/**
+ * A mutation's result must be a value before it commits: Convex converts it inside the run
+ * (`invokeMutation`, registration_impl.ts), so a result that is not one (`undefined` in an array, a function,
+ * a class instance) is the function's own error and none of its writes stay. The conversion is the wire's,
+ * so the message is the one a later conversion would have given.
+ */
+const mustBeValue = <T>(value: T): T => {
+  toJsonValue((value === undefined ? null : value) as Value);
+  return value;
+};
+
+/**
+ * Arguments' size and nesting, in one walk. Convex parses the positional args array, `[args]`, as a value
+ * (`parse_udf_args`, crates/udf/src/helpers.rs), so its nesting limit leaves the arguments 63 levels, then
+ * measures that array (`validate_udf_args_size`). The walk goes one level past the limit, for `runNested`.
+ */
+const measureArgs = (args: unknown) =>
+  measureRawValue([(args === undefined ? {} : args) as Value], MAX_VALUE_NESTING + 1);
 
 import {
   ActionPermits,
@@ -80,7 +102,7 @@ import {
   OperationNotPermittedError,
 } from "./admin-keys.ts";
 import type { AppMetrics } from "./app-metrics.ts";
-import { type AnyArgs, type FunctionDef, NODE_FUNCTIONS } from "./builders.ts";
+import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
@@ -543,8 +565,15 @@ export class Functions {
     return key.slice(0, key.lastIndexOf(":"));
   }
 
-  private cacheKey(name: string, args: unknown) {
-    return cacheKeyOf(this.moduleHashes.get(Functions.moduleOf(name)) ?? "", name, args);
+  private cacheKey(name: string, args: unknown): string | undefined {
+    try {
+      return cacheKeyOf(this.moduleHashes.get(Functions.moduleOf(name)) ?? "", name, args);
+    } catch (e) {
+      // Arguments too deep for the stack to stringify are past the nesting limit: no key, and the run's own
+      // check refuses them with Convex's message (STUDY-109).
+      if (e instanceof RangeError) return undefined;
+      throw e;
+    }
   }
 
   /**
@@ -1018,19 +1047,27 @@ export class Functions {
 
   /**
    * Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
-   * HTTP routes as `{ functionType: "HttpAction", method, path }`.
+   * HTTP routes as `{ functionType: "HttpAction", method, path }`. The validators are what the function's
+   * `exportArgs()` / `exportReturns()` give, as the push stored them: `{ type: "any" }` arguments and a `null`
+   * result validator when the function declares none.
    */
   apiSpec() {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
     const routes = this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
     const fns = [...this.fns].map(([key, f]) => {
       const i = key.lastIndexOf(":");
+      const identifier = `${key.slice(0, i)}.js:${key.slice(i + 1)}`;
+      const exported = (method: ValidatorExport) => {
+        const r = exportedValidator(f, method, identifier);
+        if ("problem" in r) throw new Error(r.problem);
+        return JSON.parse(r.json) as Value;
+      };
       return {
-        identifier: `${key.slice(0, i)}.js:${key.slice(i + 1)}`,
+        identifier,
         functionType: kind[f.kind],
         visibility: { kind: f.visibility },
-        args: (f.args?.json ?? { type: "any" }) as unknown as Value,
-        returns: (f.returns?.json ?? { type: "any" }) as unknown as Value,
+        args: exported("exportArgs"),
+        returns: exported("exportReturns"),
       };
     });
     return [...fns, ...routes];
@@ -1047,22 +1084,24 @@ export class Functions {
   maxResultSize = sizeKnob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
 
   /**
-   * Arguments are an object, no larger than `maxArgsSize`, checked against `args` when the function declares
-   * it (Convex's rules and order: `ValidatedPathAndArgs` in crates/udf/src/validation.rs).
+   * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
+   * when the function declares it (Convex's rules and order: `ValidatedPathAndArgs` in
+   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already.
    */
-  private checkArgs(f: FunctionDef, args: unknown): AnyArgs {
-    // Without a validator, Convex hands the handler whatever came (a number, null); with one, the single
-    // argument must be an object (`check_args`).
+  private checkArgs(f: FunctionDef, args: unknown, measured = measureArgs(args)): AnyArgs {
     const a = args === undefined ? {} : args;
-    if (f.args && !isSimpleObject(a))
-      throw ValidatorError.args(
-        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
-      );
-    // Convex measures the positional args array, `[args]` (`validate_udf_args_size`, crates/udf/src/helpers.rs).
-    const size = rawValueSize([a as Value]);
+    const { size, nesting } = measured;
+    if (nesting > MAX_VALUE_NESTING)
+      throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${TOO_NESTED_MESSAGE}`);
     if (size > this.maxArgsSize)
       throw new FunctionPathError(
         `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
+      );
+    // Without a validator, Convex hands the handler whatever came (a number, null); with one, the single
+    // argument must be an object (`check_args`, after the size).
+    if (f.args && !isSimpleObject(a))
+      throw ValidatorError.args(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
       );
     if (f.args) {
       const msg = checkValue(f.args, a as Value, this.tableOf);
@@ -1077,7 +1116,10 @@ export class Functions {
    * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
    */
   private checkReturns(f: FunctionDef, value: unknown) {
-    const size = rawValueSize((value ?? null) as Value);
+    // Convex's order: the value is parsed (its 64-level nesting limit), then measured — one walk here.
+    const { size, nesting } = measureRawValue((value ?? null) as Value);
+    if (nesting > MAX_VALUE_NESTING)
+      throw new FunctionPathError(`Function ${this.pathOf(f)} return value invalid: ${TOO_NESTED_MESSAGE}`);
     if (typeof value === "object" && value !== null) resultSizes.set(value, size);
     if (size > this.maxResultSize)
       throw new FunctionPathError(
@@ -1179,7 +1221,7 @@ export class Functions {
         const timer = timed(this.newTimer());
         const run = () => this.withAudit(db, () => withUserTimer(timer, () => this.invoke(f, db, a, 0, job)));
         const value = await this.warned(db, a, timer, async () =>
-          this.checkReturns(f, await (env ? withEnv(env, run) : run())),
+          mustBeValue(this.checkReturns(f, await (env ? withEnv(env, run) : run()))),
         );
         checkDeadline(deadline);
         return value;
@@ -1403,9 +1445,14 @@ export class Functions {
     opts: NestedOptions | undefined,
     depth: number,
   ): Promise<unknown> {
+    // Convex's `runUdf` syscall parses `args` as a value of its own before it resolves the function, so past
+    // 64 levels its check speaks; at 64, the callee's (`[args]` is 65).
+    const measured = measureArgs(args);
+    if (measured.nesting > MAX_VALUE_NESTING + 1)
+      throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
     const f = this.fn(name, kind, false);
-    const a = this.checkArgs(f, args === undefined ? {} : args);
+    const a = this.checkArgs(f, args === undefined ? {} : args, measured);
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
     if (opts?.useStaleSnapshot) {
@@ -1437,6 +1484,7 @@ export class Functions {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
         withUserTimer(timer, () => this.invoke(f, db, a, depth + 1)),
       );
+      if (sp) mustBeValue(value);
     } catch (e) {
       if (sp) db.rollback(sp);
       throw this.nestedError(e, timer);

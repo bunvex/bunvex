@@ -6,8 +6,8 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 227 | 5 | 13 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 228 | 5 | 12 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 159 | 2 | 4 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 188 | 37 | 26 |
 
 Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
@@ -159,18 +159,10 @@ gaps.
 **Low: rare, ops-only, or a missing nicety**
 
 - Client:
-  - `convexQueryOptions`;
-  - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
-  - close 1000 with a reason for NotFound and Forbidden;
-  - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
-  - `.staged(validator)`;
-  - `.count()` on the query builder;
-  - typed limit error codes.
+  - `.count()` on the query builder.
 - Limits and checks:
-  - nesting 64 for arguments and results;
   - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
   - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
@@ -184,7 +176,6 @@ gaps.
   - `_index_worker_metadata`, `_auth`, `_db`;
   - an upgrade guide.
 - CLI:
-  - `codegen` flags;
   - `run --component` / `--inline-query`;
   - `typecheck`, `mcp`, `usage-limits` commands;
   - `dev` waiting on an env var or a table.
