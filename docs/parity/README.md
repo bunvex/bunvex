@@ -10,6 +10,9 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 187 | 37 | 27 |
 
+Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
+mock), 2 accepted, 1 deferred, none proposed (2026-10-05).
+
 These counts were recounted on 2026-10-05 (with #398–#408) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
 are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
@@ -22,6 +25,8 @@ are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
   decides them; until then, the default is to match Convex.
 - **Every decided divergence gets a row in [divergences.md](divergences.md)**, the central ledger of what
   bunvex does differently from Convex and why. A PR that decides, changes or resolves one updates it.
+- **Every addition (what bunvex adds and Convex does not have) gets a row in [additions.md](additions.md)**
+  (`AD-NN`), proposed in a study and decided by the owner like a divergence.
 - **Statuses:**
   - **done** means it matches Convex's behaviour.
   - **partial** means it exists but differs, and the note says how.
