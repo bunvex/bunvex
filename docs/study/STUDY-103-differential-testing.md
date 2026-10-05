@@ -1,6 +1,6 @@
 # STUDY-103 — Differential testing against Convex's own backend
 
-- **Status:** decision pending (owner): D1, D2.
+- **Status:** accepted (owner, 2026-10-05: D1 A, D2 A).
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,
@@ -95,7 +95,7 @@ The same operations on Convex and on bunvex must give the same observations, up 
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
-| **D1** | Convex's own `js-integration-tests` (FSL, from the snapshot) as a second oracle, run against bunvex? | **A.** Run them only on the owner's machine, from the local snapshot, never vendored into the repo (nothing copied, as CLAUDE.md requires). **B.** Do not use them; only the generator of §3. | **A**, as a manual pass before each release: 32 test files of what a real Convex app relies on, free to run. Their failures become bunvex tests written from scratch. |
-| **D2** | Where the generator runs | **A.** A nightly CI job that downloads Convex's released backend binary (as `convex-bench`'s `download-backend.sh` does) and runs about 20 minutes of sequences. **B.** Only on demand, locally. | **A**: a difference found the next morning is cheap. The binary is downloaded at run time, never stored in the repo. |
+| **D1** — decided: **A** (owner, 2026-10-05) | Convex's own `js-integration-tests` (FSL, from the snapshot) as a second oracle, run against bunvex? | **A.** Run them only on the owner's machine, from the local snapshot, never vendored into the repo (nothing copied, as CLAUDE.md requires). **B.** Do not use them; only the generator of §3. | **A**, as a manual pass before each release: 32 test files of what a real Convex app relies on, free to run. Their failures become bunvex tests written from scratch. |
+| **D2** — decided: **A** (owner, 2026-10-05) | Where the generator runs | **A.** A nightly CI job that downloads Convex's released backend binary (as `convex-bench`'s `download-backend.sh` does) and runs about 20 minutes of sequences. **B.** Only on demand, locally. | **A**: a difference found the next morning is cheap. The binary is downloaded at run time, never stored in the repo. |
 
 No behaviour of bunvex changes in this study: it adds tests only.
