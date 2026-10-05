@@ -20,7 +20,9 @@ import {
   isSimpleObject,
   keyBytesLength,
   MAX_COMMIT_TS,
+  MAX_VALUE_NESTING,
   rawValueSize,
+  TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   v,
@@ -38,9 +40,10 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import type { Interval, SearchRead } from "./committer.ts";
+import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
@@ -75,6 +78,7 @@ import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } f
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import { TableSummariesUnavailableError } from "./table-summaries.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
@@ -208,6 +212,20 @@ export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
 export const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
+/**
+ * The transaction limit errors Convex tags `ErrorMetadata::pagination_limit` (database/src/reads.rs,
+ * writes.rs: too many documents, bytes or reads read; too many writes or bytes written), which `paginate` ends
+ * its page at (STUDY-108). Convex hands the tag to no function: an app sees a plain Error with the message,
+ * so the mark stays here, out of the error.
+ */
+const paginationLimits = new WeakSet<Error>();
+function paginationLimit(message: string): Error {
+  const e = new Error(message);
+  paginationLimits.add(e);
+  return e;
+}
+const isPaginationLimit = (e: unknown): boolean => e instanceof Error && paginationLimits.has(e);
+
 type QState = {
   t: TableDef | undefined;
   ix: IndexDef | undefined;
@@ -252,6 +270,8 @@ export type TxQuery = TxQueryChained & {
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained;
   withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQueryChained;
   fullTableScan(): TxQueryChained;
+  /** The number of documents in the table (STUDY-107). Internal, as Convex's: not in the public types. */
+  count(): Promise<number>;
 };
 
 /** Convex's `PaginationOptions`. */
@@ -298,23 +318,39 @@ export type Savepoint = {
 /** A field's place in a document: object keys and array positions (STUDY-53). */
 type Path = (string | number)[];
 
-/** `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. */
-function extractCommitTs(value: unknown, at: Path = [], paths: Path[] = []): { value: unknown; paths: Path[] } {
+/**
+ * `value` with each commit timestamp placeholder replaced by the largest int64, and where they were. It is
+ * the first walk of a written value, so it checks Convex's nesting limit on it too (STUDY-109): an array or
+ * object deeper than `max` throws ``Invalid argument `value` for `db.<method>`: …`` before going further down.
+ */
+function extractCommitTs(
+  value: unknown,
+  max: number,
+  method: string,
+  at: Path = [],
+  paths: Path[] = [],
+): { value: unknown; paths: Path[] } {
   if (isCommitTsPlaceholder(value)) {
     paths.push(at);
     return { value: MAX_COMMIT_TS, paths };
   }
   if (Array.isArray(value)) {
-    const out = value.map((x, i) => extractCommitTs(x, [...at, i], paths).value);
+    if (at.length >= max) throw tooNestedWrite(method);
+    const out = value.map((x, i) => extractCommitTs(x, max, method, [...at, i], paths).value);
     return { value: out, paths };
   }
   if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    if (at.length >= max) throw tooNestedWrite(method);
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, [...at, k], paths).value;
+    for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, max, method, [...at, k], paths).value;
     return { value: out, paths };
   }
   return { value, paths };
 }
+
+/** Convex's message for a written value past the nesting limit (`with_argument_error`, the syscall's `value`). */
+const tooNestedWrite = (method: string) =>
+  new Error(`Invalid argument \`value\` for \`db.${method}\`: ${TOO_NESTED_MESSAGE}`);
 
 /** A copy of `doc` with `by` at each of `paths`. */
 function setAt(doc: Doc, paths: Path[], by: unknown): Doc {
@@ -426,11 +462,11 @@ export class Tx {
     if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
     if (this.systemTx) return;
     if (this.docsRead > this.limits.documentsRead)
-      throw new Error(
+      throw paginationLimit(
         `Too many documents read in a single function execution (limit: ${this.limits.documentsRead}). ${OVER_LIMIT_HELP}`,
       );
     if (this.bytesRead > this.limits.bytesRead)
-      throw new Error(
+      throw paginationLimit(
         `Too many bytes read in a single function execution (limit: ${this.limits.bytesRead} bytes). ${OVER_LIMIT_HELP}`,
       );
   }
@@ -625,6 +661,14 @@ export class Tx {
   }
 
   /**
+   * How deeply a written value may nest: Convex's value limit, 64 (STUDY-109). The engine's own records are
+   * exempt — a scheduled job keeps its arguments (63 levels) inside its document, which Convex stores as bytes.
+   */
+  private writtenNesting(): number {
+    return this.systemAccess ? Number.POSITIVE_INFINITY : MAX_VALUE_NESTING;
+  }
+
+  /**
    * Run `fn` with access to system tables, inside an app transaction: for the engine's own records that
    * must commit with the app's writes (the sync protocol's `_session_requests`). Not for app code.
    */
@@ -748,7 +792,7 @@ export class Tx {
   recordInterval(i: Interval) {
     this.readList.push(i);
     if (!this.systemTx && this.readList.length - this.uncountedReads > this.limits.databaseQueries)
-      throw new Error(
+      throw paginationLimit(
         `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
   }
@@ -876,6 +920,25 @@ export class Tx {
   }
 
   /**
+   * @internal (SystemReader) A query of a system table an app may not read (Convex's
+   * `StableIndexName::Missing` for a private system table): every read finds nothing and records none, any
+   * index name included; its `count()` still counts the table, as Convex's `1.0/count` (STUDY-107).
+   */
+  privateSystemQuery(table: string): TxQuery {
+    const st: QState = {
+      t: undefined,
+      ix: undefined,
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      ops: [],
+      closed: false,
+      iterated: false,
+    };
+    return this.makeQuery(table, st);
+  }
+
+  /**
    * A query of a table given by its definition, hidden or being deleted too (an import's or the deletion
    * worker's, STUDY-42). System transactions only.
    */
@@ -931,7 +994,7 @@ export class Tx {
       creationTime = this.nextCreationTime;
       this.nextCreationTime = nextUp(creationTime);
     }
-    const doc = { ...copyFields(rest, "insert"), _id: id, _creationTime: creationTime };
+    const doc = { ...copyFields(rest, "insert", this.writtenNesting()), _id: id, _creationTime: creationTime };
     checkSystemFields(doc, {}, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     return id;
@@ -1122,7 +1185,13 @@ export class Tx {
     }
     if (!st.t || !st.ix) return done([], "end", null, null);
     if (start === "end") {
-      this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
+      try {
+        this.recordInterval({ index: st.ix.id, lo: st.range.lo, hi: st.range.lo });
+      } catch (e) {
+        // Convex's cursor is already at the end when this read fails: the page ends there, split required.
+        if (!isPaginationLimit(e)) throw e;
+        return done([], "end", "SplitRequired", null);
+      }
       return done([], "end", null, null);
     }
     // The page's range: after the start cursor, up to (and including) the end cursor.
@@ -1141,56 +1210,102 @@ export class Tx {
       if (end && end !== "end") lo = end.after;
     }
     const page: Doc[] = [];
+    // Every document read, passed by the filters or not: Convex's split cursor is the middle one
+    // (`IndexRange::intermediate_cursors`), on any page of more than two.
     const keys: Uint8Array[] = [];
     let rowsRead = 0;
     let bytesRead = 0;
     let last: Uint8Array | null = null;
     let exhausted = true;
     let status: PaginationResult["pageStatus"] = null;
-    const maxRows = opts.maximumRowsRead;
-    const maxBytes = opts.maximumBytesRead;
-    const sub: QState = { ...st, range: { lo, hi } };
-    for await (const d of this.stream(sub)) {
-      if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
-        status = "SplitRequired";
-        exhausted = false;
-        break;
-      }
-      rowsRead++;
-      bytesRead += rawValueSize(d as unknown as Value);
-      last = indexKey(st.ix, d);
-      if (pipe.offer(d)) {
-        page.push(this.handOut(d));
+    // As Convex's `IndexRange`: the page's own limits hold without an end cursor only (a pinned page is read to
+    // its end), and are checked before the next document is read, which then is not charged.
+    const maxRows = end ? undefined : opts.maximumRowsRead;
+    const maxBytes = end ? undefined : opts.maximumBytesRead;
+    // Convex records the page's read with its first document (or, with none, at the end of the range); at the
+    // read-interval limit, that is where the page fails.
+    const readsFull = !this.systemTx && this.readList.length - this.uncountedReads >= this.limits.databaseQueries;
+    let recorded = false;
+    const recordPage = () => {
+      recorded = true;
+      // The range this page covers (to the end cursor, or to the last key read).
+      const readHi = st.desc ? hi : exhausted ? hi : readEndAfter(last ?? lo, hi);
+      const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
+      this.recordInterval({ index: st.ix!.id, lo: readLo, hi: readHi });
+    };
+    const docs = this.stream({ ...st, range: { lo, hi } });
+    try {
+      for (;;) {
+        if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
+          status = "SplitRequired";
+          exhausted = false;
+          break;
+        }
+        const next = await docs.next();
+        if (next.done) break;
+        const d = next.value;
+        rowsRead++;
+        bytesRead += rawValueSize(d as unknown as Value);
+        last = indexKey(st.ix, d);
         keys.push(last);
-        // As Convex: a full page stops without looking further, so its cursor is "after the last
-        // document" even if nothing follows (the next page is then empty and done).
-        if (!end && page.length >= pageSize) {
+        if (readsFull && !recorded) {
+          exhausted = false;
+          recordPage(); // throws: the page ends past its first document, as Convex's
+        }
+        if (pipe.offer(d)) {
+          page.push(this.handOut(d));
+          // As Convex: a full page stops without looking further, so its cursor is "after the last
+          // document" even if nothing follows (the next page is then empty and done).
+          if (!end && page.length >= pageSize) {
+            exhausted = false;
+            break;
+          }
+        }
+        // A full limit ends the page as Convex's does: not done, the cursor after the last document read.
+        if (pipe.done) {
           exhausted = false;
           break;
         }
       }
-      // A full limit ends the page as Convex's does: not done, the cursor after the last document read.
-      if (pipe.done) {
-        exhausted = false;
-        break;
+      if (!recorded) recordPage();
+    } catch (e) {
+      // A transaction limit hit while reading (Convex's `read_page_from_query`): the page ends at the last
+      // document read, split required, instead of failing the function. The document over the limit is
+      // charged but not in the page. Before any document, with no cursor to continue from, Convex fails with a
+      // system error.
+      if (!isPaginationLimit(e)) throw e;
+      if (!start && last === null) {
+        const err = new QueryCursorError(
+          `This should be impossible. Hit pagination limit before setting query cursor: ${(e as Error).message}`,
+        );
+        failExecution(err);
+        throw err;
       }
+      status = "SplitRequired";
+      exhausted = false;
+      if (!recorded && last !== null) recordPage();
+    } finally {
+      await docs.return(undefined);
     }
-    // Read-set: the range this page covers (to the end cursor, or to the last key read).
-    const readHi = st.desc ? hi : exhausted ? hi : readEndAfter(last ?? lo, hi);
-    const readLo = st.desc ? (exhausted ? lo : (last ?? hi)) : lo;
-    this.recordInterval({ index: st.ix.id, lo: readLo, hi: readHi });
+    // Convex's soft limits (`IndexRange::is_approaching_data_limit`): 3/4 of the page's limits, or of the
+    // transaction's when it sets none, or more than 6144 documents.
+    const softRows = Math.min(opts.maximumRowsRead ?? TRANSACTION_MAX_READ_SIZE_ROWS, TRANSACTION_MAX_READ_SIZE_ROWS);
+    const softBytes = Math.min(
+      opts.maximumBytesRead ?? TRANSACTION_MAX_READ_SIZE_BYTES,
+      TRANSACTION_MAX_READ_SIZE_BYTES,
+    );
     if (
       status === null &&
-      ((maxRows !== undefined && rowsRead > (maxRows * 3) / 4) ||
-        (maxBytes !== undefined && bytesRead > (maxBytes * 3) / 4) ||
+      (rowsRead > Math.floor((softRows * 3) / 4) ||
+        bytesRead > Math.floor((softBytes * 3) / 4) ||
         page.length > (8192 * 3) / 4)
     )
       status = "SplitRecommended";
-    const split =
-      status && keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
+    const split = keys.length > 2 ? encodeCursor(secret, { after: keys[Math.floor(keys.length / 2)] }, fp) : null;
     // A page with a pinned end reports that end as its continue cursor even when it stopped early at a read
     // limit (Convex's `end_cursor.or_else(query.cursor())`): the halves of its split then still cover it all.
-    const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last ?? lo });
+    // With no document read, the page continues from where it started.
+    const pos: CursorPosition = end ?? (exhausted ? "end" : last ? { after: last } : (start ?? "end"));
     return done(page, pos, status, split);
   }
 
@@ -1315,9 +1430,9 @@ export class Tx {
     }
     this.docsWritten++;
     if (this.docsWritten > this.limits.documentsWritten)
-      throw new Error(`Too many writes in a single function execution (limit: ${this.limits.documentsWritten})`);
+      throw paginationLimit(`Too many writes in a single function execution (limit: ${this.limits.documentsWritten})`);
     if (this.bytesWritten > this.limits.bytesWritten)
-      throw new Error(
+      throw paginationLimit(
         `Too many bytes written in a single function execution (limit: ${formatBytes(this.limits.bytesWritten)})`,
       );
     return measured;
@@ -1340,6 +1455,9 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
+    // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
+    engineOwned(old);
+    engineOwned(next);
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
@@ -1394,6 +1512,10 @@ export class Tx {
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     if (!this.writable) throw new Error("queries cannot write");
+    // Validated and copied at the call, as Convex serializes the value: its nesting first, before the table
+    // (Convex's `insert` syscall parses `value`, then `table`); an unsupported type throws below, and mutating
+    // `fields` afterwards cannot change what is written.
+    const x = extractCommitTs(fields, this.writtenNesting(), "insert");
     const t = this.findTable(table) ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
@@ -1405,10 +1527,11 @@ export class Tx {
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
-    // Validated and copied at the call, as Convex serializes the value: an unsupported type throws here, and
-    // mutating `fields` afterwards cannot change what is written.
-    const x = extractCommitTs(fields);
-    const doc = { ...copyFields(x.value as Record<string, unknown>, "insert"), _id: id, _creationTime: creationTime };
+    const doc = {
+      ...copyFields(x.value as Record<string, unknown>, "insert", this.writtenNesting()),
+      _id: id,
+      _creationTime: creationTime,
+    };
     checkSystemFields(doc, fields, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     this.setCommitTs(id, x.paths);
@@ -1431,15 +1554,17 @@ export class Tx {
   }
 
   private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
+    // Convex parses the patch before it reads the document. Each field's value is a value of its own, so the
+    // patch object may be one level deeper than the limit.
+    const x = extractCommitTs(fields, this.writtenNesting() + 1, "patch");
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
     // Convex's shallow merge: a field set to `undefined` is removed.
-    const x = extractCommitTs(fields);
     const next: Record<string, unknown> = { ...cur };
     for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
-    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch"));
+    Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch", this.writtenNesting() + 1));
     checkSystemFields(next, fields, id, cur._creationTime);
     this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
     // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
@@ -1458,13 +1583,13 @@ export class Tx {
   }
 
   private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
+    const x = extractCommitTs(value, this.writtenNesting(), "replace"); // before the read, as in Convex
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
     const old = this.writes.get(id)?.old ?? cur;
-    const x = extractCommitTs(value);
     const next: Record<string, unknown> = {
-      ...copyFields(x.value as Record<string, unknown>, "replace"),
+      ...copyFields(x.value as Record<string, unknown>, "replace", this.writtenNesting()),
       _id: id,
       _creationTime: cur._creationTime,
     };
@@ -1551,16 +1676,16 @@ export class Tx {
   searchIndexes: SearchIndexes | null = null;
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
-  /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
-  tableCount: ((tablet: number) => number) | null = null;
+  /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
+  tableCount: ((tablet: number, snapshot: number) => number) | null = null;
 
   /**
-   * The number of documents of `table` (Convex's internal `count()`, which its `tableSize` system functions
-   * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
-   * table, so a cached query or a subscription re-runs when it changes. System transactions only.
+   * The number of documents of `table` (Convex's internal `count()`: `db.query(table).count()` and its
+   * `tableSize` system functions, STUDY-107): the summaries' count at this transaction's snapshot with its own
+   * inserts and deletes. The read covers the whole table (not its documents: no read limit is charged), so a
+   * cached query or a subscription re-runs when it changes. A system table needs system access.
    */
   async countTable(table: string): Promise<number> {
-    if (!this.systemAccess) throw new Error("countTable is for system transactions");
     const t = this.findTable(table);
     if (!t) {
       this.readMissingTable();
@@ -1568,9 +1693,24 @@ export class Tx {
     }
     const ix = t.indexes.get("by_creation_time")!;
     this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
-    let n = this.tableCount ? this.tableCount(t.id) : 0;
+    let n = 0;
+    try {
+      n = this.tableCount ? this.tableCount(t.id, this.snapshot) : 0;
+    } catch (e) {
+      // The summaries are still being built (Convex's bootstrapping error), or the snapshot is older than the
+      // write log keeps: system errors, which the function cannot catch.
+      if (e instanceof TableSummariesUnavailableError || e instanceof OutOfRetentionError) failExecution(e);
+      throw e;
+    }
     for (const w of this.writes.values()) if (w.table.id === t.id) n += (w.next ? 1 : 0) - (w.old ? 1 : 0);
     return n;
+  }
+
+  /** @internal (Engine) The tables this transaction wrote, each once. */
+  writtenTables(): TableDef[] {
+    const out: TableDef[] = [];
+    for (const w of this.writes.values()) if (!out.includes(w.table)) out.push(w.table);
+    return out;
   }
 
   /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
@@ -1789,11 +1929,14 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
   return n;
 }
 
-/** A validated deep copy of a write's fields (Convex serializes values at the call). */
-function copyFields(fields: Record<string, unknown>, method: string): Record<string, unknown> {
+/**
+ * A validated deep copy of a write's fields (Convex serializes values at the call), nested at most
+ * `maxNesting` levels.
+ */
+function copyFields(fields: Record<string, unknown>, method: string, maxNesting: number): Record<string, unknown> {
   if (!isSimpleObject(fields))
     throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
-  return copyValue(fields as Value) as Record<string, unknown>;
+  return copyValue(fields as Value, maxNesting) as Record<string, unknown>;
 }
 
 /**
@@ -1849,12 +1992,13 @@ const reusedError = () => new Error("This query has been chained with another op
 
 /**
  * Convex's "Cursor was None" (crates/isolate/src/environment/udf/async_syscall.rs, `read_page_from_query`):
- * `paginate` over a `limit(0)` never reads, so it has no cursor to return. Convex raises it without error
- * metadata, a system error: the client gets the internal-error message, and the function cannot catch it.
+ * `paginate` over a `limit(0)` never reads, so it has no cursor to return; nor does a first page that hits a
+ * transaction limit before its first document (STUDY-108). Convex raises both without error metadata, a
+ * system error: the client gets the internal-error message, and the function cannot catch it.
  */
 export class QueryCursorError extends Error {
-  constructor() {
-    super("Cursor was None. This should be impossible if `.next` was called on the query.");
+  constructor(message = "Cursor was None. This should be impossible if `.next` was called on the query.") {
+    super(message);
     this.name = "QueryCursorError";
   }
 }
@@ -2040,6 +2184,20 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
 
   fullTableScan(): TxQueryChained {
     return this.chain(() => {});
+  }
+
+  /**
+   * Convex's internal `count()` (STUDY-107; `@internal` in its types, and so not in bunvex's public ones): the
+   * table's documents at this snapshot, with this transaction's own writes. On the initializer only, and it
+   * leaves the query usable, as Convex's (a call of its own, by table name).
+   */
+  async count(): Promise<number> {
+    try {
+      checkIdentifier("table", this.table);
+    } catch (e) {
+      throw new Error(`Invalid argument \`table\` for \`db.count\`: ${(e as Error).message}`);
+    }
+    return this.tx.countTable(this.table);
   }
 }
 

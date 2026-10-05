@@ -1,10 +1,13 @@
-// Search index snapshots (STUDY-96): written at a clean shutdown, restored at start with the log since — the
-// same results as indexing the tables — and refused (the tables are indexed instead) when they cannot be
-// trusted: another store, a changed definition, outside retention, unreadable.
+// Search index snapshots (STUDY-96), as an earlier version wrote them at a clean shutdown: an index with no
+// segments (STUDY-111) is restored from one with the log since — the same results as indexing the tables — and
+// refused (the tables are indexed instead) when it cannot be trusted: another store, a changed definition,
+// outside retention, unreadable.
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { defineSchema, defineTable, Engine, SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { SEARCH_SEGMENTS_GLOBAL } from "../src/search-segments.ts";
+import { saveSearchSnapshot } from "../src/search-snapshot.ts";
 
 const schemaWith = (filterFields: string[]) =>
   defineSchema({
@@ -38,6 +41,13 @@ async function open(p: MemoryPersistence, store?: SearchSnapshotStore, s = schem
   return e;
 }
 
+/** A clean shutdown as an earlier version did it: a snapshot of the indexes, and no segments. */
+async function closeWithSnapshot(e: Engine, p: MemoryPersistence, store: SearchSnapshotStore) {
+  await saveSearchSnapshot(p, store, e.committer.visibleTs, e.searchIndexes.all(), e.vectorIndexes.all());
+  await e.close();
+  await p.setGlobal(SEARCH_SEGMENTS_GLOBAL, null);
+}
+
 /** What searches answer: text hits for each word, vector neighbours. */
 async function answers(e: Engine) {
   const text: Record<string, unknown[]> = {};
@@ -63,8 +73,7 @@ test("a restart restores the indexes from the snapshot and the log since: the an
     await db.insert("notes", { body: "hello there", kind: "b", v: [0, 1] }),
     await db.insert("notes", { body: "plain", kind: "a", v: [0.5, 0.5] }),
   ]);
-  await e1.close(); // a clean shutdown: the snapshot
-  expect(store.map.size).toBe(1);
+  await closeWithSnapshot(e1, p, store);
 
   // A run that writes and then crashes: no snapshot of its own (it has none to write to).
   const e2 = await open(p);
@@ -80,8 +89,11 @@ test("a restart restores the indexes from the snapshot and the log since: the an
   expect(e3.searchStats.restored).toBe(2);
   expect(await answers(e3)).toEqual(expected);
   await e3.close();
-  // Its own clean shutdown replaced the snapshot.
-  expect(store.map.size).toBe(1);
+  // It stored segments: the next start loads them.
+  const e4 = await open(p, store);
+  expect([e4.searchStats.fromSegments, e4.searchStats.restored]).toEqual([2, 0]);
+  expect(await answers(e4)).toEqual(expected);
+  await e4.close();
   const scanned = await open(p);
   expect(scanned.searchStats.restored).toBe(0);
   expect(await answers(scanned)).toEqual(expected);
@@ -93,7 +105,7 @@ const seeded = async () => {
   const store = blobs();
   const e = await open(p, store);
   await e.mutation((db) => db.insert("notes", { body: "hello world", kind: "a", v: [1, 0] }));
-  await e.close();
+  await closeWithSnapshot(e, p, store);
   return { p, store };
 };
 
@@ -106,7 +118,8 @@ test("refused, the tables indexed instead: another store, unreadable, outside re
   await other.close();
 
   const a = await seeded();
-  for (const k of a.store.map.keys()) a.store.map.set(k, new Uint8Array([1, 2, 3]));
+  const snapshotKey = ((await a.p.getGlobal(SEARCH_SNAPSHOT_GLOBAL)) as { key: string }).key;
+  a.store.map.set(snapshotKey, new Uint8Array([1, 2, 3]));
   const unreadable = await open(a.p, a.store);
   expect(unreadable.searchStats.restored).toBe(0);
   expect((await answers(unreadable)).text.hello).toHaveLength(1);

@@ -17,6 +17,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  SCHEDULED_FUNCTIONS_TABLE,
   SchemaEnforcementError,
   setUserStopState,
   stringifyValue,
@@ -25,7 +26,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
-import { decodeId, type Value } from "@bunvex/values";
+import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
@@ -70,7 +71,7 @@ import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
-import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
+import { type AdminCaller, adminCallerOf, callerOf, type Functions, type SourcedCaller } from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -78,6 +79,7 @@ import { ImportError, type ImportOptions, ImportRequestError, ImportService, MOD
 import {
   BadJsonBody,
   QUERY_BATCH,
+  RUN_TEST_FUNCTION,
   readJsonBody,
   UDF_POST,
   UDF_POST_ARGS_ONLY,
@@ -88,6 +90,7 @@ import { AuditLogLimitError } from "./log.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { isPlatformPath, openApiDocAt, openApiResponse } from "./openapi.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -112,9 +115,11 @@ import {
   SyncSession,
   splayOptions,
   supportsTransitionChunks,
+  type WsHeartbeatOptions,
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
@@ -262,6 +267,11 @@ export type ServerOptions = {
    * `HTTP_SERVER_MAX_CONCURRENT_REQUESTS`, else 128, as self-hosted Convex.
    */
   maxConcurrentRequests?: number;
+  /**
+   * The sync socket's WS ping interval and client timeout (STUDY-104). Defaults: Convex's 5 s and 120 s. For
+   * tests.
+   */
+  wsHeartbeat?: Partial<WsHeartbeatOptions>;
 };
 
 /**
@@ -280,10 +290,13 @@ const fromWire = (args: unknown, path: string) => {
     const one = Array.isArray(args) ? args[0] : args;
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
-    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
-    throw new FunctionPathError(
-      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
-    );
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too
+    // deep for the stack to stringify (thousands of levels) is past the nesting limit too (STUDY-109).
+    const message =
+      e instanceof RangeError && e.message.includes("call stack")
+        ? TOO_NESTED_MESSAGE
+        : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
+    throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
 
@@ -657,6 +670,7 @@ export function createServer(opts: ServerOptions) {
     formatError,
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
+    ...(opts.wsHeartbeat ? { wsHeartbeat: opts.wsHeartbeat } : {}),
     // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
     onInvalidations: (events) => {
       const bySource = new Map<string, Map<string, number>>();
@@ -1026,6 +1040,16 @@ export function createServer(opts: ServerOptions) {
       );
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_scheduled_functions_table {componentId?}` (scheduling.rs, the dashboard's "Delete
+    // all"): the scheduler's table replaced with an empty one in one commit, whatever it holds; 200, no body.
+    if (url.pathname === "/api/delete_scheduled_functions_table") {
+      if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      await engine.replaceWithEmptyTables([SCHEDULED_FUNCTIONS_TABLE], (db) =>
+        insertAuditLogEvents(db, [auditEvents.deleteScheduledJobsTable()], auditActor(caller)),
+      );
+      return new Response(null, { status: 200 });
+    }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
       if (!Array.isArray(body.tableNames) || !body.tableNames.every((t) => typeof t === "string"))
@@ -1052,6 +1076,65 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
+  /**
+   * Convex's `POST /api/run_test_function {adminKey, bundle, args, format, componentId?}` (STUDY-119): the
+   * admin key in the body (any key, as `must_be_admin_from_key`), `RunTestQuery`, then the bundle's default
+   * query run once, uncached, as the function tester (`Tester`); a `UdfResponse` in the requested format.
+   */
+  const testFunctionRoute = async (req: Request): Promise<Response> => {
+    if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+    let body: {
+      adminKey: string;
+      bundle: TestBundle | unknown[];
+      args: unknown;
+      format: string;
+      componentId?: string | null;
+    };
+    try {
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), RUN_TEST_FUNCTION);
+    } catch (e) {
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    // A struct may come as an array of its fields, as serde reads it.
+    const b = body.bundle;
+    const bundle: TestBundle = Array.isArray(b)
+      ? { path: b[0] as string, source: b[1] as string, sourceMap: b[2] as string, environment: b[3] as string }
+      : b;
+    let caller: Caller;
+    try {
+      caller = withRequest(adminCaller(body.adminKey, false), req);
+      functions.requireOperation(caller, "RunTestQuery");
+    } catch (e) {
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
+    }
+    // bunvex has no components (STUDY-62): its own refusal, as `/api/shapes2` and `/api/delete_tables`.
+    if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+      return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+    let found: Awaited<ReturnType<typeof standaloneQuery>>;
+    try {
+      const config = await udfConfig(engine);
+      found = await standaloneQuery(bundle, {
+        seed: config.seed,
+        timestamp: config.timestamp,
+        env: await deploymentEnv(),
+      });
+    } catch (e) {
+      if (e instanceof TestFunctionError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    const tester = { ...caller, source: "Tester" } as SourcedCaller;
+    return udfResponse(
+      await collectLogs(async () =>
+        functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester),
+      ),
+      "query",
+      { format: body.format, client: req.headers.get("bunvex-client") },
+    );
+  };
+
   // Convex's CORS layer on `/api` (STUDY-67 H2).
   const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
@@ -1061,7 +1144,12 @@ export function createServer(opts: ServerOptions) {
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
       maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
+      // The sync session pings every 5 s and closes a client silent for 120 s (STUDY-104), so Bun's own ping
+      // (sent when the idle timeout nears) is off: one heartbeat, not two. The idle timeout stays, at Bun's
+      // largest, as a backstop: it only fires on a socket nothing has come in on for 16 minutes, which the
+      // session's timeout closes long before.
       idleTimeout: 960,
+      sendPings: false,
       // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
       // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
       // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
@@ -1072,6 +1160,14 @@ export function createServer(opts: ServerOptions) {
       },
       message(ws, raw) {
         ws.data.session.message(String(raw));
+      },
+      // Any frame from the client shows it is alive, as Convex's `last_received` (STUDY-104); Bun answers a
+      // client's ping with a pong by itself.
+      ping(ws) {
+        ws.data.session.heard();
+      },
+      pong(ws) {
+        ws.data.session.heard();
       },
       close(ws) {
         ws.data.session.close();
@@ -1098,6 +1194,11 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname === "/version") return new Response("bunvex");
       // Convex's health route: the deployment's name, as plain text (STUDY-34).
       if (url.pathname === "/instance_name") return new Response(engine.instanceName);
+      // The OpenAPI documents (STUDY-115), with no auth; `/api/v1/` answers only the documented routes.
+      const openApiDoc = openApiDocAt(url.pathname);
+      if (openApiDoc) return openApiResponse(openApiDoc, req);
+      if (url.pathname.startsWith("/api/v1/") && !isPlatformPath(url.pathname))
+        return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
@@ -1130,12 +1231,15 @@ export function createServer(opts: ServerOptions) {
         (url.pathname === "/api/get_config_hashes" || url.pathname.startsWith("/api/deploy2/"))
       )
         return pushRoute(url, req);
+      // The function tester (STUDY-119): its admin key is in the body.
+      if (url.pathname === "/api/run_test_function") return testFunctionRoute(req);
       // The admin API (STUDY-34): each route needs an admin key, and its operation.
       if (
         url.pathname === "/stats" ||
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/delete_scheduled_functions_table" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||
