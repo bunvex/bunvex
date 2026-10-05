@@ -420,9 +420,9 @@ Recounted in the parity sweep of 2026-10-04 (every `missing` / `partial` row che
 
 | Status | Count |
 |---|---|
-| done | 188 |
+| done | 192 |
 | partial | 37 |
 | missing | 26 |
-| n/a (cloud-only or a decided divergence) | 3 |
+| n/a (cloud-only or a decided divergence) | 2 |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).
