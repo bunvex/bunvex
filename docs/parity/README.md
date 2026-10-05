@@ -132,10 +132,11 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 ## Gaps by impact
 
-From the parity sweep of 2026-10-04: every `missing` and `partial` row of [platform](platform.md),
-[server-api](server-api.md) and [client-sync](client-sync.md) was checked against the code, and stale rows
-were corrected. This ranks what is left by what an app written for Convex would notice. Decided
-divergences and cloud-only items are not gaps.
+Checked against main on 2026-10-04, after #370–#395. Since the first ranking, these were built: the action
+timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
+`deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
+(#377–#381), identical database indexes refused (STUDY-66). Decided divergences and cloud-only items are not
+gaps.
 
 **High: an app that uses it does not run**
 
@@ -146,21 +147,12 @@ divergences and cloud-only items are not gaps.
 
 **Medium: an app hits it in normal use of a feature**
 
-2. **Action timeout:** none (Convex: 1800 s for V8 actions, 600 s for Node). A hung action runs forever and
-   holds one of the 64 action permits.
-3. **Search and vector indexes after a restart:** while they rebuild (DV-227, DV-270), their queries now get
-   Convex's bootstrapping answer and sync skips and retries them (STUDY-79). What is left is the window's
-   length: the whole table (about 20 µs a document) where Convex replays only the writes since its last
-   segment. **Planned (owner, 2026-10-04, STUDY-79 §6):** option D, a snapshot of the in-memory indexes at a
-   clean shutdown, loaded at start with the log replayed since; then persisted segments (E).
-4. **Bundling `server-only` (and wasm):** shared code importing `server-only`, common in Next.js apps,
-   fails to bundle (platform §14).
-5. **Auth helpers:** no Convex Auth (`@convex-dev/auth`) or WorkOS AuthKit equivalent (platform §1).
-6. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
-7. **The `log` export (`log.audit`, `log.vars`):** an app importing it fails at import (server-api).
-8. **Write throughput (4 MiB/s):** Convex rejects bulk writers past it; bunvex accepts them, so an app can
-   work on bunvex and fail on Convex (platform §24).
-9. **`deploy --cmd`:** frontend build pipelines that use it (platform §12).
+2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, itself a component) or WorkOS AuthKit equivalent;
+   Clerk and Auth0 exist (platform §1).
+3. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
+4. **Search after a restart:** queries get Convex's bootstrapping answer while the indexes rebuild (STUDY-79),
+   but the rebuild reads the whole table. **Planned** (owner, 2026-10-04, STUDY-79 §6, option D): snapshot the
+   in-memory indexes at a clean shutdown, load them at start and replay the log since.
 
 **Low: rare, ops-only, or a missing nicety**
 
@@ -174,23 +166,21 @@ divergences and cloud-only items are not gaps.
 - Server API:
   - `getDocumentSize`, `Base64`, the `getConvexSize` name;
   - runtime `filterApi`;
-  - `exportArgs` / `exportReturns`;
+  - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
   - `.count()` on the query builder;
   - typed limit error codes.
 - Limits and checks:
-  - identical database indexes;
   - the 10 000-table cap;
   - nesting 64 for arguments and results;
   - `check_index_references` at push;
   - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
-  - missing audit events (`build_indexes`, `clear_tables`, `change_deployment_state`, …);
+  - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
   - `/api/delete_scheduled_functions_table`;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
-  - an SSRF proxy;
   - Prometheus `/metrics`;
   - `_index_worker_metadata`, `_auth`, `_db`;
   - an upgrade guide.
@@ -199,9 +189,7 @@ divergences and cloud-only items are not gaps.
   - `run --component` / `--inline-query`;
   - `typecheck`, `mcp`, `usage-limits` commands;
   - `dev` waiting on an env var or a table.
-- An HTTP action's response-size warning (DV-323, #369).
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
-  - the server side of every screen now exists (admin API, function and audit logs, scheduler, env vars,
-    file functions);
+  - the server side of every screen exists;
   - what is missing is a data source that calls it.
