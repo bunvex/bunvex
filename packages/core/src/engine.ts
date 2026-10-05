@@ -91,6 +91,7 @@ import {
 } from "./persistence/index.ts";
 import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
+import { type Runtime, realRuntime } from "./runtime.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
@@ -266,12 +267,19 @@ export class Engine {
    * `log_mutation_occ_error` with `will_retry` (STUDY-47).
    */
   onOccRetry: ((error: OccError, failures: number) => void) | null = null;
+  /** The clock and timers (STUDY-132): `opts.runtime`, else the process's. */
+  readonly runtime: Runtime;
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
     public schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: {
+      /**
+       * The clock and timers the engine and the server on it use (STUDY-132): the process's own by default; a
+       * test passes a `TestRuntime` (`@bunvex/core/test-runtime`) to move the time itself.
+       */
+      runtime?: Runtime;
       /** The query cache's byte budget (default: UDF_CACHE_MAX_SIZE from the environment, else 100 MiB). */
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
@@ -328,6 +336,7 @@ export class Engine {
       writeThroughput?: WriteThroughputOptions;
     } = {},
   ) {
+    this.runtime = opts.runtime ?? realRuntime;
     installDeterminism();
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);

@@ -215,6 +215,7 @@ export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cac
 export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
+export { type Runtime, type RuntimeTimer, realRuntime } from "./runtime.ts";
 export {
   cancelJob,
   completeJob,

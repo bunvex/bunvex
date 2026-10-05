@@ -944,7 +944,10 @@ export class Functions {
     private engine: Engine,
     opts: { actionPermits?: ConcurrencyLimiter; limits?: FunctionLimits } = {},
   ) {
-    this.limits = opts.limits ?? functionLimitsFromEnv(process.env, opts.actionPermits ?? ActionPermits.fromEnv());
+    const rt = engine.runtime;
+    this.limits =
+      opts.limits ??
+      functionLimitsFromEnv(process.env, opts.actionPermits ?? ActionPermits.fromEnv(process.env, rt), rt);
     this.actionPermits = this.limits.action;
   }
 
@@ -1258,7 +1261,7 @@ export class Functions {
    */
   userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
   systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
-  private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs);
+  private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs, this.engine.runtime.monotonicNow);
   /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
   actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS);
   nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS);
@@ -1560,7 +1563,7 @@ export class Functions {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
-      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
       return this.warned(
         db,
         a,
@@ -1581,7 +1584,7 @@ export class Functions {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
-      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
       return this.warned(
         db,
         a,

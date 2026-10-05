@@ -1,21 +1,23 @@
 // The user execution limit (STUDY-41 PR 2), as Convex's DATABASE_UDF_USER_TIMEOUT (1 s): a query's or
 // mutation's own time, not the time it awaits the store; checked at store calls and at the end (N5); not
 // catchable; a nested call has its own budget, the caller's clock paused; the system budget (15 s).
+// The time is virtual (STUDY-132): a function "works" for `ms` by moving the test runtime's clock, so the
+// budgets are checked to the millisecond however loaded the machine is.
 import { expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine, formatDuration } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { TestRuntime } from "@bunvex/core/test-runtime";
 import { v } from "@bunvex/values";
 import { Functions, mutation, query } from "../src/functions.ts";
 
-/** Busy for `ms` of real time (Date.now and performance.now are frozen inside a function). */
-const busy = (ms: number) => {
-  const end = Bun.nanoseconds() + ms * 1e6;
-  while (Bun.nanoseconds() < end) {}
-};
-
 async function setup(o: { userMs?: number; systemMs?: number; storeDelayMs?: number } = {}) {
+  const rt = new TestRuntime();
+  /** Busy for `ms`: the function's own work, which no store call or timer interrupts. */
+  const busy = (ms: number) => rt.blockFor(ms);
   const persistence = await MemoryPersistence.open(null, { durable: false });
-  const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), persistence).init();
+  const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), persistence, {
+    runtime: rt,
+  }).init();
   const fns = new Functions(engine).register("m", {
     busyBetweenReads: query(async ({ db }, { ms }: { ms: number }) => {
       await db.query("items").collect();
@@ -69,19 +71,21 @@ async function setup(o: { userMs?: number; systemMs?: number; storeDelayMs?: num
     const p = persistence as unknown as { scan: (...a: unknown[]) => unknown };
     const scan = p.scan.bind(persistence);
     p.scan = async (...a: unknown[]) => {
-      await Bun.sleep(o.storeDelayMs!);
+      await rt.sleep(o.storeDelayMs!);
       return scan(...a);
     };
     const s2 = persistence as unknown as { scanDocs?: (...a: unknown[]) => unknown };
     if (s2.scanDocs) {
       const sd = s2.scanDocs.bind(persistence);
       s2.scanDocs = async (...a: unknown[]) => {
-        await Bun.sleep(o.storeDelayMs!);
+        await rt.sleep(o.storeDelayMs!);
         return sd(...a);
       };
     }
   }
-  return { engine, fns };
+  /** `p`, with the time moved through every store delay it waits on. */
+  const run = <T>(p: Promise<T>): Promise<T> => rt.runUntilSettled(p);
+  return { engine, fns, rt, run };
 }
 
 test("over the limit between store calls: Convex's message; a mutation commits nothing", async () => {
@@ -106,10 +110,10 @@ test("checked when the function ends too; catching it does not save the function
 
 test("time awaiting the store does not count; past the system budget, Convex's system timeout", async () => {
   const slow = await setup({ userMs: 50, storeDelayMs: 20 });
-  expect(await slow.fns.runQuery("m:manyReads", { n: 6 })).toBe(0); // ~120 ms awaiting the store
+  expect(await slow.run(slow.fns.runQuery("m:manyReads", { n: 6 }))).toBe(0); // 120 ms awaiting the store
   await slow.engine.close();
   const sys = await setup({ userMs: 1000, systemMs: 50, storeDelayMs: 20 });
-  await expect(sys.fns.runQuery("m:manyReads", { n: 6 })).rejects.toThrow(
+  await expect(sys.run(sys.fns.runQuery("m:manyReads", { n: 6 }))).rejects.toThrow(
     "Your request timed out performing too many system operations.",
   );
   await sys.engine.close();
@@ -119,6 +123,11 @@ test("a nested call has its own budget; its timeout is catchable by the caller",
   const { engine, fns } = await setup({ userMs: 50 });
   // The caller 20 + 20 ms, the nested call 40 ms: 80 ms in all, but neither over its own 50 ms.
   expect(await fns.runQuery("m:parent", { mine: 20, theirs: 40 })).toBe("both done");
+  // To the millisecond: 25 + 25 ms and 50 ms are each at the limit, not over it; 51 ms is over.
+  expect(await fns.runQuery("m:parent", { mine: 25, theirs: 50 })).toBe("both done");
+  expect(await fns.runQuery("m:parent", { mine: 0, theirs: 51 })).toBe(
+    "Function execution timed out (maximum duration: 50ms)\n",
+  );
   expect(await fns.runQuery("m:parent", { mine: 0, theirs: 80 })).toBe(
     // Convex's `JsError::from_message` display: the message and a newline, no frames.
     "Function execution timed out (maximum duration: 50ms)\n",

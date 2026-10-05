@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { TestRuntime } from "@bunvex/core/test-runtime";
 import { BunvexError, v } from "@bunvex/values";
 import { ActionPermits } from "../src/action-permits.ts";
 import { Functions, internalAction, internalMutation, query } from "../src/functions.ts";
@@ -353,11 +354,23 @@ describe("auth, limits, time", () => {
   });
 
   test("past the action limit, a request waits, then gets Convex's 429", async () => {
-    const { site, gate } = await setup({ permits: new ActionPermits(1, 50) });
+    // The wait times out on virtual time (STUDY-132); the requests are real, so the test waits for their states.
+    const rt = new TestRuntime();
+    const permits = new ActionPermits(1, 50, rt);
+    const { site, gate } = await setup({ permits });
+    const until = async (f: () => boolean) => {
+      for (let i = 0; i < 2000 && !f(); i++) await Bun.sleep(1);
+      expect(f()).toBe(true);
+    };
     const open = gate("slow");
     const first = fetch(`${site}/slow`);
-    await Bun.sleep(20);
-    const second = await fetch(`${site}/hello`);
+    await until(() => permits.outstanding.running === 1);
+    const waiting = fetch(`${site}/hello`);
+    await until(() => permits.outstanding.queued === 1);
+    await rt.advance(49);
+    expect(permits.outstanding.queued).toBe(1); // still waiting
+    await rt.advance(1);
+    const second = await waiting;
     expect(second.status).toBe(429);
     expect(await second.json()).toEqual({
       code: "TooManyConcurrentRequests",

@@ -44,6 +44,7 @@ bunvex/
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── write-throughput         the 4 MiB/s write throughput limit (STUDY-78)                ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
+│   │   ├── runtime                  the clock and timers; TestRuntime, virtual time for tests (STUDY-132) 🟡
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
