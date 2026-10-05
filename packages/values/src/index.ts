@@ -1,5 +1,6 @@
 // Package @bunvex/values — Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.
 
+export * as Base64 from "./base64.ts";
 export { checkValue, displayValidator, displayValue, type TableOfId } from "./check.ts";
 export {
   CommitTsPlaceholder,
@@ -44,10 +45,12 @@ export {
   compareValues,
   copyValue,
   fromJsonValue,
+  getDocumentSize,
   isBytes,
   isSimpleObject,
   isSpecialFloat,
   type JSONValue,
+  rawValueSize,
   stringifyValueForError,
   toJsonValue,
   type Value,

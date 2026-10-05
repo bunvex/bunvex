@@ -164,7 +164,6 @@ gaps.
   - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `getDocumentSize`, `Base64`, the `getConvexSize` name;
   - runtime `filterApi`;
   - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;

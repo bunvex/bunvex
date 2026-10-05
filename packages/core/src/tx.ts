@@ -20,11 +20,11 @@ import {
   isSimpleObject,
   keyBytesLength,
   MAX_COMMIT_TS,
+  rawValueSize,
   toJsonValue,
   type Value,
   v,
   valueNesting,
-  valueSize,
 } from "@bunvex/values";
 import { BTree } from "./btree.ts";
 import {
@@ -388,7 +388,7 @@ export class Tx {
     for (const [id, { table, next, measured }] of this.writes) {
       if (!next || table.name.startsWith("_")) continue;
       // Measured when it was written (the write limits' check), else now.
-      const size = measured?.size ?? valueSize(next as unknown as Value);
+      const size = measured?.size ?? rawValueSize(next as unknown as Value);
       const nesting = measured?.nesting ?? valueNesting(next as unknown as Value);
       if (!maxSize || size > maxSize[1]) maxSize = [id, size];
       if (!maxNesting || nesting > maxNesting[1]) maxNesting = [id, nesting];
@@ -408,7 +408,7 @@ export class Tx {
   private countEgress(t: TableDef, doc: Doc, ix: IndexDef | null) {
     if (t.name.startsWith("_")) return;
     this.docsRead++;
-    this.bytesRead += valueSize(doc as unknown as Value);
+    this.bytesRead += rawValueSize(doc as unknown as Value);
     if (ix && !isReservedIndex(ix)) this.keyBytesRead += keyBytesLength(indexKeyValues(ix, doc));
     if (this.systemTx) return;
     if (this.docsRead > this.limits.documentsRead)
@@ -456,7 +456,7 @@ export class Tx {
           if (next && !isReservedIndex(ix)) writeBytes += indexKeySize(ix, next);
         }
         if (!next) continue;
-        const size = valueSize(next as unknown as Value);
+        const size = rawValueSize(next as unknown as Value);
         writeBytes += size;
         // Convex's text and vector index write sizes (`track_commit`): the new version's estimated text bytes
         // per text index; per vector index it is in, its vector's 4-byte elements and its id's 33 bytes, and
@@ -1135,7 +1135,7 @@ export class Tx {
         break;
       }
       rowsRead++;
-      bytesRead += valueSize(d as unknown as Value);
+      bytesRead += rawValueSize(d as unknown as Value);
       last = indexKey(st.ix, d);
       if (pipe.offer(d)) {
         page.push(this.handOut(d));
@@ -1282,7 +1282,7 @@ export class Tx {
         throw new Error(
           `Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`,
         );
-      const size = valueSize(v);
+      const size = rawValueSize(v);
       if (size > MAX_USER_SIZE)
         throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
       this.bytesWritten += size;
