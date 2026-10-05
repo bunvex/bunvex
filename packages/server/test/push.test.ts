@@ -376,6 +376,13 @@ describe("deploy2 over HTTP", () => {
     expect(broken.start.body.message).toStartWith(
       "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught Error: broken at import",
     );
+    // A module that does not compile: the error alone, none of the server's frames (STUDY-95 §7).
+    const syntax = await d.push([mod("messages.js", "export const x = (1;")], schema);
+    expect(syntax.start.body.code).toBe("InvalidModules");
+    expect(syntax.start.body.message).toStartWith(
+      "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught SyntaxError: ",
+    );
+    expect(syntax.start.body.message).not.toMatch(/\bat |node:vm|code-version\.ts/);
     const badSchema = await d.push([messages(1)], mod("schema.js", `export default 42;`));
     expect([badSchema.start.status, badSchema.start.body.code]).toEqual([400, "InvalidSchema"]);
     expect((await d.call("query", "messages:list")).status).toBe("success");
