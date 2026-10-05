@@ -168,7 +168,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `v.id(table)` | values/validator.ts | done (#24) | Checks the id names the table (catalog lookup). |
-| **bunvex addition:** table names in `v.id` — the system tables suggested everywhere (`schema.ts` included), and `v` from `_generated/server` typed with the app's tables (a misspelled table is a type error; any name with no schema or `strictTableNameTypes: false`) | — (convex-helpers' `typedV` is the nearest) | done (STUDY-100 T1, T2) | Type-only; the generated `v` is bunvex's `v`. |
+| **bunvex addition** ([AD-21, AD-22](additions.md#additions)): table names in `v.id` — the system tables suggested everywhere (`schema.ts` included), and `v` from `_generated/server` typed with the app's tables (a misspelled table is a type error; any name with no schema or `strictTableNameTypes: false`) | — (convex-helpers' `typedV` is the nearest) | done (STUDY-100 T1, T2) | Type-only; the generated `v` is bunvex's `v`. |
 | `v.null()` | values/validator.ts | done (#24) | |
 | `v.number()` / `v.float64()` | values/validator.ts | done (#24) | |
 | `v.bigint()` / `v.int64()` | values/validator.ts | done (#24) | |
