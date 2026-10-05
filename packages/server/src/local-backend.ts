@@ -211,7 +211,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       s3Prefix: async () => (storageType as { s3Prefix: string }).s3Prefix,
     });
   };
-  // Search index snapshots live in the `search` use case (STUDY-96); its store is made once the engine exists.
+  // Search and vector index segments live in the `search` use case (STUDY-111); its store is made once the engine
+  // exists.
   let searchBlobs: BlobStore | null = null;
   const engine: Engine = new Engine(defineSchema({}), persistence, {
     instanceName: f.instanceName,
