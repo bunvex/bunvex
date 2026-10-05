@@ -1,7 +1,7 @@
 # STUDY-125 — Virtual system tables: `_file_storage`, `_scheduled_jobs`, `_scheduled_job_args`
 
 - **Status:** implemented (owner decision 2026-10-05: match Convex's physical/virtual layout; no legacy data,
-  no migration)
+  no migration; system tables behave as the latest Convex version)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** STUDY-30 (scheduler, S2 / DV-140), STUDY-32 (file storage, F1 / DV-148), STUDY-42 (import and
   export, X9 / DV-223), STUDY-73 (storage gauges), STUDY-100 (typed `v.id`)
@@ -131,8 +131,8 @@ The owner said there is no legacy data (alpha): no migration, no reading of the 
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| V1 (DV-400) | The virtual documents are always the newest shape (base64 sha256); no client-version gate (Convex refuses virtual reads below npm 1.6.1 and gives hex sha256 below 1.9.0) | Não dá pra fazer: a bunvex function carries no Convex npm version, and bunvex's own clients are all newer than the shapes | pending owner (recommend: accept) |
-| V2 (DV-401) | Every system index ends with `_creationTime` in bunvex (the new tables' `by_storage_id`, `by_next_ts`, `by_completed_ts`, `by_udf_path_and_next_event_ts` too); Convex leaves these out (`SYSTEM_INDEXES_WITHOUT_CREATION_TIME`) | Ainda não fizemos: pre-existing for every bunvex system table; private indexes, so only the order of exact ties differs (the dashboard's job list) | pending owner (recommend: match Convex for all system tables in a follow-up) |
+| V1 (DV-400) | The virtual documents are always the newest shape (base64 sha256); no client-version gate (Convex refuses virtual reads below npm 1.6.1 and gives hex sha256 below 1.9.0) | Owner's rule: system tables behave as the latest Convex version, with no support for older Convex clients (a bunvex function carries no Convex npm version anyway) | **accepted** (owner, 2026-10-05) |
+| V2 (DV-401) | Every system index ends with `_creationTime` in bunvex (the new tables' `by_storage_id`, `by_next_ts`, `by_completed_ts`, `by_udf_path_and_next_event_ts` too); Convex leaves these out (`SYSTEM_INDEXES_WITHOUT_CREATION_TIME`) | Ainda não fizemos: pre-existing for every bunvex system table; private indexes, so only the order of exact ties differs (the dashboard's job list) | **match Convex** for every system table (owner, 2026-10-05), built in the follow-up PR stacked on this one |
 | V3 (DV-402) | `db.system.get` of a user table's id returned null and `db.get(storageId)` returned null | Now as Convex's `system_table_guard`: both throw | resolved (matches Convex) |
 
 DV-140 (STUDY-30 S2) and DV-148 (STUDY-32 F1) — real tables named `_scheduled_functions` / `_storage` with the
@@ -179,4 +179,4 @@ mapping is small; `db.system.get` and `getUrl` per file ~3.4–5.8 µs before, ~
 
 ## 6. Open questions
 
-DV-400 and DV-401 (§4) for the owner.
+None: DV-400 and DV-401 were decided (owner, 2026-10-05).

@@ -229,6 +229,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-340 | **Moved to [AD-18](additions.md#additions)** (the local backend's log): a bunvex addition, not a divergence | — | — | — | owner, 2026-10-04 (as recommended; whether bunvex reports errors to a service of its own, as Convex's Sentry, is open: STUDY-40 L8) | [STUDY-40 L8](../study/STUDY-40-local-backend-and-local-deployments.md#4-divergences) |
 | DV-345 | A function error's frame names the function as JavaScriptCore does: a name the bundler changed shows changed (`assertShort2`), an inline handler `<anonymous>`, and a strict-mode tail call has no caller frame | V8 with esbuild `keepNames`: the original names, every caller | yes (stack text) | the engine: JavaScriptCore names a frame by its declared identifier and implements proper tail calls | owner, 2026-10-04 (as recommended) | [STUDY-95 S1](../study/STUDY-95-error-stacks.md#4-divergences) |
 | DV-347 | Convex's `getConvexSize` is `valueSize` in `bunvex/values` | `getConvexSize` (values/size.ts) | yes: `import { getConvexSize }` fails; the function, sizes and errors are the same | Rule 5: no "convex" in shipped names (as `toJsonValue` for `convexToJson`) | owner, 2026-10-04 (keep `valueSize`) | [STUDY-97 VS1](../study/STUDY-97-value-size-and-base64.md#4-divergences) |
+| DV-400 | The virtual `_storage` and `_scheduled_functions` documents are always the newest shape (base64 sha256); no client-version gate | refuses virtual reads for npm < 1.6.1 and gives hex sha256 for npm < 1.9.0 (`MIN_NPM_VERSION_FILE_STORAGE_V1/V2`) | no for bunvex's clients (all newer) | Owner's rule: system tables behave as the latest Convex version, with no support for older Convex clients (a bunvex function carries no Convex npm version anyway) | owner, 2026-10-05 (accepted) | [STUDY-125 V1](../study/STUDY-125-virtual-system-tables.md#4-divergences) |
 | DV-346 | A frame's line and column are the original 1-based position its source map defines | the frame's 1-based position passed to a 0-based lookup, the token's 0-based position printed: usually the right line on esbuild's output, a 0-based column | yes (positions) | over Bun's output, Convex's arithmetic shows wrong lines; the right line is what Convex's users see | owner, 2026-10-04 (as recommended) | [STUDY-95 S2](../study/STUDY-95-error-stacks.md#4-divergences) |
 
 ## Resolved to match Convex
@@ -338,16 +339,15 @@ classed as bugs by their study; they are listed here because they change what op
 | ID | Gap | Convex | Source |
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
+| DV-401 | Every bunvex system index ends with `_creationTime`, `_file_storage.by_storage_id` and the `_scheduled_jobs` indexes included (owner, 2026-10-05: match Convex for every system table) | `SYSTEM_INDEXES_WITHOUT_CREATION_TIME` (crates/model/src/lib.rs): those indexes have no `_creationTime` suffix; every other system index has it | [STUDY-125 V2](../study/STUDY-125-virtual-system-tables.md#4-divergences) |
 | DV-66 | No `prev_ts`. **Partially built:** the by-ts log reads on `indexes` (PERSIST-01 C11, STUDY-24 H11) and on `documents` (C12, STUDY-33); still needed for export: `prev_ts` | has both | [STUDY-09 D6](../study/STUDY-09-persistence-layout.md#4-divergences) |
 
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Decided | Source |
-|---|---|---|---|---|---|---|
-| DV-400 | The virtual `_storage` and `_scheduled_functions` documents are always the newest shape (base64 sha256); no client-version gate | refuses virtual reads for npm < 1.6.1 and gives hex sha256 for npm < 1.9.0 (`MIN_NPM_VERSION_FILE_STORAGE_V1/V2`) | no for bunvex's clients (all newer) | Não dá pra fazer: a bunvex function carries no Convex npm version | pending owner (recommend: accept) | [STUDY-125 V1](../study/STUDY-125-virtual-system-tables.md#4-divergences) |
-| DV-401 | Every system index ends with `_creationTime`, `_file_storage.by_storage_id` and the `_scheduled_jobs` indexes included | `SYSTEM_INDEXES_WITHOUT_CREATION_TIME` leaves it out of these and other system indexes | barely: the order of exact ties in the dashboard's job list | Ainda não fizemos: pre-existing for every bunvex system table | pending owner (recommend: match Convex for all system tables, a follow-up) | [STUDY-125 V2](../study/STUDY-125-virtual-system-tables.md#4-divergences) |
+DV-400 (STUDY-125 V1) was accepted (owner, 2026-10-05) and is in [Decided divergences](#decided-divergences).
+DV-401 (STUDY-125 V2) was decided to match Convex (owner, 2026-10-05) and is in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built); it is built in the follow-up PR to #459.
 
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
