@@ -28,6 +28,7 @@ import {
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   finishCatalog,
   hasChanges,
@@ -43,13 +44,13 @@ import {
   LOG_SINKS_TABLE,
   MODULES_TABLE,
   planCatalog,
-  SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
   SCHEMAS_TABLE,
   SESSION_REQUESTS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
-  STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
   UDF_CONFIG_TABLE,
@@ -91,7 +92,7 @@ import {
 } from "./persistence/index.ts";
 import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
-import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
+import { SCHEDULED_JOBS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
   type Doc,
@@ -583,7 +584,8 @@ export class Engine {
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
-      { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
+      { name: SCHEDULED_JOBS_TABLE, indexes: SCHEDULED_JOBS_INDEXES, document: v.any() },
+      { name: SCHEDULED_JOB_ARGS_TABLE, indexes: {}, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
         name: CRON_NEXT_RUN_TABLE,
@@ -591,7 +593,7 @@ export class Engine {
         document: v.any(),
       },
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
-      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
+      { name: FILE_STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
       { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
       { name: MODULES_TABLE, indexes: { by_path: ["path"] }, document: v.any() },
       { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
@@ -1170,7 +1172,7 @@ export class Engine {
           if (!stillPending()) return;
           const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
           for (const doc of page.page) {
-            const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+            const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.publicNameOf(n));
             if (msg) {
               await this.failSchemaPush(
                 schemaId,

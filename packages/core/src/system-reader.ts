@@ -1,61 +1,57 @@
-// `db.system` (Convex's `DatabaseReader.system`): read access to the system tables an app may see. They
-// come back in their public shape: `_scheduled_functions` (STUDY-30 S2) and `_storage` (STUDY-32 F1). Only the `by_id` and `by_creation_time` indexes are public, as on Convex's virtual tables; the
-// other system tables are not visible.
+// `db.system` (Convex's `DatabaseReader.system`): read access to the virtual system tables (STUDY-125,
+// virtual-tables.ts), `_storage` and `_scheduled_functions`. Each reads its system table (`_file_storage`,
+// `_scheduled_jobs`) and gives documents in Convex's virtual shape, with the same ids; only the `by_id` and
+// `by_creation_time` indexes are public. No other system table is visible.
 import { decodeId } from "@bunvex/values";
-import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "./catalog.ts";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
-import { type JobDoc, publicJob } from "./scheduled-jobs.ts";
 import type { Doc } from "./schema.ts";
 import { TableReader } from "./table-scope.ts";
 import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuery, TxQueryChained } from "./tx.ts";
+import { VIRTUAL_INDEXES, VIRTUAL_TABLES, type VirtualTable } from "./virtual-tables.ts";
 
-const PUBLIC_INDEXES = new Set(["by_id", "by_creation_time"]);
-const VISIBLE: Record<string, (d: Doc) => Doc> = {
-  [SCHEDULED_FUNCTIONS_TABLE]: (d) => publicJob(d as unknown as JobDoc) as unknown as Doc,
-  // Convex's `_storage` document: base64 sha256, size, and `contentType` null when there is none.
-  [STORAGE_TABLE]: (d) =>
-    ({
-      _id: d._id,
-      _creationTime: d._creationTime,
-      sha256: d.sha256,
-      size: d.size,
-      contentType: d.contentType ?? null,
-    }) as unknown as Doc,
-};
-
-function visible(table: string): (d: Doc) => Doc {
-  const project = VISIBLE[table];
-  if (!project) throw new Error(`System table ${table} is not accessible here.`);
-  return project;
+function virtualTable(table: string): VirtualTable {
+  const vt = VIRTUAL_TABLES.get(table);
+  if (!vt) throw new Error(`System table ${table} is not accessible here.`);
+  return vt;
 }
 
 export class SystemReader {
   constructor(private readonly tx: Tx) {}
 
-  /** `db.system.get(id)`, or `db.system.get(table, id)`. */
+  /**
+   * `db.system.get(id)`, or `db.system.get(table, id)`, as Convex's `1.0/get` with `isSystem`: the id names
+   * its table (a virtual one by its system table's number); a user table's is refused, another system
+   * table's reads nothing.
+   */
   async get(tableOrId: string, id?: string): Promise<Doc | null> {
-    const [table, docId] =
-      id === undefined
-        ? [Object.keys(VISIBLE).find((t) => this.normalizeId(t, tableOrId) !== null), tableOrId]
-        : [tableOrId, id];
-    if (table === undefined) {
+    const [requested, docId] = id === undefined ? [undefined, tableOrId] : [tableOrId, id];
+    let number: number;
+    try {
+      number = decodeId(docId).tableNumber;
+    } catch {
       // An id that does not decode at all is refused with `db.get`'s message, as Convex's `db.system.get`.
-      try {
-        decodeId(tableOrId);
-      } catch {
-        await this.tx.get(tableOrId);
-      }
+      await this.tx.get(docId);
       return null;
     }
-    const project = visible(table);
-    const d = await this.tx.asSystem(() => this.tx.get(table, docId));
-    return d && project(d);
+    const actual = this.tx.publicTableName(number);
+    if (actual === undefined) return null;
+    if (!actual.startsWith("_")) throw new Error("User tables cannot be accessed with db.system.");
+    const vt = VIRTUAL_TABLES.get(actual);
+    if (!vt) return null;
+    if (requested !== undefined && requested !== actual)
+      throw new Error(
+        `Invalid argument \`id\` for \`db.system.get\`: expected to be an Id<"${requested}">, got Id<"${actual}"> instead.`,
+      );
+    const d = await this.tx.asSystem(() => this.tx.get(vt.system, docId));
+    return d && vt.toVirtual(this.tx, d);
   }
 
+  /** `db.system.normalizeId(table, id)`: an id of a virtual table is one of its system table's number. */
   normalizeId(table: string, id: string): string | null {
-    if (!VISIBLE[table]) return null;
-    return this.tx.asSystemSync(() => this.tx.normalizeId(table, id));
+    const vt = VIRTUAL_TABLES.get(table);
+    if (!vt) return null;
+    return this.tx.asSystemSync(() => this.tx.normalizeId(vt.system, id));
   }
 
   /** `db.system.table(name)` (STUDY-66 §2): a reader of one system table. */
@@ -64,24 +60,22 @@ export class SystemReader {
   }
 
   query(table: string): TxQuery {
-    const project = visible(table);
-    return new ProjectedQueryInitializer(
+    const vt = virtualTable(table);
+    return new VirtualQueryInitializer(
       table,
-      this.tx.asSystemSync(() => this.tx.query(table)),
-      project,
+      this.tx.queryVirtual(table, vt.system, (d) => vt.toVirtual(this.tx, d)),
     );
   }
 }
 
-/** A system-table query after its first operator (as `QueryImpl`: no index or scan methods). */
-export class ProjectedQuery implements TxQueryChained {
+/** A virtual table's query after its first operator (as `QueryImpl`: no index or scan methods). */
+export class VirtualQuery implements TxQueryChained {
   constructor(
     protected readonly table: string,
     protected readonly q: TxQueryChained,
-    protected readonly project: (d: Doc) => Doc,
   ) {}
   protected wrap(q: TxQueryChained): TxQueryChained {
-    return new ProjectedQuery(this.table, q, this.project);
+    return new VirtualQuery(this.table, q);
   }
   order(dir: "asc" | "desc"): TxQueryChained {
     return this.wrap(this.q.order(dir));
@@ -92,46 +86,34 @@ export class ProjectedQuery implements TxQueryChained {
   limit(n: number): TxQueryChained {
     return this.wrap(this.q.limit(n));
   }
-  async take(n: number): Promise<Doc[]> {
-    return (await this.q.take(n)).map(this.project);
+  take(n: number): Promise<Doc[]> {
+    return this.q.take(n);
   }
-  async first(): Promise<Doc | null> {
-    const d = await this.q.first();
-    return d && this.project(d);
+  first(): Promise<Doc | null> {
+    return this.q.first();
   }
-  async unique(): Promise<Doc | null> {
-    const d = await this.q.unique();
-    return d && this.project(d);
+  unique(): Promise<Doc | null> {
+    return this.q.unique();
   }
-  async collect(): Promise<Doc[]> {
-    return (await this.q.collect()).map(this.project);
+  collect(): Promise<Doc[]> {
+    return this.q.collect();
   }
-  async paginate(opts: PaginationOptions): Promise<PaginationResult> {
-    const r = await this.q.paginate(opts);
-    return { ...r, page: r.page.map(this.project) };
+  paginate(opts: PaginationOptions): Promise<PaginationResult> {
+    return this.q.paginate(opts);
   }
   [Symbol.asyncIterator](): AsyncIterator<Doc> {
-    const it = this.q[Symbol.asyncIterator]();
-    const project = this.project;
-    return {
-      async next() {
-        const r = await it.next();
-        return r.done ? r : { done: false, value: project(r.value) };
-      },
-    };
+    return this.q[Symbol.asyncIterator]();
   }
 }
 
 /** `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. */
-export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery {
-  constructor(table: string, q: TxQuery, project: (d: Doc) => Doc) {
-    super(table, q, project);
-  }
+export class VirtualQueryInitializer extends VirtualQuery implements TxQuery {
   private get initial(): TxQuery {
     return this.q as TxQuery;
   }
+  /** Convex's `virtual_to_system_index`: `by_id` and `by_creation_time` only, the system table's. */
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
-    if (!PUBLIC_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
+    if (!VIRTUAL_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
     return this.wrap(this.initial.withIndex(name, range));
   }
   /** System tables have no search indexes. */
@@ -144,4 +126,4 @@ export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery
 }
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
-opaqueToInspect(SystemReader, ProjectedQuery, ProjectedQueryInitializer);
+opaqueToInspect(SystemReader, VirtualQuery, VirtualQueryInitializer);

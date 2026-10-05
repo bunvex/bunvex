@@ -1,8 +1,9 @@
 // File storage (STUDY-32), as Convex's crates/file_storage, crates/model/src/file_storage,
 // crates/local_backend/src/storage.rs and npm-packages/convex/src/server/storage.ts:
-// - `_storage` rows hold the public fields (base64 sha256, size, contentType) and hidden ones (`storageId`,
-//   the UUID in URLs; `storageKey`, the blob's key in the backend). Ids are `_storage` document ids, or
-//   (legacy) the UUID.
+// - Each file is a `_file_storage` document, as Convex's `FileStorageEntry` (STUDY-125): `storageId` (the UUID
+//   in URLs), `storageKey` (the blob's key in the backend), `sha256` (bytes), `size` (int64), `contentType`.
+//   Apps see it as the virtual `_storage` (core's virtual-tables.ts), with the same ids. Ids are `_storage`
+//   document ids, or (legacy) the UUID.
 // - `ctx.storage` reads and writes through the transaction (getUrl is reactive, delete transactional); in
 //   actions each call is its own transaction. Deleting queues the blob, removed once the delete commits (F3).
 // - Uploads: a token valid for an hour (reusable), `POST /api/storage/upload?token=`, the body streamed to the
@@ -11,11 +12,12 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import {
   BackendIsNotRunningError,
   type Engine,
+  FILE_STORAGE_TABLE,
+  type FileStorageDoc,
   isStopped,
   opaqueToInspect,
   readBackendState,
   STORAGE_DELETIONS_TABLE,
-  STORAGE_TABLE,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -28,6 +30,7 @@ export const UPLOAD_TOKEN_VALIDITY_MS = 60 * 60 * 1000;
 /** Convex's MAX_CACHE_AGE for downloads. */
 const CACHE_CONTROL = "private, max-age=2592000";
 
+/** A `_file_storage` document, its sha256 in base64 and its size a number. */
 export type StorageRow = {
   _id: string;
   _creationTime: number;
@@ -36,6 +39,20 @@ export type StorageRow = {
   sha256: string;
   size: number;
   contentType: string | null;
+};
+
+const rowOf = (d: Record<string, unknown> | null): StorageRow | null => {
+  if (!d) return null;
+  const f = d as unknown as FileStorageDoc;
+  return {
+    _id: f._id,
+    _creationTime: f._creationTime,
+    storageId: f.storageId,
+    storageKey: f.storageKey,
+    sha256: Buffer.from(f.sha256).toString("base64"),
+    size: Number(f.size),
+    contentType: f.contentType ?? null,
+  };
 };
 
 /** An error with Convex's code, as the HTTP routes answer it (`{code, message}`). */
@@ -132,8 +149,9 @@ export class FileStorage {
       throw arg(
         `Invalid storage ID: "${String(id)}". Storage ID should be an Id of '_storage' table, or a UUID string.`,
       );
-    const docId = db.asSystemSync(() => db.normalizeId(STORAGE_TABLE, id));
-    if (docId) return (await db.asSystem(() => db.get(STORAGE_TABLE, docId))) as unknown as StorageRow | null;
+    // A `_storage` id is a `_file_storage` one: the virtual table shares its number.
+    const docId = db.asSystemSync(() => db.normalizeId(FILE_STORAGE_TABLE, id));
+    if (docId) return rowOf(await db.asSystem(() => db.get(FILE_STORAGE_TABLE, docId)));
     let isOtherId = false;
     try {
       decodeId(id);
@@ -145,12 +163,14 @@ export class FileStorage {
   }
 
   async byUuid(db: Tx, uuid: string): Promise<StorageRow | null> {
-    return (await db.asSystem(() =>
-      db
-        .query(STORAGE_TABLE)
-        .withIndex("by_storage_id", (q) => q.eq("storageId", uuid))
-        .unique(),
-    )) as unknown as StorageRow | null;
+    return rowOf(
+      await db.asSystem(() =>
+        db
+          .query(FILE_STORAGE_TABLE)
+          .withIndex("by_storage_id", (q) => q.eq("storageId", uuid))
+          .unique(),
+      ),
+    );
   }
 
   urlOf(row: StorageRow, origin = this.origin) {
@@ -165,11 +185,11 @@ export class FileStorage {
     return this.engine.mutation(
       (db) =>
         db.asSystem(() =>
-          db.insert(STORAGE_TABLE, {
+          db.insert(FILE_STORAGE_TABLE, {
             storageId: crypto.randomUUID(),
             storageKey: written.key,
-            sha256: b64(written.sha256),
-            size: written.size,
+            sha256: written.sha256.slice().buffer as ArrayBuffer,
+            size: BigInt(written.size),
             contentType,
           }),
         ),
@@ -182,7 +202,7 @@ export class FileStorage {
     const row = await this.resolve(db, id, method);
     if (!row) throw new Error(`storage id ${String(id)} not found`);
     await db.asSystem(async () => {
-      await db.delete(STORAGE_TABLE, row._id);
+      await db.delete(FILE_STORAGE_TABLE, row._id);
       await db.insert(STORAGE_DELETIONS_TABLE, { storageKey: row.storageKey });
     });
   }
@@ -321,7 +341,7 @@ export class FileStorage {
     for await (const b of this.blobs.list()) if (b.lastModified <= before) candidates.push(b.key);
     if (candidates.length === 0) return 0;
     const known = await this.engine.query(async (db) => {
-      const rows = (await db.asSystem(() => db.query(STORAGE_TABLE).collect())) as unknown as StorageRow[];
+      const rows = (await db.asSystem(() => db.query(FILE_STORAGE_TABLE).collect())) as unknown as FileStorageDoc[];
       const queued = (await db.asSystem(() => db.query(STORAGE_DELETIONS_TABLE).collect())) as unknown as {
         storageKey: string;
       }[];

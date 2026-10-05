@@ -27,6 +27,7 @@ export {
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   IndexBackfillingError,
   IndexesUnavailableError,
@@ -35,16 +36,21 @@ export {
   LOG_SINKS_TABLE,
   MAX_USER_TABLES,
   MODULES_TABLE,
+  primaryVirtualTable,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
   SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
   STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_TO_VIRTUAL_TABLE,
   searchIndexesUnavailable,
   TooManyTablesError,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  VIRTUAL_TO_SYSTEM_TABLE,
   vectorIndexesUnavailable,
 } from "./catalog.ts";
 export {
@@ -216,21 +222,32 @@ export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export {
+  argsFromBytes,
+  argsToBytes,
   cancelJob,
   completeJob,
   deleteCompletedJobs,
+  deleteJob,
   dueJobs,
   getJob,
   insertJob,
   isJobId,
   type JobDoc,
   type JobState,
+  jobArgs,
+  msToNs,
   nextJobTs,
+  nsToMs,
   type PublicJob,
+  parseJob,
   patchJob,
-  publicJob,
+  SCHEDULED_BY_NAME_AND_NEXT_TS,
+  SCHEDULED_BY_NEXT_TS,
+  type ScheduledJobDoc,
+  type StoredJobState,
   TRANSACTION_MAX_NUM_SCHEDULED,
   TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+  virtualJob,
 } from "./scheduled-jobs.ts";
 export {
   checkIdentifier,
@@ -309,6 +326,13 @@ export {
   type TxQuery,
   type TxQueryChained,
 } from "./tx.ts";
+export {
+  type FileStorageDoc,
+  VIRTUAL_TABLES,
+  type VirtualTable,
+  virtualFile,
+  virtualTableOfSystem,
+} from "./virtual-tables.ts";
 export {
   formatByteCount,
   formatWindow,

@@ -1036,8 +1036,8 @@ export class Functions {
     return [...fns, ...routes];
   }
 
-  /** An id's table, for `v.id` (the engine's catalog). */
-  private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
+  /** An id's table, for `v.id`: `_storage` for a `_file_storage` id, as Convex names it (STUDY-125). */
+  private tableOf = (n: number) => this.engine.catalog.publicNameOf(n);
 
   /**
    * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64

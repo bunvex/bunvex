@@ -15,9 +15,10 @@ import {
   type AuditLogActor,
   type Engine,
   EXPORTS_TABLE,
+  FILE_STORAGE_TABLE,
+  type FileStorageDoc,
   formatBytes,
   insertAuditLogEvents,
-  STORAGE_TABLE,
   SYSTEM_ACTOR,
   type Tx,
 } from "@bunvex/core";
@@ -113,16 +114,6 @@ const EXTENSIONS: Record<string, string> = {
 const extensionOf = (contentType: string | null) => {
   const ext = contentType ? EXTENSIONS[contentType.split(";")[0]!.trim().toLowerCase()] : undefined;
   return ext ? `.${ext}` : "";
-};
-
-type StorageRow = {
-  _id: string;
-  _creationTime: number;
-  storageId: string;
-  storageKey: string;
-  sha256: string;
-  size: number;
-  contentType: string | null;
 };
 
 export type ExportOptions = {
@@ -400,14 +391,16 @@ export class ExportService {
   }
 
   private async exportStorage(zip: ZipFileWriter, at: number, progress: (m: string, force?: boolean) => Promise<void>) {
-    const rows: StorageRow[] = [];
+    // `_file_storage`, written as the virtual `_storage` (Convex's `write_storage_table`), with the URL's UUID as
+    // `internalId`.
+    const rows: FileStorageDoc[] = [];
     let last: string | null = null;
     for (;;) {
       const page = (await this.engine.query(
         (db) =>
           db.asSystem(() =>
             db
-              .query(STORAGE_TABLE)
+              .query(FILE_STORAGE_TABLE)
               .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
               .take(PAGE_SIZE),
           ),
@@ -415,14 +408,14 @@ export class ExportService {
         undefined,
         undefined,
         at,
-      )) as unknown as StorageRow[];
+      )) as unknown as FileStorageDoc[];
       rows.push(...page);
       if (page.length < PAGE_SIZE) break;
       last = page[page.length - 1]!._id;
     }
     let total = 0;
     for (const row of rows) {
-      total += row.size;
+      total += Number(row.size);
       if (total > MAX_FILE_STORAGE_EXPORT_BYTES)
         throw new ExportError(
           400,
@@ -436,7 +429,7 @@ export class ExportService {
       rows
         .map(
           (r) =>
-            `{"_id":${JSON.stringify(r._id)},"_creationTime":${formatExportFloat(r._creationTime)},"sha256":${JSON.stringify(r.sha256)},"size":${r.size},"contentType":${JSON.stringify(r.contentType)},"internalId":${JSON.stringify(r.storageId)}}\n`,
+            `{"_id":${JSON.stringify(r._id)},"_creationTime":${formatExportFloat(r._creationTime)},"sha256":${JSON.stringify(Buffer.from(r.sha256).toString("base64"))},"size":${r.size},"contentType":${JSON.stringify(r.contentType)},"internalId":${JSON.stringify(r.storageId)}}\n`,
         )
         .join(""),
     );

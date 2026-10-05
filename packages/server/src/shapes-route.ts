@@ -6,12 +6,11 @@ import { type Engine, reduceShape } from "@bunvex/core";
 
 export async function tableShapes(engine: Engine): Promise<Record<string, unknown>> {
   const catalog = engine.catalog;
-  const byNumber = new Map([...catalog.tables.values()].map((t) => [t.number, t.name]));
   const out: Record<string, unknown> = {};
   const tables = [...catalog.tables.values()].filter((t) => !t.name.startsWith("_"));
   for (const t of tables.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)))
     out[t.name] = engine.tableSummaries.ready
-      ? reduceShape(engine.tableSummaries.get(t.id).shape, (n) => byNumber.get(n))
+      ? reduceShape(engine.tableSummaries.get(t.id).shape, (n) => catalog.publicNameOf(n))
       : { type: "Unknown" };
   return out;
 }

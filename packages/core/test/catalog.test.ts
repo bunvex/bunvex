@@ -50,8 +50,10 @@ describe("catalog (_tables / _index)", () => {
           _cron_job_logs: 533,
           _log_sinks: 535,
           _backend_state: 536,
-          _scheduled_functions: 539,
-          _storage: 540,
+          // Convex's physical tables behind the virtual `_scheduled_functions` and `_storage` (STUDY-125).
+          _scheduled_jobs: 539,
+          _file_storage: 540,
+          _scheduled_job_args: 550,
           _snapshot_imports: 541,
           _function_handles: 545,
           _cron_next_run: 547,
@@ -164,9 +166,9 @@ describe("catalog (_tables / _index)", () => {
 test("fixed system numbers: a table created before keeps its number; a system table without one skips the reserved", async () => {
   const { planCatalog } = await import("../src/catalog.ts");
   const anyDoc = v.any();
-  // A store numbered in order before (its `_storage` at 522): nothing moves.
-  const before = [{ _id: "x", name: "_storage", number: 522, tablet: 30, state: "active" as const }];
-  expect(planCatalog([{ name: "_storage", indexes: {}, document: anyDoc }], before, []).insertTables).toEqual([]);
+  // A store numbered in order before (its `_file_storage` at 522): nothing moves.
+  const before = [{ _id: "x", name: "_file_storage", number: 522, tablet: 30, state: "active" as const }];
+  expect(planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], before, []).insertTables).toEqual([]);
   // A new system table without a fixed number: the first free one that no system table reserves — with
   // 515 taken, not 516 (`_exports`'s) but 517.
   const with515 = [{ _id: "z", name: "_old", number: 515, tablet: 32, state: "active" as const }];
@@ -174,7 +176,7 @@ test("fixed system numbers: a table created before keeps its number; a system ta
   expect(planned.map((t) => t.number)).toEqual([517]);
   // A fixed number already taken (an import moved a table there): the next free unreserved one.
   const taken = [{ _id: "y", name: "_other", number: 540, tablet: 31, state: "active" as const }];
-  expect(planCatalog([{ name: "_storage", indexes: {}, document: anyDoc }], taken, []).insertTables[0]!.number).toBe(
-    515,
-  );
+  expect(
+    planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], taken, []).insertTables[0]!.number,
+  ).toBe(515);
 });

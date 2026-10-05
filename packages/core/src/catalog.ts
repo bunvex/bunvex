@@ -14,15 +14,45 @@ export const INDEX_TABLE = "_index";
 export const INSTANCE_TABLE = "_instance";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
-/** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
+/**
+ * Scheduled functions (scheduled-jobs.ts, STUDY-30, STUDY-125), as Convex's: each job is a document of the system
+ * table `_scheduled_jobs`, its arguments one of `_scheduled_job_args`. Apps read them through the VIRTUAL table
+ * `_scheduled_functions` (`db.system`, virtual-tables.ts), which shares `_scheduled_jobs`' number and ids.
+ */
+export const SCHEDULED_JOBS_TABLE = "_scheduled_jobs";
+export const SCHEDULED_JOB_ARGS_TABLE = "_scheduled_job_args";
 export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 /**
- * Stored files (STUDY-32 F1): `_storage` holds Convex's public fields plus hidden ones (the URL's UUID and
- * the blob's key); apps read it through `db.system`. `_storage_deletions` queues the blobs of deleted
- * files, removed once the delete commits (F3).
+ * Stored files (STUDY-32, STUDY-125), as Convex's: `_file_storage` holds each file's metadata (the URL's UUID,
+ * the blob's key, sha256, size, content type); apps read the VIRTUAL table `_storage` (its public fields,
+ * the same ids). `_storage_deletions` (bunvex's own) queues the blobs of deleted files, removed once the
+ * delete commits (F3).
  */
+export const FILE_STORAGE_TABLE = "_file_storage";
 export const STORAGE_TABLE = "_storage";
 export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
+/**
+ * Convex's virtual system tables (`VirtualSystemMapping`, crates/common/src/virtual_system_mapping.rs): each
+ * virtual table's primary system table, which holds its ids, number and `by_id` / `by_creation_time` indexes.
+ */
+export const VIRTUAL_TO_SYSTEM_TABLE: Readonly<Record<string, string>> = {
+  [STORAGE_TABLE]: FILE_STORAGE_TABLE,
+  [SCHEDULED_FUNCTIONS_TABLE]: SCHEDULED_JOBS_TABLE,
+};
+/**
+ * The virtual table each system table backs (Convex's `associated_virtual_table_name`): the primary table, and
+ * `_scheduled_job_args`, a secondary one that holds some of `_scheduled_functions`' fields.
+ */
+export const SYSTEM_TO_VIRTUAL_TABLE: Readonly<Record<string, string>> = {
+  [FILE_STORAGE_TABLE]: STORAGE_TABLE,
+  [SCHEDULED_JOBS_TABLE]: SCHEDULED_FUNCTIONS_TABLE,
+  [SCHEDULED_JOB_ARGS_TABLE]: SCHEDULED_FUNCTIONS_TABLE,
+};
+/** The virtual table a system table is the primary table of (Convex's `primary_system_to_virtual_table`). */
+export const primaryVirtualTable = (system: string): string | undefined => {
+  const v = SYSTEM_TO_VIRTUAL_TABLE[system];
+  return v !== undefined && VIRTUAL_TO_SYSTEM_TABLE[v] === system ? v : undefined;
+};
 /** Pushed code (STUDY-35), as Convex's: each module's metadata, the packages they live in, the import phase. */
 export const MODULES_TABLE = "_modules";
 export const SOURCE_PACKAGES_TABLE = "_source_packages";
@@ -64,7 +94,8 @@ const FIRST_SYSTEM_TABLE_NUMBER = 513;
 /**
  * Each system table's fixed number (STUDY-42 X9): Convex's (`DefaultTableNumber` in crates/model/src/lib.rs,
  * 512 + n, "to make import/export more likely to work nicely") for the tables Convex has — a virtual table
- * (`_storage`, `_scheduled_functions`) shares its system table's — and numbers Convex does not use for
+ * (`_storage`, `_scheduled_functions`) shares its primary system table's (`_file_storage`, `_scheduled_jobs`)
+ * and has no table of its own — and numbers Convex does not use for
  * bunvex's own, counted down from the top of the system range (below 10 000, as Convex's). A table created before keeps its number.
  */
 export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
@@ -80,8 +111,8 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _cron_jobs: 531,
   _schemas: 532,
   _cron_job_logs: 533,
-  _scheduled_functions: 539,
-  _storage: 540,
+  _scheduled_jobs: 539,
+  _file_storage: 540,
   _snapshot_imports: 541,
   _log_sinks: 535,
   _function_handles: 545,
@@ -90,6 +121,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _cron_next_run: 547,
   _data_sync_progress: 553,
   _usage_limits: 552,
+  _scheduled_job_args: 550,
   _index_backfills: 548,
   // bunvex's own.
   _instance: 9_999,
@@ -314,6 +346,15 @@ export class Catalog {
   /** The table an id's number names, if any. */
   byNumber(number: number): TableDef | undefined {
     return this.numbers.get(number);
+  }
+
+  /**
+   * The name an id's number has for apps (Convex's `all_tables_number_to_name`): a virtual table's for its
+   * primary system table's number (`_storage` for `_file_storage`'s), else the table's own.
+   */
+  publicNameOf(number: number): string | undefined {
+    const name = this.numbers.get(number)?.name;
+    return name === undefined ? undefined : (primaryVirtualTable(name) ?? name);
   }
 
   table(name: string): TableDef {
