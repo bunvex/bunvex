@@ -49,16 +49,35 @@ import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
  * Convex's `check_index_references`, after the schema evaluates (`_evaluate_schema`): an index naming a field
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
+/** Convex's `invalid_schema_export_error`, without Convex's name or docs link (DV-356). */
+const invalidSchemaExport = () =>
+  new PushError(
+    "InvalidSchemaExport",
+    "Hit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+  );
+
+/**
+ * The schema module's default export, as Convex's `run_evaluate_schema` takes it (crates/isolate/src/environment/
+ * schema.rs): none, `null` or `undefined` is `MissingSchemaExportError`; anything that is not a schema (made by
+ * `defineSchema`) is `InvalidSchemaExport`. Convex's messages without its docs link (DV-356).
+ */
+function schemaExport(value: unknown): SchemaDefinition {
+  if (value === undefined || value === null)
+    throw new PushError(
+      "MissingSchemaExportError",
+      "Hit an error while evaluating your schema:\nSchema file missing default export.",
+    );
+  if (!((value as SchemaDefinition).tables instanceof Map)) throw invalidSchemaExport();
+  return value as SchemaDefinition;
+}
+
 function checkIndexReferences(schema: SchemaDefinition) {
   // First Convex exports the schema (`schemaToJson` here). An error there, such as a document validator whose
   // JSON is not an object, is answered with `invalid_schema_export_error`, its own message dropped (STUDY-14 §6).
   try {
     schemaToJson(schema);
   } catch {
-    throw new PushError(
-      "InvalidSchemaExport",
-      "Hit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
-    );
+    throw invalidSchemaExport();
   }
   // Then Convex parses it: a document validator a table cannot have (STUDY-14 §6).
   const document = documentTypeError(schema);
@@ -230,12 +249,7 @@ export class PushService {
     let schema = emptySchema;
     const schemaModule = req.appDefinition?.schema;
     if (schemaModule) {
-      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
-      if (!(s?.tables instanceof Map))
-        throw new PushError(
-          "InvalidSchema",
-          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
-        );
+      const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
       checkIndexReferences(s);
       schema = s;
     }
@@ -270,12 +284,7 @@ export class PushService {
     let schema = emptySchema;
     const schemaModule = req.appDefinition?.schema;
     if (schemaModule) {
-      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
-      if (!(s?.tables instanceof Map))
-        throw new PushError(
-          "InvalidSchema",
-          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
-        );
+      const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
       checkIndexReferences(s);
       schema = s;
     }

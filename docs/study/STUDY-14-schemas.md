@@ -126,3 +126,37 @@ Sabotage checks, each caught:
 | The export check off | core, HTTP, oracle |
 | The export error's code changed | HTTP |
 | No top-level check at all | core, HTTP |
+
+### 6.5 A default export that is not a schema (2026-10-05)
+
+Convex's `run_evaluate_schema` (crates/isolate/src/environment/schema.rs:251–290) reads the schema module's
+`default` export as follows:
+
+- **None, `null` or `undefined`:** `missing_schema_export_error()`, a 400 `MissingSchemaExportError`, "Schema
+  file missing default export. To learn more, …".
+- **Not an object, no `export` method, or an `export()` that throws or does not return a string:**
+  `invalid_schema_export_error()`, a 400 `InvalidSchemaExport`, "Default export from schema file isn't a Convex
+  schema. To learn more, …".
+
+Both are prefixed "Hit an error while evaluating your schema:\n".
+
+Before, bunvex answered 400 `InvalidSchema`, "The default export is not a schema (defineSchema(...))", for every
+such case. Now `push.ts`'s `schemaExport` answers as Convex does (owner, 2026-10-05), in `start_push` and in
+`evaluate_schema`:
+
+- none, `null` or `undefined`: `MissingSchemaExportError`;
+- anything that is not a schema made by `defineSchema` (bunvex's equivalent of having `export`):
+  `InvalidSchemaExport`.
+
+The messages are under DV-397 (no docs link, "bunvex schema").
+
+The tests are in `push.test.ts` ("a module or schema that fails"): `42`, a plain object and a string give
+`InvalidSchemaExport`; no default, `null` and `undefined` give `MissingSchemaExportError`; `evaluate_schema`
+answers the same. Sabotage checks:
+
+- the invalid export's code changed: caught;
+- `null` not treated as missing: caught;
+- the missing-export message changed: caught;
+- any object accepted as a schema: not caught by this check. Such an object then fails the export step
+  (`schemaToJson`), which is also `InvalidSchemaExport`, so the behaviour cannot be told apart, as in Convex,
+  where a failing `export()` gives the same answer.

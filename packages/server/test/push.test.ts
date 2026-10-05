@@ -376,8 +376,30 @@ describe("deploy2 over HTTP", () => {
     expect(broken.start.body.message).toStartWith(
       "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught Error: broken at import",
     );
-    const badSchema = await d.push([messages(1)], mod("schema.js", `export default 42;`));
-    expect([badSchema.start.status, badSchema.start.body.code]).toEqual([400, "InvalidSchema"]);
+    // A default export that is not a schema, or none: Convex's InvalidSchemaExport and MissingSchemaExportError.
+    const EVAL = "Hit an error while pushing:\nHit an error while evaluating your schema:\n";
+    for (const source of [`export default 42;`, `export default { tables: {} };`, `export default "schema";`]) {
+      const bad = await d.push([messages(1)], mod("schema.js", source));
+      expect([bad.start.status, bad.start.body.code, bad.start.body.message]).toEqual([
+        400,
+        "InvalidSchemaExport",
+        `${EVAL}Default export from schema file isn't a bunvex schema.`,
+      ]);
+    }
+    for (const source of [`export const x = 1;`, `export default null;`, `export default undefined;`]) {
+      const missing = await d.push([messages(1)], mod("schema.js", source));
+      expect([missing.start.status, missing.start.body.code, missing.start.body.message]).toEqual([
+        400,
+        "MissingSchemaExportError",
+        `${EVAL}Schema file missing default export.`,
+      ]);
+    }
+    // evaluate_schema answers the same.
+    const evaluated = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: mod("schema.js", `export default 42;`) },
+      componentDefinitions: [],
+    });
+    expect([evaluated.status, evaluated.body.code]).toEqual([400, "InvalidSchemaExport"]);
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
