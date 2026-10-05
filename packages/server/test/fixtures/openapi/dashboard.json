@@ -1,0 +1,115 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "bunvex Dashboard HTTP routes",
+    "description": "Routes the dashboard calls. Each needs an admin key.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "The deployment's API"
+    }
+  ],
+  "paths": {
+    "/check_admin_key": {
+      "get": {
+        "tags": [
+          "public_api"
+        ],
+        "summary": "Check admin key validity",
+        "description": "Whether the request's admin key belongs to this deployment, with the operations it allows and whether it is read-only.",
+        "operationId": "check_admin_key",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shapes2": {
+      "get": {
+        "summary": "Get table shapes",
+        "description": "The shape inferred from each table's documents.",
+        "operationId": "shapes2",
+        "parameters": [
+          {
+            "name": "component",
+            "in": "query",
+            "description": "The component's id; bunvex has only the root component.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/delete_tables": {
+      "post": {
+        "summary": "Delete database tables",
+        "description": "Delete tables with their documents and indexes.",
+        "operationId": "delete_tables",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteTableArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DeleteTableArgs": {
+        "type": "object",
+        "required": [
+          "tableNames"
+        ],
+        "properties": {
+          "tableNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The tables to delete, in one transaction."
+          },
+          "componentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

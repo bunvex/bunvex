@@ -892,7 +892,7 @@ export class Engine {
     }
     if (v.length !== e.def.dimensions)
       throw new Error(`Expected a vector with dimensions ${e.def.dimensions}, received ${v.length}.`);
-    charge?.(e.docs.size * v.length * 4);
+    charge?.(e.index.size * v.length * 4);
     return this.vectorIndexes.search(e, v, limit, filter).map((h) => ({ _id: h.id, _score: h.score }));
   }
 
