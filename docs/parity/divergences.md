@@ -366,6 +366,11 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+DV-407 (STUDY-130 SD1, 2026-10-05): re-opens DV-150. Convex never removes a deleted file's blob (no queue, no sweep);
+bunvex removes it after the delete commits through its own `_storage_deletions`, which can fail an export or a
+download that read the file at an earlier snapshot. Options: A match Convex (drop the table and the sweeps;
+recommended), B reclaim by an orphan sweep only, C keep DV-150. Until decided, DV-150 stays as built.
+
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).

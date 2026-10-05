@@ -146,6 +146,7 @@ to a spec.
 | [STUDY-109](STUDY-109-value-nesting-limit.md) | The value nesting limit (64): arguments (63, as `[args]`), results, written values; Convex's messages and order, any depth without a stack overflow | implemented; N1 decided by the owner (2026-10-05, DV-363) |
 | [STUDY-111](STUDY-111-search-segments.md) | Persisted search segments (STUDY-79 option E): text and vector segment formats, the memory part and merged queries, the flusher, the paged backfill, the compactor, fast-forward and retention | decided (owner, 2026-10-05: build E); PRs 1–3 (formats, merged queries, flusher and start) implemented |
 | [STUDY-102](STUDY-102-query-options.md) | `QueryOptions` and `bunvexQueryOptions` (Convex's `convexQueryOptions`), and `prewarmQuery`'s required `args` | implemented; the name decided by the owner (2026-10-05, DV-348) |
+| [STUDY-130](STUDY-130-storage-deletions.md) | Deleting a file's blob: Convex never does (no queue, no sweep); bunvex's `_storage_deletions` (DV-150) re-examined: options A (match Convex), B, C | decision pending (owner): SD1 / DV-407 |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
