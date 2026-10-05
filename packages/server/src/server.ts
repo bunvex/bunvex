@@ -51,7 +51,14 @@ import {
   withCanonical,
 } from "./canonical-urls.ts";
 import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
-import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
+import {
+  loadLatestCode,
+  peekUdfConfig,
+  type SourcePackage,
+  udfConfig,
+  writeCodeRows,
+  writePackage,
+} from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
@@ -1087,7 +1094,8 @@ export function createServer(opts: ServerOptions) {
       return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
     let found: Awaited<ReturnType<typeof standaloneQuery>>;
     try {
-      const config = await udfConfig(engine);
+      // Read, never written: Convex sets them in a transaction it does not commit.
+      const config = await peekUdfConfig(engine);
       found = await standaloneQuery(bundle, {
         seed: config.seed,
         timestamp: config.timestamp,
