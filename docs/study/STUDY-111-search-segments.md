@@ -120,7 +120,12 @@ timestamp from falling behind; a start only replays the writes since that timest
 ### 1.9 Storage
 
 - The `search` use case (`S3_STORAGE_SEARCH_BUCKET`, else `<storage>/search`). Queries read segments from a local
-  cache of downloaded archives (`search/src/archive/cache.rs`), memory-mapped.
+  cache of downloaded archives (`search/src/archive/cache.rs`), memory-mapped:
+  - the cache is a temporary directory per process (`searcher/in_process.rs`, `TempDir::new()`), so it starts
+    empty; an archive is fetched from the store (local or S3) and extracted into it on first use;
+  - it is an LRU bounded by `MAX_ARCHIVE_CACHE_SIZE_BYTES` (500 MiB, `searchlight_knobs.rs`); an evicted
+    archive's files are removed once no query holds a handle to them (an mmap keeps its handle), so the bound
+    is exceeded while queries use more than it.
 - **Old segments are never deleted** from storage: nothing calls `delete_object` on the search storage
   (only exports' objects are deleted, `application/src/system_table_cleanup/mod.rs:499`).
 
@@ -155,7 +160,7 @@ Delivered as a series of pull requests, each building on the previous one.
 
 One binary layout for both kinds (`segment-file.ts`): a header, then sections aligned to 8 bytes, each a typed
 array over the same buffer. Opening a segment decodes nothing: every lookup reads the buffer in place, so a
-segment costs its bytes in memory, and the same code can later run over a memory-mapped file (PR 7).
+segment costs its bytes in memory, and the same code runs over a memory-mapped file (PR 9, §3.10).
 
 - **Text segment** (`text-segment.ts`, `TextSegment`), built from `IndexedDoc`s:
   - documents **sorted by id** (the id's UTF-8 bytes), so the local document number is the id's rank and an id
@@ -418,11 +423,54 @@ every commit, flushed, compacted and fast-forwarded. A search on it answers `Ind
 that un-stages it keeps the built index and enables it at once (its row becomes `snapshotted`); staging it again
 keeps it built. Before, staged indexes were not built at all, and un-staging one started its build.
 
-### 3.10 Not built: segments queried from disk
+### 3.10 Segments read from disk (PR 9)
 
-Segments stay loaded in memory (DV-371). The format reads in place (§3.1), so a memory-mapped file
-(`Bun.mmap`) of a local blob, or of a local cache of an S3 one, can take a loaded blob's place without changing
-the search code; that is the series' optional last PR, not done (§6).
+The owner decided (2026-10-05) to build the disk path now, as Convex's: segments are read from local files,
+memory-mapped, instead of loaded whole into memory (DV-371 resolved). `SegmentFiles`
+(`core/src/search-segments.ts`):
+
+- **Mapping.** Bun maps files: `Bun.mmap(path, { shared: false })` returns a `Uint8Array` over the file, starting
+  at offset 0 (so 8-byte aligned, as the format's sections need, §3.1). The format reads in place, so a mapped
+  segment serves exactly as a loaded one did: the search code is unchanged. The mapping is private
+  (copy-on-write): nothing can write through to a stored blob. No positioned-read fallback was needed.
+- **Which file.** A store that keeps blobs as files says where (`SearchSegmentStore.localPath`; the server's
+  local blob store, `<local storage>/search/files/<key>.blob`): the segment is mapped from the store's own file,
+  with no copy. Any other store (S3) goes through a local cache, `searchCacheDir` (the server's
+  `<local storage>/search_cache`): the segment is written there once (a temporary file, then renamed, so a mapped
+  file is never one being written) and mapped from there.
+- **When.** Every segment is mapped where it used to be held: at start (the segments of each index's row), and
+  when the flusher, the backfill or the compactor writes one (mapped from the file just written; its bytes in
+  memory are dropped).
+- **The cache**, as Convex's temporary directory, starts empty at each start, and holds the segments the indexes
+  use: when a row stops naming a segment (a compaction replaced it, its index was removed), its cached copy is
+  removed; a mapping still read stays valid until dropped. The store's own files are never removed (DV-370).
+  Unlike Convex's, it has no size bound (DV-372, §6): every segment of every index stays mapped while the process
+  runs, since a search reads them all.
+- **Deletes** (the small bitsets a commit rewrites) stay in memory, as do the memory parts.
+- With neither a local store nor a cache directory (an engine embedded with an in-memory store), segments are held
+  in memory as before.
+
+**Measured** (`bench/search-segments.ts`, 200 000 documents of 12 words, one text and one 64-dimension vector
+index, SQLite and file blobs, an Apple laptop under load from other work; `SEARCH_DISK=1` maps the store's files,
+`SEARCH_DISK=cache` goes through the cache). Each restart is a process of its own, after a clean close, measured
+once its compactions are done. The physical footprint is macOS's: the dirty memory the process holds, without
+the clean pages of mapped files, which the OS drops under pressure and reads back from disk. The RSS counts
+those pages (the mapped segments, and SQLite's), so it is about 0.9–1 GB after the queries in every mode.
+
+| | in memory | mapped (local store) | mapped (cache, as S3) |
+|---|---|---|---|
+| restart until ready | 27–53 ms | 25–42 ms | 50–84 ms (copies into the cache) |
+| footprint once ready | 134–135 MB | 22–23 MB | 24 MB |
+| footprint after 250 queries | 151–155 MB | 44–49 MB | 38–43 MB |
+| text query, first / median | 63–68 / 51–54 ms | 73–76 / 51–52 ms | 64–70 / 49–51 ms |
+| vector query, first / median | 18–21 / 13.3–13.6 ms | 20–27 / 13.0–13.6 ms | 19–21 / 12.6–13.1 ms |
+| restart after a crash (20 000 writes since) | 1.27 s | 1.20 s | 1.22 s |
+
+The ~112 MB difference is the indexes' segments (122 MB of files), now pages of files instead of process memory;
+latency is the same within the noise of the machine. The JS heap reads 114 MiB in every mode because Bun counts a
+mapped buffer's length in it. Write throughput is unchanged (4100–4700 documents/s in all three runs, as noisy as
+the machine). The cache held exactly the three segments in use (122 MB); the store kept every blob ever
+written (570 MB, DV-370).
 
 ## 4. Divergences
 
@@ -432,7 +480,8 @@ the search code; that is the series' optional last PR, not done (§6).
 | E2 | Search and vector indexes' `_index` rows are Convex's `config` with bunvex's identity fields (`tablet`, `name`, as its database index rows); the backfill cursor is the document id's bytes, not an index key; a non-staged index has no `Backfilled` state (it is enabled once built). Staged indexes are built and kept `Backfilled { staged }`, as Convex's (PR 8) | Identity fields: DV-53. Cursor and states: bunvex's backfill and push. Count, config and staged indexes as Convex's | owner, 2026-10-05 (rows as Convex's; staged as Convex's). DV-368 |
 | E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | owner, 2026-10-05: keep it. DV-369 |
 | E4 | ~~Replaced segment and deletes blobs, and those of a removed index, were deleted from the `search` store~~ | Resolved: no search blob is deleted, as Convex's | owner, 2026-10-05 (match Convex). DV-370 |
-| E5 | Segments are loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files | Ainda não fizemos: the format reads in place (PR 1), so a memory-mapped file can take a loaded blob's place (PR 7). Operational: memory | owner, 2026-10-05 (RAM first; disk as a later PR). DV-371 |
+| E5 | ~~Segments were loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files~~ | Resolved (PR 9): segments are memory-mapped files, as Convex's | owner, 2026-10-05 (build the disk path now). DV-371 |
+| E6 | The local cache of segments has no size bound: it holds every segment the indexes use, all mapped while the process runs; a local store's segments are mapped from its own files, not copied into the cache | Not built yet: Convex's 500 MiB LRU evicts archives no query holds, because its searcher opens segments per query; bunvex's indexes keep every segment open (a search reads them all), so a bound would evict nothing. Bounding it needs segments opened per query. Mapping a local store's files in place avoids a second copy; not observable. Operational: local disk with S3 (the size of the indexes' segments) | pending (§6). DV-372 |
 
 ## 5. Tests
 
@@ -580,11 +629,27 @@ retention checked against the segments' ts only.
 Sabotage checks (each made tests fail): a staged index not built; un-staging rebuilding the index; a staged index
 not kept current by commits; a staged row written as `snapshotted`.
 
+**PR 9** (`packages/core/test/search-disk.test.ts`; `server/test/search-storage.test.ts`;
+`file-storage/test/local.test.ts`):
+
+- with a store that keeps blobs as files, flushes, compactions and a restart map every segment from the store's
+  files; the answers equal those of the same store read into memory, and of the table indexed from scratch;
+- with a store that keeps none (as S3) and a cache directory: the cache starts empty (a file left in it is gone),
+  segments are mapped from it, it holds exactly the segments the `_index` rows name (none a compaction replaced)
+  while the store keeps every blob, and a restart fills it again and answers the same;
+- a mapped segment is a private mapping: writing to it leaves the stored blob unchanged;
+- the server's search store names a local blob store's files (and none for another store).
+
+Sabotage checks (each made tests fail): the store's own files not mapped (2); a restart reading blobs into memory
+(2); a cache file written truncated (1); a flushed segment mapped from another key (2); replaced segments kept in
+the cache (1); the cache not emptied at start (1); a shared mapping (1).
+
 ## 6. Open questions
 
-- **Segments in RAM or on disk** (DV-371). Segments are loaded into memory: at 200 000 documents a restarted
-  process holds about 170–220 MiB of heap (`main` held 550–850 MiB), and queries are faster than `main`'s. Reading
-  them from disk instead (memory-mapped, as Convex's cache) would bound memory by the OS page cache, at some query
-  latency and with a local cache for S3. The format is ready for it (§3.9); it is not built. Recommendation: keep
-  RAM until a deployment's segments outgrow its memory.
+- ~~Segments in RAM or on disk~~ decided by the owner (2026-10-05): on disk, built in PR 9 (DV-371 resolved).
+- **The cache's bound** (DV-372). Convex bounds its archive cache at 500 MiB (LRU) beyond the archives queries
+  hold; bunvex's cache holds every segment in use, unbounded, since every index keeps all its segments open.
+  Only an S3 deployment has the cache (a local store's files are mapped in place); its size is the indexes'
+  segments (122 MB at 200 000 documents). Recommendation: keep it so; a bound would need segments opened per query,
+  for no saving while every segment is searched.
 - ~~The clean-shutdown flush~~ decided by the owner (2026-10-05): kept (DV-369).

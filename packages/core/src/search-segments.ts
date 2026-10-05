@@ -8,6 +8,8 @@
 // vector index of the schema has one, so `_index` holds the rows Convex's does (STUDY-111 §3.7). A row names only
 // blobs already written. A start loads an index's segments and replays the document log since its ts, as Convex's
 // bootstrap; a state it cannot trust is not used, and the index is built from its table instead.
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
 import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
@@ -133,7 +135,78 @@ export type SearchSegmentStore = {
   put(data: Uint8Array): Promise<string>;
   get(key: string): Promise<Uint8Array | null>;
   delete(key: string): Promise<void>;
+  /** The local file a blob is kept in, when the store keeps blobs as files (its segments are mapped from there). */
+  localPath?(key: string): string | null;
 };
+
+/**
+ * Segments read from local files rather than held in memory (STUDY-111 PR 9, DV-371 resolved), as Convex's
+ * searcher reads memory-mapped archives from its local cache (`search/src/archive/cache.rs`): a segment's bytes
+ * are `Bun.mmap` of the store's own file when it has one, else of a copy written once to `cacheDir` (for a store
+ * such as S3). Segments are read in place (§3.1), so a mapped file serves as a loaded one does; the OS pages them
+ * in and drops them. Mappings are private (copy-on-write), so nothing can write through to a stored blob. Deletes
+ * stay in memory: they are small and rewritten.
+ *
+ * The cache, as Convex's (a temporary directory per process), starts empty, and holds the segments the indexes
+ * use: one no index names any more is removed from it (its mapping, if still read, stays valid until dropped).
+ * The store's own files are never removed (DV-370).
+ */
+export class SegmentFiles {
+  constructor(
+    private blobs: SearchSegmentStore,
+    private cacheDir: string | null,
+  ) {
+    if (cacheDir) {
+      rmSync(cacheDir, { recursive: true, force: true });
+      mkdirSync(cacheDir, { recursive: true });
+    }
+  }
+
+  /** Whether segments can be mapped at all (the store's files, or a cache directory). */
+  get enabled(): boolean {
+    return typeof this.blobs.localPath === "function" || this.cacheDir !== null;
+  }
+
+  /** Segments mapped so far (tests and measurements). */
+  mapped = 0;
+
+  /**
+   * Segment `key` mapped from a local file (null: not possible, the caller keeps the bytes in memory). `bytes`:
+   * the segment, when it was just written (no need to read it back for the cache).
+   */
+  async map(key: string, bytes?: Uint8Array): Promise<Uint8Array | null> {
+    const own = this.blobs.localPath?.(key);
+    if (own && existsSync(own)) {
+      this.mapped++;
+      return Bun.mmap(own, { shared: false });
+    }
+    if (!this.cacheDir) return null;
+    const path = join(this.cacheDir, key);
+    if (!existsSync(path)) {
+      const data = bytes ?? (await this.blobs.get(key));
+      if (!data) return null;
+      // Written whole, then renamed: a mapped file is never one being written.
+      const tmp = `${path}.${crypto.randomUUID()}.tmp`;
+      writeFileSync(tmp, data);
+      renameSync(tmp, path);
+    }
+    this.mapped++;
+    return Bun.mmap(path, { shared: false });
+  }
+
+  /** Segments no index names any more: their cached copies are removed (never the store's own files). */
+  release(keys: Iterable<string>) {
+    if (!this.cacheDir) return;
+    for (const key of keys) rmSync(join(this.cacheDir, key), { force: true });
+  }
+}
+
+/** The segment blobs the states name. */
+function segmentKeys(states: Map<string, IndexSegmentsState>): Set<string> {
+  const keys = new Set<string>();
+  for (const s of states.values()) for (const r of s.segments) keys.add(r.segment);
+  return keys;
+}
 
 /**
  * A stored segment: its blob and its deletes' blob, its documents (deleted ones included) and deleted ones, its
@@ -365,6 +438,8 @@ export class SearchSegmentsState {
   private ids = new Map<string, string>();
   /** Each index's fast-forward ts (Convex's `_index_worker_metadata`), by state key, with its row's id. */
   private forwarded = new Map<string, { ts: number; _id?: string }>();
+  /** Where segments are mapped from, when they are read from disk (STUDY-111 PR 9). */
+  files: SegmentFiles | null = null;
   private writes: Promise<void> = Promise.resolve();
 
   constructor(
@@ -454,6 +529,7 @@ export class SearchSegmentsState {
   ): Promise<boolean> {
     const run = this.writes.then(async () => {
       const before = new Map([...this.states].map(([k, v]) => [k, JSON.stringify(stateToRow(v))]));
+      const keysBefore = this.files ? segmentKeys(this.states) : null;
       if (change(this.states) === false) return false;
       const writes: IndexRowWrite[] = [];
       const inserted: string[] = [];
@@ -474,6 +550,10 @@ export class SearchSegmentsState {
         for (const k of removed) this.ids.delete(k);
       }
       stored?.();
+      if (keysBefore) {
+        const now = segmentKeys(this.states);
+        this.files!.release([...keysBefore].filter((k) => !now.has(k)));
+      }
       return true;
     });
     this.writes = run.then(
@@ -505,9 +585,10 @@ export class SearchSegmentsState {
   async fetch(s: IndexSegmentsState): Promise<StoredSegment[] | null> {
     const blobs = this.blobs;
     if (!blobs) return null;
+    const files = this.files;
     const parts = await Promise.all(
       s.segments.map(async (r) => {
-        const segment = await blobs.get(r.segment);
+        const segment = (files ? await files.map(r.segment) : null) ?? (await blobs.get(r.segment));
         const deletes = await blobs.get(r.deletes);
         if (!segment || !deletes) return null;
         return { segment, deletes, keys: { segment: r.segment, deletes: r.deletes } };

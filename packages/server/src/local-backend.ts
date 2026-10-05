@@ -218,6 +218,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     instanceSecret: f.instanceSecret,
     storedSchema: true,
     lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
+    // Segments read from disk: the local store's files, or a local cache of S3's (STUDY-111 PR 9).
+    searchCacheDir: resolve(io.cwd, f.localStorage, "search_cache"),
     searchStorage: searchSegmentStore(() => {
       searchBlobs ??= storage("search");
       return searchBlobs;

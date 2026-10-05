@@ -120,6 +120,7 @@ import {
   type SearchSegmentStore,
   SearchSegmentsState,
   type SearchWorkerOptions,
+  SegmentFiles,
   SegmentReplay,
   sameSpec,
   searchCompactionFromEnv,
@@ -342,6 +343,11 @@ export class Engine {
        * indexes are in memory only, read from their tables at every start.
        */
       searchStorage?: SearchSegmentStore;
+      /**
+       * Where segments are cached as local files to be read from disk (memory-mapped) when the store does not
+       * keep them as local files itself (S3). With neither, segments are held in memory (STUDY-111 PR 9).
+       */
+      searchCacheDir?: string;
       /** The memory parts' flush thresholds (default: SEARCH_INDEX_SIZE_SOFT_LIMIT / VECTOR_INDEX_SIZE_SOFT_LIMIT). */
       searchSegmentLimits?: Partial<SearchSegmentLimits>;
       /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
@@ -866,6 +872,10 @@ export class Engine {
     const store = canPersistSegments(p) ? p : null;
     const blobs = store ? (this.opts.searchStorage ?? null) : null;
     const state = new SearchSegmentsState(store, blobs, (writes) => this.writeIndexRows(writes));
+    if (blobs) {
+      const files = new SegmentFiles(blobs, this.opts.searchCacheDir ?? null);
+      if (files.enabled) state.files = files;
+    }
     state.load(
       await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
     );
@@ -1007,6 +1017,17 @@ export class Engine {
         id: segment.uid,
       },
     };
+  }
+
+  /** Segments mapped from local files since the start (STUDY-111 PR 9; tests and measurements). */
+  get searchSegmentsMapped(): number {
+    return this.searchSegments?.files?.mapped ?? 0;
+  }
+
+  /** A segment just written, mapped from its local file when segments are read from disk (else null). */
+  private async mapSegment(key: string, bytes: Uint8Array): Promise<Uint8Array | null> {
+    const files = this.searchSegments?.files;
+    return files ? files.map(key, bytes) : null;
   }
 
   /** The bytes a segment counts for (Convex's `size_bytes_total`, or vectors × dimensions × 4). */
@@ -1151,6 +1172,8 @@ export class Engine {
     // Nothing to write: the ts moves by a fast-forward instead (`searchWorkersTick`), as Convex's.
     if (!f.segment && !f.deletes.length && before && !before.backfill) return;
     const added = f.segment ? await this.storeSegment(kind, e, f.segment) : null;
+    // Read from its file from now on, when segments are read from disk.
+    const mapped = added && f.segment ? await this.mapSegment(added.keys.segment, f.segment) : null;
     const deletes = await Promise.all(f.deletes.map((d) => state.blobs!.put(d.bytes)));
     const stored = await state.update(
       (states) => {
@@ -1176,6 +1199,7 @@ export class Engine {
         f.deletes.forEach((d, i) => {
           d.part.keys = { segment: d.part.keys!.segment, deletes: deletes[i]! };
         });
+        if (mapped) f.segment = mapped;
         index.commitFlush(f, added?.keys);
       },
     );
@@ -1212,7 +1236,7 @@ export class Engine {
    * Convex's compactor for one index (STUDY-111 PR 5, `search_compactor.rs`): the segments
    * `segmentsToCompact` picks are merged into one of their live documents, built outside the index's lock; then,
    * under it, the deletes they got meanwhile (flushes' included) are carried into it and stored with it
-   * (Convex's writer `merge_deletes`), the state names it in their place, and their blobs are deleted. True when
+   * (Convex's writer `merge_deletes`), the state names it in their place; their blobs are kept (DV-370). True when
    * it compacted.
    */
   private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
@@ -1236,6 +1260,8 @@ export class Engine {
       if (this.closed) throw new Error("the engine closed");
     });
     const segment = c.segment ? await state.blobs!.put(c.segment) : null;
+    const mapped = segment && c.segment ? await this.mapSegment(segment, c.segment) : null;
+    if (mapped) c.segment = mapped;
     await this.opts.beforeSearchCompactionCommit?.();
     return this.withIndexLock(e, async () => {
       if (this.closed || !this.isCurrent(kind, e) || chosen.some((p) => !index.segments.includes(p))) return false;
@@ -1378,6 +1404,7 @@ export class Engine {
         const bytes = index.buildSegment(docs);
         const deletes = index.changedDeletes();
         const added = bytes ? await this.storeSegment(kind, e, bytes) : null;
+        const mapped = added && bytes ? await this.mapSegment(added.keys.segment, bytes) : null;
         const deleteKeys = await Promise.all(deletes.map((d) => state.blobs!.put(d.bytes)));
         const stored = await state.update(
           (states) => {
@@ -1405,7 +1432,7 @@ export class Engine {
               const part = d.part as { keys?: { segment: string; deletes: string | null } };
               part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
             });
-            index.commitBackfill(bytes, deletes, ts, added?.keys);
+            index.commitBackfill(mapped ?? bytes, deletes, ts, added?.keys);
           },
         );
         // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
