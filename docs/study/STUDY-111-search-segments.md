@@ -444,7 +444,7 @@ memory-mapped, instead of loaded whole into memory (DV-371 resolved). `SegmentFi
 - **The cache**, as Convex's temporary directory, starts empty at each start, and holds the segments the indexes
   use: when a row stops naming a segment (a compaction replaced it, its index was removed), its cached copy is
   removed; a mapping still read stays valid until dropped. The store's own files are never removed (DV-370).
-  Unlike Convex's, it has no size bound (DV-372, §6): every segment of every index stays mapped while the process
+  Unlike Convex's, it has no size bound (DV-372, decided by the owner): every segment of every index stays mapped while the process
   runs, since a search reads them all.
 - **Deletes** (the small bitsets a commit rewrites) stay in memory, as do the memory parts.
 - With neither a local store nor a cache directory (an engine embedded with an in-memory store), segments are held
@@ -481,7 +481,7 @@ written (570 MB, DV-370).
 | E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | owner, 2026-10-05: keep it. DV-369 |
 | E4 | ~~Replaced segment and deletes blobs, and those of a removed index, were deleted from the `search` store~~ | Resolved: no search blob is deleted, as Convex's | owner, 2026-10-05 (match Convex). DV-370 |
 | E5 | ~~Segments were loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files~~ | Resolved (PR 9): segments are memory-mapped files, as Convex's | owner, 2026-10-05 (build the disk path now). DV-371 |
-| E6 | The local cache of segments has no size bound: it holds every segment the indexes use, all mapped while the process runs; a local store's segments are mapped from its own files, not copied into the cache | Not built yet: Convex's 500 MiB LRU evicts archives no query holds, because its searcher opens segments per query; bunvex's indexes keep every segment open (a search reads them all), so a bound would evict nothing. Bounding it needs segments opened per query. Mapping a local store's files in place avoids a second copy; not observable. Operational: local disk with S3 (the size of the indexes' segments) | pending (§6). DV-372 |
+| E6 | The local cache of segments has no size bound: it holds every segment the indexes use, all mapped while the process runs; a local store's segments are mapped from its own files, not copied into the cache | Not built yet: Convex's 500 MiB LRU evicts archives no query holds, because its searcher opens segments per query; bunvex's indexes keep every segment open (a search reads them all), so a bound would evict nothing. Bounding it needs segments opened per query. Mapping a local store's files in place avoids a second copy; not observable. Operational: local disk with S3 (the size of the indexes' segments) | owner, 2026-10-05: keep it unbounded. DV-372 |
 
 ## 5. Tests
 
@@ -647,9 +647,9 @@ the cache (1); the cache not emptied at start (1); a shared mapping (1).
 ## 6. Open questions
 
 - ~~Segments in RAM or on disk~~ decided by the owner (2026-10-05): on disk, built in PR 9 (DV-371 resolved).
-- **The cache's bound** (DV-372). Convex bounds its archive cache at 500 MiB (LRU) beyond the archives queries
+- ~~The cache's bound~~ decided by the owner (2026-10-05): kept unbounded (DV-372). Convex bounds its archive cache at 500 MiB (LRU) beyond the archives queries
   hold; bunvex's cache holds every segment in use, unbounded, since every index keeps all its segments open.
   Only an S3 deployment has the cache (a local store's files are mapped in place); its size is the indexes'
-  segments (122 MB at 200 000 documents). Recommendation: keep it so; a bound would need segments opened per query,
-  for no saving while every segment is searched.
+  segments (122 MB at 200 000 documents). A bound would need segments opened per query, for no saving while every
+  segment is searched.
 - ~~The clean-shutdown flush~~ decided by the owner (2026-10-05): kept (DV-369).

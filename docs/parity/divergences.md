@@ -232,6 +232,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-367 | Search segments are bunvex's own binary format: a text segment is one blob (terms, posting lists, documents sorted by id, a forward index) plus a deletes blob; a vector segment is a flat array of normalized f32 vectors plus a deleted bitset | a tantivy archive, an id tracker, an alive bitset and a deleted-terms table per text segment; a qdrant HNSW segment, an id tracker and a deleted bitset per vector segment | no (answers are the whole index's) | Não dá pra fazer: tantivy and qdrant are Rust libraries; the flat vector segment follows DV-269 (exact search) | owner, 2026-10-05 (build E; the format follows) | [STUDY-111 E1](../study/STUDY-111-search-segments.md#4-divergences) |
 | DV-368 | Search and vector indexes' `_index` rows carry Convex's `config` (spec, `onDiskState`, segment list) under bunvex's identity fields `tablet`/`name` (as its database index rows, DV-53); the backfill cursor is the document id's bytes; a non-staged index goes from `backfilling` to `snapshotted` when built (no `Backfilled` while a push waits) | `table_id`/`descriptor`; the cursor an index key; `Backfilled` until the push commits | no (system table; the rows and their count are Convex's; staged indexes built and kept `Backfilled { staged }` as Convex's) | identity: DV-53; cursor and states follow bunvex's backfill and push | owner, 2026-10-05 (rows as Convex's; staged indexes as Convex's) | [STUDY-111 E2](../study/STUDY-111-search-segments.md#4-divergences) |
 | DV-369 | A clean shutdown flushes every search and vector index, so the next start replays nothing | the next start replays the writes since the last flush | operational (start and shutdown time) | keeps the clean-restart guarantee of STUDY-96's snapshot (option D), which segments replaced and which is removed | owner, 2026-10-05 (keep it; carried from D, 2026-10-04) | [STUDY-111 E3](../study/STUDY-111-search-segments.md#4-divergences) |
+| DV-372 | The local cache of search segments (S3 only) has no size bound: it holds every segment the indexes use, all mapped while the process runs; a local store's segments are mapped from its own files, not copied | an LRU of extracted archives in a temporary directory, bounded by `MAX_ARCHIVE_CACHE_SIZE_BYTES` (500 MiB) beyond what queries hold; archives fetched into it from any store | operational (local disk with S3: the size of the indexes' segments) | A bound evicts only segments no query holds, and bunvex's indexes keep every segment open (a search reads them all), so it would evict nothing; bounding it would need segments opened per query | owner, 2026-10-05 (keep it unbounded) | [STUDY-111 E6](../study/STUDY-111-search-segments.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -348,10 +349,6 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
-|---|---|---|---|---|---|---|
-| DV-372 | The local cache of search segments (S3 only) has no size bound: it holds every segment the indexes use, all mapped while the process runs; a local store's segments are mapped from its own files, not copied | an LRU of extracted archives in a temporary directory, bounded by `MAX_ARCHIVE_CACHE_SIZE_BYTES` (500 MiB) beyond what queries hold; archives fetched into it from any store | operational (local disk with S3: the size of the indexes' segments) | Not built yet: a bound evicts only segments no query holds, and bunvex's indexes keep every segment open (a search reads them all); bounding it needs segments opened per query | keep: no saving while every segment is searched | [STUDY-111 E6](../study/STUDY-111-search-segments.md#4-divergences) |
-
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).
 DV-324 was decided by the owner (2026-10-04, #373: option (a), downloads metered by the bytes sent as Convex; the missing `content-length` recorded) and is in [Decided divergences](#decided-divergences).
@@ -410,6 +407,8 @@ DV-322 was decided by the owner (2026-10-04, #340: option (a), the logger factor
 DV-340 (STUDY-40 L8) was accepted as recommended (owner, 2026-10-04) and is in [Decided divergences](#decided-divergences).
 
 DV-345 and DV-346 (STUDY-95 S1, S2) were accepted as recommended (owner, 2026-10-04) and are in [Decided divergences](#decided-divergences).
+
+DV-372 (STUDY-111 E6, the search segment cache's bound) was decided by the owner (2026-10-05: keep it unbounded) and is in [Decided divergences](#decided-divergences).
 
 ## Waiting on a dependency
 
