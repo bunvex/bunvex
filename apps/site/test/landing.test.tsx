@@ -38,6 +38,16 @@ describe("Landing", () => {
     expect(screen.getByRole("link", { name: /full report/i }).getAttribute("href")).toBe(BENCH.report);
   });
 
+  test("every benchmark bar has a width, the shortest for a cell with no number (an out-of-memory run)", () => {
+    const { container } = renderLanding();
+    const bars = [...container.querySelectorAll<HTMLElement>("#benchmarks td span[style]")];
+    expect(bars.length).toBe(BENCH.rows.length * 3);
+    for (const bar of bars) expect(bar.style.width).toMatch(/^\d+(\.\d+)?%$/);
+    const oom = BENCH.rows.findIndex((r) => r.convex.startsWith("OOM"));
+    expect(oom).toBeGreaterThan(-1);
+    expect(bars[oom * 3]!.style.width).toBe("2%");
+  });
+
   test("code blocks wrap rather than scroll, so no unfocusable scroll region exists at any width", () => {
     renderLanding();
     const blocks = [...document.querySelectorAll("pre")];
