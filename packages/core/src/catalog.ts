@@ -143,6 +143,10 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _data_sync_progress: "Data sync progress, one row per sync.",
   _usage_limits: "Usage limits per metric and window.",
   _index_backfills: "Progress checkpoints of index backfills.",
+  _index_worker_metadata: "Search and vector index workers' state: the ts each index was fast-forwarded to.",
+  _next_persistence_index_id: "The next index id to hand out.",
+  _auth: "The deployed auth providers, one document per provider.",
+  _db: "The database globals: the data version and the storage type pinned at the first start.",
   _instance: "The deployment's own settings, such as the generated instance secret.",
   _storage_deletions: "Blobs of deleted files, removed once the delete commits.",
 };

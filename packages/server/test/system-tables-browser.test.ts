@@ -95,9 +95,10 @@ test("the listing comes from the catalog: every system table it has, private one
 test("a private system table: readable through the debug query only", async () => {
   const t = await setup();
   await t.call("mutation", "m:add", { body: "a" });
-  // the CLI's tableData goes through db.system, which hides it
+  // the CLI's tableData goes through db.system, which hides it: its reads find nothing, as Convex's (DV-360)
   const hidden = await t.call("query", "_system/cli/tableData", { ...page("_index"), order: "asc" });
-  expect(hidden.status).toBe("error");
+  expect(hidden.status).toBe("success");
+  expect(hidden.value.page).toEqual([]);
   const r = await t.call("query", "_system/debug/systemTable", page("_index"));
   expect(r.status).toBe("success");
   const docs = r.value.page as { table_id?: string; descriptor?: string; name?: string }[];

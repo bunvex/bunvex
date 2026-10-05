@@ -7,6 +7,7 @@ import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { action, Functions, query } from "../src/functions.ts";
+import { SERVER_VERSION } from "../src/health.ts";
 import { MAX_CONCURRENT_REQUESTS, RequestLimit, requestLimitFromEnv } from "../src/request-limit.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
@@ -185,8 +186,8 @@ test("WebSocket upgrades and /version are exempt", async () => {
   const t = await c.transition(0);
   expect(updated(t)[1]).toBe(1);
   c.ws.close();
-  expect(await (await fetch(`${s.api}/version`)).text()).toBe("bunvex");
-  expect(await (await fetch(`${s.site}/version`)).text()).toBe("bunvex");
+  expect(await (await fetch(`${s.api}/version`)).text()).toBe(SERVER_VERSION);
+  expect(await (await fetch(`${s.site}/version`)).text()).toBe(SERVER_VERSION);
   s.open("busy");
   expect(await a).toBe("busy");
 });

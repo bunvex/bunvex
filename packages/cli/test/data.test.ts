@@ -149,9 +149,12 @@ test("bunvex data --system: every system table with its description; a private o
   const index = await t.run(["--system", "_index", "--format", "jsonl", "--order", "asc"]);
   expect(index.code).toBe(0);
   expect(index.out).toContain('"by_creation_time"');
-  // without --system the same table stays hidden, as Convex's `npx convex data _index`
+  // without --system the same table stays hidden: its reads find nothing (DV-360), so Convex's
+  // `npx convex data _index` prints that the table has no documents
   const hidden = await t.run(["_index"]);
-  expect(hidden.code).toBe(1);
+  expect(hidden.code).toBe(0);
+  expect(hidden.out).toBe("");
+  expect(hidden.err.join("\n")).toContain("There are no documents in this table.");
   // a user table is not a system table
   const user = await t.run(["--system", "alpha"]);
   expect(user.code).toBe(1);
