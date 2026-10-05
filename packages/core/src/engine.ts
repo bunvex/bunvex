@@ -211,7 +211,11 @@ export type CallRequest = {
   /** The scheduled function this execution belongs to, if any. */
   scheduledFunctionId: string | null;
 };
-export type Caller = { identity: unknown; key: string; request?: CallRequest };
+/**
+ * Who runs a transaction. `systemIdentity`: an admin or the system acting as itself, not as a user (Convex's
+ * `identity.is_admin() || identity.is_system()`): only it reaches the `_system/` functions.
+ */
+export type Caller = { identity: unknown; key: string; request?: CallRequest; systemIdentity?: boolean };
 const ANONYMOUS: Caller = { identity: null, key: "" };
 /** Separates a cache key from its identity part; `*` is the identity-free entry. */
 const ID_SEP = "\u0001";
@@ -1920,6 +1924,7 @@ export class Engine {
     this.lastTx = tx;
     tx.retention = this.retention;
     tx.identity = caller.identity;
+    tx.systemIdentity = caller.systemIdentity === true;
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
@@ -2112,6 +2117,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
+    tx.systemIdentity = caller.systemIdentity === true;
     tx.searchIndexes = this.searchIndexes;
     tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;

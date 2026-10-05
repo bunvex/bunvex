@@ -100,7 +100,7 @@ function parseScheduleArgs(args: unknown): Record<string, Value> {
 }
 
 /** Where a scheduler writes: a mutation's transaction, or (an action) one transaction per call. */
-type Target = { db: Tx; job?: string } | { engine: Engine; job?: string };
+type Target = { db: Tx; job?: string } | { engine: Engine; job?: string; systemIdentity?: boolean };
 
 export function makeScheduler(functions: Functions, target: Target): Scheduler {
   const write = <T>(f: (db: Tx) => Promise<T>): Promise<T> =>
@@ -122,6 +122,7 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
     const name = functions.scheduledTarget(
       await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
+      "db" in target ? target.db.systemIdentity : target.systemIdentity === true,
     );
     // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
     // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot

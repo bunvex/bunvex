@@ -39,6 +39,7 @@ import {
   HeaderParseError,
   OperationNotPermittedError,
   removeTypePrefix,
+  SystemIdentityRequiredError,
   splitActingAs,
 } from "./admin-keys.ts";
 import { AppMetrics } from "./app-metrics.ts";
@@ -71,7 +72,14 @@ import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
-import { type AdminCaller, adminCallerOf, callerOf, type Functions, type SourcedCaller } from "./functions.ts";
+import {
+  type AdminCaller,
+  adminCallerOf,
+  callerOf,
+  type Functions,
+  isSystemIdentity,
+  type SourcedCaller,
+} from "./functions.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -406,6 +414,7 @@ export function createServer(opts: ServerOptions) {
       e instanceof BadAdminKeyError ||
       e instanceof BadDeployKeyError ||
       e instanceof OperationNotPermittedError ||
+      e instanceof SystemIdentityRequiredError ||
       e instanceof HeaderParseError
     )
       return requestError(e.status, e.code, e.message);
@@ -1339,6 +1348,10 @@ export function createServer(opts: ServerOptions) {
       // `/api/run`: any kind on the root component, as `/api/function`, but open to everyone: an internal
       // function is found for an admin only.
       if (kind === "run") {
+        // As Convex's `any_udf`: reading a `_system/` module is refused to anyone but an admin or the system
+        // (`ModuleModel::get_metadata`), before the function is looked for.
+        if (typeof body.path === "string" && body.path.startsWith("_system/") && !isSystemIdentity(caller))
+          return accessError(new SystemIdentityRequiredError("get_module"))!;
         const found = functions.kindOf(body.path);
         if (!found || (!(caller as AdminCaller).admin && functions.isInternal(body.path)))
           return udfResponse(

@@ -136,7 +136,7 @@ describe("_system/frontend schedules", () => {
       "ArgumentValidationError",
     );
     expect(await functions.runQuery("_system/frontend/listCronJobs", {}).catch((e: Error) => e.message)).toBe(
-      "Could not find public function for '_system/frontend/listCronJobs'.",
+      "Operation query not permitted",
     );
   });
 

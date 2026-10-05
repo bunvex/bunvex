@@ -100,6 +100,7 @@ import {
   BadDeployKeyError,
   type DeploymentOp,
   OperationNotPermittedError,
+  SystemIdentityRequiredError,
 } from "./admin-keys.ts";
 import type { AppMetrics } from "./app-metrics.ts";
 import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
@@ -276,8 +277,15 @@ export const adminCallerOf = (admin: AdminKeyIdentity, actingAs: Record<string, 
   // (the query cache's per-caller entries, sync's shared runs). Convex keys an admin by its operations too.
   key: `admin:${admin.kind}:${admin.kind === "admin" && admin.readOnly ? "ro" : "rw"}:${actingAs ? stringifyValue(actingAs as never) : ""}`,
   admin,
+  systemIdentity: actingAs === null,
 });
 const adminOf = (caller: Caller | undefined) => (caller as AdminCaller | undefined)?.admin;
+/**
+ * Whether `caller` may reach a `_system/` function: an admin or the system acting as itself (Convex's
+ * `identity.is_admin() || identity.is_system()`); not a user, nobody, nor an admin acting as a user.
+ */
+export const isSystemIdentity = (caller: Caller | undefined) =>
+  adminOf(caller) !== undefined && caller!.identity == null;
 const INTERNAL_OPS = {
   query: "RunInternalQueries",
   mutation: "RunInternalMutations",
@@ -1455,6 +1463,8 @@ export class Functions {
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
+    // As Convex's runner: a `_system/` path only for a transaction of an admin or the system
+    if (isSystemPath(name) && !db.systemIdentity) throw new SystemIdentityRequiredError(kind);
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args, measured);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -1539,7 +1549,10 @@ export class Functions {
    * The canonical name (`module.js:function`) of a function to schedule, which must exist, of any kind or
    * visibility (Convex's `validate_schedule_args`; the kind is checked when the job runs).
    */
-  scheduledTarget(name: string): string {
+  scheduledTarget(name: string, systemIdentity = false): string {
+    // Convex reads the target's module first (`ModuleModel::get_metadata`), which refuses a `_system/` module
+    // to anyone but an admin or the system.
+    if (isSystemPath(name) && !systemIdentity) throw new SystemIdentityRequiredError("get_module");
     const key = registryKey(name);
     const i = key.lastIndexOf(":");
     const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
@@ -1583,11 +1596,20 @@ export class Functions {
    * result shapes. From a client, only an admin (or the system) finds it, and its key must allow the
    * function's operation (Convex's `queryPrivateSystem("ViewData")`).
    */
-  /** A client's access to a system function: only an admin finds it, and needs its operation. */
-  private systemAccess(n: string, f: SystemQuery | undefined, fallback: DeploymentOp, caller?: Caller) {
-    const admin = adminOf(caller);
-    if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
-    if (!f || !admin) throw notFound(n);
+  /**
+   * A client's access to a system function, as Convex's `application_function_runner`: refused to anyone but
+   * an admin or the system acting as itself (403 `SystemIdentityRequired`, before the function is looked
+   * up); then the function must exist, and the key must allow its operation.
+   */
+  private systemAccess(
+    n: string,
+    f: SystemQuery | undefined,
+    fallback: DeploymentOp,
+    kind: "query" | "mutation",
+    caller?: Caller,
+  ) {
+    if (!isSystemIdentity(caller)) throw new SystemIdentityRequiredError(kind);
+    if (!f) throw notFound(n);
     if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
@@ -1598,15 +1620,21 @@ export class Functions {
   checkQueryAccess(name: string, caller?: Caller) {
     if (isSystemPath(name)) {
       const n = name.replace(/:default$/, "");
-      this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", caller);
+      this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", "query", caller);
     } else this.checkAccess(this.fns.get(name) ?? this.fns.get(registryKey(name)), name, "query", caller);
   }
 
-  private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+  private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
     const n = name.replace(/:default$/, "");
     const q = SYSTEM_QUERIES[n];
-    if (fromClient) this.systemAccess(n, q, "ViewData", caller);
-    else if (!q) throw notFound(n);
+    if (fromClient) this.systemAccess(n, q, "ViewData", "query", caller);
+    else {
+      // function code (an action's `runQuery`) reaches it only for an admin or the system, as Convex's runner;
+      // no caller at all is the server itself, in process
+      if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
+        throw new SystemIdentityRequiredError("query");
+      if (!q) throw notFound(n);
+    }
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
@@ -1623,11 +1651,15 @@ export class Functions {
     };
   }
 
-  private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+  private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
     const n = name.replace(/:default$/, "");
     const m = SYSTEM_MUTATIONS[n];
-    if (fromClient) this.systemAccess(n, m, "WriteData", caller);
-    else if (!m) throw notFound(n);
+    if (fromClient) this.systemAccess(n, m, "WriteData", "mutation", caller);
+    else {
+      if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
+        throw new SystemIdentityRequiredError("mutation");
+      if (!m) throw notFound(n);
+    }
     const a = this.systemArgs(args, m!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
@@ -1646,12 +1678,12 @@ export class Functions {
 
   /** A dashboard system query, in process (as the system: no key involved). */
   async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
-    return this.engine.query(this.systemQueryBody(name, args, false));
+    return this.engine.query(this.systemQueryBody(name, args, false, undefined, true));
   }
 
   /** A dashboard system mutation, in process; one transaction, as Convex's. */
   async runSystemMutation(name: string, args: unknown = {}): Promise<unknown> {
-    return this.engine.mutation(this.systemMutationBody(name, args, false), name);
+    return this.engine.mutation(this.systemMutationBody(name, args, false, undefined, true), name);
   }
 
   /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
@@ -1854,6 +1886,8 @@ export class Functions {
       caller,
       async () => {
         await this.failActionWhileNotRunning();
+        // As Convex's runner: a `_system/` path only for an admin or the system (there are no system actions)
+        if (isSystemPath(name) && !isSystemIdentity(caller)) throw new SystemIdentityRequiredError("action");
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
@@ -1945,6 +1979,7 @@ export class Functions {
       scheduler: cutOffWithAction(
         makeScheduler(this, {
           engine: this.engine,
+          systemIdentity: isSystemIdentity(caller),
           job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
         }),
       ),
