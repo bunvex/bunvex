@@ -121,7 +121,7 @@ to a spec.
 | [STUDY-78](STUDY-78-write-throughput-limit.md) | The write throughput limit: 4 MiB/s per deployment, `TooManyWrites`, who waits and who fails | implemented |
 | [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler | implemented |
 | [STUDY-95](STUDY-95-error-stacks.md) | A function's error stack: only the app's frames, source-mapped to its files, everywhere errors surface | implemented; S1 / S2 (DV-345, DV-346) accepted as recommended (owner, 2026-10-04) |
-| [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | proposal (owner) |
+| [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

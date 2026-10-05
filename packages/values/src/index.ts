@@ -21,6 +21,7 @@ export {
   type ObjectType,
   type OptionalProperty,
   type PropertyValidators,
+  type TableValidators,
   VAny,
   VArray,
   type Validator,

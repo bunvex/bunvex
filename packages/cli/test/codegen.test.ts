@@ -195,6 +195,72 @@ export const worse = action({ args: {}, handler: (ctx) => ctx.runMutation(api.me
     expect(await main(["codegen", "--typecheck=disable"], io(app).it)).toBe(0);
   }, 120_000);
 
+  // STUDY-100 T2: `v` from `_generated/server` types `v.id` with the app's tables and the system tables; with no
+  // schema, or `strictTableNameTypes: false`, any table name. T1: `v.id` from bunvex/values takes the system tables.
+  test("the generated v: its tables and the system tables; a misspelled table fails, unless the schema is loose", async () => {
+    const app = appWithPackages({
+      ...TYPED_APP,
+      "bunvex/ids.ts": `import { v as plainV } from ${JSON.stringify(VALUES)};
+import { query, v } from "./_generated/server";
+export const byId = query({
+  args: { message: v.id("messages"), file: v.id("_storage"), job: v.id("_scheduled_functions") },
+  handler: async (ctx, { message, file }) => [await ctx.db.get(message), await ctx.storage.getUrl(file)],
+});
+// T1: bunvex/values' v.id keeps the literal: getUrl takes only an Id<"_storage">.
+export const plain = query({
+  args: { file: plainV.id("_storage") },
+  handler: async (ctx, { file }): Promise<string | null> => ctx.storage.getUrl(file),
+});`,
+    });
+    expect(await main(["codegen", "--init", "--typecheck", "enable"], io(app).it)).toBe(0);
+    // What an editor completes in `v.id("`: TypeScript's language service, the one editors run.
+    write(app, {
+      "bunvex/complete.ts": `import { v as plainV } from ${JSON.stringify(VALUES)};
+import { v } from "./_generated/server";
+plainV.id("");
+v.id("");`,
+      "complete.mjs": `import ts from "typescript";
+const file = process.cwd() + "/bunvex/complete.ts";
+const text = ts.sys.readFile(file);
+const config = ts.getParsedCommandLineOfConfigFile("bunvex/tsconfig.json", {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic() {} });
+const host = {
+  getScriptFileNames: () => [file], getScriptVersion: () => "1",
+  getScriptSnapshot: (f) => ts.ScriptSnapshot.fromString(ts.sys.readFile(f) ?? ""),
+  getCurrentDirectory: () => process.cwd(), getCompilationSettings: () => config.options,
+  getDefaultLibFileName: (o) => ts.getDefaultLibFilePath(o), fileExists: ts.sys.fileExists, readFile: ts.sys.readFile,
+  readDirectory: ts.sys.readDirectory, directoryExists: ts.sys.directoryExists, getDirectories: ts.sys.getDirectories,
+};
+const service = ts.createLanguageService(host);
+const at = (needle) => (service.getCompletionsAtPosition(file, text.indexOf(needle) + needle.length, {})?.entries ?? []).map((e) => e.name).filter(Boolean).sort();
+console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("') }));`,
+    });
+    const probe = Bun.spawnSync(["bun", "complete.mjs"], { cwd: app });
+    const completions = JSON.parse(probe.stdout.toString()) as { plain: string[]; generated: string[] };
+    expect(completions.plain).toEqual(["_scheduled_functions", "_storage"]);
+    expect(completions.generated).toEqual(["_scheduled_functions", "_storage", "messages"]);
+    write(app, { "bunvex/typo.ts": `import { v } from "./_generated/server";\nexport const bad = v.id("mesages");` });
+    const strict = io(app);
+    expect(await main(["codegen"], strict.it)).toBe(1);
+    expect(strict.err.join("\n")).toContain(`bunvex/typo.ts(2,`);
+    expect(strict.err.join("\n")).toContain(`'"mesages"'`);
+    // A loose schema: any table name.
+    write(app, {
+      "bunvex/schema.ts": TYPED_APP["bunvex/schema.ts"].replace(
+        /\}\);$/,
+        "}, { strictTableNameTypes: false });",
+      ),
+    });
+    expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(0);
+  }, 120_000);
+
+  test("the generated v with no schema: any table name", async () => {
+    const app = appWithPackages({
+      "bunvex/ids.ts": `import { query, v } from "./_generated/server";
+export const byId = query({ args: { id: v.id("anything"), file: v.id("_storage") }, handler: async () => null });`,
+    });
+    expect(await main(["codegen", "--init", "--typecheck", "enable"], io(app).it)).toBe(0);
+  }, 120_000);
+
   test("without a tsconfig, try skips the typecheck and enable fails", async () => {
     const app = tmp();
     write(app, { "bunvex/a.ts": "export const x = 1;" });
