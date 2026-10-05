@@ -417,8 +417,8 @@ Recounted in the parity sweep of 2026-10-04 (every `missing` / `partial` row che
 
 | Status | Count |
 |---|---|
-| done | 185 |
-| partial | 39 |
+| done | 187 |
+| partial | 37 |
 | missing | 27 |
 | n/a (cloud-only or a decided divergence) | 3 |
 
