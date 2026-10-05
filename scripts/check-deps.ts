@@ -54,6 +54,9 @@ const ALLOWED: Record<string, string[]> = {
   ],
   // Test-only, never published: Jepsen-style consistency runs against a server process (STUDY-57).
   jepsen: ["client", "server", "core", "values"],
+  // Test-only, never published: the same app on Convex's backend and on bunvex's, compared (STUDY-103);
+  // it uses bunvex as a user would, through the public package and its CLI.
+  differential: ["bunvex"],
   // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
   bunvex: ["server", "values", "client", "react", "nextjs", "react-clerk", "react-auth0", "cli", "core", "persistence"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
