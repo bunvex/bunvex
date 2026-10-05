@@ -225,7 +225,7 @@ type QState = {
    * A virtual table's query (`db.system`, STUDY-125): each system document read is mapped to the virtual
    * shape before the operators see it, so filters run on the virtual fields, as Convex's.
    */
-  virtual?: (d: Doc) => Promise<Doc>;
+  virtual?: (d: Doc) => Doc | Promise<Doc>;
 };
 
 type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
@@ -890,7 +890,7 @@ export class Tx {
    * @internal `db.system.query(name)` of a virtual table (system-reader.ts, STUDY-125): a query of its system
    * table `system`, each document mapped by `toVirtual` before any operator.
    */
-  queryVirtual(name: string, system: string, toVirtual: (d: Doc) => Promise<Doc>): TxQuery {
+  queryVirtual(name: string, system: string, toVirtual: (d: Doc) => Doc | Promise<Doc>): TxQuery {
     const t = this.asSystemSync(() => this.findTable(system));
     if (!t) this.readMissingTable();
     const st: QState = {
@@ -1080,7 +1080,12 @@ export class Tx {
       const docs = await this.page(st, lo, hi, n);
       for (const d of docs) {
         this.countEgress(st.t!, d, st.ix!);
-        yield st.virtual ? await st.virtual(d) : d;
+        if (!st.virtual) yield d;
+        else {
+          // A mapping that needs no other read (`_storage`'s) is not awaited.
+          const m = st.virtual(d);
+          yield m instanceof Promise ? await m : m;
+        }
       }
       if (docs.length < n) return;
       const last = indexKey(st.ix!, docs[docs.length - 1]);
@@ -1253,7 +1258,10 @@ export class Tx {
       const limit = Math.min(pipe.onlyLimits, cap);
       let docs = await this.page(st, st.range.lo, st.range.hi, limit);
       for (const d of docs) this.countEgress(st.t, d, st.ix);
-      if (st.virtual) docs = await Promise.all(docs.map(st.virtual));
+      if (st.virtual) {
+        const mapped = docs.map(st.virtual);
+        docs = mapped.some((m) => m instanceof Promise) ? await Promise.all(mapped) : (mapped as Doc[]);
+      }
       // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
       // one ran out of the range.
       if (docs.length < limit) reads.exhausted();

@@ -44,11 +44,11 @@ export type VirtualTable = {
   /** The primary system table. */
   system: string;
   /** A system document in the virtual shape, other system tables read in `tx` (a job's arguments). */
-  toVirtual(tx: Tx, d: Doc): Promise<Doc>;
+  toVirtual(tx: Tx, d: Doc): Doc | Promise<Doc>;
 };
 
 export const VIRTUAL_TABLES: ReadonlyMap<string, VirtualTable> = new Map([
-  [STORAGE_TABLE, { name: STORAGE_TABLE, system: FILE_STORAGE_TABLE, toVirtual: async (_tx, d) => virtualFile(d) }],
+  [STORAGE_TABLE, { name: STORAGE_TABLE, system: FILE_STORAGE_TABLE, toVirtual: (_tx, d) => virtualFile(d) }],
   [
     SCHEDULED_FUNCTIONS_TABLE,
     { name: SCHEDULED_FUNCTIONS_TABLE, system: SCHEDULED_JOBS_TABLE, toVirtual: (tx, d) => virtualJob(tx, d) },
