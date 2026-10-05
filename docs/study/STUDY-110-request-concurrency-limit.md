@@ -1,7 +1,6 @@
 # STUDY-110 — The HTTP server's concurrent request limit
 
-- **Status:** implemented; DV-364 and DV-365 decided (owner, 2026-10-05); DV-366 (the site proxy's own limit
-  of 4) pending the owner
+- **Status:** implemented; DV-364, DV-365 and DV-366 decided (owner, 2026-10-05)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-31](STUDY-31-http-actions.md) and [STUDY-68](STUDY-68-function-limits.md) (the function
   limiters, which are a separate layer)
@@ -128,7 +127,7 @@ server) did not separate the two: run to run, its noise was ±15 % on a shared m
 |---|---|---|---|
 | L1 | `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` sets the limit; self-hosted Convex ignores it and always uses 128 | Owner: the same default as self-hosted Convex, with Convex's knob name to change it | owner, 2026-10-05 (DV-364) |
 | L2 | A WebSocket upgrade is exempt. In Convex the handshake takes a permit until its 101, so while the limit is full a new session waits | Owner: upgrades are exempt; a session never holds a permit in either | owner, 2026-10-05 (DV-365) |
-| L3 | The site port has no limit of its own. Convex's `dev_site_proxy` is a service with `max_concurrency = 4`, so at most 4 site requests (HTTP actions) are forwarded at once, under the backend's 128 | **Pending.** Matching it is possible (a second `RequestLimit(4)` on the site, inside the shared one), but it caps HTTP actions at 4 in flight, which looks like a dev-proxy default rather than a designed limit. The owner's instruction (the limit on both servers) did not cover it | pending (DV-366) |
+| L3 | The site port has no limit of its own. Convex's `dev_site_proxy` is a service with `max_concurrency = 4`, so at most 4 site requests (HTTP actions) are forwarded at once, under the backend's 128 | Convex's 4 is the dev proxy's default, not a designed limit. Matching it (a second `RequestLimit(4)` on the site) would cap HTTP actions at 4 in flight | owner, 2026-10-05: do not match (DV-366) |
 
 Matching Convex (no divergence):
 
@@ -172,5 +171,4 @@ None.
 
 ## 6. Open questions
 
-- **DV-366**: should the site port also cap HTTP actions at 4 in flight, as self-hosted Convex's site proxy?
-  The recommendation is no.
+None. DV-366 (the site proxy's limit of 4) was decided: not matched (owner, 2026-10-05).
