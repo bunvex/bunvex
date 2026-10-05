@@ -104,10 +104,9 @@ Otherwise it prints the type alone:
 bunvex printed the bigint's digits (`v.literal(3)`) and `NaN` / `inf`. `displayLiteral` (check.ts) now prints
 Convex's forms. `displayValidator` and the literal-mismatch message use it (owner, 2026-10-05).
 
-A finite float is still printed by `displayValue`, as in every other message. Its form differs from serde_json's
-for very large or very small magnitudes (JavaScript writes `10000000000000000` and `1e+21`, where `ryu` writes
-`1e16` and `1e21`). That is not part of this change. It is reported to the owner as an open question for the
-value display as a whole.
+A finite float literal is JSON as serde_json prints it, through `formatExportFloat` (`0.00005`, and `1e+21` once
+#463 lands its `+`). It is not printed as a value's `{:?}`: values in messages are Rust's `{:?}` (`5e-5`, `1e21`),
+literals serde_json's, as in Convex (STUDY-18 §8).
 
 Tests (`packages/values/test/validators.test.ts`, "literals compare by type and value"):
 

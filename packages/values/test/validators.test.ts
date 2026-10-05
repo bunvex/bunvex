@@ -30,6 +30,8 @@ describe("v.* builders and checking (STUDY-13)", () => {
     expect(err(v.literal(3n), 3)).toBe("`3.0` does not match literal validator `v.literal(<bigint>)`.");
     expect(err(v.literal("a"), "b")).toBe('`"b"` does not match literal validator `v.literal("a")`.');
     expect(err(v.literal(2), 3)).toBe("`3.0` does not match literal validator `v.literal(2.0)`.");
+    // A finite literal is serde_json's text, which keeps 1e-5..1e-4 as a decimal (a value's `{:?}` does not).
+    expect(err(v.literal(0.00005), 3)).toBe("`3.0` does not match literal validator `v.literal(0.00005)`.");
     expect(err(v.literal(Number.NaN), 3)).toBe("`3.0` does not match literal validator `v.literal(<number>)`.");
     expect(err(v.literal(true), false)).toBe("`false` does not match literal validator `v.literal(true)`.");
     expect(err(v.union(v.literal(1n), v.literal("x")), "y")).toBe(

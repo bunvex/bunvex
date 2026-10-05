@@ -3,6 +3,7 @@
 // value and the validator in the same display forms.
 
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
+import { formatExportFloat } from "./export-json.ts";
 import { decodeId } from "./id.ts";
 import type { GenericValidator } from "./validators.ts";
 import { compareValues, isBytes, isSimpleObject, opaque, type Value } from "./value.ts";
@@ -55,7 +56,8 @@ function display(v: Value | undefined, ancestors: Set<object>): string {
  */
 function displayLiteral(value: Value): string {
   if (typeof value === "bigint") return "<bigint>";
-  if (typeof value === "number" && !Number.isFinite(value)) return "<number>";
+  // A finite number is JSON as serde_json prints it (`0.00005`, `1e+21`), not as values print in messages.
+  if (typeof value === "number") return Number.isFinite(value) ? formatExportFloat(value) : "<number>";
   return displayValue(value);
 }
 
