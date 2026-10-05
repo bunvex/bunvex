@@ -13,6 +13,7 @@ import {
   actionGeneric,
   type FilterApi,
   Functions,
+  filterApi,
   type GenericQueryCtx,
   internalMutationGeneric,
   type MutationBuilder,
@@ -97,6 +98,17 @@ check<Equal<PublicApi["dir"]["nested"]["run"]["_type"], "action">>(true);
 check<Equal<PublicApi["dir"]["nested"]["run"]["_returnType"], string>>(true);
 // A void result is null to a client.
 check<Equal<InternalApi["messages"]["clear"]["_returnType"], null>>(true);
+
+// `filterApi`: the same object, narrowed by its type (Convex's server/api.ts).
+const queries = filterApi<PublicApi, FunctionReference<"query">>(api);
+check<Equal<keyof typeof queries, "messages">>(true);
+check<Equal<keyof typeof queries.messages, "list" | "count">>(true);
+// @ts-expect-error a mutation is filtered out
+void queries.messages.send;
+test("filterApi returns its argument", () => {
+  expect(filterApi(api)).toBe(api);
+  expect(filterApi<typeof internal, FunctionReference<"mutation">>(internal)).toBe(internal);
+});
 
 // Misuse the types refuse.
 mutation({

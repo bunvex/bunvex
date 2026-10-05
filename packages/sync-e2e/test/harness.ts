@@ -2,15 +2,29 @@
 // come back on the same port (a restart, as far as clients can tell).
 import { defineSchema, defineTable, Engine, type PaginationOptions } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { action, createServer, Functions, mutation, query } from "@bunvex/server";
+import {
+  action,
+  adminKeyCipherKey,
+  createServer,
+  Functions,
+  internalMutation,
+  issueAdminKey,
+  mutation,
+  query,
+} from "@bunvex/server";
 import { BunvexError, v } from "@bunvex/values";
 
 export type Harness = Awaited<ReturnType<typeof startServer>>;
+
+const INSTANCE_SECRET = "4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974";
+/** An admin key of the harness's deployment (for `/api/function`). */
+export const ADMIN_KEY = issueAdminKey({ instanceName: "harness", cipherKey: adminKeyCipherKey(INSTANCE_SECRET) });
 
 export async function startServer() {
   const engine = await new Engine(
     defineSchema({ messages: defineTable(v.any()), counters: defineTable(v.any()), settings: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
+    { instanceName: "harness", instanceSecret: INSTANCE_SECRET },
   ).init();
   const runs: string[] = [];
   const gates = new Map<string, Promise<void>>();
@@ -55,6 +69,10 @@ export async function startServer() {
     }),
     sendMany: mutation(async ({ db }, { prefix, n }: { prefix: string; n: number }) => {
       for (let i = 0; i < n; i++) await db.insert("messages", { body: `${prefix}${i}` });
+    }),
+    clear: internalMutation(async ({ db }, { keep }: { keep: string }) => {
+      for (const m of await db.query("messages").collect()) if (m.body !== keep) await db.delete(m._id);
+      return keep;
     }),
     logged: mutation(() => {
       console.log("hello from a mutation");

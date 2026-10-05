@@ -9,7 +9,8 @@ export function blobStoreFromEnv(
   env: Record<string, string | undefined> = process.env,
   opts: {
     s3Prefix?: string | (() => Promise<string>);
-    useCase?: "files" | "modules" | "exports" | "snapshot_imports";
+    /** `search`: the search indexes' snapshots (STUDY-96), Convex's search bucket. */
+    useCase?: "files" | "modules" | "exports" | "snapshot_imports" | "search";
   } = {},
 ): BlobStore {
   const useCase = opts.useCase ?? "files";

@@ -103,7 +103,14 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
-import { filterKey, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import { filterKey, indexedDoc, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
+import {
+  canSnapshotSearch,
+  loadSearchSnapshot,
+  SearchRestore,
+  type SearchSnapshotStore,
+  saveSearchSnapshot,
+} from "./search-snapshot.ts";
 import {
   deleteSessionRequestsBefore,
   findSessionRequest,
@@ -128,6 +135,7 @@ import {
   type VectorFilter,
   type VectorIndexEntry,
   VectorIndexes,
+  vectorEntry,
 } from "./vector-indexes.ts";
 import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
 
@@ -299,6 +307,11 @@ export class Engine {
       retention?: RetentionOptions;
       /** Table summary checkpoints' knobs (STUDY-72); `false`: none, the summaries scanned on every start. */
       summaryCheckpoints?: SummaryCheckpointOptions | false;
+      /**
+       * Where the search indexes' snapshot is kept (STUDY-96): written at a clean shutdown, restored from at
+       * start with the log since. None: the indexes are read from their tables at every start.
+       */
+      searchSnapshots?: SearchSnapshotStore;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
       /**
@@ -364,8 +377,13 @@ export class Engine {
     const backfilling = await this.reconcileCatalog();
     // The search and vector indexes of the schema the process starts on existed before it: they are rebuilt
     // in memory (DV-227, DV-270), and searches meanwhile are Convex's bootstrapping answer (STUDY-79).
+    await this.loadSearchSnapshot();
     this.reconcileSearch(true);
     this.reconcileVector(true);
+    // The snapshot is held only while the indexes it restores are being built.
+    void Promise.allSettled([...this.searchBackfills]).then(() => {
+      this.searchRestore = null;
+    });
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -460,6 +478,7 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
+    await this.saveSearchSnapshot();
     if (this.lease) {
       clearInterval(this.lease.timer);
       if (!this.committer.stopped) await this.lease.store.releaseLease();
@@ -749,9 +768,54 @@ export class Engine {
     }
   }
 
+  /** The snapshot the bootstrapping indexes are restored from (STUDY-96), while they are. */
+  private searchRestore: SearchRestore | null = null;
+  /** How many indexes the last start restored from a snapshot (tests, STUDY-96). */
+  readonly searchStats = { restored: 0 };
+
+  private async loadSearchSnapshot() {
+    const blobs = this.opts.searchSnapshots;
+    const p = this.persistence;
+    if (!blobs || !canSnapshotSearch(p)) return;
+    const at = this.committer.visibleTs;
+    try {
+      const snapshot = await loadSearchSnapshot(p, blobs, at);
+      if (snapshot) this.searchRestore = new SearchRestore(p, snapshot, at, decodeDoc);
+    } catch (e) {
+      console.error(
+        `bunvex: the search index snapshot could not be read, indexing the tables: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /** At a clean shutdown: the ready search and vector indexes, as of the last commit (STUDY-96). */
+  private async saveSearchSnapshot() {
+    const blobs = this.opts.searchSnapshots;
+    const p = this.persistence;
+    if (!blobs || !canSnapshotSearch(p) || this.committer.stopped) return;
+    try {
+      await saveSearchSnapshot(p, blobs, this.committer.visibleTs, this.searchIndexes.all(), this.vectorIndexes.all());
+    } catch (e) {
+      console.error(`bunvex: the search index snapshot could not be written: ${(e as Error).message}`);
+    }
+  }
+
   private async backfillVector(e: VectorIndexEntry) {
     const t = this.catalog.byTablet(e.tablet);
     if (!t) return;
+    if (
+      e.bootstrapping &&
+      this.searchRestore &&
+      (await this.searchRestore.vector(
+        e,
+        (id, entry) => this.vectorIndexes.restore(e, id, entry),
+        (doc) => vectorEntry(e.def, doc),
+      ))
+    ) {
+      this.searchStats.restored++;
+      this.vectorIndexes.done(e);
+      return;
+    }
     const at = this.committer.visibleTs;
     let last: string | null = null;
     for (;;) {
@@ -835,6 +899,19 @@ export class Engine {
   private async backfillSearch(e: SearchIndexEntry) {
     const t = this.catalog.byTablet(e.tablet);
     if (!t) return;
+    if (
+      e.bootstrapping &&
+      this.searchRestore &&
+      (await this.searchRestore.text(
+        e,
+        (id, d) => this.searchIndexes.restore(e, id, d),
+        (doc) => indexedDoc(e.def, doc),
+      ))
+    ) {
+      this.searchStats.restored++;
+      this.searchIndexes.done(e);
+      return;
+    }
     const at = this.committer.visibleTs;
     let last: string | null = null;
     for (;;) {
@@ -1303,7 +1380,13 @@ export class Engine {
       async (db) => {
         const { tables, indexes: stored } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
-        const plan = planCatalog([{ name: `\u0000hidden`, indexes, document: v.any() }], tables, stored);
+        // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
+        const plan = planCatalog(
+          [{ name: `\u0000hidden`, indexes, document: v.any() }],
+          tables,
+          stored,
+          !name.startsWith("_"),
+        );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
           const holder = tables.find(

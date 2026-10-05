@@ -15,7 +15,7 @@ import {
   type Tx,
   wallClock,
 } from "@bunvex/core";
-import { displayValue, type Value, valueSize } from "@bunvex/values";
+import { displayValue, rawValueSize, type Value } from "@bunvex/values";
 import type { CronSpec } from "./cron.ts";
 import {
   applyCrons,
@@ -292,7 +292,7 @@ export class CronJobExecutor {
               THROTTLED,
             ),
           // A cron that changed meanwhile did not run.
-          (ran) => (ran ? { returnBytes: valueSize((value ?? null) as Value) } : { skip: true }),
+          (ran) => (ran ? { returnBytes: rawValueSize((value ?? null) as Value) } : { skip: true }),
           undefined,
           job.cronSpec.udfArgs[0],
         ),

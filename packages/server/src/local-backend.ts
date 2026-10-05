@@ -19,11 +19,12 @@
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence } from "@bunvex/core";
-import { blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
+import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence } from "./persistence.ts";
+import { searchSnapshotStore } from "./search-snapshot-store.ts";
 import { createServer } from "./server.ts";
 
 export type LocalBackendIo = {
@@ -199,13 +200,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
     persistence = new SqlitePersistence(resolve(io.cwd, f.dbSpec), { durable: true });
   } else persistence = await openPersistence({ kind: f.db, url: f.dbSpec, requireSsl: !f.doNotRequireSsl, pool: 16 });
-  const engine = await new Engine(defineSchema({}), persistence, {
-    instanceName: f.instanceName,
-    instanceSecret: f.instanceSecret,
-    storedSchema: true,
-    lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
-  }).init();
-  const storage = (useCase: "files" | "modules" | "exports" | "snapshot_imports") => {
+  // The engine is read when a store first writes to S3 (its prefix is an instance setting), after it exists.
+  const storage = (useCase: "files" | "modules" | "exports" | "snapshot_imports" | "search") => {
     // With --s3-storage, each use case whose bucket is set is in S3, the others stay local (STUDY-38 K4).
     if (!f.s3 || !s3OptionsFromEnv(io.env, useCase))
       return new LocalBlobStore(resolve(io.cwd, f.localStorage), useCase);
@@ -214,6 +210,19 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
     });
   };
+  // Search index snapshots live in the `search` use case (STUDY-96); its store is made once the engine exists.
+  let searchBlobs: BlobStore | null = null;
+  const engine: Engine = new Engine(defineSchema({}), persistence, {
+    instanceName: f.instanceName,
+    instanceSecret: f.instanceSecret,
+    storedSchema: true,
+    lease: { ttlMs: Number(io.env.LEASE_TTL_MS ?? 5000), waitMs: Number(io.env.LEASE_WAIT_MS ?? 0) },
+    searchSnapshots: searchSnapshotStore(() => {
+      searchBlobs ??= storage("search");
+      return searchBlobs;
+    }),
+  });
+  await engine.init();
   const app = createServer({
     engine,
     functions: new Functions(engine),

@@ -328,9 +328,16 @@ function optionalOf<V extends GenericValidator>(x: V): Validator<Infer<V> | unde
 
 type Required<V extends GenericValidator> = V extends { isOptional: "optional" } ? never : V;
 
+/**
+ * The system tables an id may name (as `SystemTableNames` in @bunvex/core). In `v.id`'s signature so editors
+ * suggest them everywhere, `schema.ts` included (STUDY-100 T1); `string & {}` still takes any other name.
+ */
+type SystemTableName = "_scheduled_functions" | "_storage";
+
 /** The validator builders. */
 export const v = {
-  id: <TableName extends string>(tableName: TableName) => new VId<GenericId<TableName>>("required", tableName),
+  id: <TableName extends SystemTableName | (string & {})>(tableName: TableName) =>
+    new VId<GenericId<TableName>>("required", tableName),
   null: () => new VNull("required"),
   number: () => new VFloat64("required"),
   float64: () => new VFloat64("required"),
@@ -349,6 +356,15 @@ export const v = {
   any: () => new VAny("required"),
   optional: <V extends GenericValidator>(x: V) => optionalOf(x) as ReturnType<typeof optionalOf<V>>,
   nullable: <V extends GenericValidator>(x: V) => v.union(x, v.null()),
+};
+
+/**
+ * `v` with `v.id` limited to `TableNames` (STUDY-100 T2): `_generated/server` exports `v` typed so with the
+ * app's tables and the system tables, so editors complete them and a misspelled table is a type error. With no
+ * schema, or `strictTableNameTypes: false`, `TableNames` is `string` and any name is accepted. The value is `v`.
+ */
+export type TableValidators<TableNames extends string> = Omit<typeof v, "id"> & {
+  id: <TableName extends TableNames>(tableName: TableName) => VId<GenericId<TableName>>;
 };
 
 /**
