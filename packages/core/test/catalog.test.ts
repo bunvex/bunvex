@@ -58,6 +58,7 @@ describe("catalog (_tables / _index)", () => {
           _data_sync_progress: 553,
           _usage_limits: 552,
           _index_backfills: 548,
+          _index_worker_metadata: 542,
           _storage_deletions: 9998,
           _instance: 9999,
           users: 10001,

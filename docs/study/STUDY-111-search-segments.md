@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill), PR 5 (the compactor) and PR 6 (the `_index` rows) implemented
+  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill), PR 5 (the compactor), PR 6 (the `_index` rows) and PR 7 (fast-forward, retention, orphans) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),
@@ -147,7 +147,7 @@ Delivered as a series of pull requests, each building on the previous one.
 | 5 | `feat/search-segments-compactor` | The compactor and its reconciliation with flushes |
 | 3b | `feat/search-segments-backpressure` | `TextIndexTooLarge` / `VectorIndexTooLarge` (DV-228) |
 | 6 | `feat/search-segments-index-rows` | Every search and vector index's `_index` row, as Convex's (the state moves there); the STUDY-96 snapshot removed |
-| 7 | `feat/search-segments-retention` | Fast-forward (`_index_worker_metadata`), `TooOld` flushes, retention, orphan blobs |
+| 7 | `feat/search-segments-retention` | Fast-forward (`_index_worker_metadata`), `TooOld` flushes, retention |
 | 8 | `feat/search-segments-disk` | (optional) segments queried from disk instead of RAM |
 
 ### 3.1 The segment formats (PR 1, `@bunvex/search`)
@@ -391,11 +391,29 @@ The owner asked (2026-10-05) for every search and vector index to have its `_ind
 - **STUDY-96's snapshot is removed**: segments cover what it did (a clean shutdown flushes, DV-369), and bunvex
   has no data to migrate (owner, 2026-10-05). The engine's `searchSnapshots` option is `searchStorage`.
 
-### 3.8 The rest of the series (planned; each PR updates this section)
+### 3.8 Fast-forward and retention (PR 7)
 
-- **Fast-forward, retention, orphans (PR 7).** §1.6: `_index_worker_metadata`'s `fast_forward_ts`, the `TooOld`
-  flush; blobs a crash left unnamed.
-- **Query from disk (PR 8, optional).** RAM until then: see §6.
+- **`_index_worker_metadata`**, Convex's system table (number 542, `by_index_doc_id` on `index_id`): per search or
+  vector index, `{index_id, index_metadata: {metadata_type: "text_search" | "vector_search", metadata:
+  {fast_forward_ts}}}`, `index_id` its `_index` row's id.
+- **The workers' poll**, every `DATABASE_WORKERS_POLL_INTERVAL` (20 s), as Convex's flusher and
+  `FastForwardIndexWorker`:
+  - **`TooOld`:** a ready index whose memory part is not empty and whose ts is `SEARCH_WORKERS_MAX_CHECKPOINT_AGE`
+    (1 h) old is flushed;
+  - **fast-forward:** each ready index with nothing in its memory part (and no deletes left to store) gets
+    `fast_forward_ts` = now; debounced as Convex's (the first time at once, then once 500 commits —
+    `DATABASE_WORKERS_MIN_COMMITS` — or the checkpoint age have passed).
+- **A start** uses `max(segments' ts, fast_forward_ts)` (Convex's bootstrap): it replays only the log after it,
+  and it is what retention's `document_min_snapshot_ts` is compared with, so an idle index is never overtaken.
+- **A clean shutdown** flushes, then fast-forwards every index, instead of rewriting their rows (DV-369).
+- **Blobs a crash left unnamed** (between writing a segment or deletes blob and naming it) stay in the store, as
+  Convex's: no search blob is ever deleted (DV-370).
+
+### 3.9 Not built: segments queried from disk
+
+Segments stay loaded in memory (DV-371). The format reads in place (§3.1), so a memory-mapped file
+(`Bun.mmap`) of a local blob, or of a local cache of an S3 one, can take a loaded blob's place without changing
+the search code; that is the series' optional last PR, not done (§6).
 
 ## 4. Divergences
 
@@ -403,7 +421,7 @@ The owner asked (2026-10-05) for every search and vector index to have its `_ind
 |---|---|---|---|
 | E1 | Segments are bunvex's own binary format: a text segment is one blob (terms, postings, documents, forward index) plus a deletes blob, not a tantivy archive with an id tracker, an alive bitset and a deleted-terms table; a vector segment is a flat array of normalized vectors plus a deleted bitset, not a qdrant HNSW segment | Não dá pra fazer: tantivy and qdrant are Rust libraries. The flat vector segment follows DV-269 (exact search). Not observable: answers are the whole index's | owner, 2026-10-05 (build E; the format follows), DV-367 |
 | E2 | Search and vector indexes' `_index` rows are Convex's `config` with bunvex's identity fields (`tablet`, `name`, as its database index rows); a staged index is not built, so its row stays `backfilling` (Convex: `Backfilled { staged }`); the backfill cursor is the document id's bytes, not an index key; there is no `Backfilled` state (an index is enabled once built) | Identity fields: DV-53. Staged: Ainda não fizemos (staged search indexes are not built, platform §search). Cursor and states: bunvex's backfill and push. Count and config as Convex's | owner, 2026-10-05 (rows as Convex's); the rest follows existing decisions. DV-368 |
-| E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | carried from D (owner, 2026-10-04); question in the series' report. DV-369 |
+| E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | owner, 2026-10-05: keep it. DV-369 |
 | E4 | ~~Replaced segment and deletes blobs, and those of a removed index, were deleted from the `search` store~~ | Resolved: no search blob is deleted, as Convex's | owner, 2026-10-05 (match Convex). DV-370 |
 | E5 | Segments are loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files | Ainda não fizemos: the format reads in place (PR 1), so a memory-mapped file can take a loaded blob's place (PR 7). Operational: memory | owner, 2026-10-05 (RAM first; disk as a later PR). DV-371 |
 
@@ -529,9 +547,24 @@ Sabotage checks (each made tests fail): search rows read as database indexes; th
 indexes are reconciled; the snapshot written with another version; filter fields not sorted in the row; the
 staged flag not kept.
 
+**PR 7** (`packages/core/test/search-workers.test.ts`):
+
+- an index holding a write in memory is not fast-forwarded; a clean shutdown flushes then fast-forwards, in
+  `_index_worker_metadata`'s shape (`text_search`, `vector_search`), past the rows' ts; writes to another table
+  move the clock and a tick fast-forwards both indexes again; after a crash, with retention past the rows' ts
+  but not the fast-forward's, a start loads the segments and replays nothing;
+- a memory part older than the checkpoint age is flushed by a tick;
+- no blob is deleted: an old unnamed one, and the deletes a flush replaces, stay; the answers are unchanged.
+
+Sabotage checks (each made a test fail): the fast-forward ts ignored at start; busy indexes fast-forwarded; no
+`TooOld` flush; no fast-forward at shutdown;
+retention checked against the segments' ts only.
+
 ## 6. Open questions
 
-- **Segments in RAM or on disk.** PRs 1–6 load every segment into RAM: it already bounds the memory of the
-  write path (the memory part) and is much more compact than today's maps, while queries keep today's
-  speed. Querying from disk (memory-mapped segments, as Convex's cache) bounds memory by the OS page cache
-  instead, at some query latency; the format is laid out for it, and it is PR 7. Measured in PR 3.
+- **Segments in RAM or on disk** (DV-371). Segments are loaded into memory: at 200 000 documents a restarted
+  process holds about 170–220 MiB of heap (`main` held 550–850 MiB), and queries are faster than `main`'s. Reading
+  them from disk instead (memory-mapped, as Convex's cache) would bound memory by the OS page cache, at some query
+  latency and with a local cache for S3. The format is ready for it (§3.9); it is not built. Recommendation: keep
+  RAM until a deployment's segments outgrow its memory.
+- ~~The clean-shutdown flush~~ decided by the owner (2026-10-05): kept (DV-369).

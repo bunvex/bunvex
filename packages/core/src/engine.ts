@@ -36,6 +36,8 @@ import {
   INDEX_BACKFILLS_INDEX,
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
+  INDEX_WORKER_METADATA_INDEX,
+  INDEX_WORKER_METADATA_TABLE,
   INSTANCE_TABLE,
   IndexBackfillingError,
   type IndexBackfillMeta,
@@ -117,10 +119,12 @@ import {
   type SearchSegmentLimits,
   type SearchSegmentStore,
   SearchSegmentsState,
+  type SearchWorkerOptions,
   SegmentReplay,
   sameSpec,
   searchCompactionFromEnv,
   searchSegmentLimitsFromEnv,
+  searchWorkersFromEnv,
   segmentRefs,
   segmentsToCompact,
   stateKey,
@@ -342,6 +346,8 @@ export class Engine {
       searchSegmentLimits?: Partial<SearchSegmentLimits>;
       /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
       searchCompaction?: Partial<SearchCompactionConfig>;
+      /** The search index workers' pacing (default: Convex's knobs from the environment). */
+      searchWorkers?: Partial<SearchWorkerOptions>;
       /** Awaited between a compaction's build and its commit (tests interleave flushes there). */
       beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
@@ -413,6 +419,7 @@ export class Engine {
     await this.loadSearchSegments();
     this.reconcileSearch(true);
     this.reconcileVector(true);
+    this.startSearchWorkers();
     // The log since the segments is held only while the indexes it restores are being built.
     void Promise.allSettled([...this.searchBackfills]).then(() => {
       this.segmentReplay = null;
@@ -511,6 +518,7 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     await this.committer.idle();
+    if (this.workerTimer) clearInterval(this.workerTimer);
     // A compaction in progress stops; then every index is flushed.
     await Promise.allSettled([...this.compacting.values()]);
     await this.flushSearchSegments();
@@ -618,6 +626,11 @@ export class Engine {
         document: v.any(),
       },
       { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      {
+        name: INDEX_WORKER_METADATA_TABLE,
+        indexes: { [INDEX_WORKER_METADATA_INDEX]: ["index_id"] },
+        document: v.any(),
+      },
       { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
@@ -819,6 +832,7 @@ export class Engine {
     flushes: 0,
     backfillSteps: 0,
     compactions: 0,
+    fastForwards: 0,
     backfilled: 0,
     resumed: 0,
   };
@@ -855,13 +869,112 @@ export class Engine {
     state.load(
       await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
     );
+    state.loadForwarded(
+      await this.runMutation(
+        (db) => db.query(INDEX_WORKER_METADATA_TABLE).collect() as Promise<Record<string, unknown>[]>,
+        true,
+      ),
+    );
     this.indexRows = state;
     if (!store || !blobs) return;
     this.searchSegments = state;
     // Each table's log is read once, from the oldest ts any of its indexes starts from.
     const oldest = new Map<number, number>();
-    for (const s of state.all()) oldest.set(s.tablet, Math.min(oldest.get(s.tablet) ?? s.ts, s.ts));
+    for (const s of state.all()) {
+      const ts = state.currentTs(s);
+      oldest.set(s.tablet, Math.min(oldest.get(s.tablet) ?? ts, ts));
+    }
     this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest);
+  }
+
+  /** The search index workers' pacing. */
+  private get workers(): SearchWorkerOptions {
+    return { ...searchWorkersFromEnv(), ...this.opts.searchWorkers };
+  }
+  private workerTimer: ReturnType<typeof setInterval> | null = null;
+  /** Commits since the start, and at the last fast-forward (Convex's `write_commits_since_load`). */
+  private commitsSeen = 0;
+  private lastForward: { at: number; commits: number } | null = null;
+
+  /**
+   * Convex's search index workers' periodic part (STUDY-111 PR 7): every poll interval, the `TooOld` flush of a
+   * ready index whose memory part is not empty and whose ts is `SEARCH_WORKERS_MAX_CHECKPOINT_AGE` old, then the
+   * fast-forward of the ready indexes with nothing in their memory part (`fast_forward.rs`): their
+   * `_index_worker_metadata` row's `fast_forward_ts` moves to now, so a start replays nothing older and retention
+   * never overtakes an idle index. Debounced as Convex's: after the first time, only once
+   * DATABASE_WORKERS_MIN_COMMITS commits or the checkpoint age have passed.
+   */
+  private startSearchWorkers() {
+    if (!this.searchSegments || this.workerTimer) return;
+    this.committer.onCommit((entries) => {
+      this.commitsSeen += entries.length;
+    }, "search workers");
+    this.workerTimer = setInterval(() => {
+      void this.searchWorkersTick().catch((err) => {
+        if (!this.closed) console.error(`bunvex: search index workers failed: ${err.message}`);
+      });
+    }, this.workers.pollIntervalMs);
+    this.workerTimer.unref?.();
+  }
+
+  /** One pass of the search index workers (tests call it directly). */
+  async searchWorkersTick(atShutdown = false) {
+    const state = this.searchSegments;
+    if (!state || (this.closed && !atShutdown) || this.committer.stopped) return;
+    const w = this.workers;
+    const now = this.committer.visibleTs;
+    const all = [
+      ...this.searchIndexes.all().map((e) => ["text", e] as const),
+      ...this.vectorIndexes.all().map((e) => ["vector", e] as const),
+    ];
+    // TooOld: a memory part with writes older than the checkpoint age is flushed.
+    for (const [kind, e] of all) {
+      const s = state.get(kind, e.tablet, e.name);
+      if (!e.ready || e.staged || !s || !e.index.changed.size) continue;
+      if (now - state.currentTs(s) >= w.maxCheckpointAgeMs * 1000) this.scheduleFlush(kind, e);
+    }
+    // Fast-forward, debounced.
+    const last = this.lastForward;
+    if (
+      !atShutdown &&
+      last &&
+      this.commitsSeen - last.commits < w.minCommits &&
+      Date.now() - last.at < w.maxCheckpointAgeMs
+    )
+      return;
+    const idle = all
+      .filter(([kind, e]) => {
+        const s = state.get(kind, e.tablet, e.name);
+        return (
+          e.ready &&
+          !e.staged &&
+          s &&
+          !s.backfill &&
+          !e.index.changed.size &&
+          !e.index.segments.some((p) => p.version !== p.persisted) &&
+          state.currentTs(s) < now
+        );
+      })
+      .map(([kind, e]) => stateKey(kind, e.tablet, e.name));
+    this.lastForward = { at: Date.now(), commits: this.commitsSeen };
+    if (!idle.length) return;
+    const { writes, done } = state.forward(idle, now);
+    const ids = await this.runMutation(async (db) => {
+      const out: (string | undefined)[] = [];
+      for (const x of writes) {
+        const row = {
+          index_id: x.index_id,
+          index_metadata: { metadata_type: x.metadata_type, metadata: { fast_forward_ts: now } },
+        };
+        if (x._id) {
+          await db.patch(INDEX_WORKER_METADATA_TABLE, x._id, row);
+          out.push(undefined);
+        } else out.push((await db.insert(INDEX_WORKER_METADATA_TABLE, row)) as string);
+      }
+      return out;
+    }, true);
+    done(ids);
+    this.searchStats.fastForwards += idle.length;
   }
 
   /** Writes search and vector indexes' `_index` rows, in one system transaction; the inserted rows' ids. */
@@ -924,7 +1037,7 @@ export class Engine {
       const parts = await state.fetch(s);
       if (!parts) return false;
       load(parts);
-      const changes = await log.since(e.tablet, s.ts);
+      const changes = await log.since(e.tablet, state.currentTs(s));
       await this.opts.beforeSearchBackfillPage?.();
       for (const [id, doc] of changes) {
         replay(id, doc as Doc | null);
@@ -1036,7 +1149,8 @@ export class Engine {
     const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
     const f = index.prepareFlush();
     const before = state.get(kind, e.tablet, e.name);
-    if (!f.segment && !f.deletes.length && before && before.ts >= ts) return;
+    // Nothing to write: the ts moves by a fast-forward instead (`searchWorkersTick`), as Convex's.
+    if (!f.segment && !f.deletes.length && before && !before.backfill) return;
     const added = f.segment ? await this.storeSegment(kind, e, f.segment) : null;
     const deletes = await Promise.all(f.deletes.map((d) => state.blobs!.put(d.bytes)));
     const stored = await state.update(
@@ -1327,6 +1441,10 @@ export class Engine {
         console.error(`bunvex: ${kind} index ${e.table}.${e.name} failed to flush: ${(err as Error).message}`);
       }
     }
+    // Then every index with nothing left in memory moves its ts to now: the next start replays nothing.
+    await this.searchWorkersTick(true).catch((err) => {
+      console.error(`bunvex: search indexes could not be fast-forwarded: ${(err as Error).message}`);
+    });
   }
 
   /**
@@ -1398,6 +1516,10 @@ export class Engine {
       .update((states) => {
         if (!this.isCurrent(kind, e)) return false;
         const k = stateKey(kind, e.tablet, e.name);
+        // A row that names segments (a run with a store wrote it) is left as it is: its segments, plus the log
+        // since, are still this index.
+        const before = states.get(k);
+        if (before?.segments.length) return false;
         states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: false });
         return true;
       })

@@ -56,6 +56,12 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
+/**
+ * Search index workers' state (Convex's `_index_worker_metadata`, STUDY-111): per search or vector index (its
+ * `_index` row's id), the ts it was fast-forwarded to.
+ */
+export const INDEX_WORKER_METADATA_TABLE = "_index_worker_metadata";
+export const INDEX_WORKER_METADATA_INDEX = "by_index_doc_id";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
@@ -91,6 +97,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _data_sync_progress: 553,
   _usage_limits: 552,
   _index_backfills: 548,
+  _index_worker_metadata: 542,
   // bunvex's own.
   _instance: 9_999,
   _storage_deletions: 9_998,

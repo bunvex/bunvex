@@ -12,6 +12,25 @@ import type { StoredSegment } from "@bunvex/search";
 import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
 
+/**
+ * Convex's DATABASE_WORKERS_POLL_INTERVAL (20 s), DATABASE_WORKERS_MIN_COMMITS (500) and
+ * SEARCH_WORKERS_MAX_CHECKPOINT_AGE (1 h): how often the workers look, how many commits or how long before an
+ * idle index is fast-forwarded again, and how old a non-empty memory part's ts may get before it is flushed.
+ */
+export type SearchWorkerOptions = { pollIntervalMs: number; minCommits: number; maxCheckpointAgeMs: number };
+
+export function searchWorkersFromEnv(env: Record<string, string | undefined> = process.env): SearchWorkerOptions {
+  const num = (name: string, fallback: number) => {
+    const n = Number(env[name]);
+    return env[name] !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  return {
+    pollIntervalMs: num("DATABASE_WORKERS_POLL_INTERVAL", 20) * 1000,
+    minCommits: num("DATABASE_WORKERS_MIN_COMMITS", 500),
+    maxCheckpointAgeMs: num("SEARCH_WORKERS_MAX_CHECKPOINT_AGE", 3600) * 1000,
+  };
+}
+
 /** Retention's global for the oldest document snapshot it keeps (retention.ts). */
 const MIN_DOCUMENT_TS_GLOBAL = "document_min_snapshot_ts";
 /** Convex's `TextSnapshotVersion::current()` (V2UseStringIds): the version a text snapshot is written with. */
@@ -339,6 +358,8 @@ export type IndexRowWrite = { _id?: string; row?: SearchIndexRow };
 export class SearchSegmentsState {
   private states = new Map<string, IndexSegmentsState>();
   private ids = new Map<string, string>();
+  /** Each index's fast-forward ts (Convex's `_index_worker_metadata`), by state key, with its row's id. */
+  private forwarded = new Map<string, { ts: number; _id?: string }>();
   private writes: Promise<void> = Promise.resolve();
 
   constructor(
@@ -360,6 +381,53 @@ export class SearchSegmentsState {
       this.ids.set(key, r._id as string);
       if (s) this.states.set(key, s);
     }
+  }
+
+  /** The fast-forward ts of the `_index_worker_metadata` rows, by their `_index` row's id. */
+  loadForwarded(rows: Record<string, unknown>[]) {
+    const keyOf = new Map([...this.ids].map(([k, id]) => [id, k]));
+    for (const r of rows) {
+      const k = keyOf.get(r.index_id as string);
+      const meta = r.index_metadata as { metadata?: { fast_forward_ts?: number } } | undefined;
+      const ts = meta?.metadata?.fast_forward_ts;
+      if (k !== undefined && typeof ts === "number") this.forwarded.set(k, { ts, _id: r._id as string });
+    }
+  }
+
+  /**
+   * The ts an index's state is current at: its segments' (`ts`), or later when it was fast-forwarded with nothing
+   * written since (Convex's `max(snapshot ts, fast_forward_ts)`).
+   */
+  currentTs(s: IndexSegmentsState): number {
+    const f = s.backfill ? undefined : this.forwarded.get(stateKey(s.kind, s.tablet, s.name));
+    return Math.max(s.ts, f?.ts ?? 0);
+  }
+
+  /**
+   * The `_index_worker_metadata` writes that move these indexes' fast-forward ts to `ts` (their `_index` rows'
+   * ids, the rows to insert or patch), and once they are stored, `done` records them.
+   */
+  forward(keys: string[], ts: number) {
+    const writes: { _id?: string; index_id: string; metadata_type: string }[] = [];
+    for (const k of keys) {
+      const indexId = this.ids.get(k);
+      const s = this.states.get(k);
+      if (!indexId || !s) continue;
+      writes.push({
+        ...(this.forwarded.get(k)?._id ? { _id: this.forwarded.get(k)!._id } : {}),
+        index_id: indexId,
+        metadata_type: s.kind === "text" ? "text_search" : "vector_search",
+      });
+    }
+    return {
+      writes,
+      done: (ids: (string | undefined)[]) => {
+        writes.forEach((w, i) => {
+          const k = keys.find((x) => this.ids.get(x) === w.index_id)!;
+          this.forwarded.set(k, { ts, _id: w._id ?? ids[i] });
+        });
+      },
+    };
   }
 
   get(kind: "text" | "vector", tablet: number, name: string): IndexSegmentsState | undefined {
@@ -423,8 +491,8 @@ export class SearchSegmentsState {
   ): Promise<IndexSegmentsState | null> {
     const s = this.get(kind, tablet, name);
     if (!this.store || !this.blobs) return null;
-    if (!s || !sameSpec(s.def, def) || !Number.isSafeInteger(s.ts) || s.ts > at) return null;
-    if (s.ts < Number((await this.store.getGlobal(MIN_DOCUMENT_TS_GLOBAL)) ?? 0)) return null;
+    if (!s || !sameSpec(s.def, def) || !Number.isSafeInteger(s.ts) || this.currentTs(s) > at) return null;
+    if (this.currentTs(s) < Number((await this.store.getGlobal(MIN_DOCUMENT_TS_GLOBAL)) ?? 0)) return null;
     return s;
   }
 

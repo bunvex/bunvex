@@ -176,12 +176,10 @@ gaps.
   - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
   - `/api/delete_scheduled_functions_table`;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - persisted search segments (STUDY-111, being built): segments, the flusher and the start from them are in;
-    the paged backfill, the compactor and fast-forward are not yet;
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
   - Prometheus `/metrics`;
-  - `_index_worker_metadata`, `_auth`, `_db`;
+  - `_auth`, `_db`;
   - an upgrade guide.
 - CLI:
   - `codegen` flags;
