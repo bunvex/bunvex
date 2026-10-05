@@ -51,7 +51,12 @@ ${TARGET_OPTIONS}
 
 The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
-export type ProjectConfig = { functions?: string; codegen?: { fileType?: "ts" | "js/dts" } };
+export type ProjectConfig = {
+  functions?: string;
+  codegen?: { fileType?: "ts" | "js/dts" };
+  /** Convex's `generateCommonJSApi`: codegen also writes the CommonJS api (STUDY-116). */
+  generateCommonJSApi?: boolean;
+};
 
 /** How Convex's schema validator (zod) names a value's type in "Expected …, received …". */
 function receivedType(v: unknown): string {
@@ -79,7 +84,7 @@ export function readProjectConfig(cwd: string): ProjectConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config))
     throw new Error("Expected `bunvex.json` to contain an object");
   const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
-  const { functions, codegen } = config as Record<string, unknown>;
+  const { functions, codegen, generateCommonJSApi } = config as Record<string, unknown>;
   if (functions !== undefined && typeof functions !== "string")
     throw issue("functions", `Expected string, received ${receivedType(functions)}`);
   if (codegen !== undefined) {
@@ -94,6 +99,14 @@ export function readProjectConfig(cwd: string): ProjectConfig {
           : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
       );
   }
+  if (generateCommonJSApi !== undefined && typeof generateCommonJSApi !== "boolean")
+    throw issue("generateCommonJSApi", `Expected boolean, received ${receivedType(generateCommonJSApi)}`);
+  // Convex's refinement, checked once the fields are valid.
+  if (generateCommonJSApi === true && (codegen as ProjectConfig["codegen"])?.fileType === "ts")
+    throw issue(
+      "generateCommonJSApi",
+      'Cannot use `generateCommonJSApi: true` with `codegen.fileType: "ts"`. CommonJS modules require JavaScript generation. Either set `codegen.fileType: "js/dts"` or remove `generateCommonJSApi`.',
+    );
   return config as ProjectConfig;
 }
 
@@ -102,10 +115,14 @@ export function functionsDir(cwd: string): string {
   return resolve(cwd, functions ?? "bunvex");
 }
 
-/** bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`). */
+/**
+ * bunvex.json's `codegen` (Convex's `codegen.fileType`: `.js` + `.d.ts` pairs by default, or `.ts`) and
+ * `generateCommonJSApi`.
+ */
 export function codegenConfig(cwd: string): CodegenConfig {
-  const fileType = readProjectConfig(cwd).codegen?.fileType ?? "js/dts";
-  return { fileType, packages: packagesOf(cwd) };
+  const config = readProjectConfig(cwd);
+  const fileType = config.codegen?.fileType ?? "js/dts";
+  return { fileType, packages: packagesOf(cwd), commonjs: config.generateCommonJSApi === true };
 }
 
 /** Which bunvex the app installs (STUDY-40): `bunvex`, else the scoped `@bunvex/*` packages; `bunvex` by default. */

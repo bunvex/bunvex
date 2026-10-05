@@ -185,7 +185,6 @@ gaps.
   - `_index_worker_metadata`, `_auth`, `_db`;
   - an upgrade guide.
 - CLI:
-  - `codegen` flags;
   - `run --component` / `--inline-query`;
   - `typecheck`, `mcp`, `usage-limits` commands;
   - `dev` waiting on an env var or a table.
