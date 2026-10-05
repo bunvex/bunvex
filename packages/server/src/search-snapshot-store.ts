@@ -1,6 +1,6 @@
-// The search indexes' snapshots in a blob store (STUDY-96): the `search` use case, Convex's search bucket
-// (`S3_STORAGE_SEARCH_BUCKET`, else `<storage>/search`). The store is made on first use, so a server can pass
-// one whose S3 prefix is the engine's own setting.
+// The search indexes' segments in a blob store (STUDY-111; STUDY-96's snapshots before them): the `search` use
+// case, Convex's search bucket (`S3_STORAGE_SEARCH_BUCKET`, else `<storage>/search`). The store is made on first
+// use, so a server can pass one whose S3 prefix is the engine's own setting.
 import type { SearchSnapshotStore } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 
