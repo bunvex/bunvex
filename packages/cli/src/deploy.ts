@@ -305,7 +305,14 @@ export type DeployOptions = {
  * its own side (its log may say why); and whether it waits on the deployment's environment variables
  * (`bunvex dev` pushes again once they change, as Convex's).
  */
-export type DeployResult = { code: number; transient?: boolean; internal?: boolean; envVars?: boolean };
+export type DeployResult = {
+  code: number;
+  transient?: boolean;
+  internal?: boolean;
+  envVars?: boolean;
+  /** Schema validation failed on a document of this table. */
+  table?: string;
+};
 
 /** A deployment's error answer: its message and its code (Convex's `ErrorData`). */
 class DeploymentError extends Error {
@@ -445,8 +452,10 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       const s = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 10_000 });
       if (s.type === "complete") break;
       if (s.type === "failed") {
-        io.err(`Schema validation failed${s.tableName ? ` in table "${s.tableName}"` : ""}.\n${s.error}`);
-        return { code: 1 };
+        // Convex's words (deploy2.ts `waitForSchema`): the failure, then the error, which names the table and
+        // document. The table is what `bunvex dev` waits on before it pushes again (STUDY-120).
+        io.err(`✖ Schema validation failed.\n${s.error}`);
+        return typeof s.tableName === "string" ? { code: 1, table: s.tableName } : { code: 1 };
       }
       if (s.type === "raceDetected") {
         io.err("Schema was overwritten by another push.");

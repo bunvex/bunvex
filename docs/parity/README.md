@@ -188,7 +188,6 @@ gaps.
   - `codegen` flags;
   - `run --component` / `--inline-query`;
   - `typecheck`, `mcp`, `usage-limits` commands;
-  - `dev` waiting on an env var or a table.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;
