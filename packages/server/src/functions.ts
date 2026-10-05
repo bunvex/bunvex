@@ -91,7 +91,7 @@ import {
   OperationNotPermittedError,
 } from "./admin-keys.ts";
 import type { AppMetrics } from "./app-metrics.ts";
-import { type AnyArgs, type FunctionDef, NODE_FUNCTIONS } from "./builders.ts";
+import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
@@ -1036,19 +1036,27 @@ export class Functions {
 
   /**
    * Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
-   * HTTP routes as `{ functionType: "HttpAction", method, path }`.
+   * HTTP routes as `{ functionType: "HttpAction", method, path }`. The validators are what the function's
+   * `exportArgs()` / `exportReturns()` give, as the push stored them: `{ type: "any" }` arguments and a `null`
+   * result validator when the function declares none.
    */
   apiSpec() {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
     const routes = this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
     const fns = [...this.fns].map(([key, f]) => {
       const i = key.lastIndexOf(":");
+      const identifier = `${key.slice(0, i)}.js:${key.slice(i + 1)}`;
+      const exported = (method: ValidatorExport) => {
+        const r = exportedValidator(f, method, identifier);
+        if ("problem" in r) throw new Error(r.problem);
+        return JSON.parse(r.json) as Value;
+      };
       return {
-        identifier: `${key.slice(0, i)}.js:${key.slice(i + 1)}`,
+        identifier,
         functionType: kind[f.kind],
         visibility: { kind: f.visibility },
-        args: (f.args?.json ?? { type: "any" }) as unknown as Value,
-        returns: (f.returns?.json ?? { type: "any" }) as unknown as Value,
+        args: exported("exportArgs"),
+        returns: exported("exportReturns"),
       };
     });
     return [...fns, ...routes];
