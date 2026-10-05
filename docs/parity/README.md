@@ -186,7 +186,7 @@ gaps.
   - an upgrade guide.
 - CLI:
   - `codegen` flags;
-  - `typecheck`, `mcp`, `usage-limits` commands;
+  - `typecheck`, `usage-limits` commands;
   - `dev` waiting on an env var or a table.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;

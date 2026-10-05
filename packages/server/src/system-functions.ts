@@ -24,6 +24,7 @@ import {
   type PaginationResult,
   readBackendState,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
@@ -161,6 +162,26 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         const { secretAccessKey: _, ...config } = r.config;
         return { ...r, config };
       });
+    },
+  },
+  // The schemas (Convex's `_system/frontend/getSchemas`; the MCP server's `tables` tool, STUDY-121): the
+  // active one's JSON, and the one being validated (pending or validated), each left out when there is none.
+  "_system/frontend/getSchemas": {
+    args: { componentId },
+    op: "ViewData",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as {
+        state: string;
+        schema: string;
+      }[];
+      const one = (state: string) => rows.find((r) => r.state === state);
+      const [active, pending, validated] = [one("active"), one("pending"), one("validated")];
+      if (pending && validated) throw new Error("Unexpectedly found both pending and validated schemas");
+      const inProgress = pending ?? validated;
+      return {
+        ...(active ? { active: active.schema } : {}),
+        ...(inProgress ? { inProgress: inProgress.schema } : {}),
+      };
     },
   },
   // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.

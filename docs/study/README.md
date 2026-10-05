@@ -126,6 +126,7 @@ to a spec.
 | [STUDY-101](STUDY-101-user-table-cap.md) | At most 10 000 active user tables (`TooManyTables`) | implemented |
 | [STUDY-100](STUDY-100-index-reference-check.md) | Index field references checked at push (`check_index_references`) | implemented |
 | [STUDY-99](STUDY-99-http-client-function.md) | `BunvexHttpClient.function()`: any function by an admin, through `/api/function` | implemented |
+| [STUDY-121](STUDY-121-mcp.md) | `bunvex mcp start`: the MCP server over stdio (official SDK, zod), Convex's tools without `insights`, the production guards for self-hosted deployments | implemented; DV-392–DV-395 (owner, 2026-10-05) |
 | [STUDY-119](STUDY-119-run-inline-query.md) | `run --inline-query` and the function tester (`POST /api/run_test_function`): Convex's wrapping rules, a module analyzed alone, its query run uncached as `Tester` | implemented; DV-390, DV-391 (owner, 2026-10-05) |
 | [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
 | [STUDY-98](STUDY-98-filter-api.md) | `filterApi` from `bunvex/server`: the api, filtered by type | implemented |
