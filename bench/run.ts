@@ -108,7 +108,8 @@ async function m2() {
             while (performance.now() < end) {
               const { docs, idx } = itemWrite(`t${w % 1000}`, Date.now());
               const t0 = performance.now();
-              await c.commit({ snapshot: 0, reads: [], docs, idx }); // no reads: validation is a no-op
+              // At the latest snapshot (one before the write log's retention is refused); no reads: validation is a no-op.
+              await c.commit({ snapshot: c.visibleTs, reads: [], docs, idx });
               lat.push(performance.now() - t0);
               ok++;
             }
@@ -142,7 +143,7 @@ async function m3() {
       const batch: Promise<number>[] = [];
       for (let i = 0; i < 100; i++) {
         const { docs, idx } = itemWrite(`t${t}`, base + i * 1000);
-        batch.push(c.commit({ snapshot: 0, reads: [], docs, idx }));
+        batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs, idx }));
       }
       await Promise.all(batch);
     }
