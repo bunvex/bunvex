@@ -232,6 +232,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 | DV-345 | A function error's frame names the function as JavaScriptCore does: a name the bundler changed shows changed (`assertShort2`), an inline handler `<anonymous>`, and a strict-mode tail call has no caller frame | V8 with esbuild `keepNames`: the original names, every caller | yes (stack text) | the engine: JavaScriptCore names a frame by its declared identifier and implements proper tail calls | owner, 2026-10-04 (as recommended) | [STUDY-95 S1](../study/STUDY-95-error-stacks.md#4-divergences) |
 | DV-347 | Convex's `getConvexSize` is `valueSize` in `bunvex/values` | `getConvexSize` (values/size.ts) | yes: `import { getConvexSize }` fails; the function, sizes and errors are the same | Rule 5: no "convex" in shipped names (as `toJsonValue` for `convexToJson`) | owner, 2026-10-04 (keep `valueSize`) | [STUDY-97 VS1](../study/STUDY-97-value-size-and-base64.md#4-divergences) |
 | DV-346 | A frame's line and column are the original 1-based position its source map defines | the frame's 1-based position passed to a 0-based lookup, the token's 0-based position printed: usually the right line on esbuild's output, a 0-based column | yes (positions) | over Bun's output, Convex's arithmetic shows wrong lines; the right line is what Convex's users see | owner, 2026-10-04 (as recommended) | [STUDY-95 S2](../study/STUDY-95-error-stacks.md#4-divergences) |
+| DV-359 | `count()` records a read of the table's whole `by_creation_time` index | a read of the whole `by_id` index | no: both cover every document and are invalidated by any write to the table | the existing `countTable` read; nothing to gain from moving it | owner, 2026-10-05 (keep) | [STUDY-107 C1](../study/STUDY-107-query-count.md#4-divergences) |
 
 ## Resolved to match Convex
 
@@ -342,6 +343,11 @@ classed as bugs by their study; they are listed here because they change what op
 ## Pending owner decisions
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
+
+| ID | bunvex | Convex | Observable | Why | Decided | Source |
+|---|---|---|---|---|---|---|
+| DV-360 | `db.system.query(name)` refuses a system table other than `_storage` and `_scheduled_functions` (and an unknown `_` name), so it has no `count()` | `db.system.query` takes any `_` name and `1.0/count` has no system-table guard: `db.system.query("_index").count()` counts the root namespace's `_index` rows; an unknown name counts 0 | yes | matching would expose bunvex's own system tables (which differ from Convex's) to app code, through an internal API | pending (owner); recommended: keep | [STUDY-107 C3](../study/STUDY-107-query-count.md#4-divergences) |
+| DV-361 | A `count()` at a snapshot older than the write log's retention (≥ 30 s by default) fails with `OutOfRetentionError` | the transaction holds its count snapshot for its whole life | only past the system timeout (15 s) under default limits | Ainda não fizemos: it needs the engine to track the snapshots of running transactions; the write log's retention is the bound OCC already uses | pending (owner); recommended: keep | [STUDY-107 C4](../study/STUDY-107-query-count.md#4-divergences) |
 
 
 DV-310 was decided by the owner (2026-10-03, #256: fix, diverging from Convex).

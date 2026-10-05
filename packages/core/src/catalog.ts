@@ -161,11 +161,11 @@ export class IndexBackfillingError extends Error {
  * A search or vector index still being rebuilt after the process started (STUDY-79): Convex's
  * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
  * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
- * hitting it is skipped and retried later.
+ * hitting it is skipped and retried later. The table summaries' (`count()`, STUDY-107) are one too.
  */
 export class IndexesUnavailableError extends Error {
   constructor(
-    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable",
+    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable" | "TableSummariesUnavailable",
     message: string,
   ) {
     super(message);

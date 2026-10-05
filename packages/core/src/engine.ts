@@ -334,6 +334,8 @@ export class Engine {
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
+    // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
+    this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
     this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
@@ -1001,7 +1003,7 @@ export class Engine {
     }
   }
 
-  private readonly tableCountOf = (tablet: number) => this.tableSummaries.count(tablet);
+  private readonly tableCountOf = (tablet: number, snapshot: number) => this.tableSummaries.countAt(tablet, snapshot);
 
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each

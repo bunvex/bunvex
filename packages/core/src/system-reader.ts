@@ -65,11 +65,9 @@ export class SystemReader {
 
   query(table: string): TxQuery {
     const project = visible(table);
-    return new ProjectedQueryInitializer(
-      table,
-      this.tx.asSystemSync(() => this.tx.query(table)),
-      project,
-    );
+    const q = this.tx.asSystemSync(() => this.tx.query(table));
+    // Convex counts a virtual table as its system table (`Transaction::count`); here they are the same table.
+    return new ProjectedQueryInitializer(table, q, project, () => this.tx.asSystem(() => q.count()));
   }
 }
 
@@ -124,8 +122,17 @@ export class ProjectedQuery implements TxQueryChained {
 
 /** `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. */
 export class ProjectedQueryInitializer extends ProjectedQuery implements TxQuery {
-  constructor(table: string, q: TxQuery, project: (d: Doc) => Doc) {
+  constructor(
+    table: string,
+    q: TxQuery,
+    project: (d: Doc) => Doc,
+    private readonly counter: () => Promise<number>,
+  ) {
     super(table, q, project);
+  }
+  /** Convex's internal `count()` (STUDY-107), with the system access the table needs. */
+  count(): Promise<number> {
+    return this.counter();
   }
   private get initial(): TxQuery {
     return this.q as TxQuery;
