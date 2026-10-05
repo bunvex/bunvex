@@ -1,6 +1,6 @@
 # STUDY-100 — Table names in `v.id`: autocomplete and checking (a proposed bunvex addition)
 
-- **Status:** accepted: T1 and T2 (owner, 2026-10-04); T3 later, with a port of convex-helpers. A bunvex addition, beyond Convex
+- **Status:** accepted: T1 and T2 (owner, 2026-10-04; AD-21, AD-22, built); T3 later, with a port of convex-helpers (AD-23). A bunvex addition, beyond Convex
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/convex/src/values/validator.ts`);
   get-convex/convex-helpers `packages/convex-helpers/validators.ts` (main, 2026-10-04)
 - **Related:** [STUDY-13](STUDY-13-validators.md) (validators), [STUDY-36](STUDY-36-codegen.md) (codegen).

@@ -18,6 +18,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   - the divergences.
 - Match Convex by default. **Ask the owner about every divergence** instead of deciding it yourself, and
   record the decision in [docs/parity/divergences.md](docs/parity/divergences.md).
+- Additions (what Convex does not have) are proposed in a study, decided by the owner and recorded in
+  [docs/parity/additions.md](docs/parity/additions.md) (`AD-NN`), not as divergences.
 - [docs/parity/](docs/parity/README.md) lists everything Convex has and bunvex's status on each item.
   Update the matching rows in every PR that adds or changes a Convex feature; the roadmap is there too.
 - Never copy Convex code; write bunvex's version from scratch.
