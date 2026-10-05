@@ -40,6 +40,7 @@ import {
   type IndexBackfillMeta,
   type IndexMeta,
   IndexStagedError,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
   planCatalog,
@@ -882,6 +883,29 @@ export class Engine {
     const t = this.catalog.byTablet(e.tablet);
     if (!t) return false;
     return (kind === "text" ? this.searchIndexes.get(t, e.name) : this.vectorIndexes.get(t, e.name)) === e;
+  }
+
+  /**
+   * Convex's `validate_memory_index_sizes` (STUDY-111, DV-228): a transaction writing a table one of whose ready
+   * search or vector indexes has a memory part at its hard limit (100 MiB) is refused, `TextIndexTooLarge` /
+   * `VectorIndexTooLarge`, until a flush brings it down. Indexes being built never refuse writes. Only with
+   * segments: without a store there is nothing to flush into.
+   */
+  private checkMemoryIndexSizes(tx: Tx) {
+    if (!this.searchSegments) return;
+    const limits = this.segmentLimits;
+    for (const t of tx.writtenTables()) {
+      for (const e of this.searchIndexes.forTablet(t.id))
+        if (e.ready && !e.staged && e.index.memoryBytes >= limits.textHardLimitBytes) {
+          this.scheduleFlush("text", e);
+          throw indexTooLarge("text", `${e.table}.${e.name}`);
+        }
+      for (const e of this.vectorIndexes.forTablet(t.id))
+        if (e.ready && !e.staged && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
+          this.scheduleFlush("vector", e);
+          throw indexTooLarge("vector", `${e.table}.${e.name}`);
+        }
+    }
   }
 
   /** After a commit: the ready indexes of its tables whose memory part passed the soft limit are flushed. */
@@ -2196,6 +2220,7 @@ export class Engine {
         const value = resolved(tx.snapshot);
         return withTs ? { value, ts: tx.snapshot } : value;
       }
+      this.checkMemoryIndexSizes(tx);
       const { docs, idx } = tx.toWrites();
       try {
         const ts = await this.committer.commit({

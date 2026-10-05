@@ -314,3 +314,46 @@ test("a process killed after a flush: the next start loads the segments and repl
     rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
+
+test("a write while a ready index's memory part is at its hard limit is refused until a flush (DV-228)", async () => {
+  const s = defineSchema({
+    notes: defineTable(v.any())
+      .searchIndex("search_body", { searchField: "body" })
+      .vectorIndex("by_v", { vectorField: "v", dimensions: 2 }),
+    other: defineTable(v.any()),
+  });
+  const p = await MemoryPersistence.open(null, { durable: false });
+  const limits = { ...NEVER, textHardLimitBytes: 1500, vectorHardLimitBytes: 10_000_000 };
+  const e = await new Engine(s, p, { searchSnapshots: blobs(), searchSegmentLimits: limits }).init();
+  await e.searchReady();
+  const text = () => e.searchIndexes.all()[0]!.index;
+  while (text().memoryBytes < 1500) await e.mutation((db) => db.insert("notes", note(1)));
+  const refused = await e.mutation((db) => db.insert("notes", note(2))).catch((x) => x);
+  expect(refused).toMatchObject({ code: "TextIndexTooLarge" });
+  expect(refused.message).toStartWith("Too many writes to notes.search_body. Spread your writes out over time");
+  // Other tables are not refused.
+  await e.mutation((db) => db.insert("other", { x: 1 }));
+  // The refusal woke the flusher: once it has flushed, writes go through.
+  await e.searchFlushed();
+  expect(text().memoryBytes).toBe(0);
+  await e.mutation((db) => db.insert("notes", note(3)));
+  await e.close();
+
+  // The vector limit, the same way.
+  const q = await MemoryPersistence.open(null, { durable: false });
+  const v2 = await new Engine(s, q, {
+    searchSnapshots: blobs(),
+    searchSegmentLimits: { ...NEVER, textHardLimitBytes: 10_000_000, vectorHardLimitBytes: 500 },
+  }).init();
+  await v2.searchReady();
+  const vec = () => v2.vectorIndexes.all()[0]!.index;
+  while (vec().memoryBytes < 500) await v2.mutation((db) => db.insert("notes", note(1)));
+  await expect(v2.mutation((db) => db.insert("notes", note(2)))).rejects.toMatchObject({ code: "VectorIndexTooLarge" });
+  await v2.close();
+
+  // Without a segment store there is nothing to flush into: never refused.
+  const r = await MemoryPersistence.open(null, { durable: false });
+  const plain = await new Engine(s, r, { searchSegmentLimits: { ...limits, textHardLimitBytes: 1 } }).init();
+  for (let i = 0; i < 5; i++) await plain.mutation((db) => db.insert("notes", note(i)));
+  await plain.close();
+});

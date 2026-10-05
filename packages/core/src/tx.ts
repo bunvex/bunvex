@@ -1573,6 +1573,13 @@ export class Tx {
     return n;
   }
 
+  /** @internal (Engine) The tables this transaction wrote, each once. */
+  writtenTables(): TableDef[] {
+    const out: TableDef[] = [];
+    for (const w of this.writes.values()) if (!out.includes(w.table)) out.push(w.table);
+    return out;
+  }
+
   /** @internal (Engine) The documents this transaction wrote, before and after, for the search indexes. */
   writtenDocs(): { table: TableDef; id: string; old: Doc | null; next: Doc | null }[] {
     return [...this.writes].map(([id, w]) => ({ table: w.table, id, old: w.old, next: w.next }));
