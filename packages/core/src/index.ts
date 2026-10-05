@@ -184,7 +184,17 @@ export {
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
-export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+export {
+  afterValues,
+  boundText,
+  compareKeys,
+  describeBound,
+  encodeKey,
+  type KeyBound,
+  type KeyValue,
+  keyValueText,
+  prefixEnd,
+} from "./keyenc.ts";
 export {
   DanglingReferenceError,
   DatabaseTimeoutError,
@@ -211,7 +221,14 @@ export {
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
-export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+export {
+  type CachedResult,
+  type CacheEntry,
+  MAX_CACHE_AGE_MS,
+  type MissReason,
+  QUERY_CACHE_MAX_BYTES,
+  QueryCache,
+} from "./query-cache.ts";
 export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";

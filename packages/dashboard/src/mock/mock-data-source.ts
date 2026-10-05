@@ -43,12 +43,15 @@ import {
   type FunctionInfo,
   type FunctionMetric,
   type FunctionRun,
+  type InspectorFilter,
+  type InvalidationEvent,
   type LogEntry,
   type LogFilter,
   type LogQuery,
   type MetricsWindow,
   OPERATIONS,
   type Page,
+  type QueryCacheSnapshot,
   type RunOptions,
   type ScheduledFunction,
   type ScheduledFunctionQuery,
@@ -58,6 +61,7 @@ import {
   type SnapshotImport,
   type SnapshotImportRequest,
   type StoredFile,
+  type SubscriptionsSnapshot,
   type TableInfo,
   type TableMetric,
   type Timeseries,
@@ -87,6 +91,7 @@ import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 import { MockSnapshots } from "./snapshots.ts";
+import { MockSubscriptions } from "./subscriptions.ts";
 import { MockTopology } from "./topology.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
@@ -120,6 +125,8 @@ export type MockDataSourceOptions = FixtureOptions & {
   nodes?: number;
   /** How often watchTopology delivers. Default 1 000 ms. */
   topologyIntervalMs?: number;
+  /** How often an invalidation lands while someone follows them (STUDY-131 AD-25). Default 2 000 ms. */
+  invalidationIntervalMs?: number;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -202,6 +209,8 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
+  /** Live queries and the query cache (STUDY-131 AD-25). Not part of the contract: tests drive it. */
+  readonly subscriptions: MockSubscriptions;
   /** Who connects (UI-01 §33). Not part of the contract: tests read it. */
   readonly clients: MockClients;
   /** The app's users and their auth (UI-01 §25). Not part of the contract: tests read it. */
@@ -293,6 +302,7 @@ export class MockDataSource implements DashboardDataSource {
       persistence: this.deployment.persistence,
     });
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
+    this.subscriptions = new MockSubscriptions(this.rnd, () => this.scheduler.now(), docs * 3);
     this.stats = {
       at: opts.now ?? Date.now(),
       commitTs: docs * 3,
@@ -1206,6 +1216,49 @@ export class MockDataSource implements DashboardDataSource {
       this.canViewTopology();
       return this.topology.snapshot();
     });
+  }
+
+  // ---------------------------------------------------------------- subscriptions (STUDY-131 AD-25), simulated
+
+  private canInspect() {
+    if (!this.opts.capabilities.operations.includes("viewMetrics"))
+      throw new DataSourceError("unauthorized", "this credential cannot view metrics");
+  }
+
+  getSubscriptions(filter?: InspectorFilter, opts?: CallOptions): Promise<SubscriptionsSnapshot> {
+    return this.call(opts?.signal, () => {
+      this.canInspect();
+      return structuredClone(this.subscriptions.snapshot(filter));
+    });
+  }
+
+  getQueryCache(filter?: InspectorFilter & { limit?: number }, opts?: CallOptions): Promise<QueryCacheSnapshot> {
+    return this.call(opts?.signal, () => {
+      this.canInspect();
+      return structuredClone(this.subscriptions.cache(filter));
+    });
+  }
+
+  watchInvalidations(
+    filter: InspectorFilter,
+    onEvents: (events: InvalidationEvent[]) => void,
+    onError: (e: DataSourceError) => void,
+  ): Unsubscribe {
+    let live = true;
+    const timer = setInterval(() => {
+      if (!live) return;
+      try {
+        this.canInspect();
+        const events = this.subscriptions.step().filter((e) => !filter.path || e.path.includes(filter.path));
+        if (events.length) onEvents(events);
+      } catch (e) {
+        onError(toDataSourceError(e));
+      }
+    }, this.opts.invalidationIntervalMs ?? 2000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   }
 
   // ---------------------------------------------------------------- clients (§33), simulated

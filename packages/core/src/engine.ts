@@ -89,7 +89,13 @@ import {
   LeaseLostError,
   type Persistence,
 } from "./persistence/index.ts";
-import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+import {
+  type CachedResult,
+  MAX_CACHE_AGE_MS,
+  type MissReason,
+  QUERY_CACHE_MAX_BYTES,
+  QueryCache,
+} from "./query-cache.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
 import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
 import {
@@ -1705,6 +1711,8 @@ export class Engine {
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
     // and found invalid is recomputed under the shared key, so callers of other identities wait for it.
     let hint: string | undefined;
+    // Why the result found was not served, for the miss's reason (STUDY-131 AD-25).
+    let dropped: MissReason | undefined;
     for (;;) {
       const found = this.cache.find(keys);
       const key = found?.key ?? hint ?? keys[0];
@@ -1720,8 +1728,12 @@ export class Engine {
           continue;
         }
         r = waited;
-      } else return this.runCached(body, ts, keys, key, e === undefined, companion, caller);
-      if (!this.stillValid(key, r, ts)) continue;
+      } else {
+        this.cache.noteMiss(keys, e === undefined ? dropped : "snapshot");
+        return this.runCached(body, ts, keys, key, e === undefined, companion, caller);
+      }
+      dropped = this.stillValid(key, r, ts);
+      if (dropped !== undefined) continue;
       this.stats.cacheHits++;
       companion?.replay(r.extra);
       return { json: r.json };
@@ -1789,16 +1801,21 @@ export class Engine {
    * checked and counts as changed), and a result that read the clock is not older than MAX_CACHE_AGE_MS.
    * An invalid result is dropped; a valid one is now known valid up to `ts`.
    */
-  private stillValid(key: string, r: CachedResult, ts: number): boolean {
-    if (ts < r.originalTs) return false;
-    let valid = !this.committer.changedBetween(r.reads, r.tokenTs, ts);
-    if (valid && r.observedTime) valid = Math.abs((this.opts.cacheClock ?? wallClock)() - r.unixMs) <= MAX_CACHE_AGE_MS;
-    if (!valid) this.cache.removeReady(key, r.originalTs);
+  private stillValid(key: string, r: CachedResult, ts: number): MissReason | undefined {
+    if (ts < r.originalTs) return "snapshot";
+    let why: MissReason | undefined = this.committer.changedBetween(r.reads, r.tokenTs, ts) ? "invalidated" : undefined;
+    if (
+      why === undefined &&
+      r.observedTime &&
+      Math.abs((this.opts.cacheClock ?? wallClock)() - r.unixMs) > MAX_CACHE_AGE_MS
+    )
+      why = "expired";
+    if (why !== undefined) this.cache.removeReady(key, r.originalTs);
     // A hit moves the entry's token to `ts`, so the next check only walks the commits after it: what
     // Convex's step 4 says a hit does ("this will bump the cache result's token"), though its guard only
     // writes back a fresh run's result (STUDY-08 §1.1). Not observable: the result is the same.
     else if (r.tokenTs < ts) r.tokenTs = ts;
-    return valid;
+    return why;
   }
 
   /**
@@ -1819,6 +1836,9 @@ export class Engine {
       journal: QueryJournal;
       /** Whether the run read the identity: its result is then the caller's alone. */
       identityObserved: boolean;
+      /** What it read (STUDY-131 AD-25). */
+      documentsRead: number;
+      bytesRead: number;
     }
   > {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
@@ -1839,6 +1859,8 @@ export class Engine {
       ts: snapshot,
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
+      documentsRead: tx.usage.documentsRead,
+      bytesRead: tx.usage.bytesRead,
     });
     try {
       const observed: Observed = { time: false };

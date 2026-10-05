@@ -199,3 +199,123 @@ The questions, as asked:
 3. **T1:** accept the deterministic test runtime as a roadmap item. Recommendation: yes, module by module,
    starting with the flaky tests.
 4. **Order:** AD-24 (small, and it pairs with STUDY-125–130), then AD-25, then AD-26, then AD-27 and T1.
+
+## 8. Implementation: AD-25, subscriptions and invalidation inspector (built 2026-10-05)
+
+§7 is AD-24's implementation (#460).
+
+**Recording** (`packages/server/src/sync-inspector.ts`, hooked into `SyncHub` in `sync.ts`).
+
+- **Invalidations.** When a commit invalidates an execution key, `onCommit` finds the first write that overlaps the
+  key's reads, once per key. It records the commit's ts, its write source, that write's index and key bytes,
+  and the time. This lookup is shared with the app metrics' `InvalidationEvent` attribution, which before ran
+  it once per session and key.
+- **Delay until sent.** When a transition sends the key's new result, each invalidation not yet sent gets
+  `sentAfterMs`.
+- **Reruns with no invalidation.** A run that no invalidation caused records its reason: `newSubscriber` (the
+  key's first run), `identityChange`, `codeChange` (a push changed the module) or `retry` (an index was still
+  rebuilding, STUDY-79).
+  - A session that reuses another's run is `cached` and records nothing.
+  - Sync keeps a key's result as long as anyone watches it, so a sync query has no eviction. The HTTP query
+    cache's evictions are counted as a miss reason instead (below).
+- **The ring.** Each execution key keeps the last N records, `SUBSCRIPTION_INVALIDATION_HISTORY` or the server
+  option `invalidationHistory` (default 8). 0 records nothing: the hook is one boolean test.
+  - A follow feed keeps the last 1024 invalidations in a circular buffer.
+  - The ring is forgotten when nobody watches the key.
+- **Reads.** Executions now carry the documents and bytes they read (`queryTracked` returns them).
+- **Query cache** (`query-cache.ts`, `engine.ts`).
+  - Misses are counted by reason: `new`, `evicted` (the cache remembers the last 1024 evicted keys),
+    `invalidated`, `expired` (it read the clock) or `snapshot` (only a newer result was there).
+  - `inspect()` lists the entries.
+
+**Decoding, only when asked.**
+
+- `keyToValues` in `@bunvex/values` (`sorting.ts`) is the inverse of `valuesToKey`. A property test checks the
+  round trip for any tuple of values.
+- `describeBound` in `@bunvex/core` (`keyenc.ts`) reads an interval bound back:
+  - `-∞` / `+∞`;
+  - the values of an exact key;
+  - `after` for `afterValues` (an eq prefix or an inclusive end), or for `prefixEnd` (a scan cut after a
+    document);
+  - raw hex when no whole value is left.
+- `boundText` prints a range as `[["ana"], ["ana", …])`.
+- Index ids map to `table.index` and its key fields (`…, _creationTime, _id`).
+
+**Endpoints** (`packages/server/src/debug-routes.ts`). All need an admin key with ViewMetrics, and all accept
+`?path=` (substring).
+
+- `GET /api/debug/subscriptions` returns, per session (id, identity kind) and per live query:
+  - the path and a 12-hex sha256 digest of the canonical args;
+  - `ts`, `cached`, the result kind, documents and bytes read;
+  - `readSet` (index, fields, bounds as values and text);
+  - `history`, newest first.
+- `GET /api/debug/query_cache?limit=` returns entries, bytes, hits, misses, `missReasons`, waits and evictions,
+  and the biggest entries with their read sets.
+- `GET /api/debug/invalidations?cursor=&timeoutMs=` is the follow stream: the log streams' long poll (up to
+  60 s), entries after `cursor` and `newCursor`.
+
+**Dashboard** (`packages/dashboard`, on the mock).
+
+- Contract: `data-source-subscriptions.ts`, with the optional `getSubscriptions`, `getQueryCache` and
+  `watchInvalidations` (`viewMetrics`), and its part of the contract suite (`contract-subscriptions.ts`).
+- Mock: `mock/subscriptions.ts`, with sessions over the fixture's functions and invalidations that land on a
+  timer.
+- Screen: Observe → Subscriptions (`/subscriptions?path=&tab=cache&query=&entry=`).
+  - The Live queries table opens a panel with the read set and "Why it ran".
+  - The Query cache tab shows the counters and the biggest entries.
+  - "Follow invalidations" lists new ones while the screen is open.
+  - Without `viewMetrics` it shows nothing.
+
+**Measurement** (`packages/server/bench/sync-invalidation-history.ts`). The sync hub's commit handler is timed
+per commit, in µs. One in-process session holds 1000 queries; each configuration ran twice, 150 commits each.
+
+| Shape | Ring 0 (p50, mean) | Ring 8 (p50, mean) |
+|---|---|---|
+| narrow: one key invalidated per commit | 555 / 738, 480 / 510 | 528 / 626, 534 / 560 |
+| wide: all 1000 keys invalidated per commit | 1265 / 1473, 1502 / 1740 | 1520 / 1700, 1660 / 1884 |
+
+- **Narrow.** The difference is within the run-to-run noise.
+- **Wide.** About +0.15–0.25 µs per invalidated key (+10–20% of the handler, which also schedules 1000
+  transitions).
+- **History of the measurement.**
+  - A first version kept the feed in an array trimmed with `shift()` and measured about +0.6 µs per key. The
+    feed is now a circular buffer.
+  - Sharing the first-write lookup with the metrics removed a lookup per session and key, so with metrics on
+    the handler does less than before when a key has several watchers.
+
+**Tests.**
+
+- `packages/server/test/invalidation-inspector.test.ts`:
+  - a live query's read set decoded: `messages.by_author` `[["ana"], ["ana", …])`, documents and bytes read,
+    rerun `newSubscriber`;
+  - a mutation's invalidation: its commit ts, source `m:send`, table, index, the key decoded (author,
+    `_creationTime`, id), and `sentAfterMs`; a write outside the range records nothing;
+  - the follow feed and its cursor; a waiting follow request returns when an invalidation lands; the path
+    filter;
+  - the ring keeps the last 3 with the knob at 3, newest first; the knob at 0 records nothing (history and
+    feed), while the read set is still shown;
+  - a second subscriber is `cached` and adds no rerun;
+  - the query cache: hits, misses by reason (`new`, `invalidated`), the biggest entry's read set; a miss after
+    an eviction counts as `evicted`;
+  - refused with no key (403); a read-only key passes; a key without ViewMetrics is refused.
+- `packages/values/test/sorting-decode.property.test.ts`: the round trip, a cut key, each type.
+- `packages/core/test/keyenc-describe.test.ts`: every bound kind, plus a property over `afterValues` and
+  `prefixEnd`.
+- `packages/dashboard/test/subscriptions.test.tsx`: the list (axe), the open query's read set and why it ran,
+  the path filter, the cache tab, follow, no `viewMetrics`. The contract part also runs for the mock variants
+  in `mock.test.ts`.
+
+**Sabotage** (each restored, `git diff` clean afterwards):
+
+| Break | Caught by |
+|---|---|
+| The ring keeps one more than its size | server "the ring keeps the last N; 0 records nothing" |
+| The knob at 0 still records (`enabled` always true) | the same test (history and feed must be empty) |
+| The write source is dropped | server "a mutation's invalidation …" |
+| The wrong commit ts is recorded | server "a mutation's invalidation …", "the ring keeps the last N …" |
+| The float decoder does not flip a positive's sign bit back | values "round trip", "examples: each type" |
+| `afterValues` bounds read back as exact keys | core "an eq prefix …", core property, server "a live query's read set …" |
+| The endpoints ask for ViewData instead of ViewMetrics | server "refused without an admin key and without ViewMetrics" |
+| The cache forgets the keys it evicted | server "a miss after an eviction says so" |
+| A sent transition no longer marks the delay | server "a mutation's invalidation …" (`sentAfterMs` stays null) |
+| The mock ignores the path filter | dashboard "a path filter in the URL …", and the contract's filter test (4 mock variants) |

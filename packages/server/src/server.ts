@@ -57,6 +57,7 @@ import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
+import { DEBUG_ROUTE, debugRoute } from "./debug-routes.ts";
 import {
   clientError,
   FunctionPathError,
@@ -251,6 +252,11 @@ export type ServerOptions = {
    * Convex's values (200 subscriptions, 5 ms). Tests inject `random` and `timers`.
    */
   subscriptionSplay?: Partial<SplayOptions>;
+  /**
+   * The invalidations and reruns the inspector keeps per live query (STUDY-131 AD-25, `/api/debug/*`):
+   * default `SUBSCRIPTION_INVALIDATION_HISTORY` from the environment, else 8; 0 records nothing.
+   */
+  invalidationHistory?: number;
   /**
    * Bytes a WebSocket may have waiting to be sent before it is closed (STUDY-64 W1, DV-311). Default and most:
    * Bun's largest, 2³² − 1. For tests.
@@ -651,6 +657,7 @@ export function createServer(opts: ServerOptions) {
     formatError,
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
+    ...(opts.invalidationHistory === undefined ? {} : { invalidationHistory: opts.invalidationHistory }),
     // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
     onInvalidations: (events) => {
       const bySource = new Map<string, Map<string, number>>();
@@ -883,6 +890,9 @@ export function createServer(opts: ServerOptions) {
       });
     }
     if (/^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)) return envRoute(url, req, caller);
+    // The subscriptions and invalidation inspector (STUDY-131 AD-25): ViewMetrics.
+    const debug = await debugRoute({ engine, functions, sync }, url, req, caller);
+    if (debug) return debug;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
@@ -1136,6 +1146,7 @@ export function createServer(opts: ServerOptions) {
         STREAM_ROUTE.test(url.pathname) ||
         METRICS_ROUTE.test(url.pathname) ||
         LOG_STREAM_ROUTE.test(url.pathname) ||
+        DEBUG_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||

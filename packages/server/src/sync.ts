@@ -42,6 +42,7 @@ import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
 import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
+import { invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
 
 /**
  * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
@@ -238,10 +239,15 @@ export type SyncDeps = {
    * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
    */
   onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
+  /**
+   * The invalidations and reruns kept per execution key for the inspector (STUDY-131 AD-25); default
+   * `SUBSCRIPTION_INVALIDATION_HISTORY` from the environment, else 8. 0 records nothing.
+   */
+  invalidationHistory?: number;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
-type Execution = {
+export type Execution = {
   ts: number;
   reads: Interval[];
   /** The journal the run ended with, serialized as it travels (null: none). */
@@ -259,6 +265,9 @@ type Execution = {
   identityObserved: boolean;
   /** The code generation it ran (STUDY-35): a run of superseded code is never reused nor adopted. */
   generation: number;
+  /** What the run read (STUDY-131 AD-25). */
+  documentsRead: number;
+  bytesRead: number;
   /**
    * What a session that reuses it logs (STUDY-75, Convex's query cache hit): the lines the run logged and its
    * result's bytes; a failed run's error, which Convex never serves from its cache.
@@ -266,7 +275,7 @@ type Execution = {
   logged: { lines: LogLine[]; returnBytes: number | null; error?: unknown };
 };
 
-type SessionQuery = {
+export type SessionQuery = {
   udfPath: string;
   /** A non-root component path an admin asked for (STUDY-62 K8): bunvex has none, so the query fails. */
   component?: string;
@@ -282,6 +291,11 @@ type SessionQuery = {
   validAt: number;
   /** Why its next run happens (Convex's `QueryInvocation`, the log streams' `run_reason`; STUDY-74). */
   runReason?: RunReason;
+  /** For the inspector (STUDY-131 AD-25): its last result came from another run (not its own), and when. */
+  cached?: boolean;
+  lastRunAt?: number;
+  /** Why its next run happens when no invalidation causes it: new code, or a retry. */
+  rerunBecause?: "codeChange" | "retry";
 };
 
 /**
@@ -330,6 +344,8 @@ export class SyncHub {
   readonly maxSendTransitions: number;
   /** Writable for tests. */
   unavailableRetryMs: number;
+  /** What made each key run again, for the inspector (STUDY-131 AD-25). */
+  readonly inspector: SyncInspector;
 
   /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
   private heartbeat: ReturnType<typeof setInterval>;
@@ -340,6 +356,7 @@ export class SyncHub {
       deps.maxSendTransitions ?? knob(process.env, "SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
     this.unavailableRetryMs =
       deps.unavailableRetryMs ?? knob(process.env, "SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3) * 1000;
+    this.inspector = new SyncInspector(deps.invalidationHistory ?? invalidationHistoryFromEnv());
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
     this.heartbeat = setInterval(() => {
@@ -381,14 +398,23 @@ export class SyncHub {
     const events = this.deps.onInvalidations
       ? new Map<string, { source: string | undefined; table: string; count: number }>()
       : null;
+    const inspect = this.inspector.enabled;
     for (const key of hit) {
       const sessions = this.watchers.get(key);
       if (!sessions) continue;
+      // the first write into the key's reads: found once per key, for the metrics and the inspector
+      let first: { entry: LogEntry; write: LogEntry["writes"][number] } | undefined | null = null;
+      let recorded = !inspect;
       for (const s of sessions) {
         const n = s.newlyInvalidated(key);
         if (n === 0) continue;
         count += n;
-        if (events) this.attribute(events, key, entries, n);
+        if (first === null && (events || !recorded)) first = this.firstWrite(key, entries);
+        if (events && first) this.attribute(events, first, n);
+        if (!recorded) {
+          recorded = true;
+          if (first) this.inspector.invalidated(key, first.entry.ts, first.entry.source, first.write);
+        }
         const t = touched.get(s);
         if (t) {
           t.n += n;
@@ -412,42 +438,57 @@ export class SyncHub {
     }
   }
 
+  /** The first write of `entries` that overlaps `key`'s reads, and its commit. */
+  private firstWrite(key: string, entries: LogEntry[]) {
+    const reads = this.latest.get(key)?.reads;
+    if (!reads) return undefined;
+    for (const entry of entries) {
+      const write = firstOverlap(entry.writes, reads);
+      if (write) return { entry, write };
+    }
+    return undefined;
+  }
+
   /** Count `n` invalidations of `key` against the first write that overlaps its reads, as Convex's. */
   private attribute(
     events: Map<string, { source: string | undefined; table: string; count: number }>,
-    key: string,
-    entries: LogEntry[],
+    first: { entry: LogEntry; write: LogEntry["writes"][number] },
     n: number,
   ) {
-    const reads = this.latest.get(key)?.reads;
-    if (!reads) return;
-    for (const e of entries) {
-      const w = firstOverlap(e.writes, reads);
-      if (!w) continue;
-      const table = this.tableOfIndex(w.index);
-      if (table === undefined) return;
-      const k = `${e.source ?? ""}\u0000${table}`;
-      const ev = events.get(k);
-      if (ev) ev.count += n;
-      else events.set(k, { source: e.source, table, count: n });
-      return;
-    }
+    const { entry: e, write: w } = first;
+    const table = this.indexOf(w.index)?.table;
+    if (table === undefined) return;
+    const k = `${e.source ?? ""}\u0000${table}`;
+    const ev = events.get(k);
+    if (ev) ev.count += n;
+    else events.set(k, { source: e.source, table, count: n });
   }
 
-  private indexTables: { catalog: unknown; map: Map<number, string> } | null = null;
+  private indexTables: {
+    catalog: unknown;
+    map: Map<number, { table: string; name: string; fields: string[] }>;
+  } | null = null;
 
-  /** The table an index belongs to (rebuilt when the catalog changes). */
-  private tableOfIndex(index: number): string | undefined {
+  /** An index's table, name and key fields, by id (rebuilt when the catalog changes). */
+  indexOf(index: number): { table: string; name: string; fields: string[] } | undefined {
     const catalog = this.deps.engine.catalog;
     if (this.indexTables?.catalog !== catalog) {
-      const map = new Map<number, string>();
-      for (const t of catalog.tables.values()) {
-        for (const ix of t.indexes.values()) map.set(ix.id, t.name);
-        for (const ix of t.pending) map.set(ix.id, t.name);
-      }
+      const map = new Map<number, { table: string; name: string; fields: string[] }>();
+      for (const t of catalog.tables.values())
+        for (const ix of [...t.indexes.values(), ...t.pending])
+          map.set(ix.id, {
+            table: t.name,
+            name: ix.name,
+            fields: ix.name === "by_id" ? ["_id"] : [...ix.fields, "_id"],
+          });
       this.indexTables = { catalog, map };
     }
     return this.indexTables.map.get(index);
+  }
+
+  /** The keys watched now, with their latest execution, for the inspector. */
+  latestOf(key: string): Execution | undefined {
+    return this.latest.get(key);
   }
 
   /**
@@ -476,6 +517,7 @@ export class SyncHub {
     this.watchers.delete(key);
     this.latest.delete(key);
     this.reads.delete(key);
+    this.inspector.forget(key);
   }
 
   /**
@@ -488,7 +530,7 @@ export class SyncHub {
     ts: number,
     caller: Caller,
     session?: SyncSession,
-  ): Promise<{ exec: Execution; idPart: string }> {
+  ): Promise<{ exec: Execution; idPart: string; cached?: boolean }> {
     const committer = this.deps.engine.committer;
     const mine = idPartOf(caller);
     // Access first (STUDY-34): a caller who may not run the query (an internal or system function without
@@ -508,7 +550,7 @@ export class SyncHub {
       const l = this.latest.get(q.key);
       if (valid(l)) {
         this.stats.reused++;
-        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart: q.idPart }));
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart: q.idPart, cached: true }));
       }
       // As Convex's `stored_key_hint`: a query stored shared runs at the shared key, so other callers wait
       // for that run instead of starting their own.
@@ -519,7 +561,7 @@ export class SyncHub {
       const l = this.latest.get(`${base}\u0000${idPart}`);
       if (valid(l)) {
         this.stats.reused++;
-        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart }));
+        return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart, cached: true }));
       }
     }
     // Otherwise runs for different callers stay apart: nobody knows before running whether the identity is read.
@@ -566,14 +608,14 @@ export class SyncHub {
     caller: Caller,
     at: string,
     session: SyncSession | undefined,
-  ): Promise<{ exec: Execution; idPart: string }> {
+  ): Promise<{ exec: Execution; idPart: string; cached?: boolean }> {
     const key = `${this.generation}\u0000${ts}\u0000${at}`;
     const mine = idPartOf(caller);
     let f = this.inflight.get(key);
     // Joining another session's run: Convex's `CacheOp::Wait`, logged as a cache hit when it is served.
     const joined = f !== undefined;
     const served = (r: { exec: Execution; idPart: string }) =>
-      joined ? this.logReuse(q, caller, r.exec).then(() => r) : r;
+      joined ? this.logReuse(q, caller, r.exec).then(() => ({ ...r, cached: true })) : r;
     if (!f) {
       const base = at.slice(0, at.lastIndexOf("\u0000"));
       const waiters = new Set<SyncSession>();
@@ -678,6 +720,8 @@ export class SyncHub {
         hash: "",
         identityObserved: false,
         generation,
+        documentsRead: 0,
+        bytesRead: 0,
         // A session that joined this run logs it as the failure it was (STUDY-75).
         logged: { lines: [], returnBytes: null, error: failure },
       };
@@ -688,7 +732,16 @@ export class SyncHub {
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
       ? r.value
-      : { ok: false as const, error: r.error, reads: [], ts, journal: {} as QueryJournal, identityObserved: false };
+      : {
+          ok: false as const,
+          error: r.error,
+          reads: [],
+          ts,
+          journal: {} as QueryJournal,
+          identityObserved: false,
+          documentsRead: 0,
+          bytesRead: 0,
+        };
     // No permit (STUDY-68): not the query's result; the session ends with "try again", as Convex's.
     if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
@@ -707,6 +760,8 @@ export class SyncHub {
         identityObserved: run.identityObserved,
         generation,
         logged,
+        documentsRead: run.documentsRead,
+        bytesRead: run.bytesRead,
       };
     }
     const f = this.deps.formatError(run.error);
@@ -721,6 +776,8 @@ export class SyncHub {
       identityObserved: run.identityObserved,
       generation,
       logged,
+      documentsRead: run.documentsRead,
+      bytesRead: run.bytesRead,
     };
   }
 }
@@ -1056,6 +1113,7 @@ export class SyncSession {
     for (const q of this.queries.values())
       if (changed.has(Functions.moduleOf(q.udfPath))) {
         q.exec = null;
+        q.rerunBecause = "codeChange";
         any = true;
       }
     return any;
@@ -1126,7 +1184,7 @@ export class SyncSession {
 
     let ts: number;
     let stale: [number, SessionQuery][];
-    let results: { exec: Execution; idPart: string }[];
+    let results: { exec: Execution; idPart: string; cached?: boolean }[];
     for (let failures = 0; ; failures++) {
       ts = engine.committer.visibleTs;
       // This transition runs every query stale at `ts`, so it covers any pending splayed notification
@@ -1162,9 +1220,12 @@ export class SyncSession {
       if (e.type === "TemporarilyUnavailable") {
         unavailable = true;
         q.exec = null;
+        q.rerunBecause = "retry";
         return;
       }
       q.exec = e;
+      q.cached = results[i]!.cached === true;
+      q.lastRunAt = Date.now();
       if (e.journal !== q.journal || idPart !== q.idPart) {
         q.journal = e.journal;
         q.idPart = idPart;
@@ -1196,6 +1257,7 @@ export class SyncSession {
     this.version = end;
     this.versionText = endText;
     this.hub.stats.transitions++;
+    if (this.hub.inspector.enabled) this.inspected(stale, results, identityRerun);
     // As Convex's `schedule_unavailable_query_retry`: the skipped queries run again after a delay.
     if (unavailable && this.unavailableTimer === null) {
       this.unavailableTimer = setTimeout(() => {
@@ -1219,6 +1281,44 @@ export class SyncSession {
         this.scheduled = true;
         break;
       }
+  }
+
+  /**
+   * Tell the inspector what this transition ran (STUDY-131 AD-25): a key whose new result it sent has its
+   * invalidations' delay; a run of this session's own that no invalidation caused carries its reason.
+   */
+  private inspected(
+    stale: [number, SessionQuery][],
+    results: { exec: Execution; cached?: boolean }[],
+    identityRerun: boolean,
+  ) {
+    const inspector = this.hub.inspector;
+    stale.forEach(([, q], i) => {
+      const r = results[i]!;
+      if (r.exec.type === "TemporarilyUnavailable") return;
+      const because = q.rerunBecause;
+      q.rerunBecause = undefined;
+      inspector.sent(q.key);
+      if (r.cached) return;
+      const reason: RerunReason | null =
+        because ?? (q.runReason === "initialSubscription" ? "newSubscriber" : identityRerun ? "identityChange" : null);
+      if (reason) inspector.rerun(q.key, reason);
+    });
+  }
+
+  /** This session's queries as the inspector shows them (STUDY-131 AD-25). */
+  inspect(): {
+    sessionId: string | null;
+    identity: "none" | "user" | "admin";
+    queries: { queryId: number; q: SessionQuery }[];
+  } {
+    const c = this.caller as AdminCaller;
+    const identity = c.admin ? "admin" : c.identity == null ? "none" : "user";
+    return {
+      sessionId: this.sessionId,
+      identity,
+      queries: [...this.queries].map(([queryId, q]) => ({ queryId, q })),
+    };
   }
 
   /** Watch exactly the keys of the current queries. */

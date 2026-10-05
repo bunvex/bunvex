@@ -385,6 +385,7 @@ import type { ClientInfo, ClientsFeatures } from "./data-source-clients.ts";
 import type { MetricsFeatures } from "./data-source-metrics.ts";
 import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
+import type { SubscriptionsFeatures } from "./data-source-subscriptions.ts";
 import type { TopologyFeatures } from "./data-source-topology.ts";
 
 export * from "./data-source-auth.ts";
@@ -394,6 +395,7 @@ export * from "./data-source-deployment.ts";
 export * from "./data-source-metrics.ts";
 export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
+export * from "./data-source-subscriptions.ts";
 export * from "./data-source-topology.ts";
 
 import type { ExtensionFeatures } from "./extensions/index.ts";
@@ -406,6 +408,7 @@ export interface DashboardDataSource
     AuthAdminFeatures,
     SnapshotFeatures,
     TopologyFeatures,
+    SubscriptionsFeatures,
     ClientsFeatures,
     ExtensionFeatures {
   getDeployment(opts?: CallOptions): Promise<DeploymentInfo>;

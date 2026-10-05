@@ -13,6 +13,7 @@ import { type DeploymentContractOptions, describeDeploymentContract } from "./co
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
+import { describeSubscriptionsContract } from "./contract-subscriptions.ts";
 import { describeTopologyContract } from "./contract-topology.ts";
 import {
   type DashboardDataSource,
@@ -567,6 +568,7 @@ export function describeDataSourceContract(
     describeDeploymentStateContract({ make, test, opts });
     describeMetricsContract({ make, test });
     describeTopologyContract({ make, test, watchTimeoutMs });
+    describeSubscriptionsContract({ make, test, watchTimeoutMs });
     describeClientsContract({ make, test, writes: !!opts.writes });
     describeAuthContract({ make, test });
     describeAuthAdminContract({ make, test });
