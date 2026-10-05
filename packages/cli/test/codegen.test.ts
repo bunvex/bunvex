@@ -245,10 +245,7 @@ console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("'
     expect(strict.err.join("\n")).toContain(`'"mesages"'`);
     // A loose schema: any table name.
     write(app, {
-      "bunvex/schema.ts": TYPED_APP["bunvex/schema.ts"].replace(
-        /\}\);$/,
-        "}, { strictTableNameTypes: false });",
-      ),
+      "bunvex/schema.ts": TYPED_APP["bunvex/schema.ts"].replace(/\}\);$/, "}, { strictTableNameTypes: false });"),
     });
     expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(0);
   }, 120_000);
