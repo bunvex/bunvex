@@ -33,7 +33,7 @@ import {
   TooManyWritesError,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
-import { type Value, valueSize } from "@bunvex/values";
+import { rawValueSize, type Value } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
@@ -658,7 +658,7 @@ export class SyncHub {
         },
         (run) => {
           if (!run.ok) return { error: run.error };
-          returnBytes = valueSize((run.value ?? null) as Value);
+          returnBytes = rawValueSize((run.value ?? null) as Value);
           return { returnBytes };
         },
         undefined,

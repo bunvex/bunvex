@@ -1,14 +1,19 @@
 // Seed over HTTP with the same volume as convex-bench's load/ws/seed.mjs: 1000 tenants x 100 items +
 // 1000 counters, in mutations of 2000 documents.
 const BASE = process.env.BENCH_URL ?? "http://127.0.0.1:3210";
-const call = async (path: string, args: unknown) => {
+const call = async (path: string, args: unknown): Promise<void> => {
   const r = await fetch(`${BASE}/api/mutation`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path, args }),
   });
-  const j = (await r.json()) as { status: string; errorMessage?: string };
-  if (j.status !== "success") throw new Error(`${path}: ${j.errorMessage}`);
+  const j = (await r.json()) as { status?: string; errorMessage?: string; code?: string; message?: string };
+  // Past the write throughput limit (STUDY-78; a server run with Convex's default): wait and send it again.
+  if (r.status === 429 && j.code === "TooManyWrites") {
+    await Bun.sleep(250);
+    return call(path, args);
+  }
+  if (j.status !== "success") throw new Error(`${path}: ${j.errorMessage ?? `${j.code}: ${j.message}`}`);
 };
 const t0 = Date.now();
 const batches = Array.from({ length: 50 }, (_, i) => ({ tenantOffset: i * 20, tenants: 20, perTenant: 100 }));

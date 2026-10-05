@@ -105,6 +105,18 @@ const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
  */
 export type TableState = "active" | "hidden" | "deleting";
 export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: TableState };
+/** Convex's `MAX_USER_TABLES` (crates/database/src/bootstrap_model/table.rs): active user tables, at most. */
+export const MAX_USER_TABLES = 10_000;
+
+/** Convex's `TooManyTables` (`index_validation_error::too_many_tables`), when a new table would pass the cap. */
+export class TooManyTablesError extends Error {
+  readonly code = "TooManyTables";
+  constructor() {
+    super(`Number of tables cannot exceed ${MAX_USER_TABLES}.`);
+    this.name = "TooManyTablesError";
+  }
+}
+
 /** The active tables of a `_tables` listing (old rows have no state: active). */
 export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.state ?? "active") === "active");
 /**
@@ -353,12 +365,14 @@ function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged
  * whose fields changed) gets a fresh index id and starts `backfilling`, unless its table is new (then it
  * is `enabled` at once). A PENDING index the schema no longer asks for is dropped now; an ENABLED one keeps
  * serving until the push finishes (`finishCatalog`), so a changed index is replaced atomically. Pure: the
- * caller commits.
+ * caller commits. A new user table past `MAX_USER_TABLES` active ones throws `TooManyTablesError`; `userTables`
+ * false skips that (a hidden table that will take a system table's name).
  */
 export function planCatalog(
   declared: Iterable<DeclaredTable>,
   tables: TableMeta[],
   indexes: IndexMeta[],
+  userTables = true,
 ): CatalogChanges {
   const changes: CatalogChanges = { insertTables: [], insertIndexes: [], deleteIndexes: [], restageIndexes: [] };
   let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
@@ -366,10 +380,12 @@ export function planCatalog(
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
   const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
   const active = activeTables(tables);
+  let userTableCount = active.filter((t) => !t.name.startsWith("_")).length;
   for (const d of declared) {
     let tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {
+      if (userTables && !d.name.startsWith("_") && userTableCount++ >= MAX_USER_TABLES) throw new TooManyTablesError();
       // A system table takes its fixed number, else the first free one above 512 that no system table
       // reserves; a user table the first free one above 10 000 (Convex).
       const system = d.name.startsWith("_");

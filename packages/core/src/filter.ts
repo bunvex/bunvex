@@ -1,16 +1,43 @@
 // `.filter(q => …)` (STUDY-15): the filter builder and its evaluation, with the semantics of Convex's
 // `Expression::eval` (crates/common/src/query.rs): comparisons in index-key order (a missing field is
 // `undefined`, below null), arithmetic only on two int64s or two float64s, booleans only for and/or/not.
-import { compareValues, displayValue, hasCommitTs, isBytes, type Value } from "@bunvex/values";
+import {
+  compareValues,
+  displayValue,
+  hasCommitTs,
+  isBytes,
+  type JSONValue,
+  toJsonValue,
+  type Value,
+} from "@bunvex/values";
 import type { Doc } from "./schema.ts";
 import { fieldValue } from "./schema.ts";
 
 type MaybeValue = Value | undefined;
 
-/** An expression of a filter; `T` is its value's type (types only, STUDY-36). */
+/**
+ * An expression of a filter; `T` is its value's type (types only, STUDY-36). `json` is its serialized form, as
+ * Convex's `ExpressionImpl.serialize()` (`{ $eq: [{ $field: "a" }, { $literal: 1 }] }`): a paginated query's
+ * cursor fingerprint covers it, so a cursor of another filter is refused (STUDY-17 D3).
+ */
 // biome-ignore lint/correctness/noUnusedVariables: T is only for the typed filter builder
 export class Expression<T = unknown> {
-  constructor(readonly evaluate: (doc: Doc) => MaybeValue) {}
+  constructor(
+    readonly evaluate: (doc: Doc) => MaybeValue,
+    readonly json: JSONValue,
+  ) {}
+}
+
+/** A literal's serialized form, as Convex's `{ $literal: … }` (`undefined` as Convex's `$undefined`). */
+function literalJson(x: unknown): JSONValue {
+  if (x === undefined) return { $literal: { $undefined: null } };
+  try {
+    return { $literal: toJsonValue(x as Value) };
+  } catch {
+    // Not a value: evaluating it fails as before (the predicate must be a boolean); the fingerprint only needs
+    // to tell it apart.
+    return { $literal: { $notAValue: String(x) } };
+  }
 }
 export type ExpressionOrValue<T = unknown> = Expression | (T & Value) | undefined;
 
@@ -18,8 +45,11 @@ const toExpr = (x: ExpressionOrValue): Expression => {
   if (x instanceof Expression) return x;
   // A literal is a plain value: Convex's expression JSON refuses the commit timestamp's token (STUDY-53).
   if (hasCommitTs(x)) throw new Error("Field name $commitTs starts with '$', which is reserved.");
-  return new Expression(() => x as MaybeValue);
+  return new Expression(() => x as MaybeValue, literalJson(x));
 };
+
+/** A predicate's serialized form (a literal one included): what a cursor's fingerprint covers. */
+export const expressionJson = (x: ExpressionOrValue): JSONValue => toExpr(x).json;
 
 function typeName(v: MaybeValue): string {
   if (v === undefined) return "undefined";
@@ -60,21 +90,22 @@ function arithmetic(
   );
 }
 
-const binary = (f: (l: MaybeValue, r: MaybeValue) => MaybeValue) => (a: ExpressionOrValue, b: ExpressionOrValue) => {
-  const [x, y] = [toExpr(a), toExpr(b)];
-  return new Expression((doc) => f(x.evaluate(doc), y.evaluate(doc)));
-};
+const binary =
+  (op: string, f: (l: MaybeValue, r: MaybeValue) => MaybeValue) => (a: ExpressionOrValue, b: ExpressionOrValue) => {
+    const [x, y] = [toExpr(a), toExpr(b)];
+    return new Expression((doc) => f(x.evaluate(doc), y.evaluate(doc)), { [op]: [x.json, y.json] });
+  };
 
 /** The builder a filter predicate receives, as Convex's `FilterBuilder`. */
 export const filterBuilder = {
-  field: (path: string) => new Expression((doc) => fieldValue(doc, path)),
-  eq: binary((l, r) => compareValues(l, r) === 0),
-  neq: binary((l, r) => compareValues(l, r) !== 0),
-  lt: binary((l, r) => compareValues(l, r) < 0),
-  lte: binary((l, r) => compareValues(l, r) <= 0),
-  gt: binary((l, r) => compareValues(l, r) > 0),
-  gte: binary((l, r) => compareValues(l, r) >= 0),
-  add: binary((l, r) =>
+  field: (path: string) => new Expression((doc) => fieldValue(doc, path), { $field: path }),
+  eq: binary("$eq", (l, r) => compareValues(l, r) === 0),
+  neq: binary("$neq", (l, r) => compareValues(l, r) !== 0),
+  lt: binary("$lt", (l, r) => compareValues(l, r) < 0),
+  lte: binary("$lte", (l, r) => compareValues(l, r) <= 0),
+  gt: binary("$gt", (l, r) => compareValues(l, r) > 0),
+  gte: binary("$gte", (l, r) => compareValues(l, r) >= 0),
+  add: binary("$add", (l, r) =>
     arithmetic(
       "add",
       l,
@@ -83,7 +114,7 @@ export const filterBuilder = {
       (a, b) => a + b,
     ),
   ),
-  sub: binary((l, r) =>
+  sub: binary("$sub", (l, r) =>
     arithmetic(
       "subtract",
       l,
@@ -92,7 +123,7 @@ export const filterBuilder = {
       (a, b) => a - b,
     ),
   ),
-  mul: binary((l, r) =>
+  mul: binary("$mul", (l, r) =>
     arithmetic(
       "multiply",
       l,
@@ -101,7 +132,7 @@ export const filterBuilder = {
       (a, b) => a * b,
     ),
   ),
-  div: binary((l, r) =>
+  div: binary("$div", (l, r) =>
     arithmetic(
       "divide",
       l,
@@ -110,7 +141,7 @@ export const filterBuilder = {
       (a, b) => a / b,
     ),
   ),
-  mod: binary((l, r) =>
+  mod: binary("$mod", (l, r) =>
     arithmetic(
       "mod",
       l,
@@ -121,27 +152,30 @@ export const filterBuilder = {
   ),
   neg: (x: ExpressionOrValue) => {
     const e = toExpr(x);
-    return new Expression((doc) => {
-      const v = e.evaluate(doc);
-      if (typeof v === "bigint") {
-        if (-v > MAX_INT64) throw new Error(`Cannot negate ${v}: the result is out of range for Int64`);
-        return -v;
-      }
-      if (typeof v === "number") return -v;
-      throw new Error(`Cannot negate ${displayValue(v)} (type ${typeName(v)})`);
-    });
+    return new Expression(
+      (doc) => {
+        const v = e.evaluate(doc);
+        if (typeof v === "bigint") {
+          if (-v > MAX_INT64) throw new Error(`Cannot negate ${v}: the result is out of range for Int64`);
+          return -v;
+        }
+        if (typeof v === "number") return -v;
+        throw new Error(`Cannot negate ${displayValue(v)} (type ${typeName(v)})`);
+      },
+      { $neg: e.json },
+    );
   },
   and: (...xs: ExpressionOrValue[]) => {
     const es = xs.map(toExpr);
-    return new Expression((doc) => es.every((e) => asBoolean(e.evaluate(doc))));
+    return new Expression((doc) => es.every((e) => asBoolean(e.evaluate(doc))), { $and: es.map((e) => e.json) });
   },
   or: (...xs: ExpressionOrValue[]) => {
     const es = xs.map(toExpr);
-    return new Expression((doc) => es.some((e) => asBoolean(e.evaluate(doc))));
+    return new Expression((doc) => es.some((e) => asBoolean(e.evaluate(doc))), { $or: es.map((e) => e.json) });
   },
   not: (x: ExpressionOrValue) => {
     const e = toExpr(x);
-    return new Expression((doc) => !asBoolean(e.evaluate(doc)));
+    return new Expression((doc) => !asBoolean(e.evaluate(doc)), { $not: e.json });
   },
 };
 export type FilterBuilder = typeof filterBuilder;

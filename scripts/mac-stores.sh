@@ -36,9 +36,11 @@ start() {
 
   # MongoDB (journaled by default)
   mkdir -p "$D/mongo"
-  "$MO/mongod" --dbpath "$D/mongo" --port 27018 --bind_ip 127.0.0.1 --wiredTigerCacheSizeGB 1 \
+  # A single-node replica set: bunvex's MongoDB driver needs transactions (a standalone server has none).
+  "$MO/mongod" --dbpath "$D/mongo" --port 27018 --bind_ip 127.0.0.1 --wiredTigerCacheSizeGB 1 --replSet rs0 \
     --logpath "$D/mongo.log" --pidfilepath "$D/mongo.pid" --fork >/dev/null
-  echo "mongodb ok (27018)"
+  (cd bench && bun -e 'const {MongoClient}=require("mongodb");const c=new MongoClient("mongodb://127.0.0.1:27018/?directConnection=true");await c.connect();const a=c.db().admin();if(!(await a.command({hello:1})).setName)await a.command({replSetInitiate:{_id:"rs0",members:[{_id:0,host:"127.0.0.1:27018"}]}});for(let i=0;i<60&&!(await a.command({hello:1})).isWritablePrimary;i++)await Bun.sleep(500);await c.close()')
+  echo "mongodb ok (27018, replica set rs0)"
 }
 
 stop() {

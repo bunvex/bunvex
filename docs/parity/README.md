@@ -6,11 +6,11 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 222 | 8 | 13 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 156 | 5 | 4 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 185 | 39 | 27 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 227 | 5 | 13 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 157 | 4 | 4 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 187 | 37 | 27 |
 
-These counts were recounted on 2026-10-04 (with #370–#385) from each row's status column: a row counts as done,
+These counts were recounted on 2026-10-05 (with #398–#408) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
 are not counted: 1 in server-api.md, 1 in client-sync.md, 3 in platform.md.
 
@@ -150,35 +150,30 @@ gaps.
 2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, itself a component) or WorkOS AuthKit equivalent;
    Clerk and Auth0 exist (platform §1).
 3. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
-4. **Search after a restart:** queries get Convex's bootstrapping answer while the indexes rebuild (STUDY-79),
-   but the rebuild reads the whole table. **Planned** (owner, 2026-10-04, STUDY-79 §6, option D): snapshot the
-   in-memory indexes at a clean shutdown, load them at start and replay the log since.
 
 **Low: rare, ops-only, or a missing nicety**
 
 - Client:
   - `convexQueryOptions`;
-  - `BunvexHttpClient.function()`;
   - WS ping every 5 s with a 120 s pong timeout (bunvex drops a dead peer after about 960 s);
   - close 1000 with a reason for NotFound and Forbidden;
   - large-transition warnings;
   - arguments-size metrics.
 - Server API:
-  - `getDocumentSize`, `Base64`, the `getConvexSize` name;
-  - runtime `filterApi`;
   - `exportArgs()` / `exportReturns()` on registered functions (their validator JSON is recorded already);
   - `.staged(validator)`;
   - `.count()` on the query builder;
   - typed limit error codes.
 - Limits and checks:
-  - the 10 000-table cap;
   - nesting 64 for arguments and results;
-  - `check_index_references` at push;
   - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
   - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
   - `/api/delete_scheduled_functions_table`;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
+  - persisted search segments (STUDY-79 option E): a restart restores the clean-shutdown snapshot and replays
+    the log since (STUDY-96), but after a crash the replay runs from the last clean shutdown, or the whole
+    table without one;
   - `/instance_version`, `/`, `/echo`;
   - OpenAPI;
   - Prometheus `/metrics`;

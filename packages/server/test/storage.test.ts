@@ -392,4 +392,26 @@ describe("F3 and F4", () => {
     expect((await fetch(`${api}/http/echo`, { method: "POST", body: "x".repeat(4096) })).status).toBe(413);
     expect((await fetch(`${server.siteUrl}/echo`, { method: "POST", body: "x".repeat(4096) })).status).toBe(413);
   });
+
+  test("a body sent without a length is cut off past maxRequestBodySize; one within it is read", async () => {
+    const { api } = await setup({ maxRequestBodySize: 1024 });
+    const streamed = (text: string) =>
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(text));
+          c.close();
+        },
+      });
+    const post = (text: string) =>
+      fetch(`${api}/api/query`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: streamed(text),
+        duplex: "half",
+      } as RequestInit);
+    const over = await post(JSON.stringify({ path: "m:nope", args: { pad: "x".repeat(4096) } }));
+    expect([over.status, ((await over.json()) as { code: string }).code]).toEqual([400, "BadJsonBody"]);
+    const within = await post(JSON.stringify({ path: "m:nope", args: {} }));
+    expect(((await within.json()) as { status: string }).status).toBe("error");
+  });
 });

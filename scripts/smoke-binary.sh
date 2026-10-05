@@ -10,7 +10,12 @@ PORT=${PORT:-16210}
 WORK=$(mktemp -d)
 PID=""
 cleanup() {
-  [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
+  # Wait for the backend to exit before removing its directory: a clean shutdown still writes there (the
+  # search indexes' snapshots, STUDY-96).
+  if [ -n "$PID" ]; then
+    kill "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT

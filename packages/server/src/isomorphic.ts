@@ -10,6 +10,7 @@ import type { FunctionHandle } from "./function-handles.ts";
 
 export { defineSchema, defineTable, docValidator } from "@bunvex/core/schema";
 export { anyApi, getFunctionName, makeFunctionReference } from "@bunvex/protocol";
+export { filterApi } from "./api-types.ts";
 export {
   action,
   actionGeneric,
