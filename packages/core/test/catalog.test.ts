@@ -180,3 +180,50 @@ test("fixed system numbers: a table created before keeps its number; a system ta
     planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], taken, []).insertTables[0]!.number,
   ).toBe(515);
 });
+
+test("system indexes as Convex declares them: `_creationTime` last except SYSTEM_INDEXES_WITHOUT_CREATION_TIME (DV-401)", async () => {
+  const { SYSTEM_INDEXES_WITHOUT_CREATION_TIME, planCatalog } = await import("../src/catalog.ts");
+  const e = await new Engine(
+    defineSchema({ posts: defineTable(v.any()).index("by_author", ["author"]) }),
+    await MemoryPersistence.open(null, { durable: false }),
+  ).init();
+  const fields: Record<string, string[]> = {};
+  for (const t of e.catalog.tables.values())
+    for (const ix of t.indexes.values())
+      if (ix.name !== "by_id" && ix.name !== "by_creation_time") fields[`${t.name}.${ix.name}`] = ix.fields;
+  await e.close();
+  // Convex's fields, index by index (crates/model, crates/database/src/bootstrap_model).
+  expect(fields).toEqual({
+    "_session_requests.by_session_id_and_request_id": ["sessionId", "requestId"],
+    "_index_backfills.by_index_id": ["indexId", "_creationTime"],
+    "_scheduled_jobs.by_completed_ts": ["completedTs"],
+    "_scheduled_jobs.by_next_ts": ["nextTs"],
+    "_scheduled_jobs.by_udf_path_and_next_event_ts": ["udfPath", "nextTs"],
+    "_cron_jobs.by_name": ["name"],
+    "_cron_next_run.by_cron_job_id": ["cronJobId"],
+    "_cron_next_run.by_next_ts": ["nextTs"],
+    "_cron_job_logs.by_name_and_ts": ["name", "ts"],
+    "_file_storage.by_storage_id": ["storageId"],
+    "_modules.by_path": ["path"],
+    "_environment_variables.by_name": ["name"],
+    "_exports.by_state_and_ts": ["state", "start_ts"],
+    "_exports.by_requestor": ["requestor", "_creationTime"],
+    "_deployment_audit_log.by_action_and_creation_time": ["action", "_creationTime"],
+    "_function_handles.by_component_path": ["component", "path"],
+    "_data_sync_progress.by_sync_id": ["syncId", "_creationTime"],
+    "_data_sync_progress.by_last_updated": ["lastUpdatedMs", "_creationTime"],
+    "_usage_limits.by_selector": ["metric", "window", "limitType", "_creationTime"],
+    // A user index still gets the implicit `_creationTime`.
+    "posts.by_author": ["author", "_creationTime"],
+  });
+  for (const [k, f] of Object.entries(fields))
+    if (k.startsWith("_")) expect(f.at(-1) === "_creationTime").toBe(!SYSTEM_INDEXES_WITHOUT_CREATION_TIME.has(k));
+  // A system index declared against the list is refused, as Convex refuses it at startup.
+  const anyDoc = v.any();
+  expect(() => planCatalog([{ name: "_x", indexes: { by_a: ["a"] }, document: anyDoc }], [], [])).toThrow(
+    "System index _x.by_a should end with _creationTime",
+  );
+  expect(() =>
+    planCatalog([{ name: "_modules", indexes: { by_path: ["path", "_creationTime"] }, document: anyDoc }], [], []),
+  ).toThrow("System index _modules.by_path correctly ends with _creationTime.");
+});

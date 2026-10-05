@@ -575,6 +575,8 @@ describe("a Convex ZIP with files", () => {
     // Imported into `_file_storage`, as Convex's (STUDY-125): `_storage` is its virtual name.
     expect(t.engine.catalog.tables.has("_storage")).toBe(false);
     expect(t.engine.catalog.tables.get("_file_storage")!.number).toBe(540);
+    // The replacing table copies its indexes as they are: Convex's `by_storage_id` has no `_creationTime` (DV-401).
+    expect(t.engine.catalog.table("_file_storage").indexes.get("by_storage_id")!.fields).toEqual(["storageId"]);
     const [file] = (await t.engine.query((db) => db.asSystem(() => db.query("_file_storage").collect()))) as Doc[];
     expect({ ...file!, storageKey: null }).toEqual({
       _id: fileId,

@@ -132,7 +132,7 @@ The owner said there is no legacy data (alpha): no migration, no reading of the 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | V1 (DV-400) | The virtual documents are always the newest shape (base64 sha256); no client-version gate (Convex refuses virtual reads below npm 1.6.1 and gives hex sha256 below 1.9.0) | Owner's rule: system tables behave as the latest Convex version, with no support for older Convex clients (a bunvex function carries no Convex npm version anyway) | **accepted** (owner, 2026-10-05) |
-| V2 (DV-401) | Every system index ends with `_creationTime` in bunvex (the new tables' `by_storage_id`, `by_next_ts`, `by_completed_ts`, `by_udf_path_and_next_event_ts` too); Convex leaves these out (`SYSTEM_INDEXES_WITHOUT_CREATION_TIME`) | Ainda não fizemos: pre-existing for every bunvex system table; private indexes, so only the order of exact ties differs (the dashboard's job list) | **match Convex** for every system table (owner, 2026-10-05), built in the follow-up PR stacked on this one |
+| V2 (DV-401) | Every system index ends with `_creationTime` in bunvex (the new tables' `by_storage_id`, `by_next_ts`, `by_completed_ts`, `by_udf_path_and_next_event_ts` too); Convex leaves these out (`SYSTEM_INDEXES_WITHOUT_CREATION_TIME`) | Ainda não fizemos: pre-existing for every bunvex system table; private indexes, so only the order of exact ties differs (the dashboard's job list) | **match Convex** for every system table (owner, 2026-10-05); built (§7) |
 | V3 (DV-402) | `db.system.get` of a user table's id returned null and `db.get(storageId)` returned null | Now as Convex's `system_table_guard`: both throw | resolved (matches Convex) |
 
 DV-140 (STUDY-30 S2) and DV-148 (STUDY-32 F1) — real tables named `_scheduled_functions` / `_storage` with the
@@ -176,6 +176,34 @@ change within noise); scheduling 2000 jobs from mutations takes 35–72 ms befor
 inserts per job, as Convex); `db.system.query("_storage").collect()` of 2000 files 2.6–4.4 ms before, 5.0–6.3 ms
 after — the raw read itself doubles (bytes and int64 fields decode slower than strings and floats), the
 mapping is small; `db.system.get` and `getUrl` per file ~3.4–5.8 µs before, ~4.0–5.8 µs after.
+
+## 7. System indexes without `_creationTime` (DV-401)
+
+**Convex.** A system table's `SystemIndex` fields are used as declared. `crates/model/src/lib.rs` (`SYSTEM_INDEXES_WITHOUT_CREATION_TIME`, ~386) lists the indexes "too large and not worth to backfill"; `initialize_system_table` (~533-547) refuses to start if a listed index ends with `_creationTime`, or an unlisted one does not. Of the tables bunvex has, the list covers `_function_handles.by_component_path`, `_cron_jobs.by_name`, `_cron_job_logs.by_name_and_ts`, `_cron_next_run.by_next_ts` / `by_cron_job_id`, `_environment_variables.by_name`, `_exports.by_state_and_ts`, `_file_storage.by_storage_id`, `_modules.by_path`, the three `_scheduled_jobs` indexes and `_session_requests.by_session_id_and_request_id`. The others declare it: `_exports.by_requestor`, `_deployment_audit_log.by_action_and_creation_time`, `_data_sync_progress.by_sync_id` / `by_last_updated`, `_usage_limits.by_selector`, `_index_backfills.by_index_id`. (`_tables.by_name`, `_index.by_index_doc_id`, `_schemas.by_state` and `_components.by_parent_and_name` are listed too; bunvex has none of those indexes.)
+
+**bunvex, before.** `planCatalog` appended `_creationTime` to every declared index, system tables included, so the listed indexes had it and the ones that declare it had it twice.
+
+**bunvex, now.**
+- `catalog.ts` takes a system index as declared and checks it against `SYSTEM_INDEXES_WITHOUT_CREATION_TIME`, with Convex's two messages.
+- User indexes keep the implicit suffix.
+- An import's hidden table copies the indexes of the table it replaces as they are (`HIDDEN_TABLE_PLACEHOLDER`). Before, it stripped a trailing `_creationTime` and added it back, which no longer holds for system tables.
+- `_index_backfills.by_index_id` now declares `_creationTime` itself.
+- With no legacy data, nothing migrates. A store created before rebuilds the changed indexes on start, as any index change does.
+
+**Tests.**
+- `catalog.test.ts` pins every system index's fields to Convex's, checks the list against the suffix, and checks both refusals.
+- `imports.test.ts` checks that the imported `_file_storage` keeps `by_storage_id = [storageId]`.
+- Sabotage, all caught:
+
+  | # | Break | Failing tests |
+  |---|---|---|
+  | D1 | suffix appended to system indexes again | 2 |
+  | D2 | an index dropped from the list | 27 |
+  | D3 | the hidden copy adds the suffix | 1 |
+  | D4 | `_index_backfills` declared without the suffix | 27 |
+  | D5 | user indexes lose the implicit suffix | 1 |
+
+- Scheduler throughput (1408–1410 jobs/s) and storage reads are unchanged within noise. This is not a hot path: only startup planning changed, and the keys got shorter.
 
 ## 6. Open questions
 

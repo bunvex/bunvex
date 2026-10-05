@@ -388,15 +388,54 @@ export type CatalogChanges = {
 
 const sameFields = (a: string[], b: string[]) => a.length === b.length && a.every((f, i) => f === b[i]);
 
-/** What a declared table asks for: every index's full field list (the implicit `_creationTime` added), staged or not. */
+/**
+ * Convex's `SYSTEM_INDEXES_WITHOUT_CREATION_TIME` (crates/model/src/lib.rs, STUDY-125 DV-401): the system
+ * indexes "too large and not worth to backfill" that do not end with `_creationTime`, among the tables bunvex
+ * has. Every other system index declares `_creationTime` as its last field.
+ */
+export const SYSTEM_INDEXES_WITHOUT_CREATION_TIME: ReadonlySet<string> = new Set([
+  "_function_handles.by_component_path",
+  "_cron_jobs.by_name",
+  "_cron_job_logs.by_name_and_ts",
+  "_cron_next_run.by_next_ts",
+  "_cron_next_run.by_cron_job_id",
+  "_environment_variables.by_name",
+  "_exports.by_state_and_ts",
+  "_file_storage.by_storage_id",
+  "_modules.by_path",
+  "_scheduled_jobs.by_next_ts",
+  "_scheduled_jobs.by_completed_ts",
+  "_scheduled_jobs.by_udf_path_and_next_event_ts",
+  "_session_requests.by_session_id_and_request_id",
+]);
+
+/** A copy of a table's indexes (an import's hidden table): its fields as they are, nothing added. */
+export const HIDDEN_TABLE_PLACEHOLDER = "\u0000hidden";
+
+/**
+ * What a declared table asks for: every index's full field list, staged or not. A user index gets an implicit
+ * `_creationTime` (then `_id`, in the key), so documents with equal indexed values come back in creation
+ * order. A system index is taken as declared, as Convex's `SystemIndex`: it ends with `_creationTime` unless
+ * it is one of `SYSTEM_INDEXES_WITHOUT_CREATION_TIME`, which is checked here as Convex checks it.
+ */
 function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged: boolean }> {
   const staged = new Set(d.staged ?? []);
   const out = new Map<string, { fields: string[]; staged: boolean }>();
   for (const [name, fields] of Object.entries(SYSTEM_INDEXES)) out.set(name, { fields, staged: false });
-  // As in Convex, every user index ends with an implicit `_creationTime` (then `_id`, in the key), so
-  // documents with equal indexed values come back in creation order.
-  for (const [name, fields] of Object.entries(d.indexes))
-    out.set(name, { fields: [...fields, "_creationTime"], staged: staged.has(name) });
+  const exact = d.name === HIDDEN_TABLE_PLACEHOLDER;
+  const system = d.name.startsWith("_");
+  for (const [name, fields] of Object.entries(d.indexes)) {
+    if (system) {
+      const endsWithCreation = fields[fields.length - 1] === "_creationTime";
+      if (SYSTEM_INDEXES_WITHOUT_CREATION_TIME.has(`${d.name}.${name}`)) {
+        if (endsWithCreation)
+          throw new Error(
+            `System index ${d.name}.${name} correctly ends with _creationTime. Doesn't need to be in SYSTEM_INDEXES_WITHOUT_CREATION_TIME list.`,
+          );
+      } else if (!endsWithCreation) throw new Error(`System index ${d.name}.${name} should end with _creationTime`);
+    }
+    out.set(name, { fields: system || exact ? fields : [...fields, "_creationTime"], staged: staged.has(name) });
+  }
   return out;
 }
 

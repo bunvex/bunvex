@@ -31,6 +31,7 @@ import {
   FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   finishCatalog,
+  HIDDEN_TABLE_PLACEHOLDER,
   hasChanges,
   hasFinishChanges,
   INDEX_BACKFILLS_INDEX,
@@ -583,7 +584,11 @@ export class Engine {
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
         document: v.any(),
       },
-      { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      {
+        name: INDEX_BACKFILLS_TABLE,
+        indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId", "_creationTime"] },
+        document: v.any(),
+      },
       { name: SCHEDULED_JOBS_TABLE, indexes: SCHEDULED_JOBS_INDEXES, document: v.any() },
       { name: SCHEDULED_JOB_ARGS_TABLE, indexes: {}, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
@@ -1375,8 +1380,7 @@ export class Engine {
     const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
     const indexes: Record<string, string[]> = {};
     for (const ix of [...(source?.indexes.values() ?? []), ...(source?.pending ?? [])])
-      if (!(ix.name in SYSTEM_INDEXES))
-        indexes[ix.name] = ix.fields[ix.fields.length - 1] === "_creationTime" ? ix.fields.slice(0, -1) : ix.fields;
+      if (!(ix.name in SYSTEM_INDEXES)) indexes[ix.name] = ix.fields; // as they are: the placeholder adds nothing
     let def: TableDef | undefined;
     await this.runMutation(
       async (db) => {
@@ -1384,7 +1388,7 @@ export class Engine {
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
-          [{ name: `\u0000hidden`, indexes, document: v.any() }],
+          [{ name: HIDDEN_TABLE_PLACEHOLDER, indexes, document: v.any() }],
           tables,
           stored,
           !name.startsWith("_"),
