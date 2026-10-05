@@ -19,7 +19,7 @@ import {
   TextIndex,
   type TextQuery,
 } from "./text-index.ts";
-import { TextSegment, TextSegmentDeletes } from "./text-segment.ts";
+import { type CountedDoc, TextSegment, TextSegmentDeletes } from "./text-segment.ts";
 
 export type TextSegmentPart = SegmentPart<TextSegment, TextSegmentDeletes>;
 export type PreparedTextFlush = PreparedFlush<TextSegment, TextSegmentDeletes>;
@@ -44,6 +44,20 @@ export class SegmentedTextIndex extends SegmentedIndex<TextSegment, TextSegmentD
   }
   protected build(docs: [string, IndexedDoc][]) {
     return TextSegment.build(docs, this.filterFields);
+  }
+  /** From the memory part's counted terms, not its documents' tokens. */
+  protected override buildMemory() {
+    const docs: [string, CountedDoc][] = [];
+    for (const id of this.memory.ids()) docs.push([id, this.memory.stored(id)!]);
+    return docs.length ? TextSegment.buildCounted(docs, this.filterFields) : null;
+  }
+  /** From the segments' forward indexes. */
+  protected override buildLive(parts: TextSegmentPart[]) {
+    const docs: [string, CountedDoc][] = [];
+    for (const p of parts)
+      for (let d = 0; d < p.segment.numDocs; d++)
+        if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.counted(d)]);
+    return docs.length ? TextSegment.buildCounted(docs, this.filterFields) : null;
   }
   protected memorySet(id: string, doc: IndexedDoc | null) {
     this.memory.set(id, doc);

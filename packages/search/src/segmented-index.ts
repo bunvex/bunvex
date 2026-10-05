@@ -93,13 +93,17 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     return { segment, deletes, version: 0, persisted: 0, ...(keys ? { keys } : {}) };
   }
 
-  /** Segments from storage. Changes already made (a commit before the load) delete their stale copies. */
+  /**
+   * Segments from storage, all or none: a segment that cannot be read throws before any is added. Changes
+   * already made (a commit before the load) delete their stale copies.
+   */
   load(parts: StoredSegment[]) {
-    for (const p of parts) {
+    const loaded = parts.map((p) => {
       const segment = this.open(p.segment);
       const deletes = p.deletes ? this.decodeDeletes(segment, p.deletes) : this.noDeletes(segment);
-      this.segments.push(this.part(segment, deletes, p.keys));
-    }
+      return this.part(segment, deletes, p.keys);
+    });
+    this.segments.push(...loaded);
     for (const id of this.changed.keys()) this.deleteFromSegments(id);
   }
 
@@ -151,13 +155,26 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
       for (let d = 0; d < p.segment.numDocs; d++) if (!p.deletes.has(d)) yield p.segment.id(d);
   }
 
-  /** Prepares a flush of the memory part (see `PreparedFlush`). */
-  prepareFlush(): PreparedFlush<S, D> {
+  /** The memory part's documents as a segment (null: none). */
+  protected buildMemory(): Uint8Array | null {
     const docs: [string, Doc][] = [];
     for (const id of this.memoryIds()) docs.push([id, this.memoryGet(id)!]);
+    return docs.length ? this.build(docs) : null;
+  }
+
+  /** The live documents of `parts` as one segment (null: none). */
+  protected buildLive(parts: SegmentPart<S, D>[]): Uint8Array | null {
+    const docs: [string, Doc][] = [];
+    for (const p of parts)
+      for (let d = 0; d < p.segment.numDocs; d++) if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.get(d)]);
+    return docs.length ? this.build(docs) : null;
+  }
+
+  /** Prepares a flush of the memory part (see `PreparedFlush`). */
+  prepareFlush(): PreparedFlush<S, D> {
     return {
       seq: this.seq,
-      segment: docs.length ? this.build(docs) : null,
+      segment: this.buildMemory(),
       deletes: this.segments
         .filter((p) => p.version !== p.persisted)
         .map((p) => ({ part: p, version: p.version, bytes: p.deletes.encode() })),
@@ -195,14 +212,7 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
 
   /** Prepares merging `parts` (segments of this index) into one segment of their live documents. */
   prepareCompaction(parts: SegmentPart<S, D>[]): PreparedCompaction<S, D> {
-    const docs: [string, Doc][] = [];
-    for (const p of parts)
-      for (let d = 0; d < p.segment.numDocs; d++) if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.get(d)]);
-    return {
-      parts,
-      captured: parts.map((p) => p.deletes.clone()),
-      segment: docs.length ? this.build(docs) : null,
-    };
+    return { parts, captured: parts.map((p) => p.deletes.clone()), segment: this.buildLive(parts) };
   }
 
   /** The deletes `c`'s parts got since `c.captured`, applied to `part`; `c.captured` brought up to date. */

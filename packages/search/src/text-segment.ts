@@ -6,16 +6,26 @@
 import { fieldnormToId } from "./bm25.ts";
 import {
   Bitset,
-  compareBytes,
   NO_FILTER_KEY as NO_KEY,
   SegmentFileError,
   SegmentKind,
   SegmentReader,
   SegmentWriter,
   type StringTable,
+  sortUtf8,
   utf8,
 } from "./segment-file.ts";
 import type { IndexedDoc } from "./text-index.ts";
+
+/** A document with its terms counted: what a segment is built from (`IndexedDoc`s are counted first). */
+export type CountedDoc = {
+  tf: ReadonlyMap<string, number>;
+  /** Its token count. */
+  length: number;
+  filters: Record<string, string>;
+  creationTime: number;
+  bytes: number;
+};
 
 type TextSegmentMeta = {
   uid: string;
@@ -117,19 +127,29 @@ export class TextSegment {
    * `open` reads back.
    */
   static build(docs: Iterable<readonly [string, IndexedDoc]>, filterFields: readonly string[]): Uint8Array {
+    const counted: [string, CountedDoc][] = [];
+    for (const [id, doc] of docs) {
+      const tf = new Map<string, number>();
+      for (const t of doc.tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+      counted.push([
+        id,
+        { tf, length: doc.tokens.length, filters: doc.filters, creationTime: doc.creationTime, bytes: doc.bytes ?? 0 },
+      ]);
+    }
+    return TextSegment.buildCounted(counted, filterFields);
+  }
+
+  /** `build`, from documents whose terms are already counted. */
+  static buildCounted(docs: Iterable<readonly [string, CountedDoc]>, filterFields: readonly string[]): Uint8Array {
     const entries = [...docs].map(([id, doc]) => ({ id, key: utf8(id), doc }));
-    entries.sort((a, b) => compareBytes(a.key, b.key));
+    sortUtf8(entries, (e) => e.id);
     const n = entries.length;
 
     // The terms, by bytes, and each document's frequencies.
-    const tfs = entries.map(({ doc }) => {
-      const tf = new Map<string, number>();
-      for (const t of doc.tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-      return tf;
-    });
+    const tfs = entries.map(({ doc }) => doc.tf);
     const termSet = new Set<string>();
     for (const tf of tfs) for (const t of tf.keys()) termSet.add(t);
-    const terms = [...termSet].map((t) => ({ t, key: utf8(t) })).sort((a, b) => compareBytes(a.key, b.key));
+    const terms = sortUtf8([...termSet], (t) => t).map((t) => ({ t, key: utf8(t) }));
     const ordOf = new Map(terms.map((x, i) => [x.t, i]));
 
     // Forward index: each document's terms by ordinal.
@@ -173,11 +193,11 @@ export class TextSegment {
     const bytes = new Uint32Array(n);
     entries.forEach(({ doc }, d) => {
       creationTime[d] = doc.creationTime;
-      length[d] = doc.tokens.length;
-      fieldnorm[d] = fieldnormToId(doc.tokens.length);
-      bytes[d] = doc.bytes ?? 0;
-      totalTokens += doc.tokens.length;
-      indexedBytes += doc.bytes ?? 0;
+      length[d] = doc.length;
+      fieldnorm[d] = fieldnormToId(doc.length);
+      bytes[d] = doc.bytes;
+      totalTokens += doc.length;
+      indexedBytes += doc.bytes;
     });
 
     const w = new SegmentWriter(SegmentKind.Text);
@@ -202,9 +222,8 @@ export class TextSegment {
     w.u32(docTerm);
     w.u32(docTf);
     for (const field of filterFields) {
-      const keys = [...new Set(entries.map((e) => e.doc.filters[field]).filter((k) => k !== undefined))]
-        .map((k) => ({ k, key: utf8(k) }))
-        .sort((a, b) => compareBytes(a.key, b.key));
+      const present = [...new Set(entries.map((e) => e.doc.filters[field]).filter((k) => k !== undefined))];
+      const keys = sortUtf8(present, (k) => k).map((k) => ({ k, key: utf8(k) }));
       const ord = new Map(keys.map((x, i) => [x.k, i]));
       w.strings(keys.map((x) => x.key));
       w.u32(Uint32Array.from(entries, (e) => ord.get(e.doc.filters[field]!) ?? NO_KEY));
@@ -269,6 +288,25 @@ export class TextSegment {
   /** The document's key ordinal for filter field number `field` (`NO_KEY` when it has none). */
   filterOrd(field: number, doc: number): number {
     return this.filterOrds[field]![doc]!;
+  }
+
+  /** The document with its terms counted (what a compaction builds from). */
+  counted(doc: number): CountedDoc {
+    const tf = new Map<string, number>();
+    const { terms, tf: counts } = this.docTerms(doc);
+    for (let k = 0; k < terms.length; k++) tf.set(this.term(terms[k]!), counts[k]!);
+    const filters: Record<string, string> = {};
+    this.filterFields.forEach((field, f) => {
+      const ord = this.filterOrds[f]![doc]!;
+      if (ord !== NO_KEY) filters[field] = this.filterKeys[f]!.at(ord);
+    });
+    return {
+      tf,
+      length: this.lengths[doc]!,
+      filters,
+      creationTime: this.creationTimes[doc]!,
+      bytes: this.docBytes[doc]!,
+    };
   }
 
   /** The document as it was indexed (its tokens in term order, as frequencies do not keep their order). */

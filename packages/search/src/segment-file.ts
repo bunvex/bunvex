@@ -174,6 +174,39 @@ export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length - b.length;
 }
 
+/**
+ * Two strings in the order of their UTF-8 bytes (code point order), without encoding them: UTF-16 code units
+ * compare the same except a surrogate (U+D800–DFFF, half of a code point above U+FFFF) against U+E000–FFFF, so
+ * those two ranges are swapped before comparing.
+ */
+export function compareUtf8(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    let x = a.charCodeAt(i);
+    let y = b.charCodeAt(i);
+    if (x === y) continue;
+    if (x >= 0xd800 && y >= 0xd800) {
+      x += x < 0xe000 ? 0x2000 : -0x800;
+      y += y < 0xe000 ? 0x2000 : -0x800;
+    }
+    return x - y;
+  }
+  return a.length - b.length;
+}
+
+/** Code units where UTF-16 order and UTF-8 order can differ. */
+const OUT_OF_ORDER = /[\uD800-\uFFFF]/;
+
+/** Sorts `items` by the UTF-8 bytes of `key` (JavaScript's own string order when no key needs `compareUtf8`). */
+export function sortUtf8<T>(items: T[], key: (item: T) => string): T[] {
+  if (items.some((x) => OUT_OF_ORDER.test(key(x)))) return items.sort((a, b) => compareUtf8(key(a), key(b)));
+  return items.sort((a, b) => {
+    const x = key(a);
+    const y = key(b);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+}
+
 /** UTF-8 strings stored back to back, with their offsets; sorted tables are searched in place. */
 export class StringTable {
   constructor(

@@ -42,6 +42,11 @@ const VOCAB = [
   "zebra",
   "zero",
   "東京",
+  // A code point above U+FFFF (a surrogate pair) and one above U+E000: UTF-16 and UTF-8 order them differently.
+  "𝒜b",
+  "𝒜",
+  "ｶ",
+  "ｶz",
 ];
 const KEYS = ["00", "01", "02"];
 

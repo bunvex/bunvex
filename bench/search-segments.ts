@@ -66,7 +66,25 @@ if (child === "crash") {
   // The crashing run: writes since the last flush, then dies without closing.
   const { e } = await open();
   await insert(e, Number(n), Number(crashWrites));
+  // The table summaries' checkpoint is brought up to date, so the restart measures the search indexes only.
+  await e.summariesReady();
+  await e.summaryCheckpointer?.tick(true);
   process.exit(0);
+}
+if (child === "open") {
+  // A start in a process of its own, as a restart is: until the indexes are ready.
+  const { e, ms } = await open();
+  console.log(`${ms} ms ${JSON.stringify(e.searchStats ?? {})}`);
+  await e.close();
+  process.exit(0);
+}
+
+/** A start in a new process (the bench's own heap and caches out of it); what it printed. */
+async function restart() {
+  const p = Bun.spawn(["bun", import.meta.path, where!, n, crashWrites, "open"], { stdout: "pipe", stderr: "inherit" });
+  const out = await new Response(p.stdout).text();
+  await p.exited;
+  return out.trim();
 }
 
 rmSync(where, { force: true });
@@ -101,14 +119,17 @@ mkdirSync(dir, { recursive: true });
     vector.push(performance.now() - s0);
   }
   console.log(`latency (median): text ${median(text).toFixed(2)} ms, vector ${median(vector).toFixed(2)} ms`);
+  // As in the crash run: the table summaries' checkpoint up to date, so restarts measure the search indexes.
+  await e.summariesReady();
+  await e.summaryCheckpointer?.tick(true);
   const c = performance.now();
   await e.close();
   console.log(`clean close: ${Math.round(performance.now() - c)} ms`);
 }
-{
-  const { e, ms } = await open();
-  console.log(`restart after a clean close: ${ms} ms`);
-  await e.close();
+// The first start after the load reads a cold store: printed, then the restarts that follow.
+for (let round = 0; round < 3; round++) {
+  const what = round ? "restart after a clean close" : "first restart after the load";
+  console.log(`${what}: ${await restart()}`);
 }
 if (Number(crashWrites)) {
   const p = Bun.spawn(["bun", import.meta.path, where, n, crashWrites, "crash"], {
@@ -116,7 +137,5 @@ if (Number(crashWrites)) {
     stderr: "inherit",
   });
   await p.exited;
-  const { e, ms } = await open();
-  console.log(`restart after a crash with ${crashWrites} writes since: ${ms} ms`);
-  await e.close();
+  console.log(`restart after a crash with ${crashWrites} writes since: ${await restart()}`);
 }

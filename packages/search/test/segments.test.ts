@@ -26,7 +26,23 @@ function rng(seed: number) {
   };
 }
 
-const WORDS = ["alpha", "beta", "gamma", "Ωmega", "東京", "café", "cafe", "a", "ab", "abc", "zz", "x".repeat(31)];
+// "𝒜" is above U+FFFF (a surrogate pair), "ｶ" above U+E000: UTF-16 and UTF-8 order them differently.
+const WORDS = [
+  "alpha",
+  "beta",
+  "gamma",
+  "Ωmega",
+  "東京",
+  "café",
+  "cafe",
+  "a",
+  "ab",
+  "abc",
+  "zz",
+  "x".repeat(31),
+  "𝒜",
+  "ｶ",
+];
 
 function randomDocs(seed: number, n: number): [string, IndexedDoc][] {
   const r = rng(seed);

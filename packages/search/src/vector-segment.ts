@@ -4,13 +4,13 @@
 // their filter keys, read in place; its deletes are a separate, rewritable bitset.
 import {
   Bitset,
-  compareBytes,
   NO_FILTER_KEY as NO_KEY,
   SegmentFileError,
   SegmentKind,
   SegmentReader,
   SegmentWriter,
   type StringTable,
+  sortUtf8,
   utf8,
 } from "./segment-file.ts";
 
@@ -63,7 +63,7 @@ export class VectorSegment {
     filterFields: readonly string[],
   ): Uint8Array {
     const entries = [...docs].map(([id, doc]) => ({ id, key: utf8(id), doc }));
-    entries.sort((a, b) => compareBytes(a.key, b.key));
+    sortUtf8(entries, (e) => e.id);
     const vectors = new Float32Array(entries.length * dimensions);
     entries.forEach(({ doc }, d) => {
       if (doc.vector.length !== dimensions) throw new Error(`a vector of ${doc.vector.length} dimensions`);
@@ -79,9 +79,8 @@ export class VectorSegment {
     w.strings(entries.map((e) => e.key));
     w.f32(vectors);
     for (const field of filterFields) {
-      const keys = [...new Set(entries.map((e) => e.doc.filters[field]).filter((k) => k !== undefined))]
-        .map((k) => ({ k, key: utf8(k) }))
-        .sort((a, b) => compareBytes(a.key, b.key));
+      const present = [...new Set(entries.map((e) => e.doc.filters[field]).filter((k) => k !== undefined))];
+      const keys = sortUtf8(present, (k) => k).map((k) => ({ k, key: utf8(k) }));
       const ord = new Map(keys.map((x, i) => [x.k, i]));
       w.strings(keys.map((x) => x.key));
       w.u32(Uint32Array.from(entries, (e) => ord.get(e.doc.filters[field]!) ?? NO_KEY));
