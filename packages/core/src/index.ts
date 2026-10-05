@@ -245,6 +245,7 @@ export {
   type GenericTableSearchIndexes,
   type IndexDef,
   indexKey,
+  indexReferenceError,
   isReservedIndex,
   MAX_INDEXES_PER_TABLE,
   MAX_SEARCH_FILTER_FIELDS,
