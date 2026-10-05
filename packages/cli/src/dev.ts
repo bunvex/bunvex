@@ -223,11 +223,13 @@ const sleep = (ms: number, signal: AbortSignal) =>
 const clock = () => new Date().toTimeString().slice(0, 8);
 
 /**
- * Resolves when the deployment's environment variables change (Convex's `getDeplymentEnvVarWatch`): a
- * subscription to `_system/cli/queryEnvironmentVariables`, whose first result is the current state. Never
- * resolves if the deployment cannot be watched (the file watch still runs); ends on abort.
+ * Resolves when a system query's result changes (Convex's `getFunctionWatch`): a subscription whose first
+ * result is the current state, the next one a change. Used for the deployment's environment variables
+ * (`_system/cli/queryEnvironmentVariables`, Convex's `getDeplymentEnvVarWatch`) and for the table a schema
+ * validation failed on (`_system/cli/queryTable`, Convex's `getTableWatch`, STUDY-120). Never resolves if the
+ * deployment cannot be watched (the file watch still runs); ends on abort.
  */
-function envVarsChanged(target: Target, signal: AbortSignal): Promise<void> {
+function resultChanged(target: Target, path: string, args: Record<string, string>, signal: AbortSignal): Promise<void> {
   return new Promise((done) => {
     const client = new BunvexClient(target.url, { logger: false });
     client.client.setAdminAuth(target.adminKey);
@@ -238,8 +240,8 @@ function envVarsChanged(target: Target, signal: AbortSignal): Promise<void> {
       done();
     };
     const sub = client.onUpdate(
-      makeFunctionReference<"query">("_system/cli/queryEnvironmentVariables"),
-      {},
+      makeFunctionReference<"query">(path),
+      args,
       () => {
         if (++updates > 1) finish();
       },
@@ -382,14 +384,20 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       }
       // The deployment failed on its own side: for a local one, where to read why.
       if (r.internal && localLog) io.err(`The local backend's log: ${localLog}`);
-      // Wait for the next change (one during the push counts: it was not pushed), or, after a push that needs
-      // an environment variable, for the deployment's variables to change (Convex's dev watches them too).
+      // Wait for the next change (one during the push counts: it was not pushed); after a push that needs an
+      // environment variable, or whose schema a table's documents fail, also for the deployment's variables or
+      // that table to change (Convex's dev watches them too).
       if (watcher?.dirty) io.err("Filesystem changed during push, retrying...");
-      if (watcher && r.envVars) {
+      if (watcher && (r.envVars || r.table !== undefined)) {
         const waiting = new AbortController();
         const abort = () => waiting.abort();
         stop.signal.addEventListener("abort", abort, { once: true });
-        await Promise.race([watcher.quiet(waiting.signal), envVarsChanged(target, waiting.signal)]);
+        await Promise.race([
+          watcher.quiet(waiting.signal),
+          r.envVars
+            ? resultChanged(target, "_system/cli/queryEnvironmentVariables", {}, waiting.signal)
+            : resultChanged(target, "_system/cli/queryTable", { tableName: r.table! }, waiting.signal),
+        ]);
         waiting.abort();
         stop.signal.removeEventListener("abort", abort);
       } else await watcher?.quiet(stop.signal);

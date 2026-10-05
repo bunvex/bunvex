@@ -10,8 +10,10 @@ import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from
 
 export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
-/** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
+/** The instance secret (and name) when none is configured (STUDY-17, DV-07, DV-159). */
 export const INSTANCE_TABLE = "_instance";
+/** The database's globals (STUDY-126), as Convex's `_db`: the data's version and the pinned storage type. */
+export const DATABASE_GLOBALS_TABLE = "_db";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
@@ -74,6 +76,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index: 514,
   _exports: 516,
   _udf_config: 518,
+  _db: 520,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,
@@ -164,11 +167,21 @@ export class IndexBackfillingError extends Error {
  * A search or vector index still being rebuilt after the process started (STUDY-79): Convex's
  * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
  * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
- * hitting it is skipped and retried later.
+ * hitting it is skipped and retried later. The table summaries' (`count()`, STUDY-107) are one too.
+ *
+ * Also a write refused because an index's memory part is too large (STUDY-111, `TextIndexTooLarge` /
+ * `VectorIndexTooLarge`): Convex's `ErrorMetadata::overloaded`, which it handles as it does the above — HTTP
+ * 503 with its code, a WebSocket closed with `Again` and the code, a system error a scheduled job retries, a
+ * plain `Error` in an action.
  */
 export class IndexesUnavailableError extends Error {
   constructor(
-    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable",
+    readonly code:
+      | "SearchIndexesUnavailable"
+      | "VectorIndexesUnavailable"
+      | "TableSummariesUnavailable"
+      | "TextIndexTooLarge"
+      | "VectorIndexTooLarge",
     message: string,
   ) {
     super(message);
@@ -184,6 +197,16 @@ export const vectorIndexesUnavailable = () =>
   new IndexesUnavailableError(
     "VectorIndexesUnavailable",
     "Vector indexes are bootstrapping and not yet available for use",
+  );
+
+/**
+ * Convex's refusal of a write to a table whose index has a memory part at its hard limit
+ * (`Transaction::validate_memory_index_size`), in its words without the documentation link (DV-04).
+ */
+export const indexTooLarge = (kind: "text" | "vector", index: string) =>
+  new IndexesUnavailableError(
+    kind === "text" ? "TextIndexTooLarge" : "VectorIndexTooLarge",
+    `Too many writes to ${index}. Spread your writes out over time or throttle them to avoid errors. If you’re importing data into a new application, consider removing the index and adding it again after the import (you can re-add the index as a staged index to avoid blocking your pushes).`,
   );
 
 /** A query on a staged index (Convex's `IndexStagedError`, a bad request). */

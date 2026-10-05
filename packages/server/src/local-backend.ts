@@ -18,7 +18,7 @@
 //   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`.
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
-import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence } from "@bunvex/core";
+import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence, type StorageType } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
@@ -207,10 +207,12 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       return new LocalBlobStore(resolve(io.cwd, f.localStorage), useCase);
     return blobStoreFromEnv(io.env, {
       useCase,
-      s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+      // Recorded in `_db` at the start (below), before any store is used.
+      s3Prefix: async () => (storageType as { s3Prefix: string }).s3Prefix,
     });
   };
-  // Search index snapshots live in the `search` use case (STUDY-96); its store is made once the engine exists.
+  // Search and vector index segments live in the `search` use case (STUDY-111); its store is made once the engine
+  // exists.
   let searchBlobs: BlobStore | null = null;
   const engine: Engine = new Engine(defineSchema({}), persistence, {
     instanceName: f.instanceName,
@@ -223,6 +225,15 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     }),
   });
   await engine.init();
+  // The storage this start uses, checked against the store's (Convex's `initialize_storage_tag`, STUDY-126):
+  // `--s3-storage` is S3, else the local directory as given.
+  let storageType: StorageType;
+  try {
+    storageType = await engine.initializeStorage(f.s3 ? { tag: "s3" } : { tag: "local", dir: f.localStorage });
+  } catch (e) {
+    await engine.close();
+    throw e;
+  }
   const app = createServer({
     engine,
     functions: new Functions(engine),

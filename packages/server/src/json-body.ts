@@ -23,8 +23,8 @@ export function isJsonContentType(header: string | null): boolean {
   return m !== null && (m[1] === "json" || m[1]!.endsWith("+json"));
 }
 
-/** A field of a body struct: a string, an optional string, any JSON value, or a list of structs. */
-export type FieldKind = "string" | "optString" | "value" | { seqOf: BodyShape };
+/** A field of a body struct: a string, an optional string, any JSON value, a list of structs, or a struct. */
+export type FieldKind = "string" | "optString" | "value" | { seqOf: BodyShape } | { struct: BodyShape };
 /** A body struct: its Rust name (it is in serde's messages) and its fields in declaration order. */
 export type BodyShape = { name: string; fields: [string, FieldKind][] };
 
@@ -52,6 +52,31 @@ export const UDF_POST_WITH_COMPONENT: BodyShape = {
     ["path", "string"],
     ["args", "value"],
     ["format", "optString"],
+  ],
+};
+
+/** Convex's `RunTestFunctionArgs` (local_backend/src/dashboard.rs), its bundle a `ModuleJson`. */
+export const RUN_TEST_FUNCTION: BodyShape = {
+  name: "RunTestFunctionArgs",
+  fields: [
+    ["adminKey", "string"],
+    [
+      "bundle",
+      {
+        struct: {
+          name: "ModuleJson",
+          fields: [
+            ["path", "string"],
+            ["source", "string"],
+            ["sourceMap", "optString"],
+            ["environment", "optString"],
+          ],
+        },
+      },
+    ],
+    ["args", "value"],
+    ["format", "string"],
+    ["componentId", "optString"],
   ],
 };
 
@@ -93,7 +118,9 @@ function fits(v: unknown, shape: BodyShape): boolean {
     if (kind === "string" && typeof x !== "string") return false;
     if (kind === "optString" && x !== undefined && x !== null && typeof x !== "string") return false;
     if (kind === "value" && x === undefined) return false;
-    if (typeof kind === "object" && (!Array.isArray(x) || !x.every((e) => fits(e, kind.seqOf)))) return false;
+    if (typeof kind === "object" && "struct" in kind && !fits(x, kind.struct)) return false;
+    if (typeof kind === "object" && "seqOf" in kind && (!Array.isArray(x) || !x.every((e) => fits(e, kind.seqOf))))
+      return false;
   }
   return true;
 }
@@ -256,6 +283,7 @@ class Reader {
     const b = this.peek();
     if (b === undefined) throw this.error("syntax", "EOF while parsing a value");
     if (kind === "value") return this.value(0);
+    if (typeof kind === "object" && "struct" in kind) return this.struct(kind.struct);
     if (typeof kind === "object") {
       if (b !== 0x5b) throw this.invalidType("a sequence");
       this.i++;

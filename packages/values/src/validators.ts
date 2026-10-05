@@ -5,6 +5,15 @@
 import type { CommitTsPlaceholder } from "./commit-ts.ts";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "./value.ts";
 
+/**
+ * Convex's `throwUndefinedValidatorError` (values/validators.ts): a builder given `undefined` where a validator
+ * goes, which is most often a circular import. Convex's message ends with a docs link, left out (DV-358).
+ */
+function throwUndefinedValidator(context: string, field?: string): never {
+  const where = field === undefined ? "" : ` for field "${field}"`;
+  throw new Error(`A validator is undefined${where} in ${context}. This is often caused by circular imports.`);
+}
+
 export type OptionalProperty = "required" | "optional";
 
 /**
@@ -72,6 +81,7 @@ export class VId<Type, IsOptional extends OptionalProperty = "required"> extends
     readonly tableName: string,
   ) {
     super(isOptional);
+    if (typeof tableName !== "string") throw new Error("v.id(tableName) requires a string");
   }
   get json(): ValidatorJSON {
     return { type: "id", tableName: this.tableName };
@@ -194,6 +204,8 @@ export class VLiteral<Type, IsOptional extends OptionalProperty = "required"> ex
     readonly value: Type,
   ) {
     super(isOptional);
+    if (!["string", "boolean", "number", "bigint"].includes(typeof value))
+      throw new Error("v.literal(value) must be a string, number, or boolean");
   }
   get json(): ValidatorJSON {
     return { type: "literal", value: toJsonValue(this.value as Value) };
@@ -214,6 +226,7 @@ export class VArray<
     readonly element: Element,
   ) {
     super(isOptional);
+    if (element === undefined) throwUndefinedValidator("v.array()");
   }
   get json(): ValidatorJSON {
     return { type: "array", value: this.element.json };
@@ -234,8 +247,10 @@ export class VObject<
     readonly fields: Fields,
   ) {
     super(isOptional);
-    for (const [name, f] of Object.entries(fields))
-      if (!f?.isValidator) throw new Error(`v.object() entries must be validators; the entry for "${name}" is not`);
+    for (const [name, f] of Object.entries(fields)) {
+      if (f === undefined) throwUndefinedValidator("v.object()", name);
+      if (!f?.isValidator) throw new Error("v.object() entries must be validators");
+    }
   }
   get json(): ValidatorJSON {
     return {
@@ -287,11 +302,12 @@ export class VRecord<
     readonly value: Val,
   ) {
     super(isOptional);
-    if (key === undefined) throw new Error('A validator is undefined for field "key" in v.record().');
-    if (value === undefined) throw new Error('A validator is undefined for field "value" in v.record().');
-    if (!key.isValidator || !value.isValidator) throw new Error("Key and value of v.record() must be validators");
+    // Convex's checks, in its order and words ("but be" is Convex's text).
+    if (key === undefined) throwUndefinedValidator("v.record()", "key");
+    if (value === undefined) throwUndefinedValidator("v.record()", "value");
     if (key.isOptional === "optional") throw new Error("Record validator cannot have optional keys");
     if (value.isOptional === "optional") throw new Error("Record validator cannot have optional values");
+    if (!key.isValidator || !value.isValidator) throw new Error("Key and value of v.record() but be validators");
   }
   get json(): ValidatorJSON {
     return { type: "record", keys: this.key.json, values: { fieldType: this.value.json, optional: false } };
@@ -312,7 +328,10 @@ export class VUnion<
     readonly members: Members,
   ) {
     super(isOptional);
-    for (const m of members) if (!m?.isValidator) throw new Error("All members of v.union() must be validators");
+    members.forEach((m, i) => {
+      if (m === undefined) throwUndefinedValidator("v.union()", `member at index ${i}`);
+      if (!m?.isValidator) throw new Error("All members of v.union() must be validators");
+    });
   }
   get json(): ValidatorJSON {
     return { type: "union", value: this.members.map((m) => m.json) };

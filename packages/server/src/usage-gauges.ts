@@ -23,7 +23,7 @@ export async function storageUsage(engine: Engine): Promise<StorageUsage> {
     for (const ix of t.indexes.values()) if (!isReservedIndex(ix)) indexBytes += size;
     // Vector indexes: their vectors × dimensions × 4 (`estimate_pricing_size_bytes`); text indexes: their
     // indexed bytes, for Convex's segments (DV-317).
-    for (const e of engine.vectorIndexes.forTablet(t.id)) vectorBytes += e.docs.size * e.def.dimensions * 4;
+    for (const e of engine.vectorIndexes.forTablet(t.id)) vectorBytes += e.index.size * e.def.dimensions * 4;
     for (const e of engine.searchIndexes.forTablet(t.id)) textBytes += e.index.indexedBytes;
   }
   return {
