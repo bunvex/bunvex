@@ -36,6 +36,8 @@ export {
   MAX_USER_TABLES,
   MODULES_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMA_VALIDATION_PROGRESS_TABLE,
+  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
@@ -266,6 +268,12 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
+export {
+  type SchemaValidation,
+  type SchemaValidationProgress,
+  schemaValidationProgress,
+  type ValidationState,
+} from "./schema-validations.ts";
 export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
 export {
   SESSION_CLEANUP_CHUNK,

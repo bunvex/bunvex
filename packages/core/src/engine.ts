@@ -44,6 +44,8 @@ import {
   MODULES_TABLE,
   planCatalog,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMA_VALIDATION_PROGRESS_TABLE,
+  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SESSION_REQUESTS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
@@ -103,6 +105,14 @@ import {
   type TableDef,
 } from "./schema.ts";
 import { type SchemaJson, schemaFromJson, schemaToJson } from "./schema-json.ts";
+import {
+  deleteValidationsForSchema,
+  markValidationValid,
+  progressThreshold,
+  recordValidationProgress,
+  resetSchemaValidations,
+  startTableValidation,
+} from "./schema-validations.ts";
 import { filterKey, indexedDoc, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   canSnapshotSearch,
@@ -386,6 +396,7 @@ export class Engine {
     });
     await this.loadInstanceSecret();
     await this.loadInstanceName();
+    if (this.opts.storedSchema) await this.resumePendingSchema();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -597,6 +608,12 @@ export class Engine {
       { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
       { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: SCHEMA_VALIDATIONS_TABLE,
+        indexes: { by_schema_id_and_table_name: ["schemaId", "tableName"] },
+        document: v.any(),
+      },
+      { name: SCHEMA_VALIDATION_PROGRESS_TABLE, indexes: { by_validation_id: ["validationId"] }, document: v.any() },
       { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
         name: EXPORTS_TABLE,
@@ -1145,45 +1162,128 @@ export class Engine {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
         if (row && (row.state === "pending" || row.state === "validated"))
           await db.patch(SCHEMAS_TABLE, schemaId, { state: "failed", error, tableName });
+        await deleteValidationsForSchema(db, schemaId);
       },
       true,
       "schema_worker",
     );
   }
 
+  /** Check the stored documents against a pending schema in the background (`validateExisting`). */
+  private startValidation(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
+    this.validation = this.validateExisting(schemaId, schema, active).catch((e) =>
+      this.failSchemaPush(schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
+        () => {},
+      ),
+    );
+  }
+
+  /**
+   * At a start, as Convex's `reset_for_compatibility` then its `SchemaWorker` (STUDY-127): every validation
+   * attempt is deleted; a schema still `pending` is checked again from the beginning with new attempts, and
+   * writes are checked against a `pending` or `validated` schema meanwhile, as before the restart.
+   */
+  private async resumePendingSchema() {
+    const row = await this.runMutation(
+      async (db) => {
+        await resetSchemaValidations(db);
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        return rows.find((r) => r.state === "pending" || r.state === "validated") ?? null;
+      },
+      true,
+      "init_app_system_tables",
+    );
+    if (!row) return;
+    const schema = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
+    this.pendingPush = { id: row._id as string, schema };
+    this.pendingValidators = validatorsOf(schema);
+    if (row.state === "pending") this.startValidation(row._id as string, schema, this.schema);
+  }
+
+  /** A table's document count for a validation's progress, or null while the table summaries are built. */
+  private totalDocs(table: string): number | null {
+    if (!this.tableSummaries.ready) return null;
+    const t = this.catalog.tables.get(table);
+    return t ? this.tableSummaries.count(t.id) : 0;
+  }
+
   /**
    * Convex's `SchemaWorker`: walk every table whose validator the pushed schema changes (or adds) and check
    * each existing document; the first that does not match fails the schema
    * (`Document with ID "…" in table "…" does not match the schema: …`), else it becomes `validated`. Writes
-   * made meanwhile are checked as they commit (`pendingValidators`).
+   * made meanwhile are checked as they commit (`pendingValidators`). Each table walked has an attempt in
+   * `_schema_validations` and its counters in `_schema_validation_progress` (STUDY-127), flushed every 5 % of
+   * the table or 500 documents and when the table is done; an attempt gone (the schema failed or was
+   * overwritten) stops the walk.
    */
   private async validateExisting(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
     const stillPending = () => this.pendingPush?.id === schemaId;
+    const walk: { name: string; validator: GenericValidator }[] = [];
     if (schema.schemaValidation)
       for (const t of schema.tables.values()) {
         const validator = documentValidator(t.name, t.document);
         if (!validator) continue;
         const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
         if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
-        let cursor: string | null = null;
-        for (;;) {
-          if (!stillPending()) return;
-          const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
-          for (const doc of page.page) {
-            const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
-            if (msg) {
-              await this.failSchemaPush(
-                schemaId,
-                `Document with ID "${doc._id as string}" in table "${t.name}" does not match the schema: ${msg}`,
-                t.name,
-              );
-              return;
-            }
-          }
-          if (page.isDone) break;
-          cursor = page.continueCursor;
-        }
+        walk.push({ name: t.name, validator });
       }
+    if (!stillPending()) return;
+    // Convex's `SchemaValidationProgressTracker::new`: every attempt first, in one commit.
+    const attempts = await this.runMutation(
+      async (db) => {
+        const ids: string[] = [];
+        for (const t of walk) ids.push(await startTableValidation(db, schemaId, t.name, this.totalDocs(t.name)));
+        return ids;
+      },
+      true,
+      "schema_validation_tracker_initialized",
+    );
+    for (const [k, t] of walk.entries()) {
+      const attempt = attempts[k]!;
+      const threshold = progressThreshold(this.totalDocs(t.name));
+      let unflushed = 0;
+      // One flush at a time runs while the walk goes on; the next one waits for it, and stops the walk when it
+      // found the attempt gone (the walk was canceled).
+      let inFlight: Promise<boolean> = Promise.resolve(true);
+      /** Write the counted documents; false once the attempt is gone. */
+      const flush = async () => {
+        if (!(await inFlight)) return false;
+        const count = unflushed;
+        unflushed = 0;
+        inFlight = this.runMutation(
+          (db) => recordValidationProgress(db, attempt, count, this.totalDocs(t.name)),
+          true,
+          "schema_validation_progress_updated",
+        );
+        return true;
+      };
+      let cursor: string | null = null;
+      for (;;) {
+        if (!stillPending()) return;
+        const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
+        for (const doc of page.page) {
+          const msg = checkValue(t.validator, doc as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+          if (msg) {
+            await this.failSchemaPush(
+              schemaId,
+              `Document with ID "${doc._id as string}" in table "${t.name}" does not match the schema: ${msg}`,
+              t.name,
+            );
+            return;
+          }
+          if (++unflushed % threshold === 0 && !(await flush())) return;
+        }
+        if (page.isDone) break;
+        cursor = page.continueCursor;
+      }
+      if (!(await flush()) || !(await inFlight)) return;
+      const marked = await this.runMutation(
+        (db) => markValidationValid(db, attempt),
+        true,
+        "schema_validation_progress_finished",
+      );
+      if (!marked) return;
+    }
     if (!stillPending()) return;
     await this.runMutation(
       async (db) => {
@@ -1216,8 +1316,10 @@ export class Engine {
         for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, { staged: x.staged });
         for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, i);
         for (const row of await db.query(SCHEMAS_TABLE).collect())
-          if (row.state === "pending" || row.state === "validated")
+          if (row.state === "pending" || row.state === "validated") {
             await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+            await deleteValidationsForSchema(db, row._id as string);
+          }
         const schemaId = await db.insert(SCHEMAS_TABLE, {
           state: "pending",
           schema: JSON.stringify(schemaToJson(schema)),
@@ -1237,11 +1339,7 @@ export class Engine {
     const active = this.schema;
     this.pendingPush = { id: r.schemaId, schema };
     this.pendingValidators = validatorsOf(schema);
-    this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
-      this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
-        () => {},
-      ),
-    );
+    this.startValidation(r.schemaId, schema, active);
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }
@@ -1333,6 +1431,7 @@ export class Engine {
         for (const old of await db.query(SCHEMAS_TABLE).collect())
           if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
         await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+        await deleteValidationsForSchema(db, schemaId);
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
         const name = (i: IndexMeta) => `${tables.find((t) => t.tablet === i.tablet)?.name}.${i.name}`;

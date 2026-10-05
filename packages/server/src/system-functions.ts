@@ -24,9 +24,11 @@ import {
   type PaginationResult,
   readBackendState,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
+  schemaValidationProgress,
   stringifyValue,
   type Tx,
 } from "@bunvex/core";
@@ -386,6 +388,15 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   "_system/cli/tableSize": {
     args: { tableName: v.string() },
     handler: async (db, { tableName }: { tableName: string }) => db.asSystem(() => db.countTable(tableName)),
+  },
+  // The pending schema's validation progress (STUDY-127), as Convex's: its attempts' counters summed.
+  "_system/frontend/getSchemas:schemaValidationProgress": {
+    args: { componentId },
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const rows = (await db.query(SCHEMAS_TABLE).collect()) as unknown as { _id: string; state: string }[];
+        return schemaValidationProgress(db, rows.find((r) => r.state === "pending")?._id ?? null);
+      }),
   },
   "_system/frontend/tableSize": {
     args: { tableName: v.string(), componentId },

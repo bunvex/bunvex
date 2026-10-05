@@ -29,6 +29,9 @@ export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
 /** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
 export const SCHEMAS_TABLE = "_schemas";
+/** A pending schema's validation attempts and their counters (STUDY-127), as Convex's. */
+export const SCHEMA_VALIDATIONS_TABLE = "_schema_validations";
+export const SCHEMA_VALIDATION_PROGRESS_TABLE = "_schema_validation_progress";
 /** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
@@ -91,6 +94,8 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _data_sync_progress: 553,
   _usage_limits: 552,
   _index_backfills: 548,
+  _schema_validation_progress: 549,
+  _schema_validations: 555,
   // bunvex's own.
   _instance: 9_999,
   _storage_deletions: 9_998,
