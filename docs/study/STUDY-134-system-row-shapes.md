@@ -1,9 +1,8 @@
 # STUDY-134 — System-table row shapes, as Convex writes them
 
-- **Status:** implemented in #473, #480, #477, #476, #478, #475, #474 (owner, 2026-10-05: every system-table row
-  shape matches Convex's latest version; no legacy data, no migration); DV-421–DV-427 resolved; DV-428 (identity
-  fields) and DV-429 (the app definition module) wait on a dependency; DV-430 (an import's copied indexes) to be
-  built
+- **Status:** implemented in #473, #480, #477, #476, #478, #475, #474, #482 (owner, 2026-10-05: every system-table
+  row shape matches Convex's latest version; no legacy data, no migration); DV-421–DV-427 and DV-430 resolved;
+  DV-428 (identity fields) and DV-429 (the app definition module) wait on a dependency
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; the rows of
   `convex-local-backend` precompiled-2026-09-28-5c7cb5b (CLI `convex` 1.46.0)
 - **Related:** [STUDY-04](STUDY-04-table-and-index-metadata.md) (`_tables` / `_index`),
@@ -54,8 +53,12 @@ the row's own id (its internal id is the tablet id).
   table the same push creates too. The Convex rows show the sequence for `things.by_s_n`: `Backfilling`
   (retention not started) → `Backfilling` (retention started) → `Backfilled2 {staged: false}` → `Enabled` at
   `finish_push`; `by_id` and `by_creation_time` of the new table are `Enabled` from the start.
-- **An import's table.** `copy_indexes_to_table` (database/src/bootstrap_model/index.rs:1060-1125) gives the
-  hidden table a `Backfilling` copy of each enabled index; the import enables them at its end
+- **An import's table.** `create_empty_table` (application/src/snapshot_import/mod.rs:1659-1701) creates the hidden
+  table and, in the same transaction, `copy_indexes_to_table` (database/src/bootstrap_model/index.rs:1052-1131)
+  gives it a `Backfilling` copy of each ENABLED index of the table it replaces (a table still backfilling one
+  cannot be replaced: `InvalidImport`). Then `backfill_and_enable_indexes_on_table` (:1703-1745) waits until no
+  index of the new table is backfilling and enables them in one commit — before any document is written; the
+  import's last step only activates the table
   (`enable_backfilled_indexes`, application/src/snapshot_import/mod.rs:1739).
 - **`_index_backfills`.** `SerializedIndexBackfillMetadata` (database/src/bootstrap_model/index_backfills/
   types.rs:44-80): `{indexId: <the _index row's id>, numDocsIndexed: i64, totalDocs: i64 | null, cursor:
@@ -168,8 +171,6 @@ What this study does not change, and why:
   `_storage` deletions (#456), `_components` / `_component_definitions` (components, not built).
 - **The app definition module** (`convex.config.js`): it comes with components, which bunvex does not have;
   its CLI pushes `definition: null` (DV-429).
-- **An import's copied indexes** are still `Enabled` when the hidden table is created, where Convex's start
-  `Backfilling` and are enabled at the import's end (DV-430, to be built: the import would wait for them).
 
 How each group does it, and what else it changed to keep the same behaviour:
 
@@ -193,6 +194,10 @@ How each group does it, and what else it changed to keep the same behaviour:
   `shapes.ts`.
 - **`_backend_state`** (#474): `initializeBackendState`, in the commit right after the one that creates the table
   (a transaction cannot write a table its own catalog commit creates).
+- **An import's copied indexes** (#482, stacked on #480): `createHiddenTable` copies the enabled indexes as
+  `Backfilling`, backfills the empty table (`IndexWorker.backfillNow`) and enables them in one commit before it
+  returns, as Convex's `create_empty_table`; a table still backfilling an index is refused (`InvalidImport`).
+  Convex copies search and vector indexes too; bunvex's hidden tables have none before activation (unchanged).
 
 ## 4. Divergences
 
@@ -207,7 +212,7 @@ How each group does it, and what else it changed to keep the same behaviour:
 | S7 | No `_backend_state` row until a state changes | Ainda não fizemos | match Convex: resolved, DV-427 |
 | S8 | Identity fields (`tablet`, `name`; integer tablet keys) | Ainda não fizemos: the persistence layout decides them (STUDY-133) | waiting on STUDY-133, DV-428 |
 | S9 | No app definition module row (`convex.config.js`) | Ainda não fizemos: components (STUDY-62) | waiting on components, DV-429 |
-| S10 | An import's copied indexes start `Enabled` | Ainda não fizemos: the import would wait for their backfill | match Convex (owner, 2026-10-05), to be built: DV-430 |
+| S10 | An import's copied indexes started `Enabled`; staged ones were copied; a backfilling table could be replaced | Ainda não fizemos | match Convex (owner, 2026-10-05): resolved, DV-430 (#482) |
 
 ## 4b. Additions (beyond Convex)
 
@@ -230,6 +235,7 @@ tests in `packages/server/test/convex-rows/`, which `check:deps` keeps from impo
 | crons, `_udf_config` (#478) | `_cron_jobs`, `_cron_next_run`, `_modules.cronSpecs`, `_udf_config`; `udfArgs` byte-identical to Convex's | floats; ms ×1000; args as an array; minute omitted; camelCase ids; result not JSON text; ms seed time; ms `by_next_ts` bounds; push's version ignored (9/9) |
 | globals (#475) | each retention global and `table_summary_v2` (top level and a table's summary) | µs; `table`; big-endian JsonInteger; plain-number retention; decimal `totalSize`; extra `n` (6/6) |
 | `_backend_state` (#474) | the row written at the first start; a restart keeps a paused one | wrong value; int64 `user`; no row; a row per start (4/4) |
+| an import's copied indexes (#482) | the copy's four revisions against Convex's; its backfill row; handed back enabled, filled, activated, queried; staged not copied; `InvalidImport` | copies `Enabled`; staged copied; no refusal; no enable commit; handed back pending (5/5) |
 
 Measured: the start of a fresh store with 50 tables of 2 indexes each (#480) went from 7.1 ms to 23 ms (three
 small commits per new table: its backfill row, retention started, `Backfilled2`, which Convex writes too).
