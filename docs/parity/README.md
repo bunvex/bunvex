@@ -173,8 +173,10 @@ gaps.
   - nesting 64 for arguments and results;
   - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
-  - audit events `build_indexes`, `clear_tables`, `change_deployment_state`, …;
-  - `/api/delete_scheduled_functions_table`;
+  - the `clear_tables` audit event, which comes with streaming import (missing). The other audit events
+    bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
+    `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
+    backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
   - persisted search segments (STUDY-79 option E): a restart restores the clean-shutdown snapshot and replays
     the log since (STUDY-96), but after a crash the replay runs from the last clean shutdown, or the whole
@@ -192,4 +194,7 @@ gaps.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;
-  - what is missing is a data source that calls it.
+  - what is missing is a data source that calls it;
+  - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
+    `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
+    audit events.

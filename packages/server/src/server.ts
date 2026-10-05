@@ -17,6 +17,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  SCHEDULED_FUNCTIONS_TABLE,
   SchemaEnforcementError,
   setUserStopState,
   stringifyValue,
@@ -1020,6 +1021,16 @@ export function createServer(opts: ServerOptions) {
       );
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_scheduled_functions_table {componentId?}` (scheduling.rs, the dashboard's "Delete
+    // all"): the scheduler's table replaced with an empty one in one commit, whatever it holds; 200, no body.
+    if (url.pathname === "/api/delete_scheduled_functions_table") {
+      if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      await engine.replaceWithEmptyTables([SCHEDULED_FUNCTIONS_TABLE], (db) =>
+        insertAuditLogEvents(db, [auditEvents.deleteScheduledJobsTable()], auditActor(caller)),
+      );
+      return new Response(null, { status: 200 });
+    }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
       if (!Array.isArray(body.tableNames) || !body.tableNames.every((t) => typeof t === "string"))
@@ -1130,6 +1141,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/delete_scheduled_functions_table" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||

@@ -29,6 +29,7 @@ import {
   OccError,
   patchJob,
   readBackendState,
+  SCHEDULED_FUNCTIONS_TABLE,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -223,10 +224,21 @@ export class ScheduledJobExecutor {
 
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
-    const byNextTs = this.engine.catalog.table("_scheduled_functions").indexes.get("by_next_ts")!.id;
+    let jobs = this.engine.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
+    let byNextTs = jobs.indexes.get("by_next_ts")!.id;
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
+      // The table replaced with an empty one (`/api/delete_scheduled_functions_table`, STUDY-113; the catalog
+      // changes before the listeners run): its new index from now on, and the sleep until a job that is gone
+      // dropped. A job running meanwhile finds its document gone, and records nothing.
+      const now = this.engine.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
+      if (now.id !== jobs.id) {
+        jobs = now;
+        byNextTs = now.indexes.get("by_next_ts")!.id;
+        this.poke();
+        return;
+      }
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
     }, "scheduler");
     this.loop = this.run();
