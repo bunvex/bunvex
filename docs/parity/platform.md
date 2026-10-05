@@ -71,7 +71,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `ctx.storage.delete(id)` | `crates/model/file_storage` `delete_file` | done (STUDY-32) | Transactional. The blob is removed after commit, and orphans are swept hourly (F3, DV-150); Convex never removes them. |
 | `ctx.storage.store(blob)` / `get(id)` (actions only) | `npm-packages/udf-runtime/src/storage.ts` | done (STUDY-32) | |
 | `ctx.storage.getMetadata` (deprecated) | syscall `1.0/storageGetMetadata` | done (STUDY-32) | |
-| `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | done (STUDY-32) | A real system table, projected (F1). |
+| `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | done (STUDY-32, STUDY-125) | As Convex: a virtual table over `_file_storage`, same ids and number (540); filters see the virtual fields (DV-148 resolved). |
 | `ctx.db.system.get/query` for virtual system tables | `npm/convex/server/database.ts` (system reader) | done (STUDY-32) | `_scheduled_functions`, `_storage`. |
 | Storage id formats: `Id<"_storage">` and legacy UUID | `crates/model/file_storage/mod.rs` `FileStorageId` | done (STUDY-32) | Convex's messages. |
 | Per-transaction file limits (10 files and 16 MiB read/written) | `crates/common/knobs.rs` `TRANSACTION_MAX_NUM_FILES_*` | done (STUDY-32) | Not enforced in Convex either. |
@@ -88,7 +88,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Scheduling is transactional (a job exists only if the mutation commits) | `crates/model/scheduled_jobs` | done (STUDY-30) | From actions, each call commits at once. |
 | Validation at schedule time: ±5 years, target must exist | `crates/udf/validation.rs` | done (STUDY-30) | Convex's messages; the kind and the args are checked when the job runs. |
 | Limits: 1000 scheduled per transaction, 16 MiB total args (docs say 8 MB) | `knobs.rs` `TRANSACTION_MAX_NUM_SCHEDULED` etc. | done (STUDY-30) | As Convex's code (16 MiB). |
-| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | done (STUDY-30) | A real system table, projected to the public shape through `db.system` (S2, DV-140); only `by_id` / `by_creation_time` are public. |
+| `_scheduled_functions` virtual table `{name, args, scheduledTime, completedTime?, state}` | `crates/model/scheduled_jobs/virtual_table.rs` | done (STUDY-30, STUDY-125) | As Convex: a virtual table over `_scheduled_jobs`, the arguments joined from `_scheduled_job_args`, through `db.system` (DV-140 resolved); only `by_id` / `by_creation_time` are public. |
 | `ctx.scheduler.cancel(id)` | `SchedulerModel::cancel` | done (STUDY-30) | As Convex: no-op on finished jobs; self-cancel refused; what a canceled running action schedules is born canceled. A job canceled after the executor picked it, or while its mutation runs, does not run (`server/test/executor-races.test.ts`, STUDY-65 G-A6). |
 | Scheduled mutations run exactly once | `crates/application/scheduled_jobs` | done (STUDY-30) | The job is finished in the mutation's transaction; OCC retried with backoff (100 ms to 60 s); a user error gives `failed`. |
 | Scheduled actions run at most once | same | done (STUDY-30) | A job found in progress that no one runs fails with "Transient error while executing action". |
@@ -263,8 +263,8 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 
 | Table | Convex source | bunvex status | Notes |
 |---|---|---|---|
-| `_storage` (virtual) / `_file_storage` | `crates/model/file_storage` | done (STUDY-32) | One table, `_storage`, holding Convex's public fields and the hidden ones (UUID, blob key); apps read the public ones through `db.system`. Since #216 it has Convex's number (540). |
-| `_scheduled_functions` (virtual) / `_scheduled_jobs` / `_scheduled_job_args` | `crates/model/scheduled_jobs` | done (STUDY-30) | One table, `_scheduled_functions`, with the arguments inside (Convex splits them into `_scheduled_job_args`); apps read it through `db.system`; the dashboard's queries give Convex's `_scheduled_jobs` shape. |
+| `_storage` (virtual) / `_file_storage` | `crates/model/file_storage` | done (STUDY-32, STUDY-125) | As Convex: `_file_storage` (`storageId`, `storageKey`, bytes `sha256`, int64 `size`, `contentType`; `by_storage_id`) with Convex's number (540); `_storage` is its virtual table (`db.system`, `v.id("_storage")`, snapshots). Indexes end with `_creationTime` (DV-401, pending). |
+| `_scheduled_functions` (virtual) / `_scheduled_jobs` / `_scheduled_job_args` | `crates/model/scheduled_jobs` | done (STUDY-30, STUDY-125) | As Convex: jobs in `_scheduled_jobs` (539, Convex's `SerializedScheduledJob`: ns times, `state.type`, `attempts`), arguments in `_scheduled_job_args` (550, `{args}` bytes, deleted with their job); `_scheduled_functions` is the virtual table apps read; the dashboard's queries return the stored documents. No client-version gate (DV-400, pending). |
 | `_cron_jobs`, `_cron_next_run`, `_cron_job_logs` | `crates/model/cron_jobs` | done (STUDY-30) |  |
 | `_tables`, `_index`, `_index_backfills`, `_index_worker_metadata` | `crates/common/bootstrap_model`; `crates/database/bootstrap_model` | partial (#6, STUDY-29) | `_tables`, `_index` and `_index_backfills` exist; `_index_worker_metadata` does not. |
 | `_schemas`, `_schema_validations`, `_schema_validation_progress` | `crates/database/bootstrap_model/schema` | partial | `_schemas` with Convex's states (STUDY-35). The validation progress tables are not kept: a pending schema's walk reports its progress in memory. |

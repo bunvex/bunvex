@@ -48,6 +48,7 @@ bunvex/
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
 │   │   ├── search-indexes           the search indexes of the active tables (STUDY-45)        🟡
+│   │   ├── virtual-tables           _storage / _scheduled_functions over Convex's system tables (STUDY-125) ✅
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
 │   │       ├── memory               memory + append-only log (no dependencies)                ✅
 │   │       └── sqlite               bun:sqlite (no dependencies)                              ✅

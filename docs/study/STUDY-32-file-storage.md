@@ -172,7 +172,7 @@
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| F1 | `_storage` is a real system table projected to the public shape (hidden `storageId` / `storageKey`), not a virtual table over `_file_storage` | same documents, ids and indexes for apps; as STUDY-30 S2 (DV-140) | **accepted** (owner, 2026-10-01) |
+| F1 | `_storage` is a real system table projected to the public shape (hidden `storageId` / `storageKey`), not a virtual table over `_file_storage` | same documents, ids and indexes for apps; as STUDY-30 S2 (DV-140) | **accepted** (owner, 2026-10-01); **resolved** by STUDY-125 (owner, 2026-10-05: Convex's layout) |
 | F2 | The public origins are configured as `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` (and `cloudOrigin` / `siteOrigin` options), not `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` | owner rule: no "convex" in shipped names | **accepted** (owner, 2026-10-01) |
 | F3 | A deleted file's bytes are removed after the deleting transaction commits, and a sweep removes blobs no row points to (failed or abandoned uploads, after an hour). Convex never removes them | not observable through the API (the URL already answers 404); without it disk use only grows | **accepted** (owner, 2026-10-01) |
 | F4 | Uploads have no size limit, as Convex: the upload route is exempt from `maxRequestBodySize` (H3), and other routes keep their caps | Bun applies one cap to a whole server, so the exemption needs its own path (the API server's cap raised, other routes checked per route) | **accepted** (owner, 2026-10-01) |
