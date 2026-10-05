@@ -1101,7 +1101,6 @@ export class Engine {
       const deletes = index.changedDeletes();
       const segment = bytes ? await state.blobs.put(bytes) : null;
       const deleteKeys = await Promise.all(deletes.map((d) => state.blobs.put(d.bytes)));
-      const replaced: (string | null)[] = [];
       const stored = await state.update(
         (states) => {
           if (!this.isCurrent(kind, e)) return false;
@@ -1125,17 +1124,13 @@ export class Engine {
         () => {
           deletes.forEach((d, i) => {
             const part = d.part as { keys?: { segment: string; deletes: string | null } };
-            replaced.push(part.keys?.deletes ?? null);
             part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
           });
           index.commitBackfill(bytes, deletes, ts, segment ? { segment, deletes: null } : undefined);
         },
       );
-      if (!stored) {
-        await state.deleteBlobs([segment, ...deleteKeys]);
-        return false;
-      }
-      await state.deleteBlobs(replaced);
+      // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
+      if (!stored) return false;
       this.searchStats.backfillSteps++;
       if (end) return true;
       cursor = next;
