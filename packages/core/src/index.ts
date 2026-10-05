@@ -40,7 +40,6 @@ export {
   SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
-  STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
   searchIndexesUnavailable,
   TooManyTablesError,

@@ -18,11 +18,9 @@ export const SESSION_REQUESTS_TABLE = "_session_requests";
 export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 /**
  * Stored files (STUDY-32 F1): `_storage` holds Convex's public fields plus hidden ones (the URL's UUID and
- * the blob's key); apps read it through `db.system`. `_storage_deletions` queues the blobs of deleted
- * files, removed once the delete commits (F3).
+ * the blob's key); apps read it through `db.system`. A deleted file's blob stays, as Convex's (STUDY-130).
  */
 export const STORAGE_TABLE = "_storage";
-export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
 /** Pushed code (STUDY-35), as Convex's: each module's metadata, the packages they live in, the import phase. */
 export const MODULES_TABLE = "_modules";
 export const SOURCE_PACKAGES_TABLE = "_source_packages";
@@ -93,7 +91,6 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index_backfills: 548,
   // bunvex's own.
   _instance: 9_999,
-  _storage_deletions: 9_998,
 };
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
 

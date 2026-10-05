@@ -69,7 +69,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | The `_storage` metadata row is written in its own transaction after the upload | `crates/file_storage` `store_entry` | done (STUDY-32) | |
 | `ctx.storage.getUrl(id)` | syscall `1.0/storageGetUrl` | done (STUDY-32) | Reactive (the row is read in the transaction). |
 | `GET /api/storage/{uuid}`: serving | `crates/local_backend/storage.rs`; `crates/file_storage/lib.rs` | done (STUDY-32) | Convex's headers; one range 206, several 416; HEAD; `/api` CORS. |
-| `ctx.storage.delete(id)` | `crates/model/file_storage` `delete_file` | done (STUDY-32) | Transactional. The blob is removed after commit, and orphans are swept hourly (F3, DV-150); Convex never removes them. |
+| `ctx.storage.delete(id)` | `crates/model/file_storage` `delete_file` | done (STUDY-32, STUDY-130) | Transactional. As Convex, the row only: the blob stays and nothing sweeps orphans (DV-150 reversed, DV-407). |
 | `ctx.storage.store(blob)` / `get(id)` (actions only) | `npm-packages/udf-runtime/src/storage.ts` | done (STUDY-32) | |
 | `ctx.storage.getMetadata` (deprecated) | syscall `1.0/storageGetMetadata` | done (STUDY-32) | |
 | `_storage` virtual table `{_id, _creationTime, sha256 (base64), size, contentType}` | `crates/model/file_storage/virtual_table.rs` | done (STUDY-32) | A real system table, projected (F1). |

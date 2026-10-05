@@ -96,7 +96,7 @@ import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { tableShapes } from "./shapes-route.ts";
-import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
+import { FileStorage, StorageError } from "./storage.ts";
 import {
   documentDeltas,
   jsonSchemas,
@@ -1419,7 +1419,6 @@ export function createServer(opts: ServerOptions) {
     files = new FileStorage(engine, blobs, cloudOrigin.replace(/\/$/, ""));
     functions.fileStorage = files;
   }
-  const stopFileSweeps = files ? startFileSweeps(engine, files) : () => {};
 
   // The site port (Convex's site proxy): HTTP actions at every path; `/version` first, as Convex's meta route.
   const sitePort =
@@ -1959,7 +1958,6 @@ export function createServer(opts: ServerOptions) {
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();
-      stopFileSweeps();
       sync.stop();
       site?.stop(true);
       server?.stop(true);
@@ -1980,7 +1978,6 @@ export function createServer(opts: ServerOptions) {
       sync.stop();
       site?.stop(true);
       server?.stop(true);
-      stopFileSweeps();
       builtinScreen?.stop();
       functionLog.close();
       await engine.close();

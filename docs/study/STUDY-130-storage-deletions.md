@@ -1,6 +1,6 @@
 # STUDY-130 — Deleting a file's blob: Convex's mechanism and bunvex's `_storage_deletions`
 
-- **Status:** decision pending (owner)
+- **Status:** implemented (owner, 2026-10-05: A, match Convex)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-32](STUDY-32-file-storage.md) (F3, DV-150), [STUDY-42](STUDY-42-import-export.md) (exports
   with files), [STUDY-33](STUDY-33-retention.md) (retention), [STUDY-73](STUDY-73-storage-usage-gauges.md)
@@ -47,13 +47,15 @@ whether an export or a download racing a delete can fail.
 
 ## 3. How bunvex does it
 
-bunvex (STUDY-32 F3, DV-150) deletes the bytes:
+### 3.1 Before this study
 
-- `FileStorage.deleteIn` deletes the `_storage` row. In the same transaction, it inserts `{storageKey}` into
+bunvex (STUDY-32 F3, DV-150) deleted the bytes:
+
+- `FileStorage.deleteIn` deleted the `_storage` row. In the same transaction, it inserted `{storageKey}` into
   bunvex's own `_storage_deletions` (number 9998).
-- After the delete commits, `sweepDeleted` removes the queued blobs and their queue rows. It is woken by commits
-  to the queue, and runs every 30 s.
-- `sweepOrphans`, hourly, removes blobs that no row or queued deletion names and that were written more than an
+- After the delete committed, `sweepDeleted` removed the queued blobs and their queue rows. It was woken by
+  commits to the queue, and ran every 30 s.
+- `sweepOrphans`, hourly, removed blobs that no row or queued deletion named and that were written more than an
   hour ago (failed or abandoned uploads).
 
 Safety, compared with Convex:
@@ -67,37 +69,40 @@ Safety, compared with Convex:
 | crash between commit and sweep | n/a | the queue row persists; the sweep resumes |
 
 So Convex's approach is the safer one, and it is possible in bunvex (it is less code). It is not the same
-outcome: it gives up reclaiming space, which DV-150 decided bunvex should do.
+outcome: it gives up reclaiming space, which DV-150 had decided bunvex should do.
+
+### 3.2 Now (owner, 2026-10-05: option A)
+
+As Convex: `FileStorage.deleteIn` (`ctx.storage.delete`, the dashboard's `deleteFile(s)`) deletes the `_storage`
+row and nothing else. `_storage_deletions`, `sweepDeleted`, `sweepOrphans` and `startFileSweeps` are gone. A
+deleted file's blob stays in the store, so an export or a download that read the row at an earlier snapshot still
+finds the bytes. Blobs of failed or abandoned uploads stay too, as in Convex.
+
+Possible future addition (not built): reclaiming the space of deleted files, as an `AD` proposed to the owner, with
+a design that never removes bytes a snapshot may still read (e.g. only past retention's window and after every
+export that began before the delete has finished).
 
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| SD1 (DV-407) | bunvex removes a deleted file's bytes after the delete commits (via `_storage_deletions`), and sweeps orphans hourly; Convex never removes them | DV-150: disk use would otherwise only grow | **pending (owner)**: re-opened by this study, see §6 |
+| SD1 (DV-407) | Was: bunvex removed a deleted file's bytes after the delete committed (via `_storage_deletions`), and swept orphans hourly (DV-150). Now as Convex: the bytes stay | Convex's way is the safe one: no reader at an earlier snapshot loses bytes | owner, 2026-10-05: A, match Convex; DV-150 withdrawn |
 
 ## 5. Tests
 
-None in this PR: it only adds the study. The options below say what each would test.
+`packages/server/test/storage.test.ts`: a rolled-back delete keeps the file; a committed delete removes the row
+(the URL is null, a second delete is `storage id … not found`) and the blob is still in the store 300 ms later;
+`catalog.test.ts`: no `_storage_deletions` table among the system tables. The orphan-sweep test is removed with
+the sweep.
 
-## 6. Open questions
+Sabotage (each applied alone, then restored):
 
-**SD1. Keep reclaiming deleted files' bytes, or match Convex and keep them?**
+| Change | Result |
+|---|---|
+| the blob removed once the delete commits (DV-150's behaviour back) | 1 test fails |
+| the blob removed in the deleting transaction | 1 fails |
 
-- **A. Match Convex.**
-  - Delete the row only. Drop `_storage_deletions`, `sweepDeleted` and `sweepOrphans`. DV-150 is withdrawn.
-  - Exports and downloads never race a delete.
-  - Disk use only grows; an operator reclaims space only by hand.
-  - Tests: a committed delete leaves the blob; an export from a snapshot before a delete still includes the
-    file.
-- **B. Keep reclaiming, without the extra table.**
-  - Delete the row only. A sweep removes blobs that no row names, once they are older than a grace period.
-  - The grace period must be longer than any snapshot that may still read them: an export's lifetime, which is
-    unbounded today, or retention's window.
-  - Still a divergence from Convex (DV-150 kept). The export race narrows but stays.
-- **C. Keep today's design** (DV-150 as decided). The export and download races stay.
+## 6. Decision
 
-**Recommendation:** A. It is what Convex does, it is the safe one, and `_storage_deletions` goes away. Space
-reclamation, if wanted, can come back later as an addition (AD) with a design that respects snapshots.
-
-App impact: none for app code. Operators: with A, deleted files keep using space. With B or C, an export may
-fail when files are deleted while it runs.
+SD1 was decided by the owner on 2026-10-05: **A, match Convex.** Options B (an orphan sweep only) and C (keep
+DV-150) were not taken. Space reclamation may come back as an addition (§3.2).
