@@ -1,6 +1,8 @@
 # STUDY-96 — Search index snapshots across restarts
 
-- **Status:** implemented (STUDY-79 §6 option D, decided by the owner 2026-10-04); storage and crash
+- **Status:** superseded by [STUDY-111](STUDY-111-search-segments.md) (persisted segments): the snapshot is no
+  longer written, and one already written is read only for an index with no segments. Was: implemented
+  (STUDY-79 §6 option D, decided by the owner 2026-10-04); storage and crash
   behaviour decided by the owner (2026-10-04, §6)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (the rebuild window), [STUDY-45](STUDY-45-text-search.md)

@@ -345,6 +345,26 @@ describe("deploy2 over HTTP", () => {
     }
   }, 120_000);
 
+  test("a function's broken exportArgs: InvalidModules with Convex's message; one that throws, Convex's `Error` (STUDY-105)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const fn = (patch: string) =>
+      mod("m.js", `import { query } from "@bunvex/server"; export const q = query(async () => 1); ${patch}`);
+    const broken = await d.push([fn("q.exportArgs = 5;")]);
+    expect(broken.start.status).toBe(400);
+    expect(broken.start.body).toEqual({
+      code: "InvalidModules",
+      message:
+        "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nm.js:q.exportArgs is not a function or `undefined`.",
+    });
+    const throws = await d.push([fn(`q.exportReturns = () => { throw new Error("boom"); };`)]);
+    expect(throws.start.status).toBe(400);
+    expect(throws.start.body.code).toBe("Error");
+    expect(throws.start.body.message).toStartWith("Hit an error while pushing:\nUncaught Error: boom");
+    // Nothing was deployed.
+    expect((await d.call("query", "m:q")).status).toBe("error");
+  }, 60_000);
+
   test("a second push sends only what changed; a wrong hash is a 409", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
@@ -376,6 +396,13 @@ describe("deploy2 over HTTP", () => {
     expect(broken.start.body.message).toStartWith(
       "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught Error: broken at import",
     );
+    // A module that does not compile: the error alone, none of the server's frames (STUDY-95 §7).
+    const syntax = await d.push([mod("messages.js", "export const x = (1;")], schema);
+    expect(syntax.start.body.code).toBe("InvalidModules");
+    expect(syntax.start.body.message).toStartWith(
+      "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught SyntaxError: ",
+    );
+    expect(syntax.start.body.message).not.toMatch(/\bat |node:vm|code-version\.ts/);
     const badSchema = await d.push([messages(1)], mod("schema.js", `export default 42;`));
     expect([badSchema.start.status, badSchema.start.body.code]).toEqual([400, "InvalidSchema"]);
     expect((await d.call("query", "messages:list")).status).toBe("success");
@@ -396,6 +423,62 @@ describe("deploy2 over HTTP", () => {
     const bad = await d.push([messages(1)], many);
     expect([bad.start.status, bad.start.body.code]).toEqual([400, "TooManyTables"]);
     expect(bad.start.body.message).toBe("Hit an error while pushing:\nNumber of tables cannot exceed 10000.");
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+  });
+
+  test("a staged validator (STUDY-106): a change to it alone is a schema change; Convex's errors at push", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const withStaged = (staged: string) =>
+      mod("schema.js", schema.source.replace('.index("by_author", ["author"])', `$&${staged}`));
+    const schemaDiffs = async () =>
+      (
+        (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+          action: string;
+          metadata: Record<string, any>;
+        }[]
+      )
+        .filter((e) => e.action === "push_config_with_components")
+        .map((e) => e.metadata.component_diffs[0].component_diff.schemaDiff);
+    await d.push([messages(1)], schema);
+    // The same push with only `.staged()` added: the schema changes, and the next schema carries it.
+    const staged = await d.push(
+      [messages(1)],
+      withStaged(".staged({ author: v.array(v.string()), body: v.string() })"),
+    );
+    expect(staged.finish!.status).toBe(200);
+    const diff = (await schemaDiffs())[1];
+    expect(diff).not.toBeNull();
+    expect(JSON.parse(diff.previous_schema).tables[0].stagedDocumentType).toBeUndefined();
+    expect(JSON.parse(diff.next_schema).tables[0].stagedDocumentType).toEqual({
+      type: "object",
+      value: {
+        author: { fieldType: { type: "array", value: { type: "string" } }, optional: false },
+        body: { fieldType: { type: "string" }, optional: false },
+      },
+    });
+    // It is not enforced: writes still follow `defineTable`'s validator.
+    expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
+    // A staged validator a table could not have: Convex's InvalidTopLevelTypeInSchemaError.
+    const bad = await d.push([messages(1)], withStaged(".staged(v.string())"));
+    expect([bad.start.status, bad.start.body.code]).toEqual([400, "InvalidTopLevelTypeInSchemaError"]);
+    expect(bad.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nThe document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    // Two staged validators: the schema does not evaluate.
+    const twice = await d.push([messages(1)], withStaged(".staged({ a: v.string() }).staged({ b: v.string() })"));
+    expect([twice.start.status, twice.start.body.code]).toEqual([400, "InvalidSchema"]);
+    expect(twice.start.body.message).toContain("Table cannot have more than one staged validator.");
+    // A staged validator whose JSON is not an object: the export fails, answered as Convex's
+    // InvalidSchemaExport, its own message dropped.
+    const notObject = await d.push(
+      [messages(1)],
+      withStaged('.staged({ isValidator: true, kind: "object", json: "nope" })'),
+    );
+    expect([notObject.start.status, notObject.start.body.code]).toEqual([400, "InvalidSchemaExport"]);
+    expect(notObject.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
