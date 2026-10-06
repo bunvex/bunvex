@@ -74,33 +74,45 @@ describe("withIndex ranges follow Convex's rules", () => {
     const e = await engine();
     return e.query((db) => db.query("items").withIndex(index, f).collect());
   };
+  // A query's rejection, awaited here rather than inside `expect().rejects`: bun test runs the work of a promise
+  // handed to `rejects` far slower (each committer drain waits ~150 ms), which pushed three engine starts past
+  // the 5 s timeout. A query that resolves fails `toThrow`.
+  const rejected = async (p: Promise<unknown>) => {
+    const err = await p.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    return () => {
+      if (err) throw err;
+    };
+  };
 
   test("a field outside the index: FieldNotInIndex", async () => {
-    await expect(run((q) => q.eq("wrong", 1), "by_n")).rejects.toThrow(
+    expect(await rejected(run((q) => q.eq("wrong", 1), "by_n"))).toThrow(
       'The index range included a comparison with "wrong", but items.by_n with fields ["n", "_creationTime"] doesn\'t index this field.',
     );
   });
 
   test("fields not used as an index-order prefix: InvalidIndexRange", async () => {
-    await expect(run((q) => q.eq("b", 1))).rejects.toThrow(
+    expect(await rejected(run((q) => q.eq("b", 1)))).toThrow(
       'Tried to query index items.by_ab but the query didn\'t use the index fields in order.\nIndex fields: ["a", "b", "_creationTime"]\nQuery fields: ["b"]\nFirst incorrect field: "b"',
     );
-    await expect(run((q) => q.gt("a", 1).eq("b", 2))).rejects.toThrow('First incorrect field: "b"');
-    await expect(run((q) => q.eq("a", 1).gt("a", 0))).rejects.toThrow("didn't use the index fields in order");
+    expect(await rejected(run((q) => q.gt("a", 1).eq("b", 2)))).toThrow('First incorrect field: "b"');
+    expect(await rejected(run((q) => q.eq("a", 1).gt("a", 0)))).toThrow("didn't use the index fields in order");
   });
 
   test("a second equality or bound of the same kind: AlreadyDefinedBound", async () => {
-    await expect(run((q) => q.eq("a", 1).eq("a", 2))).rejects.toThrow(
+    expect(await rejected(run((q) => q.eq("a", 1).eq("a", 2)))).toThrow(
       'Already defined equality bound in index range. Can\'t add "a" == 2.',
     );
-    await expect(run((q) => q.gt("a", 1).gte("a", 2))).rejects.toThrow(
+    expect(await rejected(run((q) => q.gt("a", 1).gte("a", 2)))).toThrow(
       'Already defined lower bound in index range. Can\'t add "a" >= 2.',
     );
-    await expect(run((q) => q.lt("a", 1).lte("a", 2))).rejects.toThrow("Already defined upper bound");
+    expect(await rejected(run((q) => q.lt("a", 1).lte("a", 2)))).toThrow("Already defined upper bound");
   });
 
   test("bounds on two fields: BoundsOnMultipleFields", async () => {
-    await expect(run((q) => q.eq("a", 1).gt("b", 1).lt("_creationTime", 5))).rejects.toThrow(
+    expect(await rejected(run((q) => q.eq("a", 1).gt("b", 1).lt("_creationTime", 5)))).toThrow(
       'This query against index items.by_ab attempted to set a range bound on both "b" and "_creationTime".',
     );
   });

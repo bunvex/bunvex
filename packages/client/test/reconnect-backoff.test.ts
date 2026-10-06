@@ -49,7 +49,7 @@ function fakeServer() {
   }
   let cursor = 0;
   return {
-    address: `http://localhost:${server.port}`,
+    address: `http://127.0.0.1:${server.port}`,
     connections: () => conns.length,
     /** The next message of `type`, after the last one taken. */
     next: <T extends v1.ClientMessage["type"]>(type: T) => next(type, cursor),

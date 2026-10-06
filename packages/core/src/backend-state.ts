@@ -10,7 +10,18 @@ export type BackendState = { system: string; usage_limit: string; user: string }
 
 const RUNNING: BackendState = { system: "none", usage_limit: "none", user: "none" };
 
-/** The state, read in `db` (running when there is no document yet). */
+/**
+ * The state's document as Convex's `BackendStateModel::initialize` writes it when `initialize_application_system_tables`
+ * creates the table (crates/model/src/backend_state/mod.rs): running, `{system, usage_limit, user}` all "none".
+ * bunvex writes it in the commit after the one that created the table (a transaction cannot write a table its own
+ * catalog commit creates), at the first start, before anything else can run; a store that has it keeps it.
+ */
+export async function initializeBackendState(db: Tx): Promise<void> {
+  if (!(await db.asSystem(() => db.query(BACKEND_STATE_TABLE).first())))
+    await db.asSystem(() => db.insert(BACKEND_STATE_TABLE, { ...RUNNING }));
+}
+
+/** The state, read in `db` (running when there is no document, as in a store whose table was emptied). */
 export async function readBackendState(db: Tx): Promise<BackendState> {
   const row = (await db.asSystem(() => db.query(BACKEND_STATE_TABLE).first())) as BackendState | null;
   return row ? { system: row.system, usage_limit: row.usage_limit, user: row.user } : { ...RUNNING };

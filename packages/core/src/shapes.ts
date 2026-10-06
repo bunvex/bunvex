@@ -497,63 +497,81 @@ export function removeValue(shape: Shape, value: Value): Shape {
   }
 }
 
-/** A shape as JSON (a table summary checkpoint, STUDY-72): an object's fields as `[name, field]` pairs, in order. */
-export type ShapeJson = { n: number; v: Record<string, unknown> };
+/**
+ * A shape as Convex's JSON (`CountedShape::to_json`, crates/shape_inference/src/json.rs), as the
+ * `table_summary_v2` checkpoint holds it (STUDY-72, STUDY-134): `{numValues, variant}`; a variant's `kind` and
+ * its fields by Convex's names — `literal`, `tableNumber`, `elementType`, an object's `fields` as
+ * `{fieldName, type: {type, optional}}` in order, a record's `fieldType` / `valueType`, a union's `types`.
+ */
+export type ShapeJson = { numValues: number; variant: Record<string, unknown> };
 
 export function shapeToJson(s: Shape): ShapeJson {
   const v = s.v;
+  let variant: Record<string, unknown>;
   switch (v.kind) {
+    case "StringLiteral":
+      variant = { kind: v.kind, literal: v.literal };
+      break;
+    case "Id":
+      variant = { kind: v.kind, tableNumber: v.table };
+      break;
     case "Array":
-      return { n: s.n, v: { kind: v.kind, element: shapeToJson(v.element) } };
+      variant = { kind: v.kind, elementType: shapeToJson(v.element) };
+      break;
     case "Object":
-      return {
-        n: s.n,
-        v: {
-          kind: v.kind,
-          fields: [...v.fields].map(([name, f]) => [name, { shape: shapeToJson(f.shape), optional: f.optional }]),
-        },
+      variant = {
+        kind: v.kind,
+        fields: [...v.fields].map(([fieldName, f]) => ({
+          fieldName,
+          type: { type: shapeToJson(f.shape), optional: f.optional },
+        })),
       };
+      break;
     case "Record":
-      return { n: s.n, v: { kind: v.kind, key: shapeToJson(v.key), value: shapeToJson(v.value) } };
+      variant = { kind: v.kind, fieldType: shapeToJson(v.key), valueType: shapeToJson(v.value) };
+      break;
     case "Union":
-      return { n: s.n, v: { kind: v.kind, variants: v.variants.map(shapeToJson) } };
+      variant = { kind: v.kind, types: v.variants.map(shapeToJson) };
+      break;
     default:
-      return { n: s.n, v: { ...v } };
+      variant = { kind: v.kind };
   }
+  return { numValues: s.n, variant };
 }
 
 /** `shapeToJson`'s inverse; throws on anything it did not write. */
 export function shapeFromJson(j: ShapeJson): Shape {
-  if (typeof j?.n !== "number" || typeof j.v?.kind !== "string") throw new Error("not a shape");
-  const v = j.v as Record<string, any>;
+  const n = j?.numValues;
+  if (typeof n !== "number" || typeof j.variant?.kind !== "string") throw new Error("not a shape");
+  const v = j.variant as Record<string, any>;
   switch (v.kind) {
     case "Array":
-      return { n: j.n, v: { kind: "Array", element: shapeFromJson(v.element) } };
+      return { n, v: { kind: "Array", element: shapeFromJson(v.elementType) } };
     case "Object":
       return {
-        n: j.n,
+        n,
         v: {
           kind: "Object",
           fields: new Map(
-            (v.fields as [string, { shape: ShapeJson; optional: boolean }][]).map(([name, f]) => [
-              name,
-              { shape: shapeFromJson(f.shape), optional: f.optional === true },
-            ]),
+            (v.fields as { fieldName: string; type: { type: ShapeJson; optional: boolean } }[]).map((f) => {
+              if (typeof f?.fieldName !== "string") throw new Error("not a shape");
+              return [f.fieldName, { shape: shapeFromJson(f.type.type), optional: f.type.optional === true }];
+            }),
           ),
         },
       };
     case "Record":
-      return { n: j.n, v: { kind: "Record", key: shapeFromJson(v.key), value: shapeFromJson(v.value) } };
+      return { n, v: { kind: "Record", key: shapeFromJson(v.fieldType), value: shapeFromJson(v.valueType) } };
     case "Union":
-      return { n: j.n, v: { kind: "Union", variants: (v.variants as ShapeJson[]).map(shapeFromJson) } };
+      return { n, v: { kind: "Union", variants: (v.types as ShapeJson[]).map(shapeFromJson) } };
     case "StringLiteral":
       if (typeof v.literal !== "string") throw new Error("not a shape");
-      return { n: j.n, v: { kind: "StringLiteral", literal: v.literal } };
+      return { n, v: { kind: "StringLiteral", literal: v.literal } };
     case "Id":
-      if (typeof v.table !== "number") throw new Error("not a shape");
-      return { n: j.n, v: { kind: "Id", table: v.table } };
+      if (typeof v.tableNumber !== "number") throw new Error("not a shape");
+      return { n, v: { kind: "Id", table: v.tableNumber } };
     default:
       if (!RANK.includes(v.kind)) throw new Error("not a shape");
-      return { n: j.n, v: { kind: v.kind } as Variant };
+      return { n, v: { kind: v.kind } as Variant };
   }
 }

@@ -15,6 +15,7 @@ import { type Crons, cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
 import { type CronJob, completeRun, currentJob, dueCrons, insertLog } from "../src/cron-model.ts";
 import { computeNextTs } from "../src/cron-next.ts";
+import { argsOfBytes, msOfNs } from "../src/cron-rows.ts";
 import { action, Functions, internalMutation, mutation, query } from "../src/functions.ts";
 import { captureErrors, failingReads, watchUnhandled } from "./faulty-store.ts";
 
@@ -217,17 +218,19 @@ describe("the executor", () => {
     await until(async () => (await logs()).length === 2, "two runs");
     expect(ran).toEqual(["t"]);
     const tick = (await logs("tick"))[0];
+    // As Convex's rows: the arguments as the bytes of their JSON, a result's value as its JSON text.
     expect(tick).toMatchObject({
       udfPath: "m.js:tick",
-      udfArgs: [{ tag: "t" }],
-      status: { type: "success", result: { type: "default", value: { ok: true } } },
+      status: { type: "success", result: { type: "default", value: '{"ok":true}' } },
       logLines: { logLines: ["[LOG] 'tick ran'"], isTruncated: false },
     });
+    expect(argsOfBytes(tick.udfArgs as ArrayBuffer)).toEqual([{ tag: "t" }]);
+    expect(typeof tick.ts).toBe("bigint");
     expect((await logs("fails"))[0].status).toMatchObject({ type: "err" });
     expect(((await logs("fails"))[0].status as { error: string }).error).toContain("Uncaught BunvexError: nope");
     const items = await engine.query((db) => db.query("items").collect());
     expect(items.map((d) => [d.tag, d.who])).toEqual([["t", null]]);
-    for (const r of await nextRuns()) expect(r.nextTs as number).toBeGreaterThan(Date.now() + 3_500_000);
+    for (const r of await nextRuns()) expect(msOfNs(r.nextTs as bigint)).toBeGreaterThan(Date.now() + 3_500_000);
   });
 
   test("an action cron; one never runs twice at once; one left in progress is logged as a transient error", async () => {
@@ -242,15 +245,15 @@ describe("the executor", () => {
     expect(ran).toEqual(["act:slow"]);
     open();
     await until(async () => (await logs("act")).length >= 1);
-    expect((await logs("act"))[0].status).toEqual({ type: "success", result: { type: "default", value: "slow" } });
+    expect((await logs("act"))[0].status).toEqual({ type: "success", result: { type: "default", value: '"slow"' } });
     await ex.stop();
     // As a crash leaves it: in progress, nobody running it.
     await engine.mutation(async (db) => {
       const [r] = await db.asSystem(() => db.query(CRON_NEXT_RUN_TABLE).collect());
       await db.asSystem(() =>
         db.patch(CRON_NEXT_RUN_TABLE, r._id, {
-          state: { type: "inProgress", requestId: "r", executionId: "e" },
-          nextTs: Date.now() - 1,
+          state: { type: "inProgress", request_id: "r", execution_id: "e" },
+          nextTs: BigInt(Date.now() - 1) * 1_000_000n,
         }),
       );
     });
@@ -289,7 +292,7 @@ describe("the executor", () => {
     await ex.start();
     await until(async () => (await logs()).some((l) => (l.status as { type: string }).type === "canceled"));
     const canceled = (await logs()).find((l) => (l.status as { type: string }).type === "canceled")!;
-    expect((canceled.status as { num_canceled: number }).num_canceled).toBeGreaterThanOrEqual(9);
+    expect((canceled.status as { num_canceled: bigint }).num_canceled).toBeGreaterThanOrEqual(9n);
     expect(ran.length).toBeLessThan(3);
   });
 
@@ -311,7 +314,7 @@ describe("the executor", () => {
     // The newest by `ts`: the real run (now) and the four latest inserted.
     expect(
       kept
-        .map((l) => l.ts as number)
+        .map((l) => msOfNs(l.ts as bigint))
         .filter((t) => t < 2000)
         .sort(),
     ).toEqual([1003, 1004, 1005, 1006]);
@@ -327,7 +330,7 @@ describe("the executor", () => {
     expect(diff).toEqual({ added: ["a", "b", "d"], updated: [], deleted: [] });
     await until(async () => (await logs()).length === 2);
     await executor.stop();
-    const before = new Map((await nextRuns()).map((r) => [r.cronJobId, r.nextTs]));
+    const before = new Map((await nextRuns()).map((r) => [r.cronJobId, msOfNs(r.nextTs as bigint)]));
     const next = cronJobs();
     next.interval("a", { hours: 1 }, "m:tick", { tag: "changed" }); // args only: the next run stays
     next.interval("d", { seconds: 5 }, "m:tick"); // the schedule changed, and daily runs are > 30 s apart: moved
@@ -341,7 +344,7 @@ describe("the executor", () => {
     stops.push(() => ex.stop());
     expect(await ex.start()).toEqual({ added: ["c"], updated: ["a", "d"], deleted: ["b"] });
     expect(await logs("b")).toEqual([]);
-    const after = new Map((await nextRuns()).map((r) => [r.cronJobId, r.nextTs]));
+    const after = new Map((await nextRuns()).map((r) => [r.cronJobId, msOfNs(r.nextTs as bigint)]));
     expect(after.size).toBe(3);
     const [aId] = [...before.keys()].filter((k) => after.has(k) && after.get(k) === before.get(k));
     expect(aId).toBeDefined(); // a's next run did not move

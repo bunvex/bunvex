@@ -57,5 +57,7 @@ test("bunvex export: into a directory, to a new file; an existing file is refuse
   expect(Bun.spawnSync(["unzip", "-Z1", join(dir, "mine.zip")]).stdout.toString()).toContain("items/documents.jsonl");
   writeFileSync(join(dir, "taken.zip"), "");
   expect(await run("--path", "taken.zip")).toEqual({ code: 1, err: ["Error: Path taken.zip already exists."] });
-  expect((await run()).code).toBe(2);
+  const missing = await run();
+  expect(missing.code).toBe(1);
+  expect(missing.err.slice(0, 2)).toEqual(["error: required option '--path <zipFilePath>' not specified", ""]);
 });

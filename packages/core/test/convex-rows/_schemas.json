@@ -1,0 +1,14 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_schemas",
+  "rows": [
+    {
+      "_creationTime": 1791234000150.1892,
+      "_id": "jg212kmx30bvs7pce07n34avnn8fq7ae",
+      "schema": "{\"tables\":[{\"tableName\":\"things\",\"indexes\":[{\"indexDescriptor\":\"by_s_n\",\"fields\":[\"s\",\"n\",\"_creationTime\"]}],\"stagedDbIndexes\":[],\"searchIndexes\":[{\"indexDescriptor\":\"search_s\",\"searchField\":\"s\",\"filterFields\":[\"b\"]}],\"stagedSearchIndexes\":[],\"vectorIndexes\":[],\"stagedVectorIndexes\":[],\"documentType\":{\"type\":\"object\",\"value\":{\"arr\":{\"fieldType\":{\"type\":\"array\",\"value\":{\"type\":\"any\"}},\"optional\":false},\"b\":{\"fieldType\":{\"type\":\"boolean\"},\"optional\":false},\"by\":{\"fieldType\":{\"type\":\"bytes\"},\"optional\":false},\"file\":{\"fieldType\":{\"type\":\"id\",\"tableName\":\"_storage\"},\"optional\":true},\"i\":{\"fieldType\":{\"type\":\"bigint\"},\"optional\":false},\"n\":{\"fieldType\":{\"type\":\"number\"},\"optional\":false},\"obj\":{\"fieldType\":{\"type\":\"object\",\"value\":{\"a\":{\"fieldType\":{\"type\":\"object\",\"value\":{\"b\":{\"fieldType\":{\"type\":\"string\"},\"optional\":false}}},\"optional\":false},\"k\":{\"fieldType\":{\"type\":\"number\"},\"optional\":false}}},\"optional\":false},\"ref\":{\"fieldType\":{\"type\":\"id\",\"tableName\":\"things\"},\"optional\":true},\"s\":{\"fieldType\":{\"type\":\"string\"},\"optional\":false},\"z\":{\"fieldType\":{\"type\":\"null\"},\"optional\":false}}},\"stagedDocumentType\":null}],\"schemaValidation\":true}",
+      "state": {
+        "state": "active"
+      }
+    }
+  ]
+}

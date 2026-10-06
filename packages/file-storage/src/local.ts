@@ -21,6 +21,11 @@ export class LocalBlobStore implements BlobStore {
     return join(this.files, `${key}.blob`);
   }
 
+  /** The file a blob is kept in (null: not a key of this store), for readers that map it. */
+  filePath(key: string): string | null {
+    return KEY.test(key) ? join(this.files, `${key}.blob`) : null;
+  }
+
   async put(body: ReadableStream<Uint8Array> | Blob | Uint8Array): Promise<Written> {
     const key = crypto.randomUUID();
     const path = this.path(key);

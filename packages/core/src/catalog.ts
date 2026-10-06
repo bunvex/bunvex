@@ -5,6 +5,7 @@
 //
 // `_tables` and `_index` themselves have FIXED ids — that is how startup finds everything else (Convex
 // keeps their ids in persistence globals instead).
+import type { Value } from "@bunvex/values";
 import { opaqueToInspect } from "./inspect.ts";
 import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 
@@ -16,21 +17,52 @@ export const INSTANCE_TABLE = "_instance";
 export const DATABASE_GLOBALS_TABLE = "_db";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
-/** Scheduled functions (scheduled-jobs.ts, STUDY-30). Apps read them through `db.system`. */
+/**
+ * Scheduled functions (scheduled-jobs.ts, STUDY-30, STUDY-125), as Convex's: each job is a document of the system
+ * table `_scheduled_jobs`, its arguments one of `_scheduled_job_args`. Apps read them through the VIRTUAL table
+ * `_scheduled_functions` (`db.system`, virtual-tables.ts), which shares `_scheduled_jobs`' number and ids.
+ */
+export const SCHEDULED_JOBS_TABLE = "_scheduled_jobs";
+export const SCHEDULED_JOB_ARGS_TABLE = "_scheduled_job_args";
 export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 /**
- * Stored files (STUDY-32 F1): `_storage` holds Convex's public fields plus hidden ones (the URL's UUID and
- * the blob's key); apps read it through `db.system`. `_storage_deletions` queues the blobs of deleted
- * files, removed once the delete commits (F3).
+ * Stored files (STUDY-32, STUDY-125), as Convex's: `_file_storage` holds each file's metadata (the URL's UUID,
+ * the blob's key, sha256, size, content type); apps read the VIRTUAL table `_storage` (its public fields,
+ * the same ids). A deleted file's blob stays, as Convex's (STUDY-130).
  */
+export const FILE_STORAGE_TABLE = "_file_storage";
 export const STORAGE_TABLE = "_storage";
-export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
+/**
+ * Convex's virtual system tables (`VirtualSystemMapping`, crates/common/src/virtual_system_mapping.rs): each
+ * virtual table's primary system table, which holds its ids, number and `by_id` / `by_creation_time` indexes.
+ */
+export const VIRTUAL_TO_SYSTEM_TABLE: Readonly<Record<string, string>> = {
+  [STORAGE_TABLE]: FILE_STORAGE_TABLE,
+  [SCHEDULED_FUNCTIONS_TABLE]: SCHEDULED_JOBS_TABLE,
+};
+/**
+ * The virtual table each system table backs (Convex's `associated_virtual_table_name`): the primary table, and
+ * `_scheduled_job_args`, a secondary one that holds some of `_scheduled_functions`' fields.
+ */
+export const SYSTEM_TO_VIRTUAL_TABLE: Readonly<Record<string, string>> = {
+  [FILE_STORAGE_TABLE]: STORAGE_TABLE,
+  [SCHEDULED_JOBS_TABLE]: SCHEDULED_FUNCTIONS_TABLE,
+  [SCHEDULED_JOB_ARGS_TABLE]: SCHEDULED_FUNCTIONS_TABLE,
+};
+/** The virtual table a system table is the primary table of (Convex's `primary_system_to_virtual_table`). */
+export const primaryVirtualTable = (system: string): string | undefined => {
+  const v = SYSTEM_TO_VIRTUAL_TABLE[system];
+  return v !== undefined && VIRTUAL_TO_SYSTEM_TABLE[v] === system ? v : undefined;
+};
 /** Pushed code (STUDY-35), as Convex's: each module's metadata, the packages they live in, the import phase. */
 export const MODULES_TABLE = "_modules";
 export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
 /** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
 export const SCHEMAS_TABLE = "_schemas";
+/** A pending schema's validation attempts and their counters (STUDY-127), as Convex's. */
+export const SCHEMA_VALIDATIONS_TABLE = "_schema_validations";
+export const SCHEMA_VALIDATION_PROGRESS_TABLE = "_schema_validation_progress";
 /** The deployed auth providers (STUDY-129), as Convex's `_auth`: one document per provider. */
 export const AUTH_TABLE = "_auth";
 /** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
@@ -60,6 +92,8 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
+/** The next tablet id to hand out (STUDY-04 §7): `{nextId}`, so a purged table's id is never given again. */
+export const NEXT_TABLET_ID_TABLE = "_next_tablet_id";
 /**
  * Search index workers' state (Convex's `_index_worker_metadata`, STUDY-111): per search or vector index (its
  * `_index` row's id), the ts it was fast-forwarded to.
@@ -76,7 +110,8 @@ const FIRST_SYSTEM_TABLE_NUMBER = 513;
 /**
  * Each system table's fixed number (STUDY-42 X9): Convex's (`DefaultTableNumber` in crates/model/src/lib.rs,
  * 512 + n, "to make import/export more likely to work nicely") for the tables Convex has — a virtual table
- * (`_storage`, `_scheduled_functions`) shares its system table's — and numbers Convex does not use for
+ * (`_storage`, `_scheduled_functions`) shares its primary system table's (`_file_storage`, `_scheduled_jobs`)
+ * and has no table of its own — and numbers Convex does not use for
  * bunvex's own, counted down from the top of the system range (below 10 000, as Convex's). A table created before keeps its number.
  */
 export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
@@ -94,8 +129,8 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _cron_jobs: 531,
   _schemas: 532,
   _cron_job_logs: 533,
-  _scheduled_functions: 539,
-  _storage: 540,
+  _scheduled_jobs: 539,
+  _file_storage: 540,
   _snapshot_imports: 541,
   _log_sinks: 535,
   _function_handles: 545,
@@ -104,12 +139,15 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _cron_next_run: 547,
   _data_sync_progress: 553,
   _usage_limits: 552,
+  _scheduled_job_args: 550,
   _index_backfills: 548,
   _index_worker_metadata: 542,
   _next_persistence_index_id: 554,
+  _schema_validation_progress: 549,
+  _schema_validations: 555,
   // bunvex's own.
   _instance: 9_999,
-  _storage_deletions: 9_998,
+  _next_tablet_id: 9_997,
 };
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
 
@@ -132,8 +170,9 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _cron_jobs: "The cron jobs and their schedules.",
   _schemas: "Pushed schemas and their state (pending, active, overwritten, failed).",
   _cron_job_logs: "The last runs of each cron job.",
-  _scheduled_functions: "Scheduled function runs and their state (apps read them through db.system).",
-  _storage: "Stored files' metadata (apps read it through db.system).",
+  _scheduled_jobs: "Scheduled function runs and their state (apps read them as _scheduled_functions).",
+  _scheduled_job_args: "The arguments of scheduled function runs.",
+  _file_storage: "Stored files' metadata (apps read it as _storage).",
   _snapshot_imports: "Snapshot imports, their state and checkpoints.",
   _log_sinks: "Configured log streams and their status.",
   _function_handles: "Function handles: a function path and when it was deleted.",
@@ -143,12 +182,14 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _data_sync_progress: "Data sync progress, one row per sync.",
   _usage_limits: "Usage limits per metric and window.",
   _index_backfills: "Progress checkpoints of index backfills.",
+  _schema_validations: "A pending schema's validation attempts, one per table walked.",
+  _schema_validation_progress: "The counters of each schema validation attempt.",
   _index_worker_metadata: "Search and vector index workers' state: the ts each index was fast-forwarded to.",
   _next_persistence_index_id: "The next index id to hand out.",
+  _next_tablet_id: "The next tablet (a table's storage id) to hand out, so a purged table's is never reused.",
   _auth: "The deployed auth providers, one document per provider.",
   _db: "The database globals: the data version and the storage type pinned at the first start.",
   _instance: "The deployment's own settings, such as the generated instance secret.",
-  _storage_deletions: "Blobs of deleted files, removed once the delete commits.",
 };
 
 /**
@@ -159,6 +200,14 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
  */
 export type TableState = "active" | "hidden" | "deleting";
 export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: TableState };
+/**
+ * A `_tables` row as stored: Convex's `SerializedTableMetadata` (crates/common/src/bootstrap_model/tables.rs), whose
+ * `number` is an int64 (STUDY-134). The catalog works on numbers; rows are converted when written and read.
+ */
+export const tableRow = <T extends { number: number }>(t: T) => ({ ...t, number: BigInt(t.number) });
+/** A `_tables` row read back, its `number` a number again. */
+export const tableMeta = (row: Record<string, unknown>): TableMeta =>
+  ({ ...row, number: Number(row.number as bigint | number) }) as TableMeta;
 /** Convex's `MAX_USER_TABLES` (crates/database/src/bootstrap_model/table.rs): active user tables, at most. */
 export const MAX_USER_TABLES = 10_000;
 
@@ -176,8 +225,10 @@ export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.sta
 /**
  * An index's lifecycle, as Convex's `DatabaseIndexState` (STUDY-29): `backfilling` (the worker is copying
  * the table into it; every write already maintains it), `backfilled` (complete, not yet enabled: the
- * schema's "push" enables it, or it is staged), `enabled` (serves queries). An index of a new table starts
- * `enabled`. `staged` (backfilling / backfilled only): never enabled while the schema declares it staged.
+ * schema's "push" enables it, or it is staged), `enabled` (serves queries). A user index starts
+ * `backfilling`, on a new table too; a system index (`by_id`, `by_creation_time`) of a new table, and every
+ * index of a new system table, start `enabled`. `staged` (backfilling / backfilled only): never enabled while
+ * the schema declares it staged.
  */
 export type IndexState = "backfilling" | "backfilled" | "enabled";
 export type IndexMeta = {
@@ -185,29 +236,131 @@ export type IndexMeta = {
   tablet: number;
   name: string;
   fields: string[];
+  /** The id persistence keys the index's entries by (Convex's `persistenceIndexId`). */
   indexId: number;
   state: IndexState;
   staged?: boolean;
+  /** While backfilling: a commit ts at or before the index's creation (Convex's `indexCreatedLowerBound`). */
+  createdLowerBound?: number;
+  /** While backfilling: the table's documents are all in it, only catching up is left (`retentionStarted`). */
+  retentionStarted?: boolean;
 };
 
+/** bunvex's commit timestamps (microseconds, DV-30) as Convex's in a row: int64 nanoseconds. */
+export const tsToRow = (ts: number): bigint => BigInt(ts) * 1000n;
+/** A row's int64 nanoseconds as a bunvex commit timestamp. */
+export const tsFromRow = (ns: bigint | number): number => Number(BigInt(ns) / 1000n);
+
 /**
- * The database indexes' `_index` rows: a search or vector index's row (STUDY-111) has Convex's `config` instead
- * of `fields`, and the catalog of tables and database indexes leaves it out.
+ * A database index's `_index` row as stored: Convex's `SerializedTabletIndexMetadata`, `config` its
+ * `SerializedIndexConfig::Database` (crates/common/src/bootstrap_model/index/index_config.rs): `fields`
+ * (`by_id`'s are empty, its key is the id alone), `onDiskState` (`Backfilling` with its `backfillState`,
+ * `Backfilled2`, `Enabled`) and the int64 `persistenceIndexId` (STUDY-134). Timestamps are Convex's
+ * nanoseconds. `tablet` and `name` stand for Convex's `table_id` and `descriptor`: bunvex's identities, which
+ * the persistence layout decides (STUDY-133), as in the search rows (STUDY-111).
+ */
+export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: string; config: Record<string, Value> } {
+  let onDiskState: Record<string, Value>;
+  if (m.state === "enabled") onDiskState = { type: "Enabled" };
+  else if (m.state === "backfilled") onDiskState = { type: "Backfilled2", staged: m.staged ?? false };
+  else
+    onDiskState = {
+      type: "Backfilling",
+      backfillState: {
+        indexCreatedLowerBound: tsToRow(m.createdLowerBound ?? 0),
+        retentionStarted: m.retentionStarted ?? false,
+        staged: m.staged ?? false,
+      },
+    };
+  return {
+    tablet: m.tablet,
+    name: m.name,
+    config: {
+      type: "database",
+      fields: m.name === "by_id" ? [] : m.fields,
+      onDiskState,
+      persistenceIndexId: BigInt(m.indexId),
+    },
+  };
+}
+
+/** A database index's `_index` row read back. */
+export function indexMeta(row: Record<string, unknown>): IndexMeta {
+  const c = row.config as { fields: string[]; onDiskState: Record<string, unknown>; persistenceIndexId: bigint };
+  const o = c.onDiskState;
+  const name = row.name as string;
+  const m: IndexMeta = {
+    _id: row._id as string,
+    tablet: row.tablet as number,
+    name,
+    fields: name === "by_id" ? SYSTEM_INDEXES.by_id! : c.fields,
+    indexId: Number(c.persistenceIndexId),
+    state: o.type === "Enabled" ? "enabled" : o.type === "Backfilled2" ? "backfilled" : "backfilling",
+  };
+  if (o.type === "Backfilled2") m.staged = o.staged as boolean;
+  if (o.type === "Backfilling") {
+    const b = o.backfillState as { indexCreatedLowerBound: bigint; retentionStarted: boolean; staged: boolean };
+    m.staged = b.staged;
+    m.createdLowerBound = tsFromRow(b.indexCreatedLowerBound);
+    m.retentionStarted = b.retentionStarted;
+  }
+  return m;
+}
+
+/** A change of an index's state as the patch of its row: the whole `config`, as Convex replaces it. */
+export function indexStatePatch(
+  m: IndexMeta,
+  change: Partial<Pick<IndexMeta, "state" | "staged" | "retentionStarted">>,
+) {
+  const { _id: _, ...rest } = m;
+  return { config: indexRow({ ...rest, ...change }).config };
+}
+
+/**
+ * The database indexes of the `_index` rows, decoded: a search or vector index's row (STUDY-111) has a `config`
+ * of type `search` / `vector`, and the catalog of tables and database indexes leaves it out.
  */
 export const databaseIndexRows = (rows: Record<string, unknown>[]): IndexMeta[] =>
-  rows.filter((r) => r.config === undefined) as unknown as IndexMeta[];
+  rows.filter((r) => (r.config as { type?: string } | undefined)?.type === "database").map(indexMeta);
 
-/** A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`). */
+/**
+ * A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`,
+ * crates/database/src/bootstrap_model/index_backfills/types.rs). Stored with int64 counts and nanosecond
+ * timestamps (`backfillRow`), and kept after the backfill ends, as Convex's.
+ */
 export type IndexBackfillMeta = {
   _id: string;
   /** The `_index` document of the index. */
   indexId: string;
   numDocsIndexed: number;
-  /** Documents in the table when the backfill began, when known (bunvex has no table summaries: null). */
+  /** Documents in the table when the backfill began, when the table summaries knew it. */
   totalDocs: number | null;
-  /** The last document id written into the index, and the snapshot the backfill began at. */
+  /**
+   * The last document id written into the index, and the snapshot the backfill began at; null for a search or
+   * vector index (its progress is in its `_index` row).
+   */
   cursor: { snapshotTs: number; cursor: string | null } | null;
 };
+
+/** A `_index_backfills` document as stored. */
+export const backfillRow = (m: Omit<IndexBackfillMeta, "_id">) => ({
+  indexId: m.indexId,
+  numDocsIndexed: BigInt(m.numDocsIndexed),
+  totalDocs: m.totalDocs === null ? null : BigInt(m.totalDocs),
+  cursor: m.cursor === null ? null : { snapshotTs: tsToRow(m.cursor.snapshotTs), cursor: m.cursor.cursor },
+});
+
+/** A `_index_backfills` document read back. */
+export function backfillMeta(row: Record<string, unknown>): IndexBackfillMeta {
+  const c = row.cursor as { snapshotTs: bigint; cursor: string | null } | null;
+  return {
+    _id: row._id as string,
+    indexId: row.indexId as string,
+    numDocsIndexed: Number(row.numDocsIndexed as bigint),
+    totalDocs: row.totalDocs === null ? null : Number(row.totalDocs as bigint),
+    cursor: c === null ? null : { snapshotTs: tsFromRow(c.snapshotTs), cursor: c.cursor },
+  };
+}
 
 /** A query on an index that is still being built (Convex's `IndexBackfillingError`, a bad request). */
 export class IndexBackfillingError extends Error {
@@ -397,6 +550,15 @@ export class Catalog {
     return this.numbers.get(number);
   }
 
+  /**
+   * The name an id's number has for apps (Convex's `all_tables_number_to_name`): a virtual table's for its
+   * primary system table's number (`_storage` for `_file_storage`'s), else the table's own.
+   */
+  publicNameOf(number: number): string | undefined {
+    const name = this.numbers.get(number)?.name;
+    return name === undefined ? undefined : (primaryVirtualTable(name) ?? name);
+  }
+
   table(name: string): TableDef {
     const t = this.tables.get(name);
     if (!t) throw new Error(`unknown table ${name}`);
@@ -423,22 +585,64 @@ export type CatalogChanges = {
   insertIndexes: Omit<IndexMeta, "_id">[];
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
-  restageIndexes: { _id: string; staged: boolean }[];
+  restageIndexes: IndexMeta[];
+  /** The tablet allocator's next value once `insertTables` took theirs (STUDY-04 §7): the caller writes it. */
+  nextTablet: number;
   /** The index id allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller writes it. */
   nextIndexId: number;
 };
 
 const sameFields = (a: string[], b: string[]) => a.length === b.length && a.every((f, i) => f === b[i]);
 
-/** What a declared table asks for: every index's full field list (the implicit `_creationTime` added), staged or not. */
+/**
+ * Convex's `SYSTEM_INDEXES_WITHOUT_CREATION_TIME` (crates/model/src/lib.rs, STUDY-125 DV-401): the system
+ * indexes "too large and not worth to backfill" that do not end with `_creationTime`, among the tables bunvex
+ * has. Every other system index declares `_creationTime` as its last field.
+ */
+export const SYSTEM_INDEXES_WITHOUT_CREATION_TIME: ReadonlySet<string> = new Set([
+  "_function_handles.by_component_path",
+  "_cron_jobs.by_name",
+  "_cron_job_logs.by_name_and_ts",
+  "_cron_next_run.by_next_ts",
+  "_cron_next_run.by_cron_job_id",
+  "_environment_variables.by_name",
+  "_exports.by_state_and_ts",
+  "_file_storage.by_storage_id",
+  "_index_worker_metadata.by_index_doc_id",
+  "_modules.by_path",
+  "_scheduled_jobs.by_next_ts",
+  "_scheduled_jobs.by_completed_ts",
+  "_scheduled_jobs.by_udf_path_and_next_event_ts",
+  "_session_requests.by_session_id_and_request_id",
+]);
+
+/** A copy of a table's indexes (an import's hidden table): its fields as they are, nothing added. */
+export const HIDDEN_TABLE_PLACEHOLDER = "\u0000hidden";
+
+/**
+ * What a declared table asks for: every index's full field list, staged or not. A user index gets an implicit
+ * `_creationTime` (then `_id`, in the key), so documents with equal indexed values come back in creation
+ * order. A system index is taken as declared, as Convex's `SystemIndex`: it ends with `_creationTime` unless
+ * it is one of `SYSTEM_INDEXES_WITHOUT_CREATION_TIME`, which is checked here as Convex checks it.
+ */
 function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged: boolean }> {
   const staged = new Set(d.staged ?? []);
   const out = new Map<string, { fields: string[]; staged: boolean }>();
   for (const [name, fields] of Object.entries(SYSTEM_INDEXES)) out.set(name, { fields, staged: false });
-  // As in Convex, every user index ends with an implicit `_creationTime` (then `_id`, in the key), so
-  // documents with equal indexed values come back in creation order.
-  for (const [name, fields] of Object.entries(d.indexes))
-    out.set(name, { fields: [...fields, "_creationTime"], staged: staged.has(name) });
+  const exact = d.name === HIDDEN_TABLE_PLACEHOLDER;
+  const system = d.name.startsWith("_");
+  for (const [name, fields] of Object.entries(d.indexes)) {
+    if (system) {
+      const endsWithCreation = fields[fields.length - 1] === "_creationTime";
+      if (SYSTEM_INDEXES_WITHOUT_CREATION_TIME.has(`${d.name}.${name}`)) {
+        if (endsWithCreation)
+          throw new Error(
+            `System index ${d.name}.${name} correctly ends with _creationTime. Doesn't need to be in SYSTEM_INDEXES_WITHOUT_CREATION_TIME list.`,
+          );
+      } else if (!endsWithCreation) throw new Error(`System index ${d.name}.${name} should end with _creationTime`);
+    }
+    out.set(name, { fields: system || exact ? fields : [...fields, "_creationTime"], staged: staged.has(name) });
+  }
   return out;
 }
 
@@ -457,16 +661,20 @@ export function planCatalog(
   tables: TableMeta[],
   indexes: IndexMeta[],
   userTables = true,
-  allocator?: number,
+  indexAllocator?: number,
+  tabletAllocator?: number,
 ): CatalogChanges {
-  let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
-  // Only the store's first catalog commit runs before the allocator exists: nothing was dropped yet.
-  let nextIndexId = allocator ?? Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  // A new table's tablet comes from its allocator (`_next_tablet_id`, STUDY-04 §7): never a purged table's; a
+  // new index's id from its own (`_next_persistence_index_id`, STUDY-128): never a dropped index's. Only the
+  // store's first catalog commit runs before they exist, when nothing was purged or dropped yet.
+  let nextTablet = tabletAllocator ?? Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
+  let nextIndexId = indexAllocator ?? Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
   const changes: CatalogChanges = {
     insertTables: [],
     insertIndexes: [],
     deleteIndexes: [],
     restageIndexes: [],
+    nextTablet,
     nextIndexId,
   };
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
@@ -502,18 +710,20 @@ export function planCatalog(
         pending = undefined;
       }
       if (pending) {
-        if ((pending.staged ?? false) !== staged) changes.restageIndexes.push({ _id: pending._id, staged });
+        if ((pending.staged ?? false) !== staged) changes.restageIndexes.push({ ...pending, staged });
         continue;
       }
       if (enabled && sameFields(enabled.fields, fields)) continue; // a staged flag on it waits for the finish
-      // A new table is empty: its indexes need no backfill (a staged one is complete and waits).
-      const state = !isNew ? "backfilling" : staged ? "backfilled" : "enabled";
+      // As Convex's: a new table's `by_id` and `by_creation_time`, and a new system table's indexes, are enabled
+      // at once (`new_enabled`); a user index is backfilled even on a new, empty table (`new_backfilling`).
+      const state = isNew && (name in SYSTEM_INDEXES || d.name.startsWith("_")) ? "enabled" : "backfilling";
       const meta: Omit<IndexMeta, "_id"> = { tablet, name, fields, indexId: nextIndexId++, state };
       if (state !== "enabled") meta.staged = staged;
       changes.insertIndexes.push(meta);
     }
     for (const i of stored) if (!wanted.has(i.name) && i.state !== "enabled") changes.deleteIndexes.push(i._id);
   }
+  changes.nextTablet = nextTablet;
   changes.nextIndexId = nextIndexId;
   return changes;
 }

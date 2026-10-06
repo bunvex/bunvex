@@ -13,12 +13,16 @@
 // ts; a document written later gets its entries from that write, which maintains the index.
 
 import {
+  backfillMeta,
+  backfillRow,
   databaseIndexRows,
   INDEX_BACKFILLS_INDEX,
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
   type IndexBackfillMeta,
   type IndexMeta,
+  indexMeta,
+  indexStatePatch,
 } from "./catalog.ts";
 import { type Committer, ConflictError } from "./committer.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
@@ -59,6 +63,8 @@ export interface IndexWorkerHost {
   installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: number): void;
   /** Finish the schema change if nothing it waits for is still backfilling; true once finished. */
   finishSchema(): Promise<boolean>;
+  /** The table's document count from the table summaries, or null while they are not built (Convex's `table_count`). */
+  tableCount?(tablet: number): number | null;
 }
 
 /** A token bucket over index entries, as Convex's `governor` quota: `rate` per second, bursts up to `rate`. */
@@ -110,6 +116,17 @@ export class IndexWorker {
     });
   }
 
+  /**
+   * Backfill these indexes now, table by table, and resolve once they are `backfilled` (or enabled): the
+   * indexes of tables a schema change just created, which are empty, so that the change can finish at once.
+   * `emptyTables`: nothing can have written them yet, so their count is 0 while the summaries are not built.
+   */
+  async backfillNow(metas: IndexMeta[], emptyTables = false) {
+    const byTablet = new Map<number, IndexMeta[]>();
+    for (const m of metas) byTablet.set(m.tablet, [...(byTablet.get(m.tablet) ?? []), m]);
+    for (const group of byTablet.values()) await this.backfillTable(group, emptyTables);
+  }
+
   /** Stop after the chunk in flight; resolves once the worker has stopped writing. */
   async stop() {
     this.stopped = true;
@@ -157,7 +174,7 @@ export class IndexWorker {
   }
 
   /** Fill every `backfilling` index of one table, from its checkpoint, then mark them done. */
-  private async backfillTable(metas: IndexMeta[]) {
+  private async backfillTable(metas: IndexMeta[], empty = false) {
     const t = this.host.catalog.byTablet(metas[0].tablet);
     if (!t) return;
     const defs = metas
@@ -170,18 +187,20 @@ export class IndexWorker {
     const progress = await this.host.system(async (db) => {
       const out: IndexBackfillMeta[] = [];
       for (const m of metas) {
-        let p = (await db
+        const row = await db
           .query(INDEX_BACKFILLS_TABLE)
           .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", m._id))
-          .first()) as unknown as IndexBackfillMeta | null;
+          .first();
+        let p = row ? backfillMeta(row as Record<string, unknown>) : null;
         if (!p) {
+          // As Convex's `initialize_database_index_backfill`: the table's count when the summaries have it.
           const fields = {
             indexId: m._id,
             numDocsIndexed: 0,
-            totalDocs: null,
+            totalDocs: this.host.tableCount?.(m.tablet) ?? (empty ? 0 : null),
             cursor: { snapshotTs: db.snapshot, cursor: null },
           };
-          p = { _id: await db.insert(INDEX_BACKFILLS_TABLE, fields), ...fields };
+          p = { _id: await db.insert(INDEX_BACKFILLS_TABLE, backfillRow(fields)), ...fields };
         }
         out.push(p);
       }
@@ -211,11 +230,21 @@ export class IndexWorker {
       checkpointAt = performance.now();
       for (let i = 0; i < done.length; i++) done[i] += n;
       await this.host.system(async (db) => {
-        for (const [i, p] of progress.entries())
-          await db.patch(INDEX_BACKFILLS_TABLE, p._id, {
-            numDocsIndexed: done[i],
-            cursor: { snapshotTs: p.cursor?.snapshotTs ?? 0, cursor },
-          });
+        // As Convex's `update_index_backfill_progress`: the count so far and the cursor; a total the summaries
+        // did not know at the start is taken from them now.
+        for (const [i, p] of progress.entries()) {
+          p.totalDocs ??= this.host.tableCount?.(metas[i].tablet) ?? null;
+          await db.replace(
+            INDEX_BACKFILLS_TABLE,
+            p._id,
+            backfillRow({
+              indexId: p.indexId,
+              numDocsIndexed: done[i],
+              totalDocs: p.totalDocs,
+              cursor: { snapshotTs: p.cursor?.snapshotTs ?? 0, cursor },
+            }),
+          );
+        }
       }, "index_worker_backfill_progress");
       this.stats.checkpoints++;
     };
@@ -229,10 +258,11 @@ export class IndexWorker {
         if (sinceCheckpoint > 0) await checkpoint();
         return;
       }
-      await this.limiter?.take(size * defs.length, () => this.stopped);
       const snapshot = committer.visibleTs;
       const docs = await this.readChunk(t, lo, snapshot, size);
       if (docs.length === 0) break;
+      // The entries this chunk writes, as Convex's rate limit counts them: an empty table costs nothing.
+      await this.limiter?.take(docs.length * defs.length, () => this.stopped);
       const idx: IndexWrite[] = [];
       for (const d of docs) for (const ix of defs) idx.push({ index: ix.id, key: indexKey(ix, d), id: d._id });
       const hi = prefixEnd(encodeKey([docs[docs.length - 1]._id]));
@@ -262,19 +292,34 @@ export class IndexWorker {
       if (performance.now() - checkpointAt >= this.opts.progressIntervalMs) await checkpoint();
     }
 
+    // Every document is in the indexes: as Convex's `mark_retention_started`, a commit of its own records it
+    // before the backfill finishes (bunvex has no catching up to do: each chunk committed at a new ts).
+    await this.host.system(async (db) => {
+      for (const m of metas) {
+        const row = await db.get(INDEX_TABLE, m._id);
+        const cur = row ? indexMeta(row as Record<string, unknown>) : null;
+        if (cur?.state === "backfilling" && !cur.retentionStarted)
+          await db.patch(INDEX_TABLE, m._id, indexStatePatch(cur, { retentionStarted: true }));
+      }
+    }, "index_worker_retention_started");
+
     // Done: as Convex's `finish_backfill`, a user index becomes `backfilled` (the schema change enables it);
-    // an index of a system table, or a system index, is enabled at once.
+    // an index of a system table, or a system index, is enabled at once. Its `_index_backfills` row stays, as
+    // Convex's (nothing there deletes one).
     await this.host.system(async (db) => {
       const enabled: number[] = [];
-      for (const [i, m] of metas.entries()) {
-        const cur = (await db.get(INDEX_TABLE, m._id)) as unknown as IndexMeta | null;
+      for (const m of metas) {
+        const row = await db.get(INDEX_TABLE, m._id);
+        const cur = row ? indexMeta(row as Record<string, unknown>) : null;
         if (cur?.state === "backfilling") {
           const enableNow = t.name.startsWith("_") || m.name in SYSTEM_INDEXES;
-          await db.patch(INDEX_TABLE, m._id, enableNow ? { state: "enabled", staged: false } : { state: "backfilled" });
+          await db.patch(
+            INDEX_TABLE,
+            m._id,
+            indexStatePatch(cur, enableNow ? { state: "enabled", staged: false } : { state: "backfilled" }),
+          );
           if (enableNow) enabled.push(m.indexId);
         }
-        if (await db.get(INDEX_BACKFILLS_TABLE, progress[i]._id))
-          await db.delete(INDEX_BACKFILLS_TABLE, progress[i]._id);
       }
       if (enabled.length)
         db.onCommitVisible = (ts) => this.host.installIndexChanges({ enable: enabled, disable: [], drop: [] }, ts);

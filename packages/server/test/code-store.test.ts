@@ -63,7 +63,7 @@ describe("deployed code in the store", () => {
     const stored = (await storedModules(d.engine))!;
     expect(stored.rows.map((r) => [r.path, r.environment, r.sha256.length])).toEqual([["messages.js", "isolate", 64]]);
     expect(stored.rows[0]!.analyzeResult!.functions.map((f) => f.name)).toEqual(["add", "rand", "version"]);
-    expect(stored.pkg.packageSize).toBeGreaterThan(0);
+    expect(stored.pkg.packageSize.zippedSizeBytes).toBeGreaterThan(0n);
     expect((await readPackage(d.moduleStorage, stored.pkg.storageKey))[0]!.path).toBe("messages.js");
     // The package lives in the modules store, not with user files.
     expect(readdirSync(join(dir, "storage"))).toEqual(["modules"]);

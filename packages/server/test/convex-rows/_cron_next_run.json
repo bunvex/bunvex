@@ -1,0 +1,18 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_cron_next_run",
+  "rows": [
+    {
+      "_creationTime": 1791234000229.0684,
+      "_id": "mc27pfevhv6tmbjb3ghbdnp2cd8fqwmj",
+      "cronJobId": "jc2fqtzwp3vewjhmqer5hw5dm18fqnpr",
+      "nextTs": {
+        "$integer": "AN5quH7R2xg="
+      },
+      "prevTs": null,
+      "state": {
+        "type": "pending"
+      }
+    }
+  ]
+}
