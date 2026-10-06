@@ -1622,7 +1622,7 @@ export class Tx {
       _id: id,
       _creationTime: creationTime,
     };
-    checkSystemFields(doc, fields, id, creationTime);
+    validateWritten(doc, fields, id, creationTime);
     this.stage(t, id, null, sortFields(doc));
     this.setCommitTs(id, x.paths);
     return id;
@@ -1655,8 +1655,9 @@ export class Tx {
     const next: Record<string, unknown> = { ...cur };
     for (const [k, v] of Object.entries(fields)) if (v === undefined) delete next[k];
     Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch", this.writtenNesting() + 1));
-    checkSystemFields(next, fields, id, cur._creationTime);
-    this.stage(t, id, old, sortFields({ ...next, _id: id, _creationTime: cur._creationTime } as Doc));
+    const merged = { ...next, _id: id, _creationTime: cur._creationTime };
+    validateWritten(merged, fields, id, cur._creationTime);
+    this.stage(t, id, old, sortFields(merged) as Doc);
     // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
     const kept = (this.commitTs.get(id) ?? []).filter((p) => !(String(p[0]) in fields));
     this.setCommitTs(id, [...kept, ...x.paths]);
@@ -1683,7 +1684,7 @@ export class Tx {
       _id: id,
       _creationTime: cur._creationTime,
     };
-    checkSystemFields(next, value, id, cur._creationTime);
+    validateWritten(next, value, id, cur._creationTime);
     this.stage(t, id, old, sortFields(next));
     this.setCommitTs(id, x.paths);
   }
@@ -2035,28 +2036,62 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
 function copyFields(fields: Record<string, unknown>, method: string, maxNesting: number): Record<string, unknown> {
   if (!isSimpleObject(fields))
     throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
-  return copyValue(fields as Value, maxNesting) as Record<string, unknown>;
+  try {
+    return copyValue(fields as Value, maxNesting) as Record<string, unknown>;
+  } catch (e) {
+    // An array's or an object's size is checked where Convex's syscall parses the value (Rust), under its
+    // `with_argument_error`; the other checks are its JS side's, with no prefix.
+    if (e instanceof Error && /^(Array length is too long|Object has too many fields) /.test(e.message))
+      throw new Error(`Invalid argument \`value\` for \`db.${method}\`: ${e.message}`);
+    throw e;
+  }
 }
 
 /**
- * As Convex's `ResolvedDocument::new`: `_id` / `_creationTime` in a written value must equal the document's,
- * and no other top-level field may start with an underscore.
+ * As Convex's `ResolvedDocument::new` then `must_validate`, for `db.insert` / `db.patch` / `db.replace`: the
+ * system fields first, then every violation of the document (its nesting, then each other top-level field
+ * that starts with an underscore, in field order) in one message after the document's display.
  */
-function checkSystemFields(
+function validateWritten(
   doc: Record<string, unknown>,
   fields: Record<string, unknown>,
   id: string,
   creationTime: number,
 ) {
+  checkSystemFieldValues(fields, id, creationTime);
+  const violations: string[] = [];
+  const nesting = valueNesting(doc as Value);
+  if (nesting > MAX_DOCUMENT_NESTING)
+    violations.push(`Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`);
+  for (const k of Object.keys(doc).sort())
+    if (k.startsWith("_") && k !== "_id" && k !== "_creationTime") violations.push(underscoreField(k));
+  if (violations.length)
+    throw new Error(`Document(value: ${displayValue(doc as Value)}) isn't a valid document: ${violations.join("\n ")}`);
+}
+
+const underscoreField = (k: string) =>
+  `Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`;
+
+/** `_id` / `_creationTime` in a written value must equal the document's (Convex's `ResolvedDocument::new`). */
+function checkSystemFieldValues(fields: Record<string, unknown>, id: string, creationTime: number) {
   if ("_id" in fields && fields._id !== undefined && fields._id !== id)
     throw new Error(`Provided document ID "${id}" doesn't match '_id' field ${JSON.stringify(fields._id)}`);
   if ("_creationTime" in fields && fields._creationTime !== undefined && fields._creationTime !== creationTime)
     throw new Error(
       `Provided creation time ${creationTime} doesn't match '_creationTime' field in ${JSON.stringify(fields)}`,
     );
+}
+
+/** An imported row's system fields: as a written value's, and no other field may start with an underscore. */
+function checkSystemFields(
+  doc: Record<string, unknown>,
+  fields: Record<string, unknown>,
+  id: string,
+  creationTime: number,
+) {
+  checkSystemFieldValues(fields, id, creationTime);
   for (const k of Object.keys(doc))
-    if (k.startsWith("_") && k !== "_id" && k !== "_creationTime")
-      throw new Error(`Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`);
+    if (k.startsWith("_") && k !== "_id" && k !== "_creationTime") throw new Error(underscoreField(k));
 }
 
 /**

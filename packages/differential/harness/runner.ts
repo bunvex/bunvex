@@ -15,12 +15,25 @@ export type ProgramOp =
   | { kind: "get"; id: Ref }
   | { kind: "read"; read: Record<string, unknown>; mutateResult?: boolean }
   | { kind: "throw"; message: string }
+  | { kind: "throwData"; data: unknown }
+  | { kind: "nested"; ops: ProgramOp[]; catch?: boolean }
+  | { kind: "runQuery"; read: Record<string, unknown> }
+  | { kind: "limit"; which: number; catch?: boolean }
   | { kind: "undefinedResult" };
+/** A step of an action: each query or mutation its own transaction. */
+export type ActionStep =
+  | { kind: "query"; read: Record<string, unknown> }
+  | { kind: "mutation"; ops: ProgramOp[]; catch?: boolean }
+  | { kind: "throw"; message: string }
+  | { kind: "throwData"; data: unknown };
 export type Call =
   | { kind: "apply"; ops: ProgramOp[] }
   | { kind: "read"; read: Record<string, unknown> }
   /** A page of `read`, from the start (`from` null) or from where the page named `from` ended. */
-  | { kind: "page"; read: Record<string, unknown>; numItems: number; from: string | null; as: string };
+  | { kind: "page"; read: Record<string, unknown>; numItems: number; from: string | null; as: string }
+  | { kind: "action"; steps: ActionStep[] }
+  /** The validated mutation, with these arguments (maybe refused). */
+  | { kind: "typed"; args: Record<string, unknown> };
 export type Program = Call[];
 
 type Record_ = { steps: Step[]; dump: unknown; ids: IdMap };
@@ -43,23 +56,45 @@ export async function run(backend: Backend, program: Program, opts: { reset?: bo
     }
     return x;
   };
+  // Operations as sent: references resolved, the names of inserts dropped.
+  const send = (ops: ProgramOp[]): unknown[] =>
+    ops.map((op) => {
+      const { as: _, ...rest } = op as ProgramOp & { as?: string };
+      if (rest.kind === "nested") return { ...(resolve(rest) as object), ops: send(rest.ops) };
+      return resolve(rest);
+    });
+  // The ids a committed `ops` inserted, named, its nested mutations' too (a caught one inserted nothing).
+  const learn = (ops: ProgramOp[], value: unknown) => {
+    if (!Array.isArray(value)) return;
+    ops.forEach((op, i) => {
+      if (op.kind === "insert") {
+        const id = value[i] as string;
+        refs.set(op.as, id);
+        ids.add(id, op.table);
+      } else if (op.kind === "nested") learn(op.ops, value[i]);
+    });
+  };
   const steps: Step[] = [];
   for (const call of program) {
     if (call.kind === "apply") {
-      const ops = call.ops.map((op) => {
-        const { as: _, ...rest } = op as ProgramOp & { as?: string };
-        return resolve(rest);
-      });
-      const answer = await backend.call("mutation", "ops:apply", { ops });
+      const answer = await backend.call("mutation", "ops:apply", { ops: send(call.ops) });
       steps.push({ kind: "mutation", path: "ops:apply", args: call.ops, answer });
       const body = answer.body as { status?: string; value?: unknown[] };
+      if (answer.ok && body.status === "success") learn(call.ops, body.value);
+    } else if (call.kind === "action") {
+      const sent = call.steps.map((st) => (st.kind === "mutation" ? { ...st, ops: send(st.ops) } : resolve(st)));
+      const answer = await backend.call("action", "ops:act", { steps: sent });
+      steps.push({ kind: "action", path: "ops:act", args: call.steps, answer });
+      const body = answer.body as { status?: string; value?: unknown[] };
+      // A failed action's mutations still committed, but which ids they made is not in its answer: only a
+      // successful action names its inserts.
       if (answer.ok && body.status === "success")
-        call.ops.forEach((op, i) => {
-          if (op.kind !== "insert") return;
-          const id = body.value![i] as string;
-          refs.set(op.as, id);
-          ids.add(id, op.table);
+        call.steps.forEach((st, i) => {
+          if (st.kind === "mutation") learn(st.ops, body.value![i]);
         });
+    } else if (call.kind === "typed") {
+      const answer = await backend.call("mutation", "ops:typed", call.args);
+      steps.push({ kind: "mutation", path: "ops:typed", args: call.args, answer });
     } else if (call.kind === "page") {
       const cursor = call.from === null ? null : (cursors.get(call.from) ?? null);
       const answer = await backend.call("query", "ops:page", {
@@ -76,6 +111,10 @@ export async function run(backend: Backend, program: Program, opts: { reset?: bo
     }
   }
   const dump = (await backend.call("query", "ops:dump", {})).body;
+  // Documents no answer named (written by a failed action, or by nested calls whose answer is a count) are
+  // named here, in each table's creation order, which both backends share.
+  const tables = (dump as { value?: Record<string, { _id: string }[]> }).value ?? {};
+  for (const [table, docs] of Object.entries(tables)) for (const d of docs) ids.add(d._id, table);
   return { steps, dump, ids };
 }
 

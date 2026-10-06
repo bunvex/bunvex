@@ -1,7 +1,11 @@
 # STUDY-122 — Differential testing against Convex's own backend
 
 - **Status:** accepted (owner, 2026-10-05: D1 A, D2 A). Phase 1 built (#429), phase 2 built (the generator,
-  `packages/differential/harness/generate.ts`): its first runs found #428 and #486.
+  `packages/differential/harness/generate.ts`): its first runs found #428 and #486. Phase 3 built (nested
+  calls, actions, application errors, validators, limits): it found #492 (a caught nested error's message,
+  in mutations and in actions), #493 (the write limits' messages) and #494 (a nested call's arguments, a
+  sorted copy), and asked D3 (decided A: refuse a lone surrogate with Convex's message, after a short study of every path that
+  refuses it). 2 000 generated programs (seeds 1 and 2) then showed no difference.
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,
@@ -99,4 +103,6 @@ The same operations on Convex and on bunvex must give the same observations, up 
 | **D1** — decided: **A** (owner, 2026-10-05) | Convex's own `js-integration-tests` (FSL, from the snapshot) as a second oracle, run against bunvex? | **A.** Run them only on the owner's machine, from the local snapshot, never vendored into the repo (nothing copied, as CLAUDE.md requires). **B.** Do not use them; only the generator of §3. | **A**, as a manual pass before each release: 32 test files of what a real Convex app relies on, free to run. Their failures become bunvex tests written from scratch. |
 | **D2** — decided: **A** (owner, 2026-10-05) | Where the generator runs | **A.** A nightly CI job that downloads Convex's released backend binary (as `convex-bench`'s `download-backend.sh` does) and runs about 20 minutes of sequences. **B.** Only on demand, locally. | **A**: a difference found the next morning is cheap. The binary is downloaded at run time, never stored in the repo. |
 
-No behaviour of bunvex changes in this study: it adds tests only.
+| **D3** — decided: **A** (owner, 2026-10-06) | A string with a lone surrogate (`"\ud800"`) written to the database. Convex refuses it: the syscall's arguments go to Rust as JSON, and serde rejects the escape, so the write fails with "Received invalid json: unexpected end of hex escape at line 1 column N", where N is the escape's place in the syscall's arguments. bunvex stores the string. | **A.** Refuse it with Convex's message, the column computed from the syscall arguments as Convex's JS serializes them. **B.** Refuse it with bunvex's own message (a divergence, recorded). **C.** Keep storing it (a divergence). | **A**: refusing it is what apps observe. The column is part of the message, and it is computable for `db.insert` / `patch` / `replace`. A short study first: which other paths refuse it (arguments, results, the scheduler) and with what messages. Until decided, the `limit` op's case 8 is left out of the comparison (`LIMIT_CASES`). |
+
+No behaviour of bunvex changes in this study: it adds tests only. The bugs it finds are fixed in their own PRs.

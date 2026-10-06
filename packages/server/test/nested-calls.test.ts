@@ -191,7 +191,13 @@ test("one transaction: a nested query sees the caller's writes, the caller sees 
   expect(await fns.runMutation("m:composite", {})).toEqual({
     seenBefore: 1,
     seenAfter: 2,
-    caught: { message: '{"code":"nope","n":"rolled back"}', data: { code: "nope", n: "rolled back" }, isBunvex: true },
+    // As Convex's `performAsyncSyscall`: the rethrown error's message is the nested one's uncaught message (its
+    // line and frames), and its data the nested data.
+    caught: {
+      message: expect.stringMatching(/^Uncaught BunvexError: \{"code":"nope","n":"rolled back"\}\n {4}at /),
+      data: { code: "nope", n: "rolled back" },
+      isBunvex: true,
+    },
     names: ["parent", "child"],
   });
   // The caller caught the failure and committed: its writes and the first nested mutation's are there.

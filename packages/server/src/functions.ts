@@ -42,6 +42,7 @@ import {
   type GenericValidator,
   hasCommitTs,
   isBunvexError,
+  isBytes,
   isSimpleObject,
   MAX_VALUE_NESTING,
   measureRawValue,
@@ -60,6 +61,24 @@ import { isolateFetch, nodeFetch } from "./action-fetch.ts";
  * same as that round trip, without building the JSON).
  */
 const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
+
+/**
+ * A nested call's arguments as the callee gets them: Convex sends `convexToJson(args)`, which Rust parses into a
+ * `ConvexValue` (its objects sorted), so the callee sees a copy with each object's fields sorted and no
+ * `undefined` field. The arguments are checked by the callee (`checkArgs`), so this only copies: anything that
+ * is not plain data is left as it is, for that check to refuse with Convex's message.
+ */
+function acrossArgs(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(acrossArgs);
+  if (isBytes(v)) return v.slice(0);
+  if (!isSimpleObject(v)) return v;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(v).sort()) {
+    const x = (v as Record<string, unknown>)[k];
+    if (x !== undefined) out[k] = acrossArgs(x);
+  }
+  return out;
+}
 
 /**
  * A mutation's result must be a value before it commits: Convex converts it inside the run
@@ -87,6 +106,7 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  ActionTimeoutError,
   actionTimeoutError,
   checkActionAlive,
   cutOffWithAction,
@@ -160,9 +180,33 @@ const registryKey = (name: string) => {
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
  */
 const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
-const unavailableAsError = <T>(p: Promise<T>): Promise<T> =>
+
+/**
+ * A callee's error as the action that called it catches it (Convex's `actions_impl.ts` through
+ * `performAsyncSyscall`): a new `Error` whose message is the callee's uncaught message (its line and frames),
+ * or with data a `BunvexError` carrying it, as for a nested call in a mutation. A system error stays as it is.
+ */
+function toActionCallerError(e: unknown): unknown {
+  if (e instanceof IndexesUnavailableError) return unavailableToAction(e);
+  if (isSystemError(e)) return e;
+  // Refused before the callee ran (its path, its arguments, a `_system/` identity, a timeout): Convex's
+  // syscall error is that message alone, which these errors already are.
+  if (
+    e instanceof FunctionPathError ||
+    e instanceof ValidatorError ||
+    e instanceof ActionTimeoutError ||
+    (e as { code?: unknown } | null)?.code === "SystemIdentityRequired"
+  )
+    return e;
+  const message = describeUncaught(e).message;
+  if (!isBunvexError(e)) return new Error(message);
+  const err = new BunvexError<Value>(message);
+  err.data = e.data;
+  return err;
+}
+const asActionCaller = <T>(p: Promise<T>): Promise<T> =>
   p.catch((e) => {
-    throw unavailableToAction(e);
+    throw toActionCallerError(e);
   });
 
 /**
@@ -199,12 +243,17 @@ export type NestedOptions = {
 };
 
 /**
- * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a
- * `BunvexError` with the data; else a new `Error` whose message is the nested `JsError`'s display — the
- * uncaught line and the nested stack frames (STUDY-41 N2), or for a timeout its message alone.
+ * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a new error
+ * whose message is the nested `JsError`'s display — the uncaught line and the nested stack frames (STUDY-41
+ * N2), or for a timeout its message alone. With data, a `BunvexError` carrying it: Convex's
+ * `new ConvexError(e.message)` and then `data`, so the message is the uncaught one, not the data's.
  */
 function toCallerError(e: unknown, timer: UserTimer): Error {
-  if (isBunvexError(e)) return new BunvexError(e.data);
+  if (isBunvexError(e)) {
+    const err = new BunvexError<Value>(describeUncaught(e).message);
+    err.data = e.data;
+    return err;
+  }
   if (e === timer.failed) return new Error(`${(e as Error).message}\n`);
   return new Error(describeUncaught(e).message);
 }
@@ -1577,7 +1626,7 @@ export class Functions {
       return body(db);
     }
     const f = this.fn(name, kind, false);
-    const a = this.checkArgs(f, args === undefined ? {} : args, measured);
+    const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
     if (opts?.useStaleSnapshot) {
@@ -2069,26 +2118,28 @@ export class Functions {
       runQuery: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await unavailableAsError(
-            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
+          await asActionCaller(
+            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
           ),
         );
       },
       runMutation: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await unavailableAsError(
-            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
+          await asActionCaller(
+            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
           ),
         );
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
-            internal: true,
-            authError,
-          }),
+          await asActionCaller(
+            this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
+              internal: true,
+              authError,
+            }),
+          ),
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.

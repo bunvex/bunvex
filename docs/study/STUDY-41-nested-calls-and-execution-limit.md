@@ -131,7 +131,8 @@
 ### Built later (#213)
 
 Accepted at first, then built to match Convex:
-- **N2:** a nested error reaches the caller as Convex's `JsError` display (`run_udf`'s `result?`, `From<JsError>`): "Uncaught Error: <message>", then the nested frames, each "    at …", and a newline; a nested timeout is `JsError::from_message`, its message and a newline. A `BunvexError` keeps its data.
+- **N2:** a nested error reaches the caller as Convex's `JsError` display (`run_udf`'s `result?`, `From<JsError>`): "Uncaught Error: <message>", then the nested frames, each "    at …", and a newline; a nested timeout is `JsError::from_message`, its message and a newline. A `BunvexError` keeps its data, and its message is that same display ("Uncaught BunvexError: <data>" and the frames), as `performAsyncSyscall`'s `new ConvexError(e.message)` then `data` (found by the differential tests, STUDY-122 phase 3; it was the data's text alone).
+- **Actions** get the same: `actions_impl.ts` calls go through `performAsyncSyscall` too, so a query, mutation or action that ran and failed reaches the calling action as its uncaught display (with `BunvexError` data). Refusals before the callee runs (path, arguments, `_system/` identity, timeout) are their message alone, as before. bunvex handed over the callee's own error.
 - **N3:** `databaseQueries` (read-set intervals), `functionsScheduled` and `scheduledFunctionArgsBytes` are counted on the transaction and budgeted like the others; the messages print the lowered limit. As in Convex, a rolled-back nested mutation does not give back its scheduling usage, and the file limits are never reached (Convex never increments its file counters).
 - **N6:** a system error (`isSystemError`) in a nested call fails the caller for good: it is thrown at the caller's next store call and when the caller ends, caught or not; at the top it is the internal error.
 

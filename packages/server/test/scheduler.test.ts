@@ -375,7 +375,8 @@ describe("the executor", () => {
     const { functions, ran, state } = await setup();
     const id = (await functions.runMutation("m:schedule", { delay: 0, fn: "m:cancelOwnJobViaMutation" })) as string;
     await until(async () => (await state(id)) === "success");
-    expect(ran).toEqual(["A mutation cannot cancel itself"]);
+    // The action catches the mutation's uncaught message, as Convex's `performAsyncSyscall` rethrows it.
+    expect(ran.map((m) => m.split("\n")[0])).toEqual(["Uncaught Error: A mutation cannot cancel itself"]);
   });
 
   test("the wrong kind, or a function gone since, fails at run time", async () => {

@@ -30,7 +30,7 @@ export type Backend = {
   name: "convex" | "bunvex";
   url: string;
   /** Call a function of the app over HTTP: its JSON answer, whatever its status. */
-  call: (kind: "query" | "mutation", path: string, args: unknown) => Promise<Answer>;
+  call: (kind: "query" | "mutation" | "action", path: string, args: unknown) => Promise<Answer>;
   stop: () => Promise<void>;
 };
 
@@ -151,7 +151,11 @@ function project(state: string, dir: "convex" | "bunvex"): string {
     if (!name.endsWith(".ts")) continue;
     let source = readFileSync(join(APP, name), "utf8");
     if (dir === "bunvex")
-      source = source.replaceAll('"convex/server"', '"bunvex/server"').replaceAll('"convex/values"', '"bunvex/values"');
+      source = source
+        .replaceAll('"convex/server"', '"bunvex/server"')
+        .replaceAll('"convex/values"', '"bunvex/values"')
+        // bunvex's name for Convex's application error class (DV-03).
+        .replaceAll("ConvexError", "BunvexError");
     writeFileSync(join(functions, name), source);
   }
   // Each CLI wants its package declared, as in a user's project.

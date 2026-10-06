@@ -4,7 +4,7 @@
 
 /** One step of a run: what was asked and what came back. */
 export type Step = {
-  kind: "query" | "mutation";
+  kind: "query" | "mutation" | "action";
   path: string;
   args: unknown;
   answer: { ok: boolean; status: number; body: unknown };
@@ -36,6 +36,8 @@ export function normalize(v: unknown, ids: IdMap, times: number[]): unknown {
       if (k === "_creationTime" && typeof x === "number") out[k] = `t${times.indexOf(x)}`;
       // A page's cursors are opaque and differ by design (DV-73): whether there is one is what compares.
       else if ((k === "continueCursor" || k === "splitCursor") && typeof x === "string") out[k] = "<cursor>";
+      // An error the app caught (a nested call's, a limit's): compared as an answer's error is.
+      else if (k === "caught" && typeof x === "string") out[k] = errorText(x, ids);
       else out[k] = normalize(x, ids, times);
     }
     return out;
@@ -66,6 +68,8 @@ const WORDING: [RegExp, string][] = [
   // DV-04: the sentences that only point at Convex's docs.
   [/\n?For more information see https:\/\/docs\.convex\.dev\/\S*/g, ""],
   [/ See https:\/\/docs\.convex\.dev\/\S*( for (more )?details)?\.?/g, ""],
+  // DV-03: the application error class is `BunvexError`, and its uncaught message names it so.
+  [/\bConvexError\b/g, "BunvexError"],
 ];
 
 /** A document id as it appears in a message: 31 to 37 characters of Crockford's base32, lower case. */
@@ -75,8 +79,10 @@ const ID_IN_TEXT = /\b[0-9a-hjkmnp-tv-z]{31,37}\b/g;
 export function errorText(message: string, ids?: IdMap): string {
   let text = message;
   for (const [from, to] of WORDING) text = text.replace(from, to);
+  // A document's display in a message (Convex's `must_validate`) holds its creation time, a clock.
   return text
     .replace(ID_IN_TEXT, (id) => ids?.name(id) ?? "<id>")
+    .replace(/_creationTime: \d+(\.\d+)?/g, "_creationTime: <time>")
     .replace(/^\[Request ID: [^\]]+\] /, "")
     .split("\n")
     .filter((l) => !/^\s+at /.test(l))
