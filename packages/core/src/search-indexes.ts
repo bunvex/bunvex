@@ -185,7 +185,7 @@ export class SearchIndexes {
       for (const e of this.forTablet(w.table.id)) {
         if (e.staged) continue;
         e.log.push({ ts, id: w.id, before: e.index.get(w.id) });
-        e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null);
+        e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null, ts);
         e.touched?.add(w.id);
       }
     // Keep the log to the retention window.

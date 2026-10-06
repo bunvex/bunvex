@@ -14,6 +14,8 @@
 // `installDeterminism()`, or that reaches a non-global API, still escapes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createCipheriv, createHash } from "node:crypto";
+// Loaded first, so the real runtime captures the globals before `installDeterminism()` replaces them.
+import { realRuntime } from "./runtime.ts";
 
 /** `import`: a code version's modules being evaluated (Convex's import phase, STUDY-35). */
 export type ExecutionKind = "query" | "mutation" | "import";
@@ -53,6 +55,8 @@ export type UserTimer = {
   failed: Error | null;
   /** When the body ended (its user time stops there, as Convex's `into_function_execution_time`). */
   ended: number | null;
+  /** The monotonic clock it counts by, in ms: a test runtime's (STUDY-132); null for the process's own. */
+  clock: (() => number) | null;
 };
 
 /** Rust's `Duration` Debug form, as Convex's message prints the limit (`1s`, `1.5s`, `500ms`). */
@@ -64,18 +68,27 @@ export function formatDuration(ms: number): string {
 
 export const SYSTEM_TIMEOUT_MESSAGE = "Your request timed out performing too many system operations.";
 
-export function newUserTimer(userMs: number, systemMs: number): UserTimer {
-  return { start: realPerformanceNow(), paused: 0, pausedSince: null, userMs, systemMs, failed: null, ended: null };
+export function newUserTimer(
+  userMs: number,
+  systemMs: number,
+  clock: () => number = realRuntime.monotonicNow,
+): UserTimer {
+  // The process's clock is called directly (`now`): the budget is checked at every store call.
+  const own = clock === realRuntime.monotonicNow ? null : clock;
+  return { start: clock(), paused: 0, pausedSince: null, userMs, systemMs, failed: null, ended: null, clock: own };
 }
+
+/** A timer's clock. */
+const now = (t: UserTimer) => (t.clock === null ? realPerformanceNow() : t.clock());
 
 /**
  * The user time a body took, in ms (STUDY-71): its wall time minus the time paused in store calls and
  * nested calls, as Convex's `user_execution_time` (wall time minus its timeout's pauses); up to now while it
  * runs.
  */
-export const userTimeMs = (t: UserTimer) => (t.ended ?? realPerformanceNow()) - t.start - pausedNow(t);
+export const userTimeMs = (t: UserTimer) => (t.ended ?? now(t)) - t.start - pausedNow(t);
 
-const pausedNow = (t: UserTimer) => t.paused + (t.pausedSince === null ? 0 : realPerformanceNow() - t.pausedSince);
+const pausedNow = (t: UserTimer) => t.paused + (t.pausedSince === null ? 0 : now(t) - t.pausedSince);
 
 /** Throw if the running function is over its budget (and remember it: the timeout cannot be caught). */
 export function checkUserTime() {
@@ -83,7 +96,7 @@ export function checkUserTime() {
   if (!t) return;
   if (t.failed) throw t.failed;
   const paused = pausedNow(t);
-  if (realPerformanceNow() - t.start - paused > t.userMs)
+  if (now(t) - t.start - paused > t.userMs)
     t.failed = new Error(`Function execution timed out (maximum duration: ${formatDuration(t.userMs)})`);
   else if (paused > t.systemMs) t.failed = new Error(SYSTEM_TIMEOUT_MESSAGE);
   if (t.failed) throw t.failed;
@@ -108,11 +121,11 @@ export function failExecution(e: Error) {
 export async function pausingUserTime<T>(fn: () => Promise<T>): Promise<T> {
   const t = executions.getStore()?.timer;
   if (!t || t.pausedSince !== null) return fn();
-  t.pausedSince = realPerformanceNow();
+  t.pausedSince = now(t);
   try {
     return await fn();
   } finally {
-    t.paused += realPerformanceNow() - t.pausedSince;
+    t.paused += now(t) - t.pausedSince;
     t.pausedSince = null;
   }
 }
@@ -134,7 +147,7 @@ export async function withUserTimer<T>(timer: UserTimer, fn: () => T): Promise<A
     if (timer.failed) throw timer.failed;
     throw err;
   } finally {
-    timer.ended ??= realPerformanceNow();
+    timer.ended ??= now(timer);
     e.timer = outer;
   }
 }
@@ -206,6 +219,11 @@ export const wallClock = (): number => realNow();
 
 const realPerformanceNow = performance.now.bind(performance);
 const origin = performance.timeOrigin;
+
+/** The real monotonic clock (`performance.now()`), frozen in no execution: trace spans are timed by it. */
+export const monotonicNow = (): number => realPerformanceNow();
+/** Real random bytes, whether or not an execution is running (trace and span ids). */
+export const realRandomBytes = (out: Uint8Array): Uint8Array => realGetRandomValues(out);
 
 /**
  * The wall clock in whole microseconds, whether or not an execution is running: the unit of commit

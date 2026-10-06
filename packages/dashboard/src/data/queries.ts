@@ -117,6 +117,30 @@ export const logsQuery = ({ source, scope }: QueryScope, filter: LogFilter, numI
     getNextPageParam: (last: Page<LogEntry>) => (last.isDone ? undefined : last.continueCursor),
   });
 
+/** The system tables (STUDY-131 AD-24); only for a source that offers them. */
+export const systemTablesQuery = ({ source, scope }: QueryScope) =>
+  queryOptions({
+    queryKey: [...dashboardKeys.all(scope), "system-tables"] as const,
+    queryFn: ({ signal }) => source.listSystemTables!({ signal }),
+    enabled: typeof source.listSystemTables === "function",
+  });
+
+/** One system table's documents, page by page, read-only. */
+export const systemDocumentsQuery = (
+  { source, scope }: QueryScope,
+  table: string,
+  order: "asc" | "desc",
+  numItems = 100,
+) =>
+  infiniteQueryOptions({
+    queryKey: [...dashboardKeys.all(scope), "system-documents", table, order] as const,
+    queryFn: ({ pageParam, signal }) =>
+      source.listSystemDocuments!({ table, order, numItems, cursor: pageParam }, { signal }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last: Page<Document>) => (last.isDone ? undefined : last.continueCursor),
+    enabled: typeof source.listSystemDocuments === "function",
+  });
+
 /**
  * The overview's stats samples. Not fetched: `useStatsHistory` fills it from watchStats, so the history
  * survives leaving the overview and coming back (within the query's gcTime).

@@ -3,7 +3,15 @@
 // `--admin-key` are accepted and ignored (DV-384). `--init` writes `tsconfig.json` and `README.md` first;
 // `--dry-run` and `--debug` print instead of writing, as Convex's; `--commonjs` adds the CommonJS api.
 import { relative } from "node:path";
-import { initFunctionsDir, runCodegen, type TypecheckMode, typecheck, type WriteMode } from "./codegen.ts";
+import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
+import {
+  initFunctionsDir,
+  printTypecheckFailure,
+  runCodegen,
+  type TypecheckMode,
+  typecheck,
+  type WriteMode,
+} from "./codegen.ts";
 import { codegenConfig, functionsDir, typescriptCompilerOf } from "./deploy.ts";
 import type { Io } from "./io.ts";
 
@@ -42,22 +50,18 @@ export async function codegenCommand(args: string[], io: Io): Promise<number> {
       io.err(`bunvex codegen: ${name}: bunvex does not have components yet.`);
       return 2;
     } else if (name === "--url" || name === "--admin-key") {
-      // Codegen reads no deployment (DV-173), so the deployment's flags change nothing (DV-384).
-      if (value() === undefined) {
-        io.err(`bunvex codegen: ${name} needs a value\n\n${CODEGEN_USAGE}`);
-        return 2;
-      }
+      // Codegen reads no deployment (DV-173), so the deployment's flags change nothing (DV-384). Argument errors
+      // as Convex's commander prints them; `codegen` shows no help after them.
+      if (value() === undefined)
+        return argumentError(io, missingArgument(name === "--url" ? "--url <url>" : "--admin-key <adminKey>"));
     } else if (name === "--typecheck") {
       const v = value();
-      if (v !== "enable" && v !== "try" && v !== "disable") {
-        io.err(`bunvex codegen: --typecheck must be enable, try or disable\n\n${CODEGEN_USAGE}`);
-        return 2;
-      }
+      if (v === undefined) return argumentError(io, missingArgument("--typecheck <mode>"));
+      if (v !== "enable" && v !== "try" && v !== "disable")
+        return argumentError(io, invalidChoice("--typecheck <mode>", v, ["enable", "try", "disable"]));
       mode = v;
-    } else {
-      io.err(`bunvex codegen: unknown option ${a}\n\n${CODEGEN_USAGE}`);
-      return 2;
-    }
+    } else if (a.startsWith("-")) return argumentError(io, unknownOption(a, optionsIn(CODEGEN_USAGE)));
+    else return argumentError(io, tooManyArguments("codegen", 0, args.filter((x) => !x.startsWith("-")).length));
   }
   try {
     const dir = functionsDir(io.cwd);
@@ -70,8 +74,7 @@ export async function codegenCommand(args: string[], io: Io): Promise<number> {
     const result = runCodegen(dir, { ...config, commonjs: commonjs || config.commonjs }, { mode: write });
     const checked = await typecheck(dir, io.cwd, mode, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
-      io.err(checked.output);
-      io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+      printTypecheckFailure(io, checked);
       return 1;
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);

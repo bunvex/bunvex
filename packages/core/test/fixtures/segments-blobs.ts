@@ -1,9 +1,9 @@
 // Blobs as files in a directory, as the server's local `search` use case keeps them (search segment tests).
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { SearchSnapshotStore } from "../../src/index.ts";
+import type { SearchSegmentStore } from "../../src/index.ts";
 
-export function fileBlobs(dir: string): SearchSnapshotStore {
+export function fileBlobs(dir: string): SearchSegmentStore {
   mkdirSync(dir, { recursive: true });
   return {
     put: async (d) => {

@@ -130,11 +130,11 @@ export class VectorIndexes {
   }
 
   /** A commit, as it becomes visible: each written document of an indexed table, in its new state. */
-  apply(writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
+  apply(ts: number, writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
         if (e.staged) continue;
-        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null);
+        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null, ts);
         e.touched?.add(w.id);
       }
   }

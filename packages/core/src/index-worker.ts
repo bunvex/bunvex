@@ -13,6 +13,7 @@
 // ts; a document written later gets its entries from that write, which maintains the index.
 
 import {
+  databaseIndexRows,
   INDEX_BACKFILLS_INDEX,
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
@@ -121,9 +122,7 @@ export class IndexWorker {
       try {
         const backfilling = await this.host.system(
           async (db) =>
-            ((await db.query(INDEX_TABLE).collect()) as unknown as IndexMeta[]).filter(
-              (i) => i.state === "backfilling",
-            ),
+            databaseIndexRows(await db.query(INDEX_TABLE).collect()).filter((i) => i.state === "backfilling"),
           "index_worker_scan",
         );
         if (backfilling.length === 0) {

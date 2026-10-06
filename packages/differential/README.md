@@ -1,6 +1,6 @@
 # @bunvex/differential
 
-Differential tests ([STUDY-129](../../docs/study/STUDY-129-differential-testing.md)): the same app, the same
+Differential tests ([STUDY-122](../../docs/study/STUDY-122-differential-testing.md)): the same app, the same
 calls, on Convex's local backend (the oracle) and on bunvex's; every answer and the final data must match.
 Tests only, never published.
 

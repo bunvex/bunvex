@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, Engine } from "@bunvex/core";
+import { defineSchema, Engine, UDF_CONFIG_TABLE } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -28,7 +28,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-async function deployment() {
+async function deployment(o: { push?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-tester-"));
   dirs.push(dir);
   const engine = await new Engine(defineSchema({}), new SqlitePersistence(join(dir, "db.sqlite"), { durable: true }), {
@@ -45,15 +45,16 @@ async function deployment() {
     redactLogsToClient: false,
   });
   stops.push(() => s.shutdown());
-  await s.deployCode([
-    {
-      path: "items.js",
-      source: `import { mutation, query } from ${JSON.stringify(SERVER)};
+  if (o.push !== false)
+    await s.deployCode([
+      {
+        path: "items.js",
+        source: `import { mutation, query } from ${JSON.stringify(SERVER)};
 export const add = mutation(async ({ db }, { n }) => { await db.insert("items", { n }); });
 export const count = query(async ({ db }) => (await db.query("items").collect()).length);`,
-      environment: "isolate",
-    },
-  ]);
+        environment: "isolate",
+      },
+    ]);
   const api = `http://127.0.0.1:${s.server.port}`;
   const raw = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${api}/api/run_test_function`, {
@@ -79,7 +80,7 @@ export const count = query(async ({ db }) => (await db.query("items").collect())
         body: JSON.stringify({ path, args, format: "encoded_json" }),
       })
     ).json()) as { status: string; value?: unknown };
-  return { api, raw, tester, call };
+  return { api, raw, tester, call, engine };
 }
 
 const wrapped = (body: string) => `import { query } from ${JSON.stringify(WRAPPERS)};
@@ -241,6 +242,25 @@ export default query({ handler: async () => n });`)
     const noFormat = await d.raw({ adminKey: KEY, args: {}, bundle: { path: "testQuery.js", source: q } });
     expect(noFormat.status).toBe(400);
     expect((await fetch(`${d.api}/api/run_test_function`)).status).toBe(405);
+  });
+
+  test("the route commits nothing: no import seed row before any push, as Convex's uncommitted transaction", async () => {
+    const d = await deployment({ push: false });
+    const seedRows = () => d.engine.query((db) => db.asSystem(() => db.query(UDF_CONFIG_TABLE).collect()));
+    expect(await seedRows()).toEqual([]);
+    const before = d.engine.committer.visibleTs;
+    expect((await d.tester(wrapped("return 1;"))).body).toEqual({ status: "success", value: 1 });
+    expect(d.engine.committer.visibleTs).toBe(before);
+    expect(await seedRows()).toEqual([]);
+    // Once a push has stored them, the module imports with the deployment's seed and time.
+    const p = await deployment();
+    const [row] = (await p.engine.query((db) =>
+      db.asSystem(() => db.query(UDF_CONFIG_TABLE).collect()),
+    )) as unknown as { importPhaseUnixTimestamp: number }[];
+    const at = await p.tester(`import { query } from ${JSON.stringify(WRAPPERS)};
+const t = Date.now();
+export default query({ handler: async () => t });`);
+    expect(at.body.value).toBe(row!.importPhaseUnixTimestamp);
   });
 
   test("components: bunvex has none (DV-391)", async () => {

@@ -37,6 +37,6 @@
     "react-dom": "^19.3.0"
   },
   "scripts": {
-    "test:react": "bun test --preload ./react/dom.ts ./react"
+    "test:react": "bun test --preload ../../scripts/test-loopback.ts --preload ./react/dom.ts ./react"
   }
 }

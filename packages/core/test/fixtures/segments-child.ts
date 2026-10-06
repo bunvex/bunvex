@@ -16,7 +16,7 @@ const note = (i: number) => ({ body: `note ${i} ${i % 3 ? "hello" : "world"}`, k
 
 // Flushed past 20 KB of memory part: the 200 first documents are, the 30 last are not.
 const e = await new Engine(schema, new SqlitePersistence(path!, { durable: true }), {
-  searchSnapshots: fileBlobs(dir!),
+  searchStorage: fileBlobs(dir!),
   searchSegmentLimits: { textSoftLimitBytes: 20_000, vectorSoftLimitBytes: 20_000 },
 }).init();
 await e.searchReady();

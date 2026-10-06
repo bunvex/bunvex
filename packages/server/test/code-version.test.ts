@@ -207,6 +207,32 @@ describe("loading and analysis", () => {
     expect(Date.now()).toBeGreaterThan(AT);
   });
 
+  test("a module that does not compile or link: `Uncaught SyntaxError: …` alone, no server frames (STUDY-95 §7)", async () => {
+    const whole = (p: Promise<unknown>) =>
+      p.then(
+        () => "loaded",
+        (e: Error) => e.message,
+      );
+    // Compiling.
+    const syntax = await whole(load([mod("m.js", "export const x = (1;\n")]));
+    expect(syntax).toStartWith(
+      "Loading the pushed modules encountered the following error:\nFailed to analyze m.js: Uncaught SyntaxError: ",
+    );
+    expect(syntax.split("\n")).toHaveLength(2);
+    expect(syntax).not.toMatch(/\bat |node:vm|code-version\.ts|<parse>/);
+    // Linking: an import of a name the module does not export.
+    const link = await whole(load([mod("a.js", "export const a = 1;"), mod("m.js", 'import { b } from "./a.js"; b;')]));
+    expect(link).toMatch(
+      /^Loading the pushed modules encountered the following error:\nFailed to analyze (m|a)\.js: Uncaught SyntaxError: /,
+    );
+    expect(link.split("\n")).toHaveLength(2);
+    expect(link).not.toMatch(/\bat |node:vm|code-version\.ts/);
+    // An error thrown while the module runs keeps the app's frames (unchanged).
+    expect(await whole(load([mod("m.js", `\nfunction f() { throw new Error("deep"); }\nf();`)]))).toMatch(
+      /at f \(m\.js:2:\d+\)/,
+    );
+  });
+
   test("http.js and crons.js: their default exports, checked as Convex's", async () => {
     const http = `import { httpRouter, httpAction } from "@bunvex/server"; const h = httpRouter(); h.route({ path: "/hi", method: "GET", handler: httpAction(async () => new Response("hi")) }); export default h;`;
     const v1 = await load([mod("http.js", http)]);
@@ -334,7 +360,19 @@ describe("running a code version", () => {
     const gate = new Promise<void>((ok) => {
       release = ok;
     });
-    const hold = Bun.serve({ port: 0, fetch: async () => (await gate, new Response("done")) });
+    // The action's own request is the signal that it runs (on v1): v2 is installed only then.
+    let reached!: () => void;
+    const running = new Promise<void>((ok) => {
+      reached = ok;
+    });
+    const hold = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        reached();
+        await gate;
+        return new Response("done");
+      },
+    });
     stops.push(() => hold.stop(true));
     const { s, call } = await server();
     const act = (n: number) =>
@@ -344,7 +382,7 @@ describe("running a code version", () => {
       );
     await s.installCodeVersion(await load([act(1)]));
     const inFlight = call("action", "slow:run");
-    await Bun.sleep(50);
+    await running;
     await s.installCodeVersion(await load([act(2)]));
     release();
     expect((await inFlight).value).toBe("done v1");

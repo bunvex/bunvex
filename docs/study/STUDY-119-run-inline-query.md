@@ -178,4 +178,28 @@ No hot path changes: the route is new, and the other queries' path only gained a
 
 None. One finding outside this study: a module that does not parse reports the `SyntaxError` with the server's
 own frames (`code-version.ts`, `node:vm`) after it; pushes share that (`CodeVersion.load`), so it is left for
-its own fix.
+its own fix (#443, STUDY-95 §6).
+
+## 7. The import seed, read without a commit (follow-up, 2026-10-05)
+
+**Convex.** `execute_standalone_module` (`crates/application/src/lib.rs:2742`) reads the component's
+`UdfConfig`, whatever server version wrote it. Before any push there is none: it then uses
+`server_version 1000.0.0` ("act like the most recent version"), a random seed and the current time, and calls
+`udf_config_model.set` inside the request's transaction. That transaction is never committed, so the row is
+never stored.
+
+**bunvex before.** The route called `udfConfig`, the push's own reader. Before any push, that commits a new
+`_udf_config` row.
+
+**bunvex now.** The route uses `peekUdfConfig` (`code-store.ts`), which only reads:
+- with a stored row, it returns that row's seed and time;
+- without one, it returns a fresh seed and the current time;
+- it never writes. A later push then draws the seed itself, as on Convex.
+
+**Test** (`run-test-function.test.ts`, "the route commits nothing"):
+- before any push, a run leaves the committer's timestamp unchanged and `_udf_config` empty;
+- after a push, the module's import-time `Date.now()` is the stored timestamp.
+
+**Sabotage.** Each change below fails that test:
+- the route back on `udfConfig`;
+- the stored row ignored.
