@@ -18,6 +18,8 @@ export type RerunReason = "newSubscriber" | "identityChange" | "codeChange" | "r
 
 export type InvalidationRecord = {
   kind: "invalidation";
+  /** Its number in the follow feed: what a function log entry links to (STUDY-131 AD-27). */
+  seq: number;
   /** Wall-clock ms when the hub matched the commit. */
   at: number;
   commitTs: number;
@@ -35,6 +37,11 @@ export type RerunRecord = { kind: "rerun"; at: number; reason: RerunReason };
 export type HistoryRecord = InvalidationRecord | RerunRecord;
 /** A feed entry: the record (shared with the key's ring), its sequence number and execution key. */
 export type FeedRecord = { seq: number; execKey: string; record: InvalidationRecord };
+
+/** A short, stable digest of a query's canonical arguments: who reads it can tell two calls apart. */
+export function argsDigest(argsJson: string): string {
+  return new Bun.CryptoHasher("sha256").update(argsJson).digest("hex").slice(0, 12);
+}
 
 /** The ring's size from the environment, `SUBSCRIPTION_INVALIDATION_HISTORY` (a non-negative integer). */
 export function invalidationHistoryFromEnv(env: Record<string, string | undefined> = process.env): number {
@@ -77,8 +84,10 @@ export class SyncInspector {
     source: string | undefined,
     write: { index: number; key: Uint8Array },
   ) {
+    const seq = ++this.seq;
     const r: InvalidationRecord = {
       kind: "invalidation",
+      seq,
       at: Date.now(),
       commitTs,
       source: source ?? null,
@@ -88,9 +97,22 @@ export class SyncInspector {
       perf: performance.now(),
     };
     this.push(execKey, r);
-    const seq = ++this.seq;
     this.feed[seq % FOLLOW_FEED] = { seq, execKey, record: r };
     if (this.waiters.size > 0) for (const w of this.waiters) w();
+  }
+
+  /**
+   * The invalidation a run of `execKey` starting now answers (STUDY-131 AD-27): the newest one whose new result
+   * has not been sent yet. Null when none waits (a run for another reason) or nothing is recorded.
+   */
+  pending(execKey: string): InvalidationRecord | null {
+    const ring = this.rings.get(execKey);
+    if (!ring) return null;
+    for (let i = ring.length - 1; i >= 0; i--) {
+      const r = ring[i]!;
+      if (r.kind === "invalidation" && r.sentAfterMs === null) return r;
+    }
+    return null;
   }
 
   /** `execKey` ran again for no invalidation. */

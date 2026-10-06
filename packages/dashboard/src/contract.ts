@@ -13,7 +13,7 @@ import { type DeploymentContractOptions, describeDeploymentContract } from "./co
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
-import { describeSubscriptionsContract } from "./contract-subscriptions.ts";
+import { describeSubscriptionsContract, expectExecutionLinks } from "./contract-subscriptions.ts";
 import { describeSystemTablesContract } from "./contract-system-tables.ts";
 import { describeTopologyContract } from "./contract-topology.ts";
 import {
@@ -399,6 +399,12 @@ export function describeDataSourceContract(
       }
     });
 
+    test("an execution's links, when given, are well-formed (STUDY-131 AD-27)", async () => {
+      const src = await make();
+      const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
+      expectExecutionLinks(page);
+    });
+
     test("logs page newest first with increasing ids, and respect the filter", async () => {
       const src = await make();
       const first: LogEntry[] = (await src.listLogs({ numItems: 50, cursor: null })).page;
@@ -658,3 +664,4 @@ export function describeDataSourceContract(
       });
   });
 }
+export { expectExecutionLinks };

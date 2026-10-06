@@ -83,7 +83,14 @@ import {
 } from "./errors.ts";
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
-import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
+import {
+  FunctionLog,
+  isDashboardClient,
+  LONG_POLL_MS,
+  partJson,
+  wantsStructuredLines,
+  wsRequestId,
+} from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
 import {
   type AdminCaller,
@@ -947,7 +954,11 @@ export function createServer(opts: ServerOptions) {
       requestId = wsRequestId(session, Number(counter));
     }
     const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
-    const structured = parts && wantsStructuredLines(req.headers.get("bunvex-client"));
+    const client = req.headers.get("bunvex-client");
+    const structured = parts && wantsStructuredLines(client);
+    // Why each run ran and its trace (STUDY-131 AD-27): for the dashboard's stream only, so the CLI's output
+    // and `stream_udf_execution` stay Convex's.
+    const links = parts && isDashboardClient(client);
     const entries = found
       .filter((p) => parts || p.kind === "Completion")
       .filter(
@@ -955,7 +966,7 @@ export function createServer(opts: ServerOptions) {
           requestId === null ||
           (p.requestId === requestId && (p.kind === "Progress" ? p.root : p.parentExecutionId === null)),
       )
-      .map((p) => partJson(p, { structured, parts }));
+      .map((p) => partJson(p, { structured, parts, links }));
     return json({ entries, newCursor });
   };
 

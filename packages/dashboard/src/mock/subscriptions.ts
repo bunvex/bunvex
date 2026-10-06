@@ -130,8 +130,10 @@ export class MockSubscriptions {
       after: false,
       text: `[${vals.map((v) => (typeof v === "string" ? text(v) : String(v))).join(", ")}]`,
     };
+    const seq = ++this.seq;
     const entry = {
       kind: "invalidation" as const,
+      seq,
       at: this.now(),
       commitTs: this.ts,
       source: t.writer,
@@ -146,7 +148,7 @@ export class MockSubscriptions {
       if (q.history.length > HISTORY) q.history.shift();
       q.at = entry.at;
     }
-    out.push({ ...entry, seq: ++this.seq, path: t.path, argsDigest: this.queries.find((q) => q.t === t)!.digest });
+    out.push({ ...entry, path: t.path, argsDigest: this.queries.find((q) => q.t === t)!.digest });
     return out;
   }
 
