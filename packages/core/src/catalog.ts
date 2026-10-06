@@ -10,8 +10,10 @@ import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from
 
 export const TABLES_TABLE = "_tables";
 export const INDEX_TABLE = "_index";
-/** The deployment's own settings, starting with the instance secret when none is configured (STUDY-17). */
+/** The instance secret (and name) when none is configured (STUDY-17, DV-07, DV-159). */
 export const INSTANCE_TABLE = "_instance";
+/** The database's globals (STUDY-126), as Convex's `_db`: the data's version and the pinned storage type. */
+export const DATABASE_GLOBALS_TABLE = "_db";
 /** The sync protocol's committed session mutations, for idempotent resends (session-requests.ts). */
 export const SESSION_REQUESTS_TABLE = "_session_requests";
 /**
@@ -25,12 +27,10 @@ export const SCHEDULED_FUNCTIONS_TABLE = "_scheduled_functions";
 /**
  * Stored files (STUDY-32, STUDY-125), as Convex's: `_file_storage` holds each file's metadata (the URL's UUID,
  * the blob's key, sha256, size, content type); apps read the VIRTUAL table `_storage` (its public fields,
- * the same ids). `_storage_deletions` (bunvex's own) queues the blobs of deleted files, removed once the
- * delete commits (F3).
+ * the same ids). A deleted file's blob stays, as Convex's (STUDY-130).
  */
 export const FILE_STORAGE_TABLE = "_file_storage";
 export const STORAGE_TABLE = "_storage";
-export const STORAGE_DELETIONS_TABLE = "_storage_deletions";
 /**
  * Convex's virtual system tables (`VirtualSystemMapping`, crates/common/src/virtual_system_mapping.rs): each
  * virtual table's primary system table, which holds its ids, number and `by_id` / `by_creation_time` indexes.
@@ -59,6 +59,8 @@ export const SOURCE_PACKAGES_TABLE = "_source_packages";
 export const UDF_CONFIG_TABLE = "_udf_config";
 /** Pushed schemas (STUDY-35), as Convex's: `pending` → `active`, or `overwritten` / `failed`. */
 export const SCHEMAS_TABLE = "_schemas";
+/** The deployed auth providers (STUDY-129), as Convex's `_auth`: one document per provider. */
+export const AUTH_TABLE = "_auth";
 /** Deployment environment variables (STUDY-37), as Convex's: `{ name, value }`, indexed `by_name`. */
 export const ENVIRONMENT_VARIABLES_TABLE = "_environment_variables";
 /** Snapshot exports (STUDY-42), as Convex's `_exports`: one row per export and its state. */
@@ -86,6 +88,14 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
+/**
+ * Search index workers' state (Convex's `_index_worker_metadata`, STUDY-111): per search or vector index (its
+ * `_index` row's id), the ts it was fast-forwarded to.
+ */
+export const INDEX_WORKER_METADATA_TABLE = "_index_worker_metadata";
+export const INDEX_WORKER_METADATA_INDEX = "by_index_doc_id";
+/** The next index id to hand out (STUDY-128), as Convex's `_next_persistence_index_id`: `{nextId}`. */
+export const NEXT_PERSISTENCE_INDEX_ID_TABLE = "_next_persistence_index_id";
 
 /** Convex numbers: system tables from 513 (`_tables` 513, `_index` 514), user tables from 10 001. */
 const FIRST_USER_TABLE_NUMBER = 10_001;
@@ -103,6 +113,8 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _index: 514,
   _exports: 516,
   _udf_config: 518,
+  _auth: 519,
+  _db: 520,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,
@@ -123,11 +135,50 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _usage_limits: 552,
   _scheduled_job_args: 550,
   _index_backfills: 548,
+  _index_worker_metadata: 542,
+  _next_persistence_index_id: 554,
   // bunvex's own.
   _instance: 9_999,
-  _storage_deletions: 9_998,
 };
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
+
+/**
+ * One line on what each system table holds, for the system-table browser (STUDY-131 AD-24: the dashboard's
+ * "Show system tables" and `bunvex data --system`). Keep it next to `SYSTEM_TABLE_NUMBERS`: a table added
+ * there gets its line here (a test checks every numbered table has one). The browser lists the tables the
+ * catalog has, not this list; a table without a line here is listed with an empty description.
+ */
+export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  _tables: "Every table: its name, number and state (active, hidden, deleting).",
+  _index: "Every index: its table, fields and state (backfilling, backfilled, enabled).",
+  _exports: "Snapshot exports and their state.",
+  _udf_config: "The pushed code's function runtime settings.",
+  _modules: "Each pushed module's metadata.",
+  _source_packages: "The pushed code packages the modules live in.",
+  _environment_variables: "The deployment's environment variables, by name.",
+  _deployment_audit_log: "The audit log: one document per deployment event.",
+  _session_requests: "Committed sync-session mutations, for idempotent resends.",
+  _cron_jobs: "The cron jobs and their schedules.",
+  _schemas: "Pushed schemas and their state (pending, active, overwritten, failed).",
+  _cron_job_logs: "The last runs of each cron job.",
+  _scheduled_jobs: "Scheduled function runs and their state (apps read them as _scheduled_functions).",
+  _scheduled_job_args: "The arguments of scheduled function runs.",
+  _file_storage: "Stored files' metadata (apps read it as _storage).",
+  _snapshot_imports: "Snapshot imports, their state and checkpoints.",
+  _log_sinks: "Configured log streams and their status.",
+  _function_handles: "Function handles: a function path and when it was deleted.",
+  _canonical_urls: "The deployment's canonical cloud and site URLs.",
+  _backend_state: "The deployment's run state (running, paused, disabled).",
+  _cron_next_run: "Each cron job's previous and next run.",
+  _data_sync_progress: "Data sync progress, one row per sync.",
+  _usage_limits: "Usage limits per metric and window.",
+  _index_backfills: "Progress checkpoints of index backfills.",
+  _index_worker_metadata: "Search and vector index workers' state: the ts each index was fast-forwarded to.",
+  _next_persistence_index_id: "The next index id to hand out.",
+  _auth: "The deployed auth providers, one document per provider.",
+  _db: "The database globals: the data version and the storage type pinned at the first start.",
+  _instance: "The deployment's own settings, such as the generated instance secret.",
+};
 
 /**
  * A table's lifecycle (STUDY-42 PR 2), as Convex's `TableState`: `active` (the one table of its name that
@@ -168,6 +219,13 @@ export type IndexMeta = {
   staged?: boolean;
 };
 
+/**
+ * The database indexes' `_index` rows: a search or vector index's row (STUDY-111) has Convex's `config` instead
+ * of `fields`, and the catalog of tables and database indexes leaves it out.
+ */
+export const databaseIndexRows = (rows: Record<string, unknown>[]): IndexMeta[] =>
+  rows.filter((r) => r.config === undefined) as unknown as IndexMeta[];
+
 /** A `_index_backfills` document: where the backfill of one index has got to (Convex's `IndexBackfillMetadata`). */
 export type IndexBackfillMeta = {
   _id: string;
@@ -193,11 +251,21 @@ export class IndexBackfillingError extends Error {
  * A search or vector index still being rebuilt after the process started (STUDY-79): Convex's
  * `ErrorMetadata::feature_temporarily_unavailable` while its indexes bootstrap. A system error, not the
  * function's: a query or mutation cannot catch it, the HTTP API answers 503 with its code, and a sync query
- * hitting it is skipped and retried later.
+ * hitting it is skipped and retried later. The table summaries' (`count()`, STUDY-107) are one too.
+ *
+ * Also a write refused because an index's memory part is too large (STUDY-111, `TextIndexTooLarge` /
+ * `VectorIndexTooLarge`): Convex's `ErrorMetadata::overloaded`, which it handles as it does the above — HTTP
+ * 503 with its code, a WebSocket closed with `Again` and the code, a system error a scheduled job retries, a
+ * plain `Error` in an action.
  */
 export class IndexesUnavailableError extends Error {
   constructor(
-    readonly code: "SearchIndexesUnavailable" | "VectorIndexesUnavailable",
+    readonly code:
+      | "SearchIndexesUnavailable"
+      | "VectorIndexesUnavailable"
+      | "TableSummariesUnavailable"
+      | "TextIndexTooLarge"
+      | "VectorIndexTooLarge",
     message: string,
   ) {
     super(message);
@@ -213,6 +281,16 @@ export const vectorIndexesUnavailable = () =>
   new IndexesUnavailableError(
     "VectorIndexesUnavailable",
     "Vector indexes are bootstrapping and not yet available for use",
+  );
+
+/**
+ * Convex's refusal of a write to a table whose index has a memory part at its hard limit
+ * (`Transaction::validate_memory_index_size`), in its words without the documentation link (DV-04).
+ */
+export const indexTooLarge = (kind: "text" | "vector", index: string) =>
+  new IndexesUnavailableError(
+    kind === "text" ? "TextIndexTooLarge" : "VectorIndexTooLarge",
+    `Too many writes to ${index}. Spread your writes out over time or throttle them to avoid errors. If you’re importing data into a new application, consider removing the index and adding it again after the import (you can re-add the index as a staged index to avoid blocking your pushes).`,
   );
 
 /** A query on a staged index (Convex's `IndexStagedError`, a bad request). */
@@ -384,6 +462,8 @@ export type CatalogChanges = {
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
   restageIndexes: { _id: string; staged: boolean }[];
+  /** The index id allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller writes it. */
+  nextIndexId: number;
 };
 
 const sameFields = (a: string[], b: string[]) => a.length === b.length && a.every((f, i) => f === b[i]);
@@ -403,7 +483,8 @@ function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged
 /**
  * The first half of a schema change, as Convex's `prepare_new_and_mutated_indexes` (the push's start):
  * new tables get the next free Convex number and a fresh tablet; a new index (or a new version of one
- * whose fields changed) gets a fresh index id and starts `backfilling`, unless its table is new (then it
+ * whose fields changed) gets the next index id from the allocator (`nextIndexId`, from
+ * `_next_persistence_index_id`: never a dropped index's, STUDY-128) and starts `backfilling`, unless its table is new (then it
  * is `enabled` at once). A PENDING index the schema no longer asks for is dropped now; an ENABLED one keeps
  * serving until the push finishes (`finishCatalog`), so a changed index is replaced atomically. Pure: the
  * caller commits. A new user table past `MAX_USER_TABLES` active ones throws `TooManyTablesError`; `userTables`
@@ -414,10 +495,18 @@ export function planCatalog(
   tables: TableMeta[],
   indexes: IndexMeta[],
   userTables = true,
+  allocator?: number,
 ): CatalogChanges {
-  const changes: CatalogChanges = { insertTables: [], insertIndexes: [], deleteIndexes: [], restageIndexes: [] };
   let nextTablet = Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
-  let nextIndexId = Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  // Only the store's first catalog commit runs before the allocator exists: nothing was dropped yet.
+  let nextIndexId = allocator ?? Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  const changes: CatalogChanges = {
+    insertTables: [],
+    insertIndexes: [],
+    deleteIndexes: [],
+    restageIndexes: [],
+    nextIndexId,
+  };
   // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
   const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
   const active = activeTables(tables);
@@ -463,6 +552,7 @@ export function planCatalog(
     }
     for (const i of stored) if (!wanted.has(i.name) && i.state !== "enabled") changes.deleteIndexes.push(i._id);
   }
+  changes.nextIndexId = nextIndexId;
   return changes;
 }
 

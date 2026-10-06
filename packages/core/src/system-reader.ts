@@ -1,7 +1,8 @@
 // `db.system` (Convex's `DatabaseReader.system`): read access to the virtual system tables (STUDY-125,
 // virtual-tables.ts), `_storage` and `_scheduled_functions`. Each reads its system table (`_file_storage`,
 // `_scheduled_jobs`) and gives documents in Convex's virtual shape, with the same ids; only the `by_id` and
-// `by_creation_time` indexes are public. No other system table is visible.
+// `by_creation_time` indexes are public. Any other system table reads as empty, as Convex's (a function sees
+// its index as missing), but `count()` counts it (STUDY-107, DV-360).
 import { decodeId } from "@bunvex/values";
 import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
@@ -9,6 +10,9 @@ import type { Doc } from "./schema.ts";
 import { TableReader } from "./table-scope.ts";
 import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuery, TxQueryChained } from "./tx.ts";
 import { VIRTUAL_INDEXES, VIRTUAL_TABLES, type VirtualTable } from "./virtual-tables.ts";
+
+/** The system tables an app reads through `db.system` (the virtual ones); every other one is private. */
+export const APP_VISIBLE_SYSTEM_TABLES: readonly string[] = [...VIRTUAL_TABLES.keys()];
 
 function virtualTable(table: string): VirtualTable {
   const vt = VIRTUAL_TABLES.get(table);
@@ -60,10 +64,19 @@ export class SystemReader {
   }
 
   query(table: string): TxQuery {
+    if (!VIRTUAL_TABLES.has(table) && table.startsWith("_")) {
+      // Another system table, or an unknown `_` name: Convex's `db.system.query` takes it, its reads find
+      // nothing (the index is `Missing` to a function), and its `count()` counts the table, 0 when there is
+      // none (STUDY-107).
+      const q = this.tx.privateSystemQuery(table);
+      return new VirtualQueryInitializer(table, q, () => this.tx.asSystem(() => q.count()), true);
+    }
     const vt = virtualTable(table);
+    // Convex counts a virtual table as its system table (`Transaction::count`).
     return new VirtualQueryInitializer(
       table,
       this.tx.queryVirtual(table, vt.system, (d) => vt.toVirtual(this.tx, d)),
+      () => this.tx.asSystem(() => this.tx.query(vt.system).count()),
     );
   }
 }
@@ -108,12 +121,25 @@ export class VirtualQuery implements TxQueryChained {
 
 /** `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. */
 export class VirtualQueryInitializer extends VirtualQuery implements TxQuery {
+  constructor(
+    table: string,
+    q: TxQuery,
+    private readonly counter: () => Promise<number>,
+    /** A private system table: any index name, as Convex's (it finds nothing). */
+    private readonly anyIndex = false,
+  ) {
+    super(table, q);
+  }
+  /** Convex's internal `count()` (STUDY-107), with the system access the table needs. */
+  count(): Promise<number> {
+    return this.counter();
+  }
   private get initial(): TxQuery {
     return this.q as TxQuery;
   }
   /** Convex's `virtual_to_system_index`: `by_id` and `by_creation_time` only, the system table's. */
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
-    if (!VIRTUAL_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
+    if (!this.anyIndex && !VIRTUAL_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
     return this.wrap(this.initial.withIndex(name, range));
   }
   /** System tables have no search indexes. */

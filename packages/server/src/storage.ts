@@ -5,7 +5,8 @@
 //   Apps see it as the virtual `_storage` (core's virtual-tables.ts), with the same ids. Ids are `_storage`
 //   document ids, or (legacy) the UUID.
 // - `ctx.storage` reads and writes through the transaction (getUrl is reactive, delete transactional); in
-//   actions each call is its own transaction. Deleting queues the blob, removed once the delete commits (F3).
+//   actions each call is its own transaction. Deleting removes the row only: the blob stays, as Convex's
+//   (STUDY-130; a reader at an earlier snapshot, an export, can still read it).
 // - Uploads: a token valid for an hour (reusable), `POST /api/storage/upload?token=`, the body streamed to the
 //   backend and hashed. Downloads: `GET /api/storage/<uuid>`, Convex's headers and single-range rule.
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
@@ -17,7 +18,6 @@ import {
   isStopped,
   opaqueToInspect,
   readBackendState,
-  STORAGE_DELETIONS_TABLE,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -197,14 +197,14 @@ export class FileStorage {
     );
   }
 
-  /** Delete a file's row in `db` and queue its blob, removed once the delete commits (F3). */
+  /**
+   * Delete a file's row in `db` (Convex's `delete_file`): the row only. The blob stays, as Convex never
+   * removes one (STUDY-130), so a reader at an earlier snapshot (an export) still finds it.
+   */
   async deleteIn(db: Tx, id: unknown, method = "storage.delete") {
     const row = await this.resolve(db, id, method);
     if (!row) throw new Error(`storage id ${String(id)} not found`);
-    await db.asSystem(async () => {
-      await db.delete(FILE_STORAGE_TABLE, row._id);
-      await db.insert(STORAGE_DELETIONS_TABLE, { storageKey: row.storageKey });
-    });
+    await db.asSystem(() => db.delete(FILE_STORAGE_TABLE, row._id));
   }
 
   /**
@@ -315,45 +315,6 @@ export class FileStorage {
 
   private ensureRunning(): Promise<void> {
     return this.engine.query((db) => this.ensureRunningIn(db));
-  }
-
-  // ---------------------------------------------------------------- deleted and orphaned blobs (F3)
-
-  /** Remove the blobs of deleted files (their deletes committed); the number removed. */
-  async sweepDeleted(limit = 100): Promise<number> {
-    const queued = (await this.engine.query((db) =>
-      db.asSystem(() => db.query(STORAGE_DELETIONS_TABLE).take(limit)),
-    )) as unknown as { _id: string; storageKey: string }[];
-    for (const d of queued) {
-      await this.blobs.delete(d.storageKey);
-      await this.engine.mutation(
-        (db) => db.asSystem(() => db.delete(STORAGE_DELETIONS_TABLE, d._id)),
-        "_system/storage",
-      );
-    }
-    return queued.length;
-  }
-
-  /** Remove blobs no row points to, written more than `olderThanMs` ago (failed or abandoned uploads). */
-  async sweepOrphans(olderThanMs = UPLOAD_TOKEN_VALIDITY_MS): Promise<number> {
-    const before = this.now() - olderThanMs;
-    const candidates: string[] = [];
-    for await (const b of this.blobs.list()) if (b.lastModified <= before) candidates.push(b.key);
-    if (candidates.length === 0) return 0;
-    const known = await this.engine.query(async (db) => {
-      const rows = (await db.asSystem(() => db.query(FILE_STORAGE_TABLE).collect())) as unknown as FileStorageDoc[];
-      const queued = (await db.asSystem(() => db.query(STORAGE_DELETIONS_TABLE).collect())) as unknown as {
-        storageKey: string;
-      }[];
-      return new Set([...rows.map((r) => r.storageKey), ...queued.map((q) => q.storageKey)]);
-    });
-    let removed = 0;
-    for (const key of candidates)
-      if (!known.has(key)) {
-        await this.blobs.delete(key);
-        removed++;
-      }
-    return removed;
   }
 
   // ---------------------------------------------------------------- HTTP
@@ -491,43 +452,6 @@ export function parseRange(header: string, size: number): { start: number; end: 
     if (start < size) ranges.push({ start, end });
   }
   return ranges.length === 1 ? ranges[0] : "unsatisfiable";
-}
-
-/**
- * The background work of F3: the blobs of deleted files, soon after their delete commits (woken by commits
- * to the queue, and every 30 s), and blobs no row points to, every hour. Returns the stopper.
- */
-export function startFileSweeps(engine: Engine, files: FileStorage): () => void {
-  let stopped = false;
-  let running = false;
-  const deleted = async () => {
-    if (stopped || running) return;
-    running = true;
-    try {
-      while (!stopped && (await files.sweepDeleted()) === 100) {}
-    } catch (e) {
-      if (!stopped) console.error("file storage: removing deleted files' blobs failed", e);
-    } finally {
-      running = false;
-    }
-  };
-  const queue = engine.catalog.table(STORAGE_DELETIONS_TABLE).indexes.get("by_creation_time")!.id;
-  engine.committer.onCommit((entries) => {
-    if (entries.some((e) => e.writes.some((w) => w.index === queue && w.id !== null))) void deleted();
-  }, "file storage sweeps");
-  const every = setInterval(() => void deleted(), 30_000);
-  const orphans = setInterval(
-    () => {
-      if (!stopped) files.sweepOrphans().catch((e) => console.error("file storage: the orphan sweep failed", e));
-    },
-    60 * 60 * 1000,
-  );
-  void deleted();
-  return () => {
-    stopped = true;
-    clearInterval(every);
-    clearInterval(orphans);
-  };
 }
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).

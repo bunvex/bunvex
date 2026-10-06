@@ -143,7 +143,7 @@ test("a virtual document's id is its system document's: same string, the system 
   await e.close();
 });
 
-test("only the public indexes; no search indexes; other system tables are not accessible", async () => {
+test("only the public indexes; no search indexes; other system tables read as empty (STUDY-107)", async () => {
   const e = await withFiles([1]);
   await expect(
     e.query(async (db) => db.system.query(STORAGE_TABLE).withIndex("by_storage_id").collect()),
@@ -156,10 +156,10 @@ test("only the public indexes; no search indexes; other system tables are not ac
         .collect(),
     ),
   ).rejects.toThrow("Index _storage.s not found.");
+  // Convex's `db.system.query` takes any `_` name; a function sees a private table's index as missing, so it reads
+  // nothing (STUDY-107), the physical tables behind the virtual ones included.
   for (const hidden of ["_tables", FILE_STORAGE_TABLE, SCHEDULED_JOBS_TABLE, SCHEDULED_JOB_ARGS_TABLE])
-    await expect(e.query(async (db) => db.system.query(hidden).collect())).rejects.toThrow(
-      `System table ${hidden} is not accessible here.`,
-    );
+    expect(await e.query(async (db) => db.system.query(hidden).collect())).toEqual([]);
   const r = await e.query(async (db) => {
     const id = (await db.system.query(STORAGE_TABLE).first())!._id as string;
     return {

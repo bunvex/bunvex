@@ -17,15 +17,18 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
 
 ## Numbers
 
-Same 2-vCPU VPS, same harness, Convex self-hosted vs bunvex on **the same Postgres**
-([full report](docs/bench/E2E-VPS-2026-09-29.md)):
+Same 2-vCPU VPS, same harness, Convex self-hosted vs bunvex on **the same Postgres**, both measured on
+5 Oct 2026 ([full report](docs/bench/E2E-VPS-2026-10-05.md)):
 
-| | Convex | bunvex (Postgres) | bunvex (memory + log) |
+| | Convex | bunvex (Postgres) | bunvex (SQLite) |
 |---|--:|--:|--:|
-| uncached indexed read, req/s | 298 | 2 119 | 6 067 |
-| durable insert, req/s | 427 | 6 052 | 7 744 |
-| action (query + mutation), req/s | 139 | 2 492 | 6 043 |
-| 10 000 subscribers, delivered · p99 | 5 % · 3.2 s | 100 % · 220 ms | 100 % · 267 ms |
+| uncached indexed read, req/s | 282 | 1 337 | 1 787 |
+| durable insert, req/s | 406 | 3 281 | 2 494 |
+| action (query + mutation), req/s | 134 | 1 159 | 1 544 |
+| 10 000 subscribers, splay off¹, delivered · p99 | out of memory (6.7 GB) | 100 % · 1.57 s | 100 % · 825 ms |
+
+¹ Both spread wide invalidations by default (bunvex as Convex does), which skips intermediate values alike;
+the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
 
 ## Repository layout
 

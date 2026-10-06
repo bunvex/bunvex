@@ -24,6 +24,7 @@ import { activeCount } from "./filter-model.ts";
 import { decodeFilter, encodeFilter } from "./filter-url.ts";
 import { useLiveTable } from "./live.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
+import { SystemTableView } from "./system-table.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
 import { ValueView, type Viewing } from "./value-view.tsx";
 import { cellText, documentFields } from "./values.ts";
@@ -50,6 +51,9 @@ export function DatabaseScreen(): ReactNode {
       <TablesSidebar tables={tables} current={table} canCreate={canCreate} />
       {info ? (
         <TableView key={info.name} info={info} />
+      ) : table.startsWith("_") && typeof scope.source.listSystemDocuments === "function" ? (
+        // a system table (STUDY-131 AD-24): read-only; user table names never start with `_`
+        <SystemTableView key={table} table={table} />
       ) : (
         <div className="p-4 md:p-6">
           <h1 className="text-xl font-semibold tracking-tight">{table}</h1>
