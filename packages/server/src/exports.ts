@@ -377,7 +377,7 @@ export class ExportService {
       // As Convex: `start_ts` becomes the snapshot's ts.
       await this.patch(r._id, {
         state: "completed",
-        start_ts: BigInt(at) * 1000n,
+        start_ts: at,
         complete_ts: this.nowNs(),
         zip_object_key: written.key,
         size: BigInt(size),
@@ -390,7 +390,7 @@ export class ExportService {
     }
   }
 
-  private async exportStorage(zip: ZipFileWriter, at: number, progress: (m: string, force?: boolean) => Promise<void>) {
+  private async exportStorage(zip: ZipFileWriter, at: bigint, progress: (m: string, force?: boolean) => Promise<void>) {
     // `_file_storage`, written as the virtual `_storage` (Convex's `write_storage_table`), with the URL's UUID as
     // `internalId`.
     const rows: FileStorageDoc[] = [];

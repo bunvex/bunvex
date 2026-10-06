@@ -97,8 +97,8 @@ describe("an LRU bounded by bytes", () => {
     const r = {
       json: "1",
       extra: undefined,
-      originalTs: 1,
-      tokenTs: 1,
+      originalTs: 1n,
+      tokenTs: 1n,
       reads: [],
       observedTime: false,
       unixMs: 0,
@@ -181,7 +181,7 @@ describe("validity: checked against the write log when looked up", () => {
     const q = counted(1);
     await e.query(q, "k");
     const entry = () =>
-      [...(e.cache as unknown as { entries: Map<string, { result: { tokenTs: number } }> }).entries.values()][0]!;
+      [...(e.cache as unknown as { entries: Map<string, { result: { tokenTs: bigint } }> }).entries.values()][0]!;
     const cachedAt = entry().result.tokenTs;
     await e.mutation((db) => db.insert("items", { n: 2 }));
     await e.query(q, "k");
@@ -249,7 +249,7 @@ describe("validity: checked against the write log when looked up", () => {
   });
 
   test("a result whose reads fell out of the write log's retention runs again", async () => {
-    const e = await engine({ writeLogRetention: { minRetentionUs: 0, maxRetentionUs: 1, softMaxBytes: 0 } });
+    const e = await engine({ writeLogRetention: { minRetentionNs: 0n, maxRetentionNs: 1000n, softMaxBytes: 0 } });
     const q = counted(1);
     await e.query(q, "k");
     for (let i = 0; i < 3; i++) {

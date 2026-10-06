@@ -11,6 +11,7 @@
 // LISTENERS (throughput: that many no-op commit listeners, as the server registers about 8; default 0).
 import { encodeKey, type IndexWrite, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { tid } from "./ids.ts";
 
 const W = Number(process.env.W ?? 64);
 const SECS = Number(process.env.SECS ?? 10);
@@ -34,11 +35,11 @@ function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
   const idx: IndexWrite[] = [
-    { index: 1, key: encodeKey([id]), id },
-    { index: 2, key: encodeKey([tenant, createdAt, id]), id },
-    { index: 3, key: encodeKey([createdAt, id]), id },
+    { index: tid(1), key: encodeKey([id]), id },
+    { index: tid(2), key: encodeKey([tenant, createdAt, id]), id },
+    { index: tid(3), key: encodeKey([createdAt, id]), id },
   ];
-  return { docs: [{ table: 1, id, json }], idx };
+  return { docs: [{ table: tid(1), id, json }], idx };
 }
 
 type Stats = { logLength?: number; logBytes?: number; outOfRetention?: number; conflicts: number; groups: number };
@@ -84,7 +85,7 @@ async function throughput() {
 
 async function lag() {
   const c = new Committer(await open(), retention);
-  const history: { t: number; ts: number }[] = []; // visibleTs over time, to take snapshots LAG_MS old
+  const history: { t: number; ts: bigint }[] = []; // visibleTs over time, to take snapshots LAG_MS old
   let noise = 0;
   let attempts = 0;
   let failed = 0;
@@ -107,7 +108,7 @@ async function lag() {
       await Bun.sleep(5);
       const cutoff = performance.now() - LAG_MS;
       if (cutoff < t0) continue;
-      let snap: number | undefined;
+      let snap: bigint | undefined;
       for (let i = history.length - 1; i >= 0; i--)
         if (history[i].t <= cutoff) {
           snap = history[i].ts;
@@ -116,11 +117,11 @@ async function lag() {
       if (snap === undefined) continue;
       const name = `lagged${n++}`;
       const k = encodeKey([name]);
-      const reads = [{ index: 9, lo: k, hi: encodeKey([`${name}\u0000`]) }];
+      const reads = [{ index: tid(9), lo: k, hi: encodeKey([`${name}\u0000`]) }];
       attempts++;
       const t = performance.now();
       try {
-        await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: 9, key: k, id: `l${n}` }] });
+        await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: tid(9), key: k, id: `l${n}` }] });
       } catch {
         failed++;
       }
@@ -153,14 +154,14 @@ async function calibrate() {
   // per-index columns validation looks writes up in (STUDY-06 D11).
   const N = 200_000;
   const c = new Committer({ apply() {}, async flush() {} } as unknown as Persistence, {
-    minRetentionUs: 3.6e9,
-    maxRetentionUs: 3.6e9,
+    minRetentionNs: 3_600_000_000_000n,
+    maxRetentionNs: 3_600_000_000_000n,
     softMaxBytes: 2 ** 40,
   });
   Bun.gc(true);
   const before = process.memoryUsage().heapUsed;
   for (let i = 0; i < N; i += 1000) {
-    const batch: Promise<number>[] = [];
+    const batch: Promise<bigint>[] = [];
     for (let j = i; j < i + 1000; j++) {
       const { idx } = itemWrite(`t${j % 64}`, 1.79e12 + j);
       batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs: [], idx }));

@@ -117,23 +117,23 @@ test("a conflict reports the write it lost to; waitForVisible resolves once that
   const p = await MemoryPersistence.open(null, { durable: false });
   const c = new Committer(p);
   const k = new Uint8Array([1]);
-  const reads = [{ index: 9, lo: k, hi: new Uint8Array([2]) }];
+  const reads = [{ index: "ix9", lo: k, hi: new Uint8Array([2]) }];
   const ts1 = await c.commit({
-    snapshot: 0,
+    snapshot: 0n,
     reads: [],
     docs: [],
-    idx: [{ index: 9, key: k, id: "doc1" }],
+    idx: [{ index: "ix9", key: k, id: "doc1" }],
     source: "m:w",
   });
-  const lost = await c.commit({ snapshot: 0, reads, docs: [], idx: [] }).catch((e) => e);
+  const lost = await c.commit({ snapshot: 0n, reads, docs: [], idx: [] }).catch((e) => e);
   expect(lost).toBeInstanceOf(ConflictError);
-  expect(lost.conflict).toEqual({ writeTs: ts1, index: 9, id: "doc1", source: "m:w" });
+  expect(lost.conflict).toEqual({ writeTs: ts1, index: "ix9", id: "doc1", source: "m:w" });
   await c.waitForVisible(ts1); // already visible: resolves at once
   let woke = false;
-  const waiting = c.waitForVisible(ts1 + 1).then(() => (woke = true));
+  const waiting = c.waitForVisible(ts1 + 1n).then(() => (woke = true));
   await new Promise((r) => setImmediate(r));
   expect(woke).toBe(false);
-  await c.commit({ snapshot: ts1, reads: [], docs: [], idx: [{ index: 9, key: k, id: "doc1" }] });
+  await c.commit({ snapshot: ts1, reads: [], docs: [], idx: [{ index: "ix9", key: k, id: "doc1" }] });
   await waiting;
   expect(woke).toBe(true);
 });

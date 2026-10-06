@@ -131,7 +131,8 @@ test("function, deployment and transaction metadata; each method only where Conv
   expect(m.fn).toEqual({ name: "m:m", componentPath: "", type: "mutation", visibility: "public" });
   // The snapshot in nanoseconds, shared with a nested query.
   expect(m.nestedSnapshot).toBe(m.snapshotTs);
-  expect(BigInt(m.snapshotTs as string) % 1000n).toBe(0n);
+  expect(BigInt(m.snapshotTs as string)).toBeLessThanOrEqual(t.engine.committer.visibleTs);
+  expect(BigInt(m.snapshotTs as string)).toBeGreaterThan(BigInt(Date.now() - 60_000) * 1_000_000n);
   const a = (await t.functions.runAction("m:a", {})) as Record<string, unknown>;
   expect(a.methods).toEqual(["getDeploymentMetadata", "getFunctionMetadata", "getRequestMetadata"]);
   expect((a.fn as Record<string, unknown>).type).toBe("action");

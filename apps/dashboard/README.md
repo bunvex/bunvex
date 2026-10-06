@@ -61,3 +61,8 @@ origins only, never `*`, and an answer counts only if it comes from the parent w
 Origins are separated by commas or spaces and compared as scheme, host and port (`https://admin.example.com`,
 not a path). Anything that is not an `http(s)` URL is ignored, `*` included: there is no "any origin" setting.
 The parent page sends the admin key to the dashboard, so it must only be served to people who may hold that key.
+
+`VITE_BUNVEX_TRACE_URL` sets where the Logs screen links a traced execution (STUDY-131 AD-27): a trace UI's URL
+template such as `http://localhost:16686/trace/{traceId}` (Jaeger); `{traceId}` and `{spanId}` are replaced, and a
+template without `{traceId}` gets the id appended. Unset (the default), trace ids are shown with no link. A host
+embedding `<Dashboard>` passes it as the `traceUrl` prop.

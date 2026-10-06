@@ -14,6 +14,7 @@ import {
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { compareValues } from "@bunvex/values";
+import { tid } from "./ids.ts";
 
 const DIR = process.env.DIR ?? `${import.meta.dir}/../.data`;
 const SECS = Number(process.env.SECS ?? 5);
@@ -70,9 +71,9 @@ function m1() {
 
 // ------------------------------------------------------------------ workload shared by M2/M3
 
-const T_ITEMS = 1;
-const I_BY_TENANT_CREATED = 1;
-const I_BY_CREATION = 2;
+const T_ITEMS = tid(1);
+const I_BY_TENANT_CREATED = tid(1);
+const I_BY_CREATION = tid(2);
 function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
@@ -140,7 +141,7 @@ async function m3() {
     // 1000 tenants x 100 items, committed in groups of 1000 (the seed does not measure anything)
     const base = 1.79e12;
     for (let t = 0; t < 1000; t++) {
-      const batch: Promise<number>[] = [];
+      const batch: Promise<bigint>[] = [];
       for (let i = 0; i < 100; i++) {
         const { docs, idx } = itemWrite(`t${t}`, base + i * 1000);
         batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs, idx }));
@@ -181,8 +182,8 @@ async function m3() {
 
 // The write log keeps, per commit, the index keys it wrote. A transaction read at snapshot `ts` and
 // recorded its read-set as key intervals; it conflicts iff a commit after `ts` wrote a key inside one.
-type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
-type LogEntry = { ts: number; writes: { index: number; key: Uint8Array }[] };
+type Interval = { index: string; lo: Uint8Array; hi: Uint8Array };
+type LogEntry = { ts: number; writes: { index: string; key: Uint8Array }[] };
 
 function conflicts(log: LogEntry[], from: number, readSet: Interval[]): boolean {
   for (let i = log.length - 1; i >= 0 && log[i].ts > from; i--)
@@ -200,14 +201,14 @@ async function m4() {
       log.push({
         ts: i,
         writes: [
-          { index: 1, key: encodeKey([`k${i}`]) },
-          { index: 2, key: encodeKey([i]) },
+          { index: tid(1), key: encodeKey([`k${i}`]) },
+          { index: tid(2), key: encodeKey([i]) },
         ],
       });
     const p = encodeKey(["zzz"]);
     const readSet: Interval[] = [
-      { index: 1, lo: p, hi: prefixEnd(p) },
-      { index: 2, lo: encodeKey([1e9]), hi: encodeKey([2e9]) },
+      { index: tid(1), lo: p, hi: prefixEnd(p) },
+      { index: tid(2), lo: encodeKey([1e9]), hi: encodeKey([2e9]) },
     ];
     let n = 0;
     const t0 = performance.now();
@@ -231,7 +232,7 @@ async function m4() {
     const tx = inFlight.shift()!;
     attempts++;
     const k = encodeKey([`k${tx.key}`]);
-    const readSet: Interval[] = [{ index: 1, lo: k, hi: prefixEnd(k) }];
+    const readSet: Interval[] = [{ index: tid(1), lo: k, hi: prefixEnd(k) }];
     if (conflicts(log, tx.snap, readSet)) {
       conflictsN++;
       const real = log.some((e) => e.ts > tx.snap && e.writes.some((w) => compareKeys(w.key, k) === 0));
@@ -239,7 +240,7 @@ async function m4() {
       inFlight.push({ key: tx.key, snap: ts }); // retry at a fresh snapshot
       continue;
     }
-    log.push({ ts: ++ts, writes: [{ index: 1, key: k }] });
+    log.push({ ts: ++ts, writes: [{ index: tid(1), key: k }] });
     if (log.length > 4096) log.splice(0, log.length - 4096);
   }
   report({

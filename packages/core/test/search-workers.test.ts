@@ -69,7 +69,7 @@ async function forwarded(e: Engine) {
         .query("_index_worker_metadata")
         .collect(),
     ),
-  )) as { index_id: string; index_metadata: { metadata_type: string; metadata: { fast_forward_ts: number } } }[];
+  )) as { index_id: string; index_metadata: { metadata_type: string; metadata: { fast_forward_ts: bigint } } }[];
   return Object.fromEntries(
     rows.map((r) => [r.index_metadata.metadata_type, r.index_metadata.metadata.fast_forward_ts]),
   );
@@ -88,7 +88,7 @@ test("an idle index is fast-forwarded; a start replays nothing older and retenti
   const e2 = await open(p, store);
   const first = await forwarded(e2);
   expect(Object.keys(first).sort()).toEqual(["text_search", "vector_search"]);
-  const rowsTs = Math.max(...(await readSearchIndexStates(p)).indexes.map((s) => s.ts));
+  const rowsTs = (await readSearchIndexStates(p)).indexes.map((s) => s.ts).reduce((a, b) => (b > a ? b : a));
   expect(first.text_search).toBeGreaterThan(rowsTs);
   // Writes to another table move the clock on; the idle indexes follow it.
   for (let i = 0; i < 3; i++) await e2.mutation((db) => db.insert("logs", { i }));

@@ -59,18 +59,25 @@ class LeasedConnection implements Persistence, Lease {
     this.store.calls.push("release");
     if (this.store.lease.epoch === this.epoch) this.store.lease.holder = null;
   }
-  apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.store.data.apply(ts, docs, idx);
   }
   async flush() {
     if (this.store.lease.epoch !== this.epoch) throw new LeaseLostError();
     await this.store.data.flush();
   }
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  scan(index: string, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     return this.store.data.scan(index, lo, hi, ts, limit, desc);
   }
-  get(table: number, id: string, ts: number) {
+  get(table: string, id: string, ts: bigint) {
     return this.store.data.get(table, id, ts);
+  }
+  getGlobal(key: string) {
+    return this.store.data.getGlobal(key);
+  }
+  async setGlobal(key: string, value: unknown) {
+    if (this.store.lease.epoch !== this.epoch) throw new LeaseLostError();
+    await this.store.data.setGlobal(key, value);
   }
   maxTs() {
     this.store.calls.push("maxTs");

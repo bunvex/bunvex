@@ -226,11 +226,17 @@ export const monotonicNow = (): number => realPerformanceNow();
 export const realRandomBytes = (out: Uint8Array): Uint8Array => realGetRandomValues(out);
 
 /**
- * The wall clock in whole microseconds, whether or not an execution is running: the unit of commit
- * timestamps (STUDY-06 D9). Convex counts nanoseconds in a u64, which a JS number cannot hold exactly;
- * microseconds stay exact until the year 2255. Never behind Date.now().
+ * The wall clock in nanoseconds, whether or not an execution is running: the unit of commit timestamps, a
+ * `bigint` as Convex's u64 (STUDY-06 D9, STUDY-133 §5.3). The whole milliseconds come from the clock and the
+ * fraction from `performance.now()` (sub-microsecond on Bun). Never behind Date.now().
  */
-export const wallClockUs = (): number => Math.floor(Math.max(origin + realPerformanceNow(), realNow()) * 1000);
+export const wallClockNs = (): bigint => {
+  const precise = origin + realPerformanceNow();
+  const wall = realNow();
+  const ms = precise > wall ? precise : wall;
+  const whole = Math.floor(ms);
+  return BigInt(whole) * 1_000_000n + BigInt(Math.floor((ms - whole) * 1e6));
+};
 
 /**
  * Round down to 0.1 ms, as Convex's `secs_as_dom_high_res_ms` (crates/isolate/src/ops/time.rs) does to

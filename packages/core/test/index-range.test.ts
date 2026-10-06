@@ -98,17 +98,40 @@ describe("withIndex ranges follow Convex's rules", () => {
       'Tried to query index items.by_ab but the query didn\'t use the index fields in order.\nIndex fields: ["a", "b", "_creationTime"]\nQuery fields: ["b"]\nFirst incorrect field: "b"',
     );
     expect(await rejected(run((q) => q.gt("a", 1).eq("b", 2)))).toThrow('First incorrect field: "b"');
-    expect(await rejected(run((q) => q.eq("a", 1).gt("a", 0)))).toThrow("didn't use the index fields in order");
   });
 
+  // The whole message, as Convex's backend answers it (asked through the differential harness, STUDY-122):
+  // a second equality names the value already there (`BTreeMap::insert`'s old value), a second bound of a kind
+  // names the new one, an equality and a bound on one field is an inequality error naming the equality; values
+  // print as Convex's `Display` (`1.0`).
+  const message = async (f: (q: any) => any) =>
+    run(f).then(
+      () => "resolved",
+      (e: Error) => e.message,
+    );
+
   test("a second equality or bound of the same kind: AlreadyDefinedBound", async () => {
-    expect(await rejected(run((q) => q.eq("a", 1).eq("a", 2)))).toThrow(
-      'Already defined equality bound in index range. Can\'t add "a" == 2.',
+    expect(await message((q) => q.eq("a", 1).eq("a", 2.5))).toBe(
+      'Already defined equality bound in index range. Can\'t add "a" == 1.0.',
     );
-    expect(await rejected(run((q) => q.gt("a", 1).gte("a", 2)))).toThrow(
-      'Already defined lower bound in index range. Can\'t add "a" >= 2.',
+    expect(await message((q) => q.eq("a", "x").eq("a", "y"))).toBe(
+      'Already defined equality bound in index range. Can\'t add "a" == "x".',
     );
-    expect(await rejected(run((q) => q.lt("a", 1).lte("a", 2)))).toThrow("Already defined upper bound");
+    expect(await message((q) => q.gt("a", 1).gte("a", 2))).toBe(
+      'Already defined lower bound in index range. Can\'t add "a" >= 2.0.',
+    );
+    expect(await message((q) => q.lt("a", null).lte("a", true))).toBe(
+      'Already defined upper bound in index range. Can\'t add "a" <= true.',
+    );
+  });
+
+  test("an equality and a bound on the same field: AlreadyDefinedBound (inequality), naming the equality", async () => {
+    expect(await message((q) => q.eq("a", 1).gt("a", 0))).toBe(
+      'Already defined inequality bound in index range. Can\'t add "a" == 1.0.',
+    );
+    expect(await message((q) => q.gt("a", 0).eq("a", "z"))).toBe(
+      'Already defined inequality bound in index range. Can\'t add "a" == "z".',
+    );
   });
 
   test("bounds on two fields: BoundsOnMultipleFields", async () => {
