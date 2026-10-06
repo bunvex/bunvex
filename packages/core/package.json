@@ -9,7 +9,8 @@
     "./schema": "./src/schema.ts",
     "./persistence": "./src/persistence/index.ts",
     "./persistence/memory": "./src/persistence/memory.ts",
-    "./persistence/sqlite": "./src/persistence/sqlite.ts"
+    "./persistence/sqlite": "./src/persistence/sqlite.ts",
+    "./test-runtime": "./src/test-runtime.ts"
   },
   "dependencies": {
     "@bunvex/values": "workspace:*",

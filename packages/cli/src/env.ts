@@ -5,6 +5,15 @@
 // `POST /api/update_environment_variables`.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  argumentError,
+  missingArgument,
+  missingRequiredArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownCommand,
+  unknownOption,
+} from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, parseEnvFile, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -167,8 +176,6 @@ async function setMany(io: Io, b: Backend, content: string, source: string, forc
 
 async function set(io: Io, b: Backend, positional: string[], opts: { fromFile?: string; force: boolean }) {
   const [name, value] = positional;
-  if (positional.length > 2)
-    throw new EnvFailure(`error: too many arguments for 'set'. Expected 2 arguments but got ${positional.length}.`);
   if (name === undefined) {
     if (opts.fromFile) return setMany(io, b, readFile(io, opts.fromFile), opts.fromFile, opts.force);
     const piped = await readStdin(io);
@@ -203,15 +210,20 @@ async function set(io: Io, b: Backend, positional: string[], opts: { fromFile?: 
 
 export async function envCommand(args: string[], io: Io): Promise<number> {
   const [sub, ...rest] = args;
-  if (sub === undefined || sub === "--help" || sub === "-h" || rest.includes("--help") || rest.includes("-h")) {
+  // No subcommand: commander prints the help on stderr and exits 1.
+  if (sub === undefined) {
+    io.err(ENV_USAGE);
+    return 1;
+  }
+  if (sub === "--help" || sub === "-h" || rest.includes("--help") || rest.includes("-h")) {
     io.out(ENV_USAGE);
-    return sub === undefined ? 1 : 0;
+    return 0;
   }
+  // Argument errors as Convex's commander prints them (no help after them for `env`).
+  if (!["set", "get", "remove", "rm", "unset", "list"].includes(sub))
+    return argumentError(io, unknownCommand(sub, ["set", "get", "remove", "rm", "list", "default"]));
   const taken = takeTargetFlags(rest);
-  if (typeof taken === "string") {
-    io.err(`bunvex env: ${taken}`);
-    return 2;
-  }
+  if (typeof taken === "string") return argumentError(io, taken);
   let fromFile: string | undefined;
   let force = false;
   let namesOnly = false;
@@ -223,19 +235,16 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
     else if (a === "--names-only" && sub === "list") namesOnly = true;
     else if ((a === "--from-file" || a.startsWith("--from-file=")) && sub === "set") {
       fromFile = a.includes("=") ? a.slice(a.indexOf("=") + 1) : r[++i];
-      if (!fromFile) {
-        io.err("bunvex env: --from-file needs a value");
-        return 2;
-      }
-    } else if (a.startsWith("--")) {
-      io.err(`bunvex env: unknown option ${a}\n\n${ENV_USAGE}`);
-      return 2;
-    } else positional.push(a);
+      if (fromFile === undefined) return argumentError(io, missingArgument("--from-file <file>"));
+    } else if (a.startsWith("--")) return argumentError(io, unknownOption(a, optionsIn(ENV_USAGE)));
+    else positional.push(a);
   }
-  if (!["set", "get", "remove", "rm", "unset", "list"].includes(sub)) {
-    io.err(`bunvex env: unknown command ${sub}\n\n${ENV_USAGE}`);
-    return 2;
-  }
+  // Each subcommand's arguments: `set [name] [value]`, `get <name>`, `remove <name>`, `list`.
+  const command = sub === "rm" || sub === "unset" ? "remove" : sub;
+  const expected = command === "set" ? 2 : command === "list" ? 0 : 1;
+  if (positional.length > expected) return argumentError(io, tooManyArguments(command, expected, positional.length));
+  if ((command === "get" || command === "remove") && positional.length === 0)
+    return argumentError(io, missingRequiredArgument("name"));
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
     acquired = await acquireTarget(taken.flags, io);
@@ -251,14 +260,12 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
   try {
     if (sub === "set") await set(io, b, positional, { fromFile, force });
     else if (sub === "get") {
-      const name = positional[0];
-      if (!name || positional.length > 1) throw new EnvFailure("error: get takes one argument: the variable's name");
+      const name = positional[0]!;
       const found = (await b.list()).find((v) => v.name === name);
       // As Convex: a missing variable is reported, and the exit code is still 0.
       if (!found) io.err(`✖ Environment variable "${name}" not found`);
       else io.out(found.value);
     } else if (sub === "list") {
-      if (positional.length) throw new EnvFailure("error: list takes no arguments");
       const vars = (await b.list()).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
       if (!vars.length) io.err("No environment variables set");
       for (const { name, value } of vars) {
@@ -271,8 +278,7 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
         io.out(`${name}=${formatted}`);
       }
     } else {
-      const name = positional[0];
-      if (!name || positional.length > 1) throw new EnvFailure(`error: ${sub} takes one argument: the variable's name`);
+      const name = positional[0]!;
       await b.update([{ name, value: null }]);
       io.err(`✔ Successfully unset ${name}`);
     }

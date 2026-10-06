@@ -257,14 +257,14 @@ describe("ctx.storage", () => {
     await functions.runMutation("m:del", { id });
     expect(await functions.runQuery("m:url", { id })).toBeNull();
     expect(await msg(functions.runMutation("m:del", { id }))).toContain(`storage id ${id} not found`);
-    // F3: the blob goes once the delete committed.
+    // As Convex (STUDY-130): the row is gone, the blob stays — nothing removes it later either.
     const count = async () => {
       let n = 0;
       for await (const _ of blobs.list()) n++;
       return n;
     };
-    for (let i = 0; i < 100 && (await count()) > 0; i++) await Bun.sleep(10);
-    expect(await count()).toBe(0);
+    await Bun.sleep(300);
+    expect(await count()).toBe(1);
   });
 
   test("URLs follow the canonical cloud URL: getUrl from a query and an action, generateUploadUrl from a mutation and an action (Convex: test_storage_get_url, test_storage_generate_upload_url)", async () => {
@@ -366,17 +366,7 @@ describe("ctx.storage", () => {
   });
 });
 
-describe("F3 and F4", () => {
-  test("blobs no row points to are swept; those with rows stay", async () => {
-    const { blobs, server, storeText } = await setup();
-    await storeText("kept");
-    await blobs.put(new Uint8Array([1, 2, 3])); // an upload whose row never committed
-    expect(await server.files!.sweepOrphans(0)).toBe(1);
-    let n = 0;
-    for await (const _ of blobs.list()) n++;
-    expect(n).toBe(1);
-  });
-
+describe("F4", () => {
   test("uploads have no size limit; every other route keeps maxRequestBodySize", async () => {
     const { upload, api, server } = await setup({ maxRequestBodySize: 1024 });
     expect((await upload("x".repeat(64 * 1024))).status).toBe(200);

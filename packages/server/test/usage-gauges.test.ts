@@ -3,7 +3,15 @@
 // virtual tables' documents), sent once the table summaries are built, on a splayed period; and the 1 TiB
 // limit on exports that include storage, on the last total.
 import { afterEach, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine, SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "@bunvex/core";
+import {
+  defineSchema,
+  defineTable,
+  Engine,
+  FILE_STORAGE_TABLE,
+  insertJob,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
+} from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { v, valueSize } from "@bunvex/values";
@@ -48,6 +56,7 @@ test("the totals, as Convex sums them", async () => {
     await db.insert("items", { n: 2, kind: "bb", body: "olá", v: [0, 1, 0] });
     await db.insert("items", { n: 3 }); // no body or vector: in neither search index
     await db.insert("other", { x: "y" });
+    await insertJob(db, { name: "m.js:f", args: [{ a: "b" }], scheduledTime: Date.now() + 60_000, now: Date.now() });
   });
   const files = new FileStorage(engine, new MemoryBlobStore(), "http://127.0.0.1:1");
   await files.actionWriter().store(new Blob(["0123456789"]));
@@ -65,12 +74,16 @@ test("the totals, as Convex sums them", async () => {
     textBytes: 11 + 3 + (Buffer.byteLength("olá") + 4) + (0 + 1),
     fileBytes: 30,
     backupBytes: 0,
+    // A virtual table's documents are its system tables' (STUDY-125): `_scheduled_functions` sums the jobs
+    // and their arguments.
     systemTableDocumentBytes: {
-      _storage: await sizeOf(engine, STORAGE_TABLE),
-      _scheduled_functions: await sizeOf(engine, SCHEDULED_FUNCTIONS_TABLE),
+      _storage: await sizeOf(engine, FILE_STORAGE_TABLE),
+      _scheduled_functions:
+        (await sizeOf(engine, SCHEDULED_JOBS_TABLE)) + (await sizeOf(engine, SCHEDULED_JOB_ARGS_TABLE)),
     },
   });
   expect(u.systemTableDocumentBytes._storage).toBeGreaterThan(0);
+  expect(u.systemTableDocumentBytes._scheduled_functions).toBeGreaterThan(await sizeOf(engine, SCHEDULED_JOBS_TABLE));
 });
 
 test("a run sends Convex's event and keeps the file total; nothing before the summaries are built", async () => {

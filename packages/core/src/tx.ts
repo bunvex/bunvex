@@ -40,10 +40,11 @@ import {
   searchIndexesUnavailable,
   TABLES_TABLE,
   type TableMeta,
+  VIRTUAL_TO_SYSTEM_TABLE,
 } from "./catalog.ts";
 import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
-import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
+import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
@@ -78,9 +79,11 @@ import {
 } from "./schema.ts";
 import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
-import { ProjectedQuery, SystemReader } from "./system-reader.ts";
+import { SystemReader, VirtualQuery } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
 import { TableSummariesUnavailableError } from "./table-summaries.ts";
+import { readNextTablet, writeNextTablet } from "./tablet-ids.ts";
+import type { IndexReadSpans } from "./tracing.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
@@ -240,6 +243,11 @@ type QState = {
   iterated: boolean;
   /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
   search?: SearchSpec;
+  /**
+   * A virtual table's query (`db.system`, STUDY-125): each system document read is mapped to the virtual
+   * shape before the operators see it, so filters run on the virtual fields, as Convex's.
+   */
+  virtual?: (d: Doc) => Doc | Promise<Doc>;
 };
 
 type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
@@ -406,6 +414,11 @@ export class Tx {
    * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
    */
   retention: { check(ts: number): void } | null = null;
+  /**
+   * Its index reads, one span per index (STUDY-131 AD-26): set by the engine when the transaction runs under
+   * a traced span, else null and no read looks at the clock.
+   */
+  indexSpans: IndexReadSpans | null = null;
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
@@ -654,6 +667,8 @@ export class Tx {
 
   /** Who runs this transaction: the server's identity object (opaque here), or null without a token. */
   identity: unknown = null;
+  /** Whether it runs for an admin or the system acting as itself (`Caller.systemIdentity`). */
+  systemIdentity = false;
   /** The request it runs for (STUDY-44), for `ctx.meta.getRequestMetadata()`. */
   request: import("./engine.ts").CallRequest | null = null;
   /** Whether the body read the identity (Convex's `observe_identity`): its result then depends on the caller. */
@@ -734,10 +749,12 @@ export class Tx {
         indexes,
         true,
         await readNextIndexId(this),
+        await readNextTablet(this),
       );
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
       for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
+      await writeNextTablet(this, plan.nextTablet);
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
       await writeNextIndexId(this, plan.nextIndexId);
       const def = new Catalog().add(
@@ -856,6 +873,11 @@ export class Tx {
   async get(tableOrId: string, id?: string): Promise<Doc | null> {
     if (id !== undefined) return this.handOut(await this.read(tableOrId, id, "db.get"));
     const table = this.tableOfIdArg(tableOrId, "db.get");
+    // A virtual table's id (`_storage`'s) names a system table apps reach through `db.system` only (Convex's
+    // `system_table_guard`).
+    const name = table === undefined ? this.publicTableName(decodeId(tableOrId).tableNumber) : undefined;
+    if (name !== undefined && !this.systemAccess && VIRTUAL_TO_SYSTEM_TABLE[name] !== undefined)
+      throw new Error("System tables can only be accessed with db.system.");
     return table === undefined ? null : this.handOut(await this.read(table, tableOrId, "db.get"));
   }
 
@@ -904,7 +926,10 @@ export class Tx {
     const k = encodeKey([id]);
     this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
     this.retention?.check(this.snapshot);
+    const spans = this.indexSpans;
+    const start = spans ? monotonicNow() : 0;
     const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
+    if (spans) spans.record(t.byId, json ? 1 : 0, start);
     this.retention?.check(this.snapshot);
     if (!json) return null;
     const doc = decodeDoc(json);
@@ -931,6 +956,32 @@ export class Tx {
       iterated: false,
     };
     return this.makeQuery(table, st);
+  }
+
+  /**
+   * @internal `db.system.query(name)` of a virtual table (system-reader.ts, STUDY-125): a query of its system
+   * table `system`, each document mapped by `toVirtual` before any operator.
+   */
+  queryVirtual(name: string, system: string, toVirtual: (d: Doc) => Doc | Promise<Doc>): TxQuery {
+    const t = this.asSystemSync(() => this.findTable(system));
+    if (!t) this.readMissingTable();
+    const st: QState = {
+      t,
+      ix: t?.indexes.get("by_creation_time"),
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      ops: [],
+      closed: false,
+      iterated: false,
+      virtual: toVirtual,
+    };
+    return this.makeQuery(name, st);
+  }
+
+  /** @internal The name an id's table number has for apps (a virtual table's for its system table's), if any. */
+  publicTableName(number: number): string | undefined {
+    return this.catalog.publicNameOf(number);
   }
 
   /**
@@ -1063,7 +1114,26 @@ export class Tx {
     }
   }
 
-  private async storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+  /** Not async: untraced, the store's promise is returned as is, with no extra turn. */
+  private storeRange(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
+    const spans = this.indexSpans;
+    return spans ? this.tracedStoreRange(spans, st, lo, hi, limit) : this.storeRangeOf(st, lo, hi, limit);
+  }
+
+  private async tracedStoreRange(
+    spans: IndexReadSpans,
+    st: QState,
+    lo: Uint8Array,
+    hi: Uint8Array,
+    limit: number,
+  ): Promise<Doc[]> {
+    const start = monotonicNow();
+    const out = await this.storeRangeOf(st, lo, hi, limit);
+    spans.record(st.ix!, out.length, start);
+    return out;
+  }
+
+  private async storeRangeOf(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     const p = this.persistence as Persistence & Partial<ScanDocs>;
@@ -1120,7 +1190,12 @@ export class Tx {
       const docs = await this.page(st, lo, hi, n);
       for (const d of docs) {
         this.countEgress(st.t!, d, st.ix!);
-        yield d;
+        if (!st.virtual) yield d;
+        else {
+          // A mapping that needs no other read (`_storage`'s) is not awaited.
+          const m = st.virtual(d);
+          yield m instanceof Promise ? await m : m;
+        }
       }
       if (docs.length < n) return;
       const last = indexKey(st.ix!, docs[docs.length - 1]);
@@ -1343,8 +1418,12 @@ export class Tx {
     if (pipe.onlyLimits !== null) {
       // Only limits: the smallest is the page size.
       const limit = Math.min(pipe.onlyLimits, cap);
-      const docs = await this.page(st, st.range.lo, st.range.hi, limit);
+      let docs = await this.page(st, st.range.lo, st.range.hi, limit);
       for (const d of docs) this.countEgress(st.t, d, st.ix);
+      if (st.virtual) {
+        const mapped = docs.map(st.virtual);
+        docs = mapped.some((m) => m instanceof Promise) ? await Promise.all(mapped) : (mapped as Doc[]);
+      }
       // A full page stops at its last document (the limit is met, nothing past it was asked for); a short
       // one ran out of the range.
       if (docs.length < limit) reads.exhausted();
@@ -1477,11 +1556,7 @@ export class Tx {
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
     const dv = next && this.docValidators?.get(t.name);
     if (dv) {
-      const msg = checkValue(
-        dv,
-        next as unknown as Value,
-        this.schemaTables ?? ((n) => this.catalog.byNumber(n)?.name),
-      );
+      const msg = checkValue(dv, next as unknown as Value, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
       if (msg)
         throw new Error(
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
@@ -1489,7 +1564,7 @@ export class Tx {
     }
     const pv = next && !this.pendingViolation && this.pendingValidators?.get(t.name);
     if (pv) {
-      const msg = checkValue(pv, next as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
+      const msg = checkValue(pv, next as unknown as Value, (n) => this.catalog.publicNameOf(n));
       if (msg)
         this.pendingViolation = {
           table: t.name,
@@ -2075,7 +2150,7 @@ export class SearchFilterBuilder {
  * `validateReturnValue` refuses as a function's result (STUDY-66 §3).
  */
 export function isQueryObject(value: unknown): boolean {
-  return value instanceof QueryImpl || value instanceof ProjectedQuery;
+  return value instanceof QueryImpl || value instanceof VirtualQuery;
 }
 
 class QueryImpl implements TxQueryChained {
