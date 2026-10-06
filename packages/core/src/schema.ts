@@ -4,6 +4,7 @@
 // resolves them into its own catalog (catalog.ts, STUDY-04). Every table also gets Convex's two system
 // indexes, `by_id` and `by_creation_time`.
 import {
+  displayValidator,
   type GenericId,
   type GenericValidator,
   isBytes,
@@ -118,7 +119,7 @@ export class TableDefinition<
   /** Index names declared more than once (Convex refuses them at push, naming the table: see `defineSchema`). */
   readonly duplicateIndexes: string[] = [];
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
-  readonly staged: string[] = [];
+  readonly stagedIndexes: string[] = [];
   /** Full-text search indexes (STUDY-45), and those declared `staged: true`. */
   readonly searchIndexes: Record<string, SearchIndexDef> = {};
   readonly stagedSearch: string[] = [];
@@ -134,12 +135,8 @@ export class TableDefinition<
     this.document = (document as GenericValidator)?.isValidator
       ? (document as GenericValidator)
       : v.object(document as PropertyValidators);
-    const d = this.document;
-    const ok =
-      d.kind === "object" ||
-      d.kind === "any" ||
-      (d.kind === "union" && (d.members as GenericValidator[]).every((m) => m.kind === "object"));
-    if (!ok) throw new Error("A table's document validator must be v.object(...), a v.union of objects, or v.any().");
+    // As Convex's `defineTable`, nothing else is checked here: a push refuses a validator a table cannot have
+    // (`documentTypeError`, STUDY-14 §6).
   }
   /**
    * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
@@ -166,7 +163,7 @@ export class TableDefinition<
       return this;
     }
     this.indexes[name] = [...fields];
-    if (!Array.isArray(config) && config.staged === true) this.staged.push(name);
+    if (!Array.isArray(config) && config.staged === true) this.stagedIndexes.push(name);
     return this;
   }
 
@@ -250,6 +247,23 @@ export class TableDefinition<
     if (config.staged === true) this.stagedVector.push(name);
     return this;
   }
+
+  /** The validator `.staged()` proposed, if any. */
+  stagedDocument: GenericValidator | undefined = undefined;
+
+  /**
+   * @internal Stage the table's next document validator (Convex's `TableDefinition.staged`, STUDY-106): an
+   * object of field validators or a validator. It is serialized and stored with the schema, so changing it
+   * alone makes a new schema version, but nothing checks documents against it: the validator given to
+   * `defineTable` stays the one enforced, and the document type does not change.
+   */
+  staged(document: Validator<Record<string, unknown>, "required"> | PropertyValidators): this {
+    if (this.stagedDocument !== undefined) throw new Error("Table cannot have more than one staged validator.");
+    this.stagedDocument = (document as GenericValidator)?.isValidator
+      ? (document as GenericValidator)
+      : v.object(document as PropertyValidators);
+    return this;
+  }
 }
 
 /** The most fields a database index may have, `_creationTime` included (Convex's `MAX_INDEX_FIELDS_SIZE`). */
@@ -273,7 +287,7 @@ function checkDatabaseIndexes(table: string, t: TableDefinition) {
     Object.keys(t.vectorIndexes).length;
   if (count > MAX_INDEXES_PER_TABLE)
     throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
-  const staged = new Set(t.staged);
+  const staged = new Set(t.stagedIndexes);
   const entries = Object.entries(t.indexes);
   for (const group of [false, true]) {
     const mine = entries.filter(([n]) => staged.has(n) === group);
@@ -307,6 +321,35 @@ function checkDatabaseIndexes(table: string, t: TableDefinition) {
   }
 }
 
+/**
+ * Convex's check when a table definition is exported (`TableDefinition.export`): the staged validator's JSON
+ * must be an object. `schemaToJson`, bunvex's `export`, runs it; a push answers it as Convex does (`InvalidSchemaExport`).
+ * Convex's message ends with a docs link, left out (DV-356).
+ */
+export function stagedDocumentJson(staged: GenericValidator): ValidatorJSON {
+  const json: unknown = staged.json;
+  if (typeof json !== "object")
+    throw new Error("Invalid staged validator: please make sure that the parameter of `.staged()` is valid");
+  return json as ValidatorJSON;
+}
+
+/**
+ * Convex's parse of a pushed schema's `stagedDocumentType` (`DocumentSchema::try_from`, json.rs): an object, a
+ * union of objects, or `v.any()`, as a table's document validator. The first table's failure (with the
+ * offending validator, or the union's offending member), or null. Convex's message ends with a docs link, left
+ * out (DV-356).
+ */
+export function stagedDocumentError(schema: SchemaDefinition): string | null {
+  for (const t of schema.tables.values()) {
+    const s = t.stagedDocument;
+    if (s === undefined || s.kind === "object" || s.kind === "any") continue;
+    const bad = s.kind === "union" ? (s.members as GenericValidator[]).find((m) => m.kind !== "object") : s;
+    if (bad)
+      return `The document validator in a schema must be an object, a union of objects, or \`v.any()\`. Found ${displayValidator(bad)}.`;
+  }
+  return null;
+}
+
 /** Convex's name checks for database indexes: reserved names, and a name declared twice. */
 function checkIndexNames(table: string, t: TableDefinition) {
   for (const n of Object.keys(t.indexes))
@@ -320,7 +363,7 @@ function checkIndexNames(table: string, t: TableDefinition) {
  * pass 16 fields. Convex's `_creationTime` message ends with a docs link, left out (DV-04).
  */
 function checkIndexSystemFields(t: TableDefinition) {
-  const staged = new Set(t.staged);
+  const staged = new Set(t.stagedIndexes);
   const sorted = (group: boolean) =>
     Object.entries(t.indexes)
       .filter(([n]) => staged.has(n) === group)
@@ -488,6 +531,8 @@ export type DeclaredTable = {
   /** Vector indexes (STUDY-51), and the names of those declared staged. */
   vectorIndexes?: Record<string, VectorIndexDef>;
   stagedVector?: string[];
+  /** The next document validator `.staged()` proposed (STUDY-106): stored with the schema, never enforced. */
+  stagedDocument?: GenericValidator;
 };
 /** A schema's tables as types (Convex's `GenericSchema`). */
 export type GenericSchema = Record<
@@ -530,13 +575,14 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
       name,
       indexes: { ...t.indexes },
       document: t.document,
-      staged: [...t.staged],
+      staged: [...t.stagedIndexes],
       ...(Object.keys(t.searchIndexes).length
         ? { searchIndexes: structuredClone(t.searchIndexes), stagedSearch: [...t.stagedSearch] }
         : {}),
       ...(Object.keys(t.vectorIndexes).length
         ? { vectorIndexes: structuredClone(t.vectorIndexes), stagedVector: [...t.stagedVector] }
         : {}),
+      ...(t.stagedDocument === undefined ? {} : { stagedDocument: t.stagedDocument }),
     });
   }
   for (const t of Object.values(tables)) checkIndexSystemFields(t);
@@ -632,6 +678,35 @@ export function referencedTables(v: ValidatorJSON, out = new Set<string>()): Set
       break;
   }
   return out;
+}
+
+/**
+ * Convex's check when a table definition is exported (`TableDefinition.export`): the document validator's JSON
+ * must be an object. `schemaToJson`, bunvex's `export`, runs it; a push answers it as Convex does
+ * (`InvalidSchemaExport`). Convex's message ends with a docs link, left out (DV-397).
+ */
+export function documentJson(document: GenericValidator): ValidatorJSON {
+  const json: unknown = document.json;
+  if (typeof json !== "object")
+    throw new Error("Invalid validator: please make sure that the parameter of `defineTable` is valid");
+  return json as ValidatorJSON;
+}
+
+/**
+ * Convex's parse of a pushed schema's `documentType` (`DocumentSchema::try_from`, crates/common/src/schemas/
+ * json.rs): an object, a union of objects, or `v.any()`. The first table's failure, naming the validator (for a
+ * union, its first member that is not an object), or null. Convex's message ends with a docs link, left out
+ * (DV-397).
+ */
+export function documentTypeError(schema: SchemaDefinition): string | null {
+  for (const t of schema.tables.values()) {
+    const d = t.document;
+    if (d.kind === "object" || d.kind === "any") continue;
+    const bad = d.kind === "union" ? (d.members as GenericValidator[]).find((m) => m.kind !== "object") : d;
+    if (bad)
+      return `The document validator in a schema must be an object, a union of objects, or \`v.any()\`. Found ${displayValidator(bad)}.`;
+  }
+  return null;
 }
 
 /**

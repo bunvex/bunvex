@@ -106,7 +106,10 @@ describe("schema validation attempts and progress, as Convex's (STUDY-127)", () 
     const f = await withItems(tmp(), 50);
     const older = await f.startSchemaPush(strict);
     await until(async () => (await rows(f, "_schema_validations")).length === 1);
-    const newer = await f.startSchemaPush(defineSchema({ items: defineTable({ n: v.float64() }) }));
+    // A different schema (one equal to the pending one would be that one, as Convex's `submit_pending`).
+    const newer = await f.startSchemaPush(
+      defineSchema({ items: defineTable({ n: v.float64(), note: v.optional(v.string()) }) }),
+    );
     expect(await schemaState(f, older.schemaId)).toBe("overwritten");
     await until(async () => (await schemaState(f, newer.schemaId)) === "validated");
     expect((await rows(f, "_schema_validations")).map((r) => r.schemaId)).toEqual([newer.schemaId]);

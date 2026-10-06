@@ -3,6 +3,7 @@
 // `.env.local`, then `.env` (or `--env-file`), as Convex's CLI reads CONVEX_SELF_HOSTED_*.
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { missingArgument } from "./args.ts";
 import type { Io } from "./io.ts";
 
 export type TargetFlags = { url?: string; adminKey?: string; envFile?: string };
@@ -48,6 +49,13 @@ export function parseEnvFile(text: string): Record<string, string> {
   return out;
 }
 
+/** The target options as Convex's commander spells them (`lib/command.ts`), for its messages. */
+const TARGET_SPECS: Record<string, string> = {
+  "--url": "--url <url>",
+  "--admin-key": "--admin-key <adminKey>",
+  "--env-file": "--env-file <envFile>",
+};
+
 /** Take `--url`, `--admin-key` and `--env-file` out of `args`: the flags and the other arguments. */
 export function takeTargetFlags(args: string[]): { flags: TargetFlags; rest: string[] } | string {
   const flags: TargetFlags = {};
@@ -57,7 +65,7 @@ export function takeTargetFlags(args: string[]): { flags: TargetFlags; rest: str
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--url" || name === "--admin-key" || name === "--env-file") {
       const v = inline ?? args[++i];
-      if (!v) return `${name} needs a value`;
+      if (!v) return missingArgument(TARGET_SPECS[name]!);
       if (name === "--url") flags.url = v;
       else if (name === "--admin-key") flags.adminKey = v;
       else flags.envFile = v;

@@ -304,6 +304,14 @@ export class Committer {
   /** Flushes made: a group is written as one or more write batches (DV-62). */
   batches = 0;
   conflicts = 0;
+  /** Commits made durable and visible. */
+  commits = 0;
+  /**
+   * Told of each write batch once it is durable: how many commits it carried and how long its flush took, in
+   * seconds (the server's `/metrics`, as Convex's `database_write_batch_commits` and
+   * `database_commit_persistence_write_seconds`).
+   */
+  onBatch: ((commits: number, flushSeconds: number) => void) | null = null;
   /** Commits refused because their snapshot was older than the write log (OutOfRetentionError). */
   outOfRetention = 0;
   /** The write log, oldest first, from `log[logHead]` (trimmed by advancing the head; compacted now and then). */
@@ -612,6 +620,7 @@ export class Committer {
       refuseRest();
       return false;
     }
+    const flushStart = performance.now();
     try {
       await this.flushWithRetries();
     } catch (e) {
@@ -624,6 +633,8 @@ export class Committer {
       return false;
     }
     this.batches++;
+    this.commits += to - from;
+    this.onBatch?.(to - from, (performance.now() - flushStart) / 1000);
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
