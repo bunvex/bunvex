@@ -44,13 +44,14 @@ import {
   VIRTUAL_TO_SYSTEM_TABLE,
 } from "./catalog.ts";
 import { writeCatalogChanges } from "./catalog-writes.ts";
-import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
+import { type Interval, type LoggedIndexWrite, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, expressionJson, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
+import { internalIdOf } from "./internal-id.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
   DanglingReferenceError,
@@ -58,7 +59,6 @@ import {
   type IndexId,
   type IndexWrite,
   type Persistence,
-  type ScanDocs,
   type TabletId,
 } from "./persistence/index.ts";
 import {
@@ -677,6 +677,26 @@ export class Tx {
     this.recordInterval({ index: this.catalog.table(TABLES_TABLE).byId.id, lo: k, hi: prefixEnd(k) });
   }
 
+  /** The tables whose `_index` rows this transaction writes (an index created, changed or dropped). */
+  private indexedTables = new Set<TabletId>();
+  /**
+   * A write log entry on the `_tables` row of each table whose indexes this commit changes, never persisted.
+   * Convex's committer computes a commit's index writes with the latest index registry; bunvex's transactions
+   * compute them with the catalog they began with, so a transaction that began before an index was created
+   * and commits after it would leave the new index without its entries. Each such transaction read its
+   * table's `_tables` row (`dependOn`), so this key makes it conflict and run again with the new catalog.
+   */
+  catalogTouches(): { index: IndexId; key: Uint8Array; id: null }[] {
+    if (!this.indexedTables.size) return [];
+    const byId = this.catalog.table(TABLES_TABLE).byId.id;
+    const out: { index: IndexId; key: Uint8Array; id: null }[] = [];
+    for (const tablet of this.indexedTables) {
+      const metaId = this.catalog.byTablet(tablet)?.metaId;
+      if (metaId !== undefined) out.push({ index: byId, key: encodeKey([metaId]), id: null });
+    }
+    return out;
+  }
+
   /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
   readonly createdTables = new Map<string, { def: TableDef }>();
   private systemDepth = 0;
@@ -940,11 +960,12 @@ export class Tx {
     this.retention?.check(this.snapshot);
     const spans = this.indexSpans;
     const start = spans ? monotonicNow() : 0;
-    const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
-    if (spans) spans.record(t.byId, json ? 1 : 0, start);
+    const version = await storeCall(() => this.persistence.get(t.id, internalIdOf(id), this.snapshot));
+    if (spans) spans.record(t.byId, version ? 1 : 0, start);
     this.retention?.check(this.snapshot);
-    if (!json) return null;
-    const doc = decodeDoc(json);
+    if (!version) return null;
+    this.versionTs.set(id, version.ts);
+    const doc = decodeDoc(version.json);
     this.countEgress(t, doc, null);
     return doc;
   }
@@ -1148,31 +1169,24 @@ export class Tx {
   private async storeRangeOf(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
-    const p = this.persistence as Persistence & Partial<ScanDocs>;
-    if (p.scanDocs) {
-      // Remote persistence fuses the index range and the document fetches into one round trip.
-      const rows = await storeCall(async () => {
-        try {
-          return await p.scanDocs!(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
-        } catch (e) {
-          // As snapshotRange does for the engine path: a reference retention pruned during the read is a
-          // snapshot too old. Checked here, before storeCall makes the failure a PersistenceReadError.
-          if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
-          throw e;
-        }
-      });
-      this.countRowsRead(t.name, rows.length);
-      return rows.map(decodeDoc);
+    // The index range and its documents, each at its entry's ts, in one call (one round trip on a remote store).
+    const rows = await storeCall(async () => {
+      try {
+        return await this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
+      } catch (e) {
+        // As snapshotRange does: a reference retention pruned during the read is a snapshot too old. Checked
+        // here, before storeCall makes the failure a PersistenceReadError.
+        if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
+        throw e;
+      }
+    });
+    this.countRowsRead(t.name, rows.length);
+    const out: Doc[] = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const doc = decodeDoc(rows[i]!.json);
+      this.versionTs.set(doc._id, rows[i]!.ts);
+      out[i] = doc;
     }
-    const ids = await storeCall(() => this.persistence.scan(ix.id, lo, hi, this.snapshot, limit, st.desc));
-    const out: Doc[] = [];
-    for (const id of ids) {
-      const json = await storeCall(() => this.persistence.get(t.id, id, this.snapshot));
-      // A corrupt store: raised, not skipped — a short page would also end the range early (PERSIST-01 C15).
-      if (!json) throw new DanglingReferenceError(ix.id, id, this.snapshot, false);
-      out.push(decodeDoc(json));
-    }
-    this.countRowsRead(t.name, out.length);
     return out;
   }
 
@@ -1563,6 +1577,10 @@ export class Tx {
     // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
     engineOwned(old);
     engineOwned(next);
+    if (t.name === INDEX_TABLE) {
+      const tablet = ((next ?? old) as { table_id?: TabletId } | null)?.table_id;
+      if (tablet !== undefined) this.indexedTables.add(tablet);
+    }
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
@@ -1752,25 +1770,44 @@ export class Tx {
   }
 
   /** The writes as persistence rows: the new version of each doc and the index entries that changed. */
-  toWrites(): { docs: DocWrite[]; idx: IndexWrite[] } {
+  toWrites(): { docs: DocWrite[]; idx: LoggedIndexWrite[] } {
     const docs: DocWrite[] = [];
-    const idx: IndexWrite[] = [];
+    const idx: LoggedIndexWrite[] = [];
     for (const [id, w] of this.writes) {
-      docs.push({ table: w.table.id, id, json: w.next ? encodeDoc(w.next) : null });
+      const internal = internalIdOf(id);
+      docs.push({
+        table: w.table.id,
+        id: internal,
+        json: w.next ? encodeDoc(w.next) : null,
+        // As Convex's committer: the ts of the version this write replaces (the one this transaction read).
+        prevTs: w.old ? this.prevTsOf(id) : null,
+      });
+      const table = w.table.id;
       for (const ix of maintainedIndexes(w.table)) {
         const oldK = writtenKey(w, "old", ix);
         const newK = writtenKey(w, "next", ix);
         if (oldK && newK && compareKeys(oldK, newK) === 0) {
           // The key did not move; the entry is rewritten so its version (and the write log) reflect
           // the change — a query on this index must see the new document version.
-          idx.push({ index: ix.id, key: newK, id });
+          idx.push({ index: ix.id, key: newK, table, id: internal, docId: id });
           continue;
         }
-        if (oldK) idx.push({ index: ix.id, key: oldK, id: null });
-        if (newK) idx.push({ index: ix.id, key: newK, id });
+        if (oldK) idx.push({ index: ix.id, key: oldK, table: null, id: null, docId: null });
+        if (newK) idx.push({ index: ix.id, key: newK, table, id: internal, docId: id });
       }
     }
     return { docs, idx };
+  }
+
+  /**
+   * The ts of each document version this transaction read from its snapshot, by id: a write's `prevTs`
+   * (Convex's `prev_ts`). Every write of an existing document reads it first.
+   */
+  private versionTs = new Map<string, bigint>();
+  private prevTsOf(id: string): bigint {
+    const ts = this.versionTs.get(id);
+    if (ts === undefined) throw new Error(`internal error: no version ts for ${id}, which this transaction replaces`);
+    return ts;
   }
 
   get hasWrites() {

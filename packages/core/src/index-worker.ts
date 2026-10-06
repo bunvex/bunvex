@@ -4,13 +4,13 @@
 // Then it marks the index `backfilled` (an index of a system table: `enabled`) and lets the engine finish
 // the schema change, which enables what is backfilled.
 //
-// How a chunk stays correct under concurrent writes: Convex writes the entries at each document's own
-// timestamp, below every live write. bunvex's persistence cannot write below its latest ts (PERSIST-01
-// applies commits in ts order, and there is no per-document ts to read; DV-66), so a chunk is an ordinary
-// COMMIT at a new ts whose read-set is the `by_id` range it scanned at its snapshot: a write to any of those
-// documents after the snapshot (an update, a delete, an insert in the range) conflicts, and the chunk is
-// read again at a newer snapshot. A document the chunk saw unchanged gets the entry it has at the commit's
-// ts; a document written later gets its entries from that write, which maintains the index.
+// How a chunk stays correct under concurrent writes, as Convex's (`IndexWriter::backfill_from_ts`, DV-127
+// reversed): the table is read at one snapshot taken after the index was created, and each document's entries
+// are written at the document version's OWN ts (`writeIndexEntries`, PERSIST-01 C17), directly, not through a
+// commit. Every write after the index was created maintains it with entries at its own commit ts, above them:
+// a document written after the snapshot has its newer entries (and the removal of the old key) from that write,
+// so the two never fight; and an index entry always points at the document version it was made from, which is
+// what the exact-ts join reads.
 
 import {
   backfillMeta,
@@ -24,16 +24,10 @@ import {
   indexMeta,
   indexStatePatch,
 } from "./catalog.ts";
-import { type Committer, ConflictError } from "./committer.ts";
+import type { Committer } from "./committer.ts";
+import { internalIdOf } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
-import {
-  DanglingReferenceError,
-  type IndexId,
-  type IndexWrite,
-  type Persistence,
-  type ScanDocs,
-  type TabletId,
-} from "./persistence/index.ts";
+import type { IndexEntryAt, IndexId, Persistence, TabletId } from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 import { decodeDoc, type Tx } from "./tx.ts";
 
@@ -70,6 +64,8 @@ export interface IndexWorkerHost {
   installIndexChanges(changes: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, ts: bigint): void;
   /** Finish the schema change if nothing it waits for is still backfilling; true once finished. */
   finishSchema(): Promise<boolean>;
+  /** The oldest snapshot retention still keeps (its index window): a backfill reads at or above it. */
+  minSnapshotTs(): bigint;
   /** The table's document count from the table summaries, or null while they are not built (Convex's `table_count`). */
   tableCount?(tablet: TabletId): number | null;
 }
@@ -103,7 +99,7 @@ export class IndexWorker {
   private stopped = false;
   private running: Promise<void> | null = null;
   /** For tests and measurements. */
-  readonly stats = { chunks: 0, conflicts: 0, docsIndexed: 0, checkpoints: 0, failures: 0 };
+  readonly stats = { chunks: 0, docsIndexed: 0, checkpoints: 0, failures: 0 };
 
   constructor(
     private readonly host: IndexWorkerHost,
@@ -256,45 +252,40 @@ export class IndexWorker {
       this.stats.checkpoints++;
     };
 
-    // A chunk refused by a write is read again at half the size, so a range under constant writes still
-    // makes progress (a single document conflicts only if it is itself written meanwhile); it grows back
-    // after each success.
-    let size = perChunk;
+    // As Convex's `backfill_from_ts`: the table walked at ONE snapshot, the checkpoint's (a resume continues at
+    // it), and each document's entries written at the document's own ts, directly (not a commit): below every
+    // write made after the index was created, which maintains it with entries of its own (DV-127 reversed).
+    // A snapshot retention has passed meanwhile can no longer be read: the backfill starts over at a new one.
+    let snapshot = progress.reduce((s, p) => {
+      const c = p.cursor?.snapshotTs ?? 0n;
+      return c > s ? c : s;
+    }, 0n);
+    if (snapshot < this.host.minSnapshotTs() || snapshot > committer.visibleTs) {
+      snapshot = committer.visibleTs;
+      lo = FULL_LO;
+      lastId = null;
+      for (const p of progress) p.cursor = { snapshotTs: snapshot, cursor: null };
+    }
     for (;;) {
       if (this.stopped) {
         if (sinceCheckpoint > 0) await checkpoint();
         return;
       }
-      const snapshot = committer.visibleTs;
-      const docs = await this.readChunk(t, lo, snapshot, size);
+      const docs = await this.readChunk(t, lo, snapshot, perChunk);
       if (docs.length === 0) break;
       // The entries this chunk writes, as Convex's rate limit counts them: an empty table costs nothing.
       await this.limiter?.take(docs.length * defs.length, () => this.stopped);
-      const idx: IndexWrite[] = [];
-      for (const d of docs) for (const ix of defs) idx.push({ index: ix.id, key: indexKey(ix, d), id: d._id });
-      const hi = prefixEnd(encodeKey([docs[docs.length - 1]._id]));
-      try {
-        await committer.commit({
-          snapshot,
-          // Everything this chunk scanned: any write to it since the snapshot refuses the chunk.
-          reads: [{ index: t.byId.id, lo, hi }],
-          docs: [],
-          idx,
-          source: "index_worker_backfill",
-          logWrites: false,
-        });
-      } catch (e) {
-        if (!(e instanceof ConflictError)) throw e;
-        this.stats.conflicts++;
-        size = Math.max(1, size >> 1);
-        await committer.waitForVisible(e.conflict.writeTs);
-        continue; // the same range, at a newer snapshot
+      const entries: IndexEntryAt[] = [];
+      for (const { doc, ts } of docs) {
+        const id = internalIdOf(doc._id);
+        for (const ix of defs) entries.push({ index: ix.id, key: indexKey(ix, doc), table: t.id, id, ts });
       }
-      size = Math.min(perChunk, size * 2);
+      await this.host.persistence.writeIndexEntries(entries);
+      const hi = prefixEnd(encodeKey([docs[docs.length - 1].doc._id]));
       this.stats.chunks++;
       this.stats.docsIndexed += docs.length;
       lo = hi;
-      lastId = docs[docs.length - 1]._id;
+      lastId = docs[docs.length - 1].doc._id;
       sinceCheckpoint += docs.length;
       if (performance.now() - checkpointAt >= this.opts.progressIntervalMs) await checkpoint();
     }
@@ -333,33 +324,26 @@ export class IndexWorker {
     }, "index_worker_finish_backfill");
   }
 
-  /** Up to `limit` live documents of `t` from `lo` on, in id order, at `snapshot` (pages of `readSize`). */
-  private async readChunk(t: TableDef, lo: Uint8Array, snapshot: bigint, limit: number): Promise<Doc[]> {
+  /**
+   * Up to `limit` live documents of `t` from `lo` on, in id order, at `snapshot` (pages of `readSize`), each with
+   * the ts of its version (Convex's revision pairs).
+   */
+  private async readChunk(
+    t: TableDef,
+    lo: Uint8Array,
+    snapshot: bigint,
+    limit: number,
+  ): Promise<{ doc: Doc; ts: bigint }[]> {
     const p = this.host.persistence;
-    const out: Doc[] = [];
+    const out: { doc: Doc; ts: bigint }[] = [];
     let from = lo;
     while (out.length < limit) {
       const n = Math.min(this.opts.readSize, limit - out.length);
-      let page: Doc[];
-      let fetched: number;
-      if (typeof (p as Partial<ScanDocs>).scanDocs === "function") {
-        const jsons = await (p as unknown as ScanDocs).scanDocs(t.id, t.byId.id, from, FULL_HI, snapshot, n, false);
-        page = jsons.map(decodeDoc);
-        fetched = jsons.length;
-      } else {
-        const ids = await p.scan(t.byId.id, from, FULL_HI, snapshot, n, false);
-        fetched = ids.length;
-        page = [];
-        for (const id of ids) {
-          const json = await p.get(t.id, id, snapshot);
-          if (!json) throw new DanglingReferenceError(t.byId.id, id, snapshot, false); // PERSIST-01 C15
-          page.push(decodeDoc(json));
-        }
-        if (ids.length) from = prefixEnd(encodeKey([ids[ids.length - 1]]));
-      }
-      out.push(...page);
-      if (fetched < n) break;
-      if (page.length) from = prefixEnd(encodeKey([page[page.length - 1]._id]));
+      // Each entry's document at the entry's ts; a missing one rejects (PERSIST-01 C15).
+      const rows = await p.scan(t.id, t.byId.id, from, FULL_HI, snapshot, n, false);
+      for (const r of rows) out.push({ doc: decodeDoc(r.json), ts: r.ts });
+      if (rows.length < n) break;
+      if (rows.length) from = prefixEnd(encodeKey([out[out.length - 1]!.doc._id]));
     }
     return out;
   }

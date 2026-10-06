@@ -39,17 +39,19 @@ import {
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
+  type DocVersion,
   type DocWrite,
   decodeLayoutVersion,
-  groupLog,
+  type IndexEntryAt,
+  type IndexedDoc,
   type IndexId,
   type IndexPrune,
   type IndexWrite,
+  type InternalId,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
-  type LogCommit,
   MAX_KEY_PREFIX_LEN,
   type OpenOptions,
   opaqueToInspect,
@@ -61,7 +63,6 @@ import {
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
-  type ScanDocs,
   type SplitRow,
   scanLatest,
   splitKey,
@@ -75,15 +76,16 @@ import { loadPeer } from "./peer.ts";
 import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 
 // ts as a decimal string: the rows travel as JSON, which has no 64-bit integers.
-type DocRow = [string, string, string, string | null, boolean];
-// index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
-type IdxRow = [string, string, string | null, string, string, boolean, string | null];
+// table, id, ts, json, deleted, prev_ts (or null)
+type DocRow = [string, string, string, string | null, boolean, string | null];
+// index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, table id, document id — keys as hex
+type IdxRow = [string, string, string | null, string, string, boolean, string | null, string | null];
 const hex = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
 
 const STORE = "this Postgres database";
 /** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id text", "id text", "ts bigint", "json_value text", "deleted boolean"],
+  documents: ["table_id text", "id text", "ts bigint", "json_value text", "deleted boolean", "prev_ts bigint"],
   indexes: [
     "index_id text",
     "key_prefix bytea",
@@ -91,6 +93,7 @@ const COLUMNS = {
     "key_suffix_hash bytea",
     "ts bigint",
     "deleted boolean",
+    "table_id text",
     "document_id text",
   ],
 };
@@ -118,7 +121,7 @@ export const connectionLost = (e: unknown) => {
   return typeof code === "string" && (LOST.has(code) || code.startsWith("08"));
 };
 
-export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
+export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush (the group's top, written to the lease row as max_ts). */
@@ -264,10 +267,11 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           progress();
           await tx.unsafe(`
           create table if not exists documents (table_id text not null, id text not null, ts bigint not null,
-            json_value text, deleted boolean not null, primary key (table_id, id, ts));
+            json_value text, deleted boolean not null, prev_ts bigint, primary key (table_id, id, ts));
           ${have.documents ? "" : "create index if not exists documents_by_ts on documents (ts); -- the document log (PERSIST-01 C12)"}
           create table if not exists indexes (index_id text not null, key_prefix bytea not null, key_suffix bytea,
-            key_suffix_hash bytea not null, ts bigint not null, deleted boolean not null, document_id text);
+            key_suffix_hash bytea not null, ts bigint not null, deleted boolean not null, table_id text,
+            document_id text);
           -- (key, ts desc): an ascending scan reads each key's newest version first, straight off the index.
           create unique index if not exists indexes_by_key on indexes (index_id, key_prefix, key_suffix_hash, ts desc);
           ${have.indexes ? "" : "create index if not exists indexes_by_ts on indexes (ts); -- the log by ts (PERSIST-01 C11)"}
@@ -430,10 +434,20 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.top = ts;
     const t = String(ts);
-    for (const d of docs) this.docs.push([d.table, d.id, t, d.json, d.json === null]);
+    for (const d of docs)
+      this.docs.push([d.table, d.id, t, d.json, d.json === null, d.prevTs === null ? null : String(d.prevTs)]);
     for (const e of idx) {
       const k = splitKey(e.key);
-      this.idx.push([e.index, hex(k.prefix), k.suffix && hex(k.suffix), hex(k.suffixHash), t, e.id === null, e.id]);
+      this.idx.push([
+        e.index,
+        hex(k.prefix),
+        k.suffix && hex(k.suffix),
+        hex(k.suffixHash),
+        t,
+        e.id === null,
+        e.table,
+        e.id,
+      ]);
     }
   }
 
@@ -479,10 +493,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     // One jsonb parameter per statement, expanded server-side (postgres.js does not bind boolean[]/bytea[]
     // arrays for unnest). Keys travel as hex. At most 1 024 rows per statement, as Convex's
     // `INSERTS_PER_STATEMENT` (DV-62): a large commit is several statements of one transaction.
-    const docInsert = `insert into documents select r->>0, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean
-      from jsonb_array_elements($1::text::jsonb) r`;
+    const docInsert = `insert into documents select r->>0, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean,
+      (r->>5)::bigint from jsonb_array_elements($1::text::jsonb) r`;
     const idxInsert = `insert into indexes select r->>0, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
-      decode(r->>3, 'hex'), (r->>4)::bigint, (r->>5)::boolean, r->>6
+      decode(r->>3, 'hex'), (r->>4)::bigint, (r->>5)::boolean, r->>6, r->>7
       from jsonb_array_elements($1::text::jsonb) r`;
     // As Convex's `transact`: if the connection is lost before the transaction began, nothing was sent, and
     // the transaction is opened once more, on a fresh pool. Once it began, a lost connection is not retried.
@@ -523,28 +537,66 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   /**
-   * Fast path: DISTINCT ON walks the index in (key_prefix, key_suffix_hash, ts desc) order and keeps the
-   * newest version of each key; removed entries are filtered AFTER it and the limit applies to what is
-   * left. That order is the key order unless a key is longer than the prefix, so a result holding such a
-   * key (or a bound that long) falls back to the paged, group-sorting scan.
+   * The range and its documents in one statement (PERSIST-01 C6). DISTINCT ON walks the index in (key_prefix,
+   * key_suffix_hash, ts desc) order and keeps the newest version of each key; removed entries are filtered
+   * AFTER it and the limit applies to what is left; each entry's document is the one at the entry's own ts
+   * (Convex's exact-ts join, DV-67 reversed). That order is the key order unless a key is longer than the
+   * prefix, so a result holding such a key (or a bound that long) falls back to the paged, group-sorting scan.
    */
-  async scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  async scan(
+    table: TabletId,
+    index: IndexId,
+    lo: Uint8Array,
+    hi: Uint8Array,
+    ts: bigint,
+    limit: number,
+    desc: boolean,
+  ) {
     if (limit <= 0) return [];
     if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
       const dir = desc ? "desc" : "asc";
       const rows = await this.read((sql) =>
         sql.unsafe(
-          `select document_id, octet_length(key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long from (
-           select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, deleted, document_id
+          `with e as (
+           select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, ts, deleted, document_id
            from indexes where index_id = $1 and key_prefix >= $2 and key_prefix < $3 and ts <= $4
-           order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc) e
-         where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $5`,
-          [index, Buffer.from(lo), Buffer.from(hi), String(ts), limit] as any,
+           order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc)
+         select e.document_id, e.ts, d.json_value, d.deleted, octet_length(e.key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long
+         from e left join documents d on d.table_id = $5 and d.id = e.document_id and d.ts = e.ts
+         where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $6`,
+          [index, Buffer.from(lo), Buffer.from(hi), String(ts), table, limit] as any,
         ),
       );
-      if (!rows.some((r) => r.long)) return rows.map((r) => r.document_id as string);
+      if (!rows.some((r) => r.long))
+        return rows.map((r): IndexedDoc => {
+          // An entry without its document is a corrupt store: raised, never skipped (PERSIST-01 C15).
+          const at = BigInt(r.ts);
+          if (r.deleted !== false) throw new DanglingReferenceError(index, r.document_id, at, r.deleted === true);
+          return { id: r.document_id as string, ts: at, json: r.json_value as string };
+        });
     }
-    return scanLatest(splitPages(this.splitSource(index, ts, desc), desc), lo, hi, limit, desc);
+    // Long keys: the exact scan, then its documents at their entries' timestamps (rare).
+    const entries = await scanLatest(splitPages(this.splitSource(index, ts, desc), desc), lo, hi, limit, desc);
+    return this.docsAt(table, index, entries);
+  }
+
+  /** The documents of index entries at the entries' own timestamps, in their order. */
+  private async docsAt(table: TabletId, index: IndexId, entries: { id: string; ts: bigint }[]) {
+    if (!entries.length) return [];
+    const rows = await this.read((sql) =>
+      sql.unsafe(
+        `select d.id, d.ts, d.json_value, d.deleted from documents d
+         join unnest($2::text[], $3::bigint[]) as e(id, ts) on d.id = e.id and d.ts = e.ts
+         where d.table_id = $1`,
+        [table, entries.map((e) => e.id), entries.map((e) => String(e.ts))] as any,
+      ),
+    );
+    const byKey = new Map(rows.map((r) => [`${r.id}\u0000${r.ts}`, r]));
+    return entries.map((e): IndexedDoc => {
+      const r = byKey.get(`${e.id}\u0000${e.ts}`);
+      if (!r || r.deleted) throw new DanglingReferenceError(index, e.id, e.ts, !!r);
+      return { id: e.id, ts: e.ts, json: r.json_value as string };
+    });
   }
 
   private splitSource(index: IndexId, ts: bigint, desc: boolean) {
@@ -583,14 +635,15 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     };
   }
 
-  async get(table: TabletId, id: string, ts: bigint) {
+  async get(table: TabletId, id: InternalId, ts: bigint): Promise<DocVersion> {
     const [r] = await this.read((sql) =>
       sql.unsafe(
-        `select json_value, deleted from documents where table_id = $1 and id = $2 and ts <= $3 order by ts desc limit 1`,
+        `select json_value, deleted, ts from documents where table_id = $1 and id = $2 and ts <= $3
+         order by ts desc limit 1`,
         [table, id, String(ts)] as any,
       ),
     );
-    return r && !r.deleted ? (r.json_value as string) : null;
+    return r && !r.deleted ? { json: r.json_value as string, ts: BigInt(r.ts) } : null;
   }
 
   async getVersions(table: TabletId, ids: string[], ts: bigint) {
@@ -609,100 +662,17 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return versionsInOrder(ids, found);
   }
 
-  async scanDocs(
-    table: TabletId,
-    index: IndexId,
-    lo: Uint8Array,
-    hi: Uint8Array,
-    ts: bigint,
-    limit: number,
-    desc: boolean,
-  ) {
+  /** PERSIST-01 C12, the document log by ts. */
+  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
-    if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
-      const dir = desc ? "desc" : "asc";
-      const rows = await this.read((sql) =>
-        sql.unsafe(
-          `with e as (
-           select distinct on (key_prefix, key_suffix_hash) key_prefix, key_suffix_hash, deleted, document_id
-           from indexes where index_id = $1 and key_prefix >= $2 and key_prefix < $3 and ts <= $4
-           order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc)
-         select e.document_id, d.json_value, d.deleted, octet_length(e.key_prefix) >= ${MAX_KEY_PREFIX_LEN} as long from e
-         left join lateral (select json_value, deleted from documents
-                            where table_id = $5 and id = e.document_id and ts <= $4 order by ts desc limit 1) d on true
-         where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $6`,
-          [index, Buffer.from(lo), Buffer.from(hi), String(ts), table, limit] as any,
-        ),
-      );
-      if (!rows.some((r) => r.long))
-        return rows.map((r) => {
-          // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
-          if (r.deleted !== false) throw new DanglingReferenceError(index, r.document_id, ts, r.deleted === true);
-          return r.json_value as string;
-        });
-    }
-    // Long keys: the exact scan, then one fetch per document (rare).
-    const out: string[] = [];
-    for (const id of await this.scan(index, lo, hi, ts, limit, desc)) {
-      const j = await this.get(table, id, ts);
-      if (j === null) throw new DanglingReferenceError(index, id, ts, false);
-      out.push(j);
-    }
-    return out;
-  }
-
-  /**
-   * PERSIST-01 C11, one statement (one snapshot): the bound is the lease row's max_ts (the durable prefix,
-   * written in the same transaction as each group), `c` walks the ts index to the last of the first
-   * `limit` commits, and the rows up to it come back in ts order with the newest ts at or before `afterTs`
-   * (one more index probe).
-   */
-  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
-    if (limit <= 0) return [];
+    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
     // The bounds are inlined, not bound: a prepared statement may switch to a generic plan after five runs,
     // and without the values Postgres estimates a range on ts as a large part of the table and plans
     // sequential scans (36 ms against 0.7 ms at 300k rows, measured with plan_cache_mode =
     // force_generic_plan). Inlined, every call gets the index plan. They are integers, checked here.
-    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
-    // `c` finds the first `limit` commit timestamps one index probe at a time (a loose index scan): a plain
-    // `select distinct ts … order by ts limit n` is planned from statistics, and on a log that just grew
-    // they say the range is small, so Postgres hashes the whole range and sorts it (54 ms against 3 ms for
-    // 1000 commits at 300k rows, measured); `order by ts limit 1` walks the index whatever they say.
-    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on a fresh pool
-    // if its connection was lost or it timed out.
-    const rows = await this.read((sql) =>
-      sql.unsafe(
-        `with recursive
-         b as (select least(${upTo}, coalesce((select max_ts from bunvex_lease where id = 1), ${upTo})) as hi),
-         c(ts, n) as (
-           (select ts, 1 from indexes, b where ts > ${after} and ts <= b.hi order by ts limit 1)
-           union all
-           select (select i.ts from indexes i, b where i.ts > c.ts and i.ts <= b.hi order by i.ts limit 1), c.n + 1
-           from c where c.n < ${n} and c.ts is not null)
-       select ts, index_id, key_prefix, key_suffix, document_id,
-              (select max(ts) from indexes where ts <= ${after}) as prev
-       from indexes where ts > ${after} and ts <= (select max(ts) from c) order by ts`,
-        [],
-        { prepare: false },
-      ),
-    );
-    if (!rows.length) return [];
-    return groupLog(
-      rows.map((r) => ({
-        ts: BigInt(r.ts),
-        index: r.index_id as string,
-        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
-        id: r.document_id as string | null,
-      })),
-      BigInt(rows[0].prev ?? 0),
-    );
-  }
-
-  /** PERSIST-01 C12: as readLog, over `documents`. */
-  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
-    if (limit <= 0) return [];
-    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
-    // Bounds inlined and commits found one index probe at a time, for readLog's reasons.
+    // Commits are found one index probe at a time (a loose index scan): a plain `select distinct ts … order by
+    // ts limit n` is planned from statistics, and on a log that just grew they say the range is small, so
+    // Postgres hashes the whole range and sorts it (54 ms against 3 ms for 1000 commits at 300k rows).
     const rows = await this.read((sql) =>
       sql.unsafe(
         `with recursive
@@ -712,13 +682,19 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
            union all
            select (select d.ts from documents d, b where d.ts > c.ts and d.ts <= b.hi order by d.ts limit 1), c.n + 1
            from c where c.n < ${n} and c.ts is not null)
-       select ts, table_id, id, deleted from documents
+       select ts, table_id, id, deleted, prev_ts from documents
        where ts > ${after} and ts <= (select max(ts) from c) order by ts`,
         [],
         { prepare: false },
       ),
     );
-    return rows.map((r) => ({ ts: BigInt(r.ts), table: r.table_id as string, id: r.id as string, deleted: r.deleted }));
+    return rows.map((r) => ({
+      ts: BigInt(r.ts),
+      table: r.table_id as string,
+      id: r.id as string,
+      deleted: r.deleted,
+      prevTs: r.prev_ts === null ? null : BigInt(r.prev_ts),
+    }));
   }
 
   /** PERSIST-01 C13: one statement per batch, behind the epoch check (see the header). */
@@ -743,6 +719,42 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
        where d.table_id = r->>0 and d.id = r->>1 and d.ts <= (r->>2)::bigint`,
       entries.map((e) => [e.table, e.id, String(e.ts)]),
     );
+  }
+
+  /**
+   * PERSIST-01 C17: index rows at their own ts, replacing a row of the same key and ts (Convex's
+   * `ConflictStrategy::Overwrite`), in statements of at most 1 024 rows behind the epoch check. Idempotent.
+   */
+  async writeIndexEntries(entries: IndexEntryAt[]) {
+    for (const chunk of chunkRows(entries, POSTGRES_ROWS_PER_STATEMENT)) {
+      const rows = chunk.map((e) => {
+        const k = splitKey(e.key);
+        return [
+          e.index,
+          hex(k.prefix),
+          k.suffix && hex(k.suffix),
+          hex(k.suffixHash),
+          String(e.ts),
+          e.id === null,
+          e.table,
+          e.id,
+        ];
+      });
+      const [r] = await this.read((sql) =>
+        sql.unsafe(
+          `with l as (select 1 from bunvex_lease where id = 1 and epoch = $2),
+                w as (insert into indexes select r->>0, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
+                        decode(r->>3, 'hex'), (r->>4)::bigint, (r->>5)::boolean, r->>6, r->>7
+                      from jsonb_array_elements($1::text::jsonb) r where exists (select 1 from l)
+                      on conflict (index_id, key_prefix, key_suffix_hash, ts) do update set key_suffix = excluded.key_suffix,
+                        deleted = excluded.deleted, table_id = excluded.table_id, document_id = excluded.document_id
+                      returning 1)
+           select (select count(*) from l)::int as ok`,
+          [JSON.stringify(rows), this.epoch] as any,
+        ),
+      );
+      if (r.ok !== 1) throw new LeaseLostError();
+    }
   }
 
   /** A delete that runs only while the lease row carries our epoch; how many rows it removed. Idempotent,

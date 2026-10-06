@@ -4,8 +4,10 @@
 // range is exhausted: old versions and removed entries can never make a scan come back short.
 import { compareKeys } from "../keyenc.ts";
 
-/** One index row version as a driver reads it. `id === null` (or `deleted`) is a removed entry. */
-export type IndexRow = { key: Uint8Array; deleted: boolean; id: string | null };
+/** One index row version as a driver reads it, with its ts. `id === null` (or `deleted`) is a removed entry. */
+export type IndexRow = { key: Uint8Array; ts: bigint; deleted: boolean; id: string | null };
+/** A live entry: its key's newest version at the scan's ts, and the ts that version was written at. */
+export type LiveEntry = { key: Uint8Array; ts: bigint; id: string };
 /** A page request: rows with lo ≤ key < hi and ts ≤ snapshot, in scan order, at most n. */
 export type PageRequest = { lo: Uint8Array; hi: Uint8Array; n: number };
 /**
@@ -23,8 +25,8 @@ function* latestLive(
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): Generator<PageRequest, string[], Page> {
-  const out: string[] = [];
+): Generator<PageRequest, LiveEntry[], Page> {
+  const out: LiveEntry[] = [];
   if (limit <= 0) return out;
   let n = Math.min(Math.max(limit * 2, 8), MAX_PAGE);
   let last: Uint8Array | null = null;
@@ -36,7 +38,7 @@ function* latestLive(
       if (last && compareKeys(last, r.key) === 0) continue; // an older version of a decided key
       last = r.key;
       if (!r.deleted && r.id !== null) {
-        out.push(r.id);
+        out.push({ key: r.key, ts: r.ts, id: r.id });
         if (out.length >= limit) return out;
       }
     }
@@ -64,7 +66,7 @@ export function scanLatestSync(
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): string[] {
+): LiveEntry[] {
   const g = latestLive(lo, hi, limit, desc);
   let step = g.next();
   while (!step.done) step = g.next(fetch(step.value));
@@ -77,7 +79,7 @@ export async function scanLatest(
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): Promise<string[]> {
+): Promise<LiveEntry[]> {
   const g = latestLive(lo, hi, limit, desc);
   let step = g.next();
   while (!step.done) step = g.next(await fetch(step.value));

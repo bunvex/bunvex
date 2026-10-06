@@ -24,9 +24,9 @@ function itemWrite(i: number) {
   const tenant = `t${i % 64}`;
   const createdAt = 1.79e12 + i;
   const idx: IndexWrite[] = [
-    { index: tid(1), key: encodeKey([id]), id },
-    { index: tid(2), key: encodeKey([tenant, createdAt, id]), id },
-    { index: tid(3), key: encodeKey([createdAt, id]), id },
+    { index: tid(1), key: encodeKey([id]), table: tid(9), id },
+    { index: tid(2), key: encodeKey([tenant, createdAt, id]), table: tid(9), id },
+    { index: tid(3), key: encodeKey([createdAt, id]), table: tid(9), id },
   ];
   return { docs: [], idx };
 }

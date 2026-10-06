@@ -681,7 +681,7 @@ mutations, half actions.
 | H8 | Fix S1–S3 now, before any scaling work | Silent corruption today on every driver | **Decided (owner, 2026-09-30): yes, Postgres first** (#62); MySQL, MongoDB, SQLite and memory follow |
 | H9 | A lagging node waits briefly, then refuses `Connect` (Convex refuses at once) | Fewer reconnect round trips; only latency differs | **Decided (owner, 2026-10-01): yes** — wait ≤ 1 s, then refuse `Connect` (DV-118) |
 | H10 | Follower HTTP reads use "read index" (a round trip to the leader) | Keeps self-hosted Convex's read-your-writes for HTTP, actions and scheduled functions | **Decided (owner, 2026-10-01): yes** — read index for follower HTTP reads, actions, scheduled functions and `query_at_ts` (DV-119) |
-| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | **Decided (owner, 2026-10-01): yes** (DV-120). Built: PERSIST-01 C11 (§4.3.1) |
+| H11 | The persisted log is `indexes` by ts, not `documents` + `prev_ts` | bunvex has no `prev_ts`; every commit writes `indexes` rows | **Decided (owner, 2026-10-01): yes** (DV-120). Built: PERSIST-01 C11 (§4.3.1). **Reversed by STUDY-133 PR 10:** C11 is gone; the log is `documents` by ts with `prev_ts` (C12), as Convex's |
 | H12 | `_creationTime` and `Date.now()` derive from the leader (begin ts / leader clock), not each node's clock | Skew would reorder `by_creation_time` and break `_creationTime ≥ Date.now()` | **Decided (owner, 2026-10-01): yes** (DV-121) |
 
 ## 7. Tests

@@ -58,8 +58,8 @@ function commitOf(n: number, size: number) {
   const idx: IndexWrite[] = [];
   for (let i = 0; i < n; i++) {
     const id = `d${seq++}`;
-    docs.push({ table: "t1", id, json: JSON.stringify({ id, pad: "x".repeat(size) }) });
-    idx.push({ index: "ix1", key: encodeKey([id]), id });
+    docs.push({ table: "t1", id, json: JSON.stringify({ id, pad: "x".repeat(size) }), prevTs: null });
+    idx.push({ index: "ix1", key: encodeKey([id]), table: "t1", id });
   }
   return { snapshot: 0n, reads: [], docs, idx };
 }

@@ -13,6 +13,7 @@ import {
   commitWriteBytes,
   type DocWrite,
   type Engine,
+  hasRetention,
   type IndexWrite,
   type Persistence,
   WRITE_BATCH_MAX_BYTES,
@@ -87,7 +88,7 @@ function recording(inner: Persistence, inject: (n: number) => "before" | "after"
 async function itemsAt(e: Engine, ts: bigint) {
   const items = e.catalog.table("items");
   const ix = [...items.indexes.values()][0].id;
-  return (await e.persistence.scan(ix, FULL_LO, FULL_HI, ts, 10_000_000, false)).length;
+  return (await e.persistence.scan(items.id, ix, FULL_LO, FULL_HI, ts, 10_000_000, false)).length;
 }
 
 export async function batchChecks(
@@ -218,19 +219,19 @@ export async function batchChecks(
     const items = e.catalog.table("items");
     const counts: number[] = [];
     for (const ix of items.indexes.values())
-      counts.push((await st.scan(ix.id, FULL_LO, FULL_HI, M, 10_000_000, false)).length);
+      counts.push((await st.scan(items.id, ix.id, FULL_LO, FULL_HI, M, 10_000_000, false)).length);
     const live = st.auditLiveDocs ? Number(await st.auditLiveDocs(items.id, M)) : counts[0];
     if (new Set([...counts, live]).size !== 1) {
       log(`  K26 kill ${k}: live docs ${live}, index entries ${JSON.stringify(counts)} (torn commit)`);
       bad++;
     }
-    // A prefix: every commit a flush carried at or below M is in the store's log (no batch lost under a later
-    // one that landed).
-    if (st.readLog) {
+    // A prefix: every commit a flush carried at or below M is in the store's document log (no batch lost under
+    // a later one that landed; every commit of the workload writes documents).
+    if (hasRetention(st)) {
       const below = announced.filter((t) => t <= M);
       if (below.length) {
         const from = below.reduce((a, b) => (b < a ? b : a)) - 1n;
-        const got = new Set((await st.readLog(from, M, 10_000_000)).map((c) => c.ts));
+        const got = new Set((await st.readDocumentLog(from, M, 10_000_000)).map((r) => r.ts));
         const missing = below.filter((t) => !got.has(t));
         if (missing.length) {
           log(

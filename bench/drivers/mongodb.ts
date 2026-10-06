@@ -52,19 +52,6 @@ export async function writerInsideFlush() {
   return ops.length > 0;
 }
 
-/** K25: a store written before PERSIST-01 C11 has no ts index. */
-export async function dropLogIndex() {
-  await raw((db) => db.collection("indexes").dropIndex("ts_1"));
-}
-export async function hasLogIndex() {
-  const have = await raw((db) => db.collection("indexes").listIndexes().toArray());
-  return have.some((i) => JSON.stringify(i.key) === JSON.stringify({ ts: 1 }));
-}
-/** K25: an index row above the durable prefix, written behind the driver's back. */
-export async function strayLogRow(ts: bigint) {
-  await raw((db) => db.collection("indexes").insertOne({ x: 960, k: "ff", ts, d: "stray" }));
-}
-
 // K22: the version record is the `meta` document {_id: "layout"}, read and written here behind the driver's back.
 export async function layoutVersion() {
   const d = await raw((db) => db.collection<any>("meta").findOne({ _id: "layout" }));

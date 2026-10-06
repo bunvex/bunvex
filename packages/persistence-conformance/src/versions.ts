@@ -32,7 +32,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
     const commits: bigint[] = [];
     for (let c = 0; c < 200; c++) {
       ts += BigInt(1 + rnd(50));
-      const docs: { table: string; id: string; json: string | null }[] = [];
+      const docs: { table: string; id: string; json: string | null; prevTs: bigint | null }[] = [];
       const touched = new Set<string>();
       for (let w = 0; w < 1 + rnd(5); w++) {
         const table = Math.random() < 0.2 ? OTHER : TABLE;
@@ -42,9 +42,10 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
         const vs = history.get(`${table}:${id}`) ?? [];
         const alive = vs.length > 0 && vs[vs.length - 1]!.json !== null;
         const json = alive && Math.random() < 0.3 ? null : `{"t":${table},"c":${c}}`;
+        const prevTs = vs.length ? vs[vs.length - 1]!.ts : null;
         vs.push({ ts, json });
         history.set(`${table}:${id}`, vs);
-        docs.push({ table, id, json });
+        docs.push({ table, id, json, prevTs });
       }
       st.apply(ts, docs, []);
       commits.push(ts);
@@ -72,7 +73,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
         if (mismatches <= 3) log(`  K32 getVersions(${table}, ${asked.join(",")}, ${at}) → ${json(got)}`);
       }
       for (const [i, id] of asked.entries())
-        if ((await st.get(table, id, at)) !== (got[i]?.json ?? null)) agreeWithGet = false;
+        if (((await st.get(table, id, at))?.json ?? null) !== (got[i]?.json ?? null)) agreeWithGet = false;
     }
     check(
       mismatches === 0,

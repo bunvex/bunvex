@@ -45,7 +45,7 @@ async function history(p: MemoryPersistence, e: Engine, name: string): Promise<R
   const out: Row[] = [];
   for (const r of p.readDocumentLog(0n, e.committer.visibleTs, 1e6)) {
     if (r.table !== index || r.deleted) continue;
-    const json = JSON.parse((await p.get(index, r.id, r.ts))!) as Row;
+    const json = JSON.parse((await p.get(index, r.id, r.ts))!.json) as Row;
     if (json.table_id === tablet && json.descriptor === name) out.push(json);
   }
   return out;

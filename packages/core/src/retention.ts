@@ -7,19 +7,25 @@
 //
 // Both advance every 30 s (with jitter), only forward, and each new bound is written to a persistence global
 // before it is used (Convex's `min_snapshot_ts` / `document_min_snapshot_ts`), so a restart never reads
-// below what was deleted. Then two deleters work through the logs (PERSIST-01 C11/C12) from their cursors
-// (`confirmed_deleted_ts` / `document_confirmed_deleted_ts`, checkpointed at most every 5 min):
+// below what was deleted. Then two deleters walk the document log (PERSIST-01 C12) by `prev_ts`, as Convex's,
+// from their cursors (`confirmed_deleted_ts` / `document_confirmed_deleted_ts`, checkpointed at most every
+// 5 min):
 //
-//   index rows (R1, DV-154): for each row of the index log at or below the window, a live row deletes the
-//     versions of its key below it, a tombstone deletes itself too: chunks of 512, at most 10 000 a pass;
-//   document versions (R2, DV-155): the same over the document log, chunks of 256, at most 10 000 scanned a
-//     pass, 256 a second, a pass a minute.
+//   index rows (Convex's `expired_index_entries`, DV-154 reversed): for each document version at or below the
+//     window that replaced one (`prev_ts`), the replaced version's index entries are re-derived from it and
+//     deleted with every older version of their keys; where the key changed or the document was deleted, the
+//     tombstone the new version wrote is deleted too: chunks of 512, at most 10 000 entries a pass;
+//   document versions (Convex's `expired_documents`, DV-155 reversed): the replaced version (`prev_ts`), and a
+//     delete's own tombstone: chunks of 256, at most 10 000 scanned a pass, 256 a second, a pass a minute.
 //
 // It runs only in the process that holds the store's lease (Convex's leader), started by the engine.
 import { type Committer, OutOfRetentionError } from "./committer.ts";
-import type { DocPrune, IndexPrune, Persistence, RetentionStore } from "./persistence/index.ts";
+import { compareKeys } from "./keyenc.ts";
+import type { DocLogRow, DocPrune, IndexPrune, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { LeaseLostError } from "./persistence/index.ts";
 import { readTsGlobal, tsGlobal } from "./persistence-globals.ts";
+import { type IndexDef, indexKey } from "./schema.ts";
+import { decodeDoc } from "./tx.ts";
 
 /** Convex's knobs (crates/common/src/knobs.rs), as milliseconds and counts. */
 export type RetentionOptions = {
@@ -90,6 +96,8 @@ export class Retention {
     private store: Persistence & RetentionStore,
     private committer: Committer,
     opts: RetentionOptions = {},
+    /** Every index of a table (enabled or being built) and how to read a stored document: for index keys. */
+    private indexesOf: (tablet: TabletId) => IndexDef[] = () => [],
   ) {
     this.opts = {
       indexDelayMs: opts.indexDelayMs ?? seconds("INDEX_RETENTION_DELAY") ?? 240_000,
@@ -250,15 +258,13 @@ export class Retention {
     const upTo = this.minIndexTs;
     let done = 0;
     while (this.indexCursor < upTo && done < this.opts.maxPerPass && !this.stopped) {
-      const page = await this.store.readLog!(this.indexCursor, upTo, LOG_PAGE);
-      if (!page.length) {
+      const rows = await this.store.readDocumentLog(this.indexCursor, upTo, LOG_PAGE);
+      if (!rows.length) {
         this.indexCursor = upTo;
         break;
       }
-      const through = page[page.length - 1].ts;
-      const entries: IndexPrune[] = [];
-      for (const c of page)
-        for (const w of c.writes) entries.push({ index: w.index, key: w.key, ts: w.id === null ? c.ts : c.ts - 1n });
+      const through = rows[rows.length - 1].ts;
+      const entries = await this.expiredIndexEntries(rows);
       for (let i = 0; i < entries.length; i += this.opts.indexChunk)
         this.stats.indexRowsDeleted += await this.store.pruneIndexes(
           entries.slice(i, i + this.opts.indexChunk),
@@ -271,6 +277,39 @@ export class Retention {
     return this.indexCursor < upTo;
   }
 
+  /**
+   * Convex's `expired_index_entries`: for each version that replaced one (its revision pair), every index of its
+   * table, the replaced version's key at its ts (and every older version of that key), and the tombstone at the
+   * new version's ts when the key changed or the document was deleted. A version without a predecessor wrote
+   * nothing that is now superseded.
+   */
+  private async expiredIndexEntries(rows: DocLogRow[]): Promise<IndexPrune[]> {
+    const pairs = rows.filter((r) => r.prevTs !== null);
+    const versions = await Promise.all(
+      pairs.map(async (r) => {
+        const [prev, cur] = await Promise.all([
+          this.store.get(r.table, r.id, r.prevTs!),
+          r.deleted ? null : this.store.get(r.table, r.id, r.ts),
+        ]);
+        return { r, prev, cur };
+      }),
+    );
+    const out: IndexPrune[] = [];
+    for (const { r, prev, cur } of versions) {
+      // A predecessor retention removed already (or never there): nothing to derive, as Convex skips it.
+      if (!prev || prev.ts !== r.prevTs) continue;
+      const before = decodeDoc(prev.json);
+      const after = cur && cur.ts === r.ts ? decodeDoc(cur.json) : null;
+      for (const ix of this.indexesOf(r.table)) {
+        const key = indexKey(ix, before);
+        out.push({ index: ix.id, key, ts: r.prevTs! });
+        if (after && compareKeys(indexKey(ix, after), key) === 0) continue;
+        out.push({ index: ix.id, key, ts: r.ts });
+      }
+    }
+    return out;
+  }
+
   private async documentPass(): Promise<boolean> {
     const upTo = this.minDocumentTs;
     let scanned = 0;
@@ -281,7 +320,12 @@ export class Retention {
         break;
       }
       const through = rows[rows.length - 1].ts;
-      const entries: DocPrune[] = rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1n }));
+      // Convex's `expired_documents`: the version each one replaced, and a delete's own tombstone.
+      const entries: DocPrune[] = [];
+      for (const r of rows) {
+        if (r.prevTs !== null) entries.push({ table: r.table, id: r.id, ts: r.prevTs });
+        if (r.deleted) entries.push({ table: r.table, id: r.id, ts: r.ts });
+      }
       for (let i = 0; i < entries.length; i += this.opts.documentChunk) {
         const chunk = entries.slice(i, i + this.opts.documentChunk);
         const t0 = performance.now();

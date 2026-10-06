@@ -111,7 +111,13 @@ function randomCommitWrites(r: () => number): IndexWrite[] {
   const n = Math.floor(r() * 6); // 0..5 index-key writes
   return Array.from({ length: n }, () => {
     const k = Math.floor(r() * KEYS);
-    return { index: `i${1 + Math.floor(r() * INDEXES)}`, key: key(k), id: r() < 0.25 ? null : `d${k}` };
+    const del = r() < 0.25;
+    return {
+      index: `i${1 + Math.floor(r() * INDEXES)}`,
+      key: key(k),
+      table: del ? null : "t1",
+      id: del ? null : `d${k}`,
+    };
   });
 }
 

@@ -83,25 +83,3 @@ export async function openThrough(via: { host: string; port: number }, opts: { t
   u.port = String(via.port);
   return MysqlPersistence.open(u.toString(), 16, { ...tls(), timeoutMs: opts.timeoutMs });
 }
-
-/** K25: a store written before PERSIST-01 C11 has no ts index. */
-export async function dropLogIndex() {
-  const c = await mysql.createConnection(process.env.MYSQL_URL!);
-  await c.query(`alter table indexes drop index indexes_by_ts`);
-  await c.end();
-}
-export async function hasLogIndex() {
-  const c = await mysql.createConnection(process.env.MYSQL_URL!);
-  const [rows] = (await c.query(
-    `select count(*) as n from information_schema.statistics
-     where table_schema = database() and table_name = 'indexes' and index_name = 'indexes_by_ts'`,
-  )) as any;
-  await c.end();
-  return Number(rows[0].n) > 0;
-}
-/** K25: an index row above the durable prefix, written behind the driver's back. */
-export async function strayLogRow(ts: bigint) {
-  const c = await mysql.createConnection(process.env.MYSQL_URL!);
-  await c.query(`insert into indexes values (960, x'ff', null, x'', ?, false, 'stray')`, [ts]);
-  await c.end();
-}

@@ -122,7 +122,7 @@ test("a conflict reports the write it lost to; waitForVisible resolves once that
     snapshot: 0n,
     reads: [],
     docs: [],
-    idx: [{ index: "ix9", key: k, id: "doc1" }],
+    idx: [{ index: "ix9", key: k, table: "t9", id: "doc1" }],
     source: "m:w",
   });
   const lost = await c.commit({ snapshot: 0n, reads, docs: [], idx: [] }).catch((e) => e);
@@ -133,7 +133,7 @@ test("a conflict reports the write it lost to; waitForVisible resolves once that
   const waiting = c.waitForVisible(ts1 + 1n).then(() => (woke = true));
   await new Promise((r) => setImmediate(r));
   expect(woke).toBe(false);
-  await c.commit({ snapshot: ts1, reads: [], docs: [], idx: [{ index: "ix9", key: k, id: "doc1" }] });
+  await c.commit({ snapshot: ts1, reads: [], docs: [], idx: [{ index: "ix9", key: k, table: "t9", id: "doc1" }] });
   await waiting;
   expect(woke).toBe(true);
 });

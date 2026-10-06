@@ -7,6 +7,7 @@ import { CommitterStoppedError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import {
   type DocWrite,
+  type IndexEntryAt,
   type IndexWrite,
   type Lease,
   type LeaseAcquire,
@@ -66,8 +67,12 @@ class LeasedConnection implements Persistence, Lease {
     if (this.store.lease.epoch !== this.epoch) throw new LeaseLostError();
     await this.store.data.flush();
   }
-  scan(index: string, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
-    return this.store.data.scan(index, lo, hi, ts, limit, desc);
+  scan(table: string, index: string, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+    return this.store.data.scan(table, index, lo, hi, ts, limit, desc);
+  }
+  async writeIndexEntries(entries: IndexEntryAt[]) {
+    if (this.store.lease.epoch !== this.epoch) throw new LeaseLostError();
+    await this.store.data.writeIndexEntries(entries);
   }
   get(table: string, id: string, ts: bigint) {
     return this.store.data.get(table, id, ts);

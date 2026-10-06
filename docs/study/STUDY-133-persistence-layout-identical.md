@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity).
+- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity), PR 3 (the interface, with PR 11).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -751,3 +751,53 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   patch 35 416 → 36 336 → 35 888, get 318 202 → 320 672 → 307 194, index range 6 696 → 6 880 → 6 544; SQLite
   insert 7 648 → 7 737 → 7 232, patch 5 632 → 5 528 → 5 240, get 108 237 → 106 472 → 104 949, index range
   792 → 808 → 834. SQLite writes lose ~6 % to text keys in place of integers; PR 3 replaces them with 16 bytes.
+
+### PR 3 — the persistence interface as Convex's (with PR 11's backfill)
+
+- `DocWrite {table, id, json, prevTs}` and `IndexWrite {index, key, table, id}`, as Convex's `DocumentLogEntry`
+  and `PersistenceIndexEntry`: `id` is the document's internal id (`internalIdOf`, a direct base32 → base64url
+  decode: 140 ns, against 820 ns through `decodeId`); `prevTs` is the ts of the version the transaction read,
+  set when the transaction is turned into writes; the write log keeps the documents' own ids for conflict
+  reports (`LoggedIndexWrite.docId`).
+- `scan(table, index, …)` returns each live entry's document at the entry's own ts (the exact-ts join, DV-67
+  reversed), with its ts; `scanDocs` is gone. `get` returns the version and its ts. The document log returns
+  `prevTs` (DV-66 built).
+- **The exact-ts join needs the backfill at each document's own ts** (an entry written by a chunk commit at a
+  new ts has no document version at that ts), so PR 11 (DV-127 reversed) is built here: `writeIndexEntries`
+  (PERSIST-01 C17) writes entries at past timestamps, outside any commit; the worker reads at the checkpoint's
+  snapshot and resumes there (it starts over at a new snapshot once retention has passed it). A mutation that
+  began before an index change and commits after it would leave the new index without its entries (Convex's
+  committer computes index writes with the latest registry; bunvex's transactions use the catalog they began
+  with): the commit that changes a table's `_index` rows logs a key on that table's `_tables` row, which every
+  mutation that used the table read, so such a mutation conflicts and runs again with the new catalog, which
+  is installed when that commit becomes visible.
+- Drivers keep their DDL with the new columns (`documents.prev_ts`, `indexes.table_id`) and text ids; PRs 4–7
+  give them Convex's. `LAYOUT_VERSION` is 4.
+- Tests: conformance K34 (`prev_ts`), K35 (the exact-ts join), K36 (`writeIndexEntries`), K30/K31 rewritten;
+  `persistence-interface.test.ts` (the `prev_ts` chain, the join, the backfill at each document's ts, the
+  conflict of a mutation older than an index). Sabotage: `prevTs: null` (red), the SQLite join by `ts >=` (red),
+  backfill entries at the snapshot (red), no catalog touches (red), memory log without `prevTs` (K34 red),
+  `insert or ignore` for entries (K36 red), Postgres entries without the fence (K36 red).
+
+### PR 10 — retention by `prev_ts`
+
+- The index pass is Convex's `expired_index_entries`: it walks the document log (PERSIST-01 C12) up to the
+  window. For each version with a `prev_ts` it reads both versions, re-derives the replaced version's key on
+  every index of the table (enabled or being built), and deletes that key at or below `prev_ts`. Where the key
+  changed or the document was deleted, it also deletes the tombstone the new version wrote, at or below its
+  ts. A predecessor already pruned is skipped, as Convex's. DV-154 reversed.
+- The document pass is Convex's `expired_documents`: each version's predecessor at `prev_ts`, and a delete's
+  own tombstone. DV-155 reversed. DV-419 is resolved in full.
+- `readLog` (PERSIST-01 C11, the `indexes` log by ts) had no other reader and is removed from the interface
+  and from every driver, with conformance K25 (PERSIST-01 v3.1). Convex has no such read. DV-120 (followers
+  read `indexes` by ts) is resolved with it: the log is `documents` by ts.
+- An index tombstone with no `prev_ts` is never pruned. Only a document created and deleted in one
+  transaction would write one, and the engine writes no index entry for that.
+- Measured: 4000 documents with two indexes, 5 patches each (20 000 revision pairs), passes run to the end by
+  hand, median of 3, ms, load average ~15. Memory: index pass 80 → 148, document pass 9 → 6. SQLite: index
+  pass 827 → 1008, document pass 335 → 246. The index pass now reads two versions per pair, as Convex's.
+  This is background work, rate-limited in production.
+- Tests: `retention-prev-ts.test.ts` (a moved key, a backfilled index, the document pass, a pruned
+  predecessor) and conformance K27–K29 deriving the prunes from the store's revision pairs. Sabotage: no
+  tombstone prune (red), prune at `prevTs - 1` (red), always prune at the new ts (red), the document pass
+  without a delete's tombstone (red), without the pruned-predecessor skip (red).

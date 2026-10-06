@@ -38,17 +38,19 @@ import {
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
+  type DocVersion,
   type DocWrite,
   decodeLayoutVersion,
-  groupLog,
+  type IndexEntryAt,
+  type IndexedDoc,
   type IndexId,
   type IndexPrune,
   type IndexWrite,
+  type InternalId,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
-  type LogCommit,
   MYSQL_MAX_CHUNK_BYTES,
   type OpenOptions,
   opaqueToInspect,
@@ -59,7 +61,6 @@ import {
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
-  type ScanDocs,
   type SplitRow,
   scanLatest,
   splitKey,
@@ -72,13 +73,15 @@ import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
-type DocRow = [string, string, bigint, string | null, boolean];
-type IdxRow = [string, Buffer, Buffer | null, Buffer, bigint, boolean, string | null];
+// table, id, ts, json, deleted, prev_ts
+type DocRow = [string, string, bigint, string | null, boolean, bigint | null];
+// index id, key_prefix, key_suffix, key_suffix_hash, ts, deleted, table id, document id
+type IdxRow = [string, Buffer, Buffer | null, Buffer, bigint, boolean, string | null, string | null];
 /** A row's bytes in the INSERT's SQL text, bounded above: a string character is at most 3 UTF-8 bytes (an
  *  escaped one 2), a buffer is sent as X'hex' (2 per byte), plus the numbers, quotes and separators. */
-const docRowBytes = (r: DocRow) => 64 + 3 * r[1].length + (r[3] === null ? 0 : 3 * r[3].length);
+const docRowBytes = (r: DocRow) => 96 + 3 * r[1].length + (r[3] === null ? 0 : 3 * r[3].length);
 const idxRowBytes = (r: IdxRow) =>
-  80 + 2 * (r[1].length + (r[2]?.length ?? 0) + r[3].length) + (r[6] === null ? 0 : 3 * r[6].length);
+  112 + 2 * (r[1].length + (r[2]?.length ?? 0) + r[3].length) + (r[7] === null ? 0 : 3 * r[7].length);
 type Conn = mysqlDriver.PoolConnection;
 
 /** Destroy a connection: out of the pool, and its socket closed at once (a frozen server never answers a
@@ -91,7 +94,14 @@ const drop = (c: Conn) => {
 const STORE = "this MySQL database";
 /** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id varchar", "id varchar", "ts bigint", "json_value mediumtext", "deleted tinyint"],
+  documents: [
+    "table_id varchar",
+    "id varchar",
+    "ts bigint",
+    "json_value mediumtext",
+    "deleted tinyint",
+    "prev_ts bigint",
+  ],
   indexes: [
     "index_id varchar",
     "key_prefix varbinary",
@@ -99,6 +109,7 @@ const COLUMNS = {
     "key_suffix_hash varbinary",
     "ts bigint",
     "deleted tinyint",
+    "table_id varchar",
     "document_id varchar",
   ],
 };
@@ -141,7 +152,7 @@ export function operational(e: unknown): boolean {
   return /connection is in closed state/.test(message);
 }
 
-export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
+export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush: the group's top, recorded as max_ts by the fence. */
@@ -296,12 +307,13 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         await c.query(`select get_lock('bunvex_bootstrap', 10)`);
         progress();
         await c.query(`create table if not exists documents (table_id varchar(32) not null, id varchar(64) not null,
-          ts bigint not null, json_value mediumtext, deleted boolean not null, primary key (table_id, id, ts),
+          ts bigint not null, json_value mediumtext, deleted boolean not null, prev_ts bigint,
+          primary key (table_id, id, ts),
           key documents_by_ts (ts))`); // the document log (PERSIST-01 C12)
         progress();
         await c.query(`create table if not exists indexes (index_id varchar(32) not null, key_prefix varbinary(2500) not null,
           key_suffix longblob, key_suffix_hash varbinary(32) not null, ts bigint not null, deleted boolean not null,
-          document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc),
+          table_id varchar(32), document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc),
           key indexes_by_ts (ts))`); // the ts index: the log by ts (PERSIST-01 C11)
         progress();
         await c.query(`create table if not exists bunvex_lease (id int primary key, epoch bigint not null,
@@ -485,7 +497,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
 
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.top = ts;
-    for (const d of docs) this.docs.push([d.table, d.id, ts, d.json, d.json === null]);
+    for (const d of docs) this.docs.push([d.table, d.id, ts, d.json, d.json === null, d.prevTs]);
     for (const e of idx) {
       const k = splitKey(e.key);
       this.idx.push([
@@ -495,6 +507,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         Buffer.from(k.suffixHash),
         ts,
         e.id === null,
+        e.table,
         e.id,
       ]);
     }
@@ -616,19 +629,45 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     );
   }
 
-  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
-    return this.latestEntries(index, lo, hi, ts, limit, desc);
+  /**
+   * The range's newest entry per key at `ts` (paged, client-side), then every entry's document at the entry's
+   * own ts in one round trip (Convex's exact-ts join, DV-67 reversed). A missing one rejects (PERSIST-01 C15).
+   */
+  async scan(
+    table: TabletId,
+    index: IndexId,
+    lo: Uint8Array,
+    hi: Uint8Array,
+    ts: bigint,
+    limit: number,
+    desc: boolean,
+  ) {
+    const entries = await this.latestEntries(index, lo, hi, ts, limit, desc);
+    if (!entries.length) return [];
+    const [rows] = (await this.read((c) =>
+      c.query(`select id, ts, json_value, deleted from documents where table_id = ? and (id, ts) in (?)`, [
+        table,
+        entries.map((e) => [e.id, e.ts]),
+      ]),
+    )) as any;
+    const byKey = new Map<string, any>((rows as any[]).map((r) => [`${r.id}\u0000${r.ts}`, r]));
+    return entries.map((e): IndexedDoc => {
+      const r = byKey.get(`${e.id}\u0000${e.ts}`);
+      if (!r || r.deleted) throw new DanglingReferenceError(index, e.id, e.ts, !!r);
+      return { id: e.id, ts: e.ts, json: r.json_value as string };
+    });
   }
 
-  async get(table: TabletId, id: string, ts: bigint) {
+  async get(table: TabletId, id: InternalId, ts: bigint): Promise<DocVersion> {
     const [rows] = (await this.read((c) =>
       c.execute(
-        `select json_value, deleted from documents where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`,
+        `select json_value, deleted, ts from documents where table_id = ? and id = ? and ts <= ?
+         order by ts desc limit 1`,
         [table, id, ts],
       ),
     )) as any;
     const r = rows[0];
-    return r && !r.deleted ? (r.json_value as string) : null;
+    return r && !r.deleted ? { json: r.json_value as string, ts: BigInt(r.ts) } : null;
   }
 
   async getVersions(table: TabletId, ids: string[], ts: bigint) {
@@ -650,77 +689,12 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return versionsInOrder(ids, found);
   }
 
-  async scanDocs(
-    table: TabletId,
-    index: IndexId,
-    lo: Uint8Array,
-    hi: Uint8Array,
-    ts: bigint,
-    limit: number,
-    desc: boolean,
-  ) {
-    const ids = await this.latestEntries(index, lo, hi, ts, limit, desc);
-    if (!ids.length) return [];
-    // One round trip for every document: the newest version <= ts of each id.
-    const [rows] = (await this.read((c) =>
-      c.query(
-        `select d.id, d.json_value, d.deleted from documents d
-       join (select id, max(ts) ts from documents where table_id = ? and id in (?) and ts <= ? group by id) v
-         on d.table_id = ? and d.id = v.id and d.ts = v.ts`,
-        [table, ids, ts, table],
-      ),
-    )) as any;
-    const byId = new Map<string, any>(rows.map((r: any) => [r.id, r]));
-    const out: string[] = [];
-    for (const id of ids) {
-      const r = byId.get(id);
-      // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
-      if (!r || r.deleted) throw new DanglingReferenceError(index, id, ts, !!r);
-      out.push(r.json_value);
-    }
-    return out;
-  }
-
-  /**
-   * PERSIST-01 C11, one statement (one consistent read): the bound is the lease row's max_ts (the durable
-   * prefix, written in the same transaction as each group); the derived table walks the ts index to the
-   * last of the first `limit` commits, and the rows up to it come back in ts order, with the newest ts at
-   * or before `afterTs`.
-   */
-  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
-    if (limit <= 0) return [];
-    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on another
-    // connection after an operational error.
-    const [rows] = (await this.read((c) =>
-      c.query(
-        `select i.ts, i.index_id, i.key_prefix, i.key_suffix, i.document_id,
-              (select max(ts) from indexes where ts <= ?) as prev
-       from indexes i
-       where i.ts > ? and i.ts <= (select max(c.ts) from (select distinct ts from indexes
-         where ts > ? and ts <= least(?, coalesce((select max_ts from bunvex_lease where id = 1), ?))
-         order by ts limit ${Math.floor(limit)}) c)
-       order by i.ts`,
-        [afterTs, afterTs, afterTs, upToTs, upToTs],
-      ),
-    )) as any;
-    if (!rows.length) return [];
-    return groupLog(
-      (rows as any[]).map((r) => ({
-        ts: BigInt(r.ts),
-        index: r.index_id as string,
-        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
-        id: r.document_id as string | null,
-      })),
-      BigInt(rows[0].prev ?? 0),
-    );
-  }
-
-  /** PERSIST-01 C12: as readLog, over `documents`. */
+  /** PERSIST-01 C12, the document log by ts. */
   async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
     const [rows] = (await this.read((c) =>
       c.query(
-        `select d.ts, d.table_id, d.id, d.deleted from documents d
+        `select d.ts, d.table_id, d.id, d.deleted, d.prev_ts from documents d
        where d.ts > ? and d.ts <= (select max(c.ts) from (select distinct ts from documents
          where ts > ? and ts <= least(?, coalesce((select max_ts from bunvex_lease where id = 1), ?))
          order by ts limit ${Math.floor(limit)}) c)
@@ -733,6 +707,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       table: r.table_id as string,
       id: r.id as string,
       deleted: !!r.deleted,
+      prevTs: r.prev_ts === null ? null : BigInt(r.prev_ts),
     }));
   }
 
@@ -743,6 +718,36 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   }
 
   /** PERSIST-01 C13. */
+  /**
+   * PERSIST-01 C17: index rows at their own ts, replacing a row of the same key and ts (Convex's
+   * `ConflictStrategy::Overwrite`), behind the epoch check, in chunks of at most 10 MiB.
+   */
+  async writeIndexEntries(entries: IndexEntryAt[]) {
+    if (!entries.length) return;
+    await this.assertEpoch();
+    const rows: IdxRow[] = entries.map((e) => {
+      const k = splitKey(e.key);
+      return [
+        e.index,
+        Buffer.from(k.prefix),
+        k.suffix && Buffer.from(k.suffix),
+        Buffer.from(k.suffixHash),
+        e.ts,
+        e.id === null,
+        e.table,
+        e.id,
+      ];
+    });
+    for (const chunk of chunkRows(rows, Infinity, MYSQL_MAX_CHUNK_BYTES, idxRowBytes))
+      await this.read((c) =>
+        c.query(
+          `insert into indexes values ? as v on duplicate key update key_suffix = v.key_suffix, deleted = v.deleted,
+             table_id = v.table_id, document_id = v.document_id`,
+          [chunk],
+        ),
+      );
+  }
+
   async pruneIndexes(entries: IndexPrune[]) {
     if (!entries.length) return 0;
     await this.assertEpoch();

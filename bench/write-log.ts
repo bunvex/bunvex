@@ -35,11 +35,11 @@ function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
   const idx: IndexWrite[] = [
-    { index: tid(1), key: encodeKey([id]), id },
-    { index: tid(2), key: encodeKey([tenant, createdAt, id]), id },
-    { index: tid(3), key: encodeKey([createdAt, id]), id },
+    { index: tid(1), key: encodeKey([id]), table: tid(1), id },
+    { index: tid(2), key: encodeKey([tenant, createdAt, id]), table: tid(1), id },
+    { index: tid(3), key: encodeKey([createdAt, id]), table: tid(1), id },
   ];
-  return { docs: [{ table: tid(1), id, json }], idx };
+  return { docs: [{ table: tid(1), id, json, prevTs: null }], idx };
 }
 
 type Stats = { logLength?: number; logBytes?: number; outOfRetention?: number; conflicts: number; groups: number };
@@ -121,7 +121,12 @@ async function lag() {
       attempts++;
       const t = performance.now();
       try {
-        await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: tid(9), key: k, id: `l${n}` }] });
+        await c.commit({
+          snapshot: snap,
+          reads,
+          docs: [],
+          idx: [{ index: tid(9), key: k, table: tid(1), id: `l${n}` }],
+        });
       } catch {
         failed++;
       }

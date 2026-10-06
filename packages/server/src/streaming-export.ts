@@ -9,6 +9,8 @@ import {
   compareInternalIds,
   type Engine,
   hasRetention,
+  internalIdBytes,
+  internalIdOf,
   OutOfRetentionError,
   reduceShape,
   shapeOf,
@@ -16,7 +18,7 @@ import {
   type TabletId,
   UnionBuilder,
 } from "@bunvex/core";
-import { compareUtf8, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import { compareUtf8, encodeId, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 
 /** Convex's knobs. */
 export const SNAPSHOT_LIST_LIMIT = 1024;
@@ -238,7 +240,7 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
   const versions = engine.persistence.getVersions
     ? await engine.persistence.getVersions(
         t.id,
-        page.map((d) => d._id as string),
+        page.map((d) => internalIdOf(d._id as string)),
         snapshotNs,
       )
     : null;
@@ -281,18 +283,20 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
         hasMore = true;
         break outer;
       }
-      commit.sort((a, b) => compareInternalIds(a.table, b.table) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      // As Convex's log: by (table, id), bytewise.
+      commit.sort((a, b) => compareInternalIds(a.table, b.table) || compareInternalIds(a.id, b.id));
       for (const r of commit) {
         rowsRead++;
         const t = engine.catalog.byTablet(r.table);
         if (!t || t.name.startsWith("_") || engine.catalog.deleting.has(r.table)) continue;
         const cols = tableSelection(selection, t.name);
         if (!cols) continue;
-        if (r.deleted) values.push(docJson(t.name, ts, true, { _id: r.id }, f));
+        // The log keys a document by its internal id; apps know it by its id.
+        if (r.deleted) values.push(docJson(t.name, ts, true, { _id: encodeId(t.number, internalIdBytes(r.id)) }, f));
         else {
-          const json = await store.get(r.table, r.id, ts);
-          if (json === null) continue;
-          const doc = fromJsonValue(JSON.parse(json) as JSONValue) as Record<string, Value>;
+          const version = await store.get(r.table, r.id, ts);
+          if (version === null) continue;
+          const doc = fromJsonValue(JSON.parse(version.json) as JSONValue) as Record<string, Value>;
           values.push(docJson(t.name, ts, false, pickColumns(doc, cols), f));
         }
       }

@@ -139,6 +139,7 @@ import {
   type Doc,
   documentValidator,
   MAX_VECTOR_DIMENSIONS,
+  maintainedIndexes,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
@@ -331,7 +332,7 @@ export class Engine {
   private cacheEpoch = 0;
   /** The last transaction's first `_creationTime` (see `transactionStart`). */
   private lastStart = 0;
-  /** The last transaction begun: its creation cursor bounds the next start. */
+  /** The last mutation begun: its creation cursor bounds the next start. */
   private lastTx: Tx | null = null;
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
@@ -537,8 +538,11 @@ export class Engine {
       if (!this.closed) console.error(`bunvex: table summaries failed to build: ${err.message}`);
     });
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
-    if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
-      this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
+    if (hasRetention(this.persistence)) {
+      this.retention = new Retention(this.persistence, this.committer, this.opts.retention, (tablet) => {
+        const t = this.catalog.byTablet(tablet);
+        return t ? maintainedIndexes(t) : [];
+      });
       await this.retention.start();
     }
     return this;
@@ -807,7 +811,13 @@ export class Engine {
       if (!hasChanges(changes)) return current;
       const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
       created = [...written.tables.values()].map((t) => t.tablet);
-      return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
+      // Read-your-own-writes: the catalog as this commit leaves it, installed as soon as the commit is visible,
+      // so a mutation it made conflict (`catalogTouches`) runs again with the new indexes.
+      const after = await readCatalog(db);
+      db.onCommitVisible = () => {
+        this.catalog = buildCatalog(after.tables, after.indexes);
+      };
+      return after;
     }, true);
     this.catalog = buildCatalog(tables, indexes);
     if (await this.backfillNewTables(created, indexes, true))
@@ -1028,7 +1038,11 @@ export class Engine {
       const o = oldest.get(s.tablet);
       oldest.set(s.tablet, o !== undefined && o < ts ? o : ts);
     }
-    this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest);
+    this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest, (tablet) => {
+      const t = this.catalog.byTablet(tablet);
+      if (!t) throw new Error(`no table has tablet ${tablet}`);
+      return t.number;
+    });
   }
 
   /** The search index workers' pacing. */
@@ -1530,7 +1544,7 @@ export class Engine {
       const updates: [string, Doc | null][] = [];
       if (cursor !== null && lastTs !== null) {
         const upTo = cursor;
-        const changed = await changedSince(state.store!, e.tablet, lastTs, ts, decodeDoc, (id) => id <= upTo);
+        const changed = await changedSince(state.store!, e.tablet, t.number, lastTs, ts, decodeDoc, (id) => id <= upTo);
         for (const [id, c] of changed) updates.push([id, c.doc]);
       }
       if (this.closed || !this.isCurrent(kind, e)) return false;
@@ -2295,7 +2309,12 @@ export class Engine {
           .filter((i) => !(i.name in SYSTEM_INDEXES))
           .map((i) => `${i.table}.${i.name}`);
         const created = [...written.tables.values()].map((t) => t.tablet);
-        return { schemaId, state, addedIndexes, created, after: await readCatalog(db) };
+        const after = await readCatalog(db);
+        // Installed as soon as the commit is visible (see `catalogTouches`).
+        db.onCommitVisible = () => {
+          this.catalog = buildCatalog(after.tables, after.indexes);
+        };
+        return { schemaId, state, addedIndexes, created, after };
       },
       true,
       "start_push",
@@ -2743,6 +2762,7 @@ export class Engine {
       installIndexChanges: (c: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, ts: bigint) =>
         this.installIndexChanges(c, ts),
       finishSchema: () => this.finishSchema(),
+      minSnapshotTs: () => this.retention?.minIndexTs ?? 0n,
       tableCount: (tablet: TabletId) => {
         try {
           return this.tableSummaries.count(tablet);
@@ -2774,7 +2794,8 @@ export class Engine {
   ) {
     const now = this.transactionStart(snapshot); // the first _creationTime; Date.now() in the body is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
-    this.lastTx = tx;
+    // Only a mutation hands out creation times: a query begun meanwhile must not hide its cursor.
+    if (kind === "mutation") this.lastTx = tx;
     tx.retention = this.retention;
     tx.identity = caller.identity;
     tx.systemIdentity = caller.systemIdentity === true;
@@ -2989,7 +3010,6 @@ export class Engine {
     const snapshot = at === undefined || at > visible ? visible : at;
     const now = this.transactionStart(snapshot); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
-    this.lastTx = tx;
     tx.retention = this.retention;
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
@@ -3148,6 +3168,8 @@ export class Engine {
               }
             : {}),
         };
+        const touches = tx.catalogTouches();
+        if (touches.length) pending.logExtra = [...(pending.logExtra ?? []), ...touches];
         if (this.tracerOf.on) {
           const parent = this.tracerOf.current();
           if (parent) pending.trace = new CommitSpans(parent, docs.length, idx.length);

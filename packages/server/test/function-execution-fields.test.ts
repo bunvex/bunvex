@@ -2,7 +2,7 @@
 // of a sync query (its initial subscription, a data change, an identity change), `scheduler_info`,
 // `function_args_bytes`, `mutation_retry_count` (and the lost attempt's empty error), `mutation_queue_length`.
 import { afterEach, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, internalIdOf } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import type { v1 } from "@bunvex/protocol";
 import { v } from "@bunvex/values";
@@ -28,7 +28,8 @@ async function setup(opts: { maxRetries?: number } = {}) {
   const gate = { id: "", open: Promise.resolve() as Promise<void> };
   const get = store.get.bind(store);
   store.get = (async (...a: Parameters<typeof get>) => {
-    if (a[1] === gate.id) await gate.open;
+    // Persistence keys a document by its internal id (STUDY-133 PR 3).
+    if (gate.id !== "" && a[1] === internalIdOf(gate.id)) await gate.open;
     return get(...a);
   }) as unknown as typeof store.get;
   const engine = await new Engine(defineSchema({ items: defineTable(v.any()) }), store, {

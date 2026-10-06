@@ -7,10 +7,12 @@
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
 // (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
-// driver; for drivers with the log by timestamp (C11, `readLog`), K25; K26 (bounded flushes: a group written
+// driver; K26 (bounded flushes: a group written
 // in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
-// log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden)
-// and K31 (one id in two tables is two documents) on every driver (C15).
+// log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden),
+// K31 (one id in two tables is two documents) and K35 (the exact-ts join) on every driver (C15, C6); K32
+// (document versions, C16); K33 (nanosecond timestamps); K34 (`prev_ts`); K36 (index entries at past
+// timestamps, C17).
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
@@ -28,6 +30,7 @@ import {
   encodeKey,
   hasLease,
   indexKey,
+  internalIdOf,
   type KeyValue,
   LAYOUT_VERSION,
   LayoutError,
@@ -38,12 +41,11 @@ import {
   type Persistence,
   ReadOnlyError,
   type ReadOnlyFlag,
-  type ScanDocs,
 } from "@bunvex/core";
 import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
+import { indexEntryChecks, prevTsChecks } from "./entries.ts";
 import { tid } from "./ids.ts";
-import { logChecks } from "./log.ts";
 import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
@@ -82,15 +84,9 @@ export type DriverModule = {
   /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
    *  address, with the given client-side call timeout (STUDY-25 L3). */
   openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
-  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
-  dropLogIndex?(): Promise<void>;
-  /** Whether the store has its ts index (K25: it is built once the lease is held). */
-  hasLogIndex?(): Promise<boolean>;
-  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
-  strayLogRow?(ts: bigint): Promise<void>;
 };
 
-// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30–K31
+// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30, K31 and K35
 export type Check =
   | "K1"
   | "K2"
@@ -105,12 +101,13 @@ export type Check =
   | "K22"
   | "K23"
   | "K24"
-  | "K25"
   | "K26"
   | "K27"
   | "K30"
   | "K32"
-  | "K33";
+  | "K33"
+  | "K34"
+  | "K36";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -126,8 +123,6 @@ export type ConformanceOptions = {
   requireLayout?: boolean;
   /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
   requireTimeouts?: boolean;
-  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
-  requireReadLog?: boolean;
   /** The driver claims PERSIST-01 C12–C14 (retention): missing methods are a failure, not a skip. */
   requireRetention?: boolean;
   /** The driver claims PERSIST-01 C16 (document versions): a missing `getVersions` is a failure, not a skip. */
@@ -149,6 +144,8 @@ type Rows = { docs: number; idx: number };
 /** The rows an engine's store holds at exactly `ts` (audit), or null when the driver cannot tell. */
 const rowsOf = async (e: Engine, ts: bigint): Promise<Rows | null> =>
   e.persistence.auditRowsAt ? await e.persistence.auditRowsAt(ts) : null;
+/** The ids of a scan's entries, in order. */
+const idsOf = (docs: { id: string }[]) => docs.map((d) => d.id);
 const sameRows = (a: Rows | null, b: Rows | null) =>
   a === null || b === null ? a === b : a.docs === b.docs && a.idx === b.idx && a.docs > 0;
 
@@ -180,13 +177,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }));
     st.apply(
       1n,
-      entries.map((x) => ({ table: tid(900), id: x.id, json: "{}" })),
-      entries.map((x) => ({ index: tid(900), key: x.key, id: x.id })),
+      entries.map((x) => ({ table: tid(900), id: x.id, json: "{}", prevTs: null })),
+      entries.map((x) => ({ index: tid(900), key: x.key, table: tid(900), id: x.id })),
     );
     await st.flush();
     const want = [...entries].sort((a, b) => compareKeys(a.key, b.key)).map((x) => x.id);
-    const asc = await st.scan(tid(900), FULL_LO, FULL_HI, 1n, 100000, false);
-    const desc = await st.scan(tid(900), FULL_LO, FULL_HI, 1n, 100000, true);
+    const asc = idsOf(await st.scan(tid(900), tid(900), FULL_LO, FULL_HI, 1n, 100000, false));
+    const desc = idsOf(await st.scan(tid(900), tid(900), FULL_LO, FULL_HI, 1n, 100000, true));
     check(
       JSON.stringify(asc) === JSON.stringify(want) && JSON.stringify(desc) === JSON.stringify([...want].reverse()),
       `K1 byte order over ${entries.length} mixed-type keys (asc and desc)`,
@@ -209,8 +206,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         touched.add(id);
         const del = Math.random() < 0.25;
         const v = del ? null : JSON.stringify({ c, id });
-        docs.push({ table: tid(901), id, json: v });
-        idx.push({ index: tid(901), key: keyOf(id), id: del ? null : id });
+        const prev = model.get(id)?.at(-1)?.ts;
+        docs.push({ table: tid(901), id, json: v, prevTs: prev === undefined ? null : BigInt(prev) });
+        idx.push({ index: tid(901), key: keyOf(id), table: del ? null : tid(901), id: del ? null : id });
         model.set(id, [...(model.get(id) ?? []), { ts, v }]);
       }
       st.apply(BigInt(ts), docs, idx);
@@ -224,10 +222,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const vs = model.get(id)?.filter((x) => x.ts <= T) ?? [];
         return vs.length ? vs[vs.length - 1].v : null;
       };
-      for (let i = 0; i < 60; i++) if ((await st.get(tid(901), `d${i}`, BigInt(T))) !== at(`d${i}`)) bad++;
+      for (let i = 0; i < 60; i++)
+        if (((await st.get(tid(901), `d${i}`, BigInt(T)))?.json ?? null) !== at(`d${i}`)) bad++;
       const want = [...model.keys()].filter((id) => at(id) !== null).sort((a, b) => compareKeys(keyOf(a), keyOf(b)));
-      const got = await st.scan(tid(901), FULL_LO, FULL_HI, BigInt(T), 1000, false);
-      if (JSON.stringify(got) !== JSON.stringify(want)) bad++;
+      const got = await st.scan(tid(901), tid(901), FULL_LO, FULL_HI, BigInt(T), 1000, false);
+      if (JSON.stringify(idsOf(got)) !== JSON.stringify(want)) bad++;
+      // Each entry comes with its document (the version written with it).
+      if (got.some((d) => d.json !== at(d.id))) bad++;
     }
     check(bad === 0, `K2 snapshot reads equal the reference model at 60 random past snapshots (${bad} mismatches)`);
   }
@@ -247,8 +248,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const idx = [];
       for (const [i, del] of writes) {
         const v = del ? null : JSON.stringify({ ts, i });
-        docs.push({ table: tid(903), id: id(i), json: v });
-        idx.push({ index: tid(903), key: keyOf(i), id: del ? null : id(i) });
+        const prev = model.get(i)?.at(-1)?.ts;
+        docs.push({ table: tid(903), id: id(i), json: v, prevTs: prev === undefined ? null : BigInt(prev) });
+        idx.push({ index: tid(903), key: keyOf(i), table: del ? null : tid(903), id: del ? null : id(i) });
         model.set(i, [...(model.get(i) ?? []), { ts, v }]);
       }
       st.apply(BigInt(ts), docs, idx);
@@ -271,7 +273,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const vs = model.get(i)?.filter((x) => x.ts <= T) ?? [];
       return vs.length ? vs[vs.length - 1].v : null;
     };
-    const scanDocs = (st as Persistence & Partial<ScanDocs>).scanDocs?.bind(st);
     let bad = 0;
     let probes = 0;
     for (const T of [T0 + 1, T0 + 3, T0 + 50, T0 + 150, ts, ...Array.from({ length: 10 }, () => T0 + 3 + rnd(300))])
@@ -290,12 +291,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const want = ordered.slice(0, limit);
             const loKey = lo === 0 ? FULL_LO : keyOf(lo);
             const hiKey = hi === N ? FULL_HI : keyOf(hi);
-            const got = await st.scan(tid(903), loKey, hiKey, BigInt(T), limit, desc);
-            if (JSON.stringify(got) !== JSON.stringify(want.map(id))) bad++;
-            if (scanDocs) {
-              const docs = await scanDocs(tid(903), tid(903), loKey, hiKey, BigInt(T), limit, desc);
-              if (JSON.stringify(docs) !== JSON.stringify(want.map((i) => at(i, T)))) bad++;
-            }
+            const got = await st.scan(tid(903), tid(903), loKey, hiKey, BigInt(T), limit, desc);
+            if (JSON.stringify(idsOf(got)) !== JSON.stringify(want.map(id))) bad++;
+            if (JSON.stringify(got.map((d) => d.json)) !== JSON.stringify(want.map((i) => at(i, T)))) bad++;
           }
         }
     check(bad === 0, `K8 exact limits over dead ranges and many versions: ${probes} probes, ${bad} mismatches`);
@@ -334,8 +332,21 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       ts++;
       st.apply(
         BigInt(ts),
-        ws.map(([i, del]) => ({ table: tid(904), id: entries[i].id, json: del ? null : JSON.stringify({ i, ts }) })),
-        ws.map(([i, del]) => ({ index: tid(904), key: entries[i].key, id: del ? null : entries[i].id })),
+        ws.map(([i, del]) => {
+          const prev = model.get(entries[i].id)?.at(-1)?.ts;
+          return {
+            table: tid(904),
+            id: entries[i].id,
+            json: del ? null : JSON.stringify({ i, ts }),
+            prevTs: prev === undefined ? null : BigInt(prev),
+          };
+        }),
+        ws.map(([i, del]) => ({
+          index: tid(904),
+          key: entries[i].key,
+          table: del ? null : tid(904),
+          id: del ? null : entries[i].id,
+        })),
       );
       for (const [i, del] of ws) model.set(entries[i].id, [...(model.get(entries[i].id) ?? []), { ts, live: !del }]);
       await st.flush();
@@ -346,7 +357,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const vs = model.get(id)?.filter((x) => x.ts <= T) ?? [];
       return vs.length > 0 && vs[vs.length - 1].live;
     };
-    const scanDocs = (st as Persistence & Partial<ScanDocs>).scanDocs?.bind(st);
     let bad = 0;
     let probes = 0;
     for (const T of [T0 + 1, T0 + 10, ts])
@@ -360,14 +370,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const live = ordered.slice(a, b).filter((e) => liveAt(e.id, T));
             const want = (desc ? live.reverse() : live).slice(0, limit).map((e) => e.id);
             probes++;
-            const got = await st.scan(tid(904), lo, hi, BigInt(T), limit, desc);
+            const got = idsOf(await st.scan(tid(904), tid(904), lo, hi, BigInt(T), limit, desc));
             if (JSON.stringify(got) !== JSON.stringify(want)) {
               bad++;
               if (bad <= 3) log(`  K9 mismatch T=${T} limit=${limit} desc=${desc} [${a},${b}): ${got} vs ${want}`);
-            }
-            if (scanDocs) {
-              const docs = await scanDocs(tid(904), tid(904), lo, hi, BigInt(T), limit, desc);
-              if (docs.length !== want.length) bad++;
             }
           }
     check(bad === 0, `K9 long keys (up to 6 KB, shared 2500-byte prefixes): ${probes} probes, ${bad} mismatches`);
@@ -455,13 +461,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     // are delayed too (the writers do none), so writes land between a chunk's snapshot and its commit.
     const st = await mod.open(false);
     let delayScans = true;
-    for (const m of ["scan", "scanDocs"] as const) {
-      const f = (st as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[m]?.bind(st);
-      if (f)
-        (st as unknown as Record<string, unknown>)[m] = async (...a: unknown[]) => {
-          if (delayScans) await new Promise((r) => setTimeout(r, 3));
-          return f(...a);
-        };
+    {
+      const f = st.scan.bind(st);
+      st.scan = async (...a: Parameters<Persistence["scan"]>) => {
+        if (delayScans) await new Promise((r) => setTimeout(r, 3));
+        return f(...a);
+      };
     }
     e = await new Engine(schemaWithAmount, st, {
       indexBackfill: { chunkSize: 200, chunkRate: 10, readSize: 100 },
@@ -492,15 +497,17 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const ix = t.indexes.get("by_amount")!;
     let bad = 0;
     for (const ts of snapshots) {
-      const live = await e.persistence.scan(t.byId.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      const live = await e.persistence.scan(t.id, t.byId.id, FULL_LO, FULL_HI, ts, 1e9, false);
       const want: [Uint8Array, string][] = [];
-      for (const id of live) {
-        const doc = fromJsonValue(JSON.parse((await e.persistence.get(t.id, id, ts))!)) as unknown as Doc;
-        want.push([indexKey(ix, doc), id]);
+      for (const d of live) {
+        const doc = fromJsonValue(JSON.parse(d.json)) as unknown as Doc;
+        want.push([indexKey(ix, doc), d.id]);
       }
       want.sort((a, b) => compareKeys(a[0], b[0]));
-      const got = await e.persistence.scan(ix.id, FULL_LO, FULL_HI, ts, 1e9, false);
-      if (got.length !== want.length || got.some((id, i) => id !== want[i][1])) {
+      // Each entry joins its document at the entry's own ts (an entry the backfill wrote at an older version
+      // than the live one would have been removed by that version's write).
+      const got = await e.persistence.scan(t.id, ix.id, FULL_LO, FULL_HI, ts, 1e9, false);
+      if (got.length !== want.length || got.some((d, i) => d.id !== want[i][1])) {
         bad++;
         log(`  K24 at ts ${ts}: ${got.length} entries for ${want.length} live documents`);
       }
@@ -509,7 +516,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     await e.close();
     check(
       bad === 0 && writes > 100,
-      `K24 a background backfill under ${writes} concurrent writes: one entry per live document at ${snapshots.length} snapshots (${stats?.chunks} chunks, ${stats?.conflicts} refused and redone)`,
+      `K24 a background backfill under ${writes} concurrent writes: one entry per live document at ${snapshots.length} snapshots (${stats?.chunks} chunks, entries at each document's own ts)`,
     );
   }
 
@@ -558,9 +565,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       // indexed id resolves to a document.
       const counts: number[] = [];
       for (const ix of ixIds) {
-        const ids = await st.scan(ix, FULL_LO, FULL_HI, M, 10_000_000, false);
-        counts.push(ids.length);
-        for (const id of ids.slice(-200)) if ((await st.get(items.id, id, M)) === null) bad++;
+        // The exact-ts join rejects an entry without its document (PERSIST-01 C15).
+        const docs = await st.scan(items.id, ix, FULL_LO, FULL_HI, M, 10_000_000, false);
+        counts.push(docs.length);
+        for (const d of docs.slice(-200)) if ((await st.get(items.id, d.id, M)) === null) bad++;
       }
       const live = st.auditLiveDocs ? Number(await st.auditLiveDocs(items.id, M)) : counts[0];
       if (new Set([...counts, live]).size !== 1) {
@@ -570,7 +578,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       // Writing resumes above M and the result is readable (timestamps follow the clock: STUDY-06 D9).
       const id = await e.mutation(insertItem("resume"));
       const next = e.committer.visibleTs;
-      if (next <= M || (await st.get(items.id, id, next)) === null) {
+      if (next <= M || (await st.get(items.id, internalIdOf(id), next)) === null) {
         log(`  kill ${k}: resume wrote ts ${next}, expected above ${M}`);
         bad++;
       }
@@ -624,7 +632,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const TABLE = tid(950);
     const INDEX = tid(951);
     const row = (ts: bigint, id: string) =>
-      [[{ table: TABLE, id, json: `{"ts":${ts}}` }], [{ index: INDEX, key: encodeKey([id]), id }]] as const;
+      [
+        [{ table: TABLE, id, json: `{"ts":${ts}}`, prevTs: null }],
+        [{ index: INDEX, key: encodeKey([id]), table: TABLE, id }],
+      ] as const;
 
     // K10 — exclusive, at the driver and through the engine.
     {
@@ -688,7 +699,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         () => null,
         (e) => e,
       );
-      const seen = await b.scan(INDEX, FULL_LO, FULL_HI, MAX_TS, 100, false);
+      const seen = idsOf(await b.scan(TABLE, INDEX, FULL_LO, FULL_HI, MAX_TS, 100, false));
       const M2 = await b.maxTs!();
       await b.releaseLease();
       await a.close();
@@ -708,7 +719,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const s = await raw(false);
       await s.acquireLease({ holder: "k16", ttlMs: 30_000 });
       const M = await s.maxTs!();
-      s.apply(M + 1n, [], [{ index: INDEX, key: encodeKey(["k16"]), id: "k16" }]);
+      s.apply(M + 1n, [], [{ index: INDEX, key: encodeKey(["k16"]), table: TABLE, id: "k16" }]);
       await s.flush();
       await s.releaseLease();
       await s.close();
@@ -863,7 +874,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const at = e.committer.visibleTs;
         const counts: number[] = [];
         for (const ix of items.indexes.values())
-          counts.push((await st.scan(ix.id, FULL_LO, FULL_HI, at, 1e7, false)).length);
+          counts.push((await st.scan(items.id, ix.id, FULL_LO, FULL_HI, at, 1e7, false)).length);
         const live = st.auditLiveDocs ? Number(await st.auditLiveDocs(items.id, at)) : counts[0];
         // The child must stop (fail-stop) and land nothing. Paused between flushes it finds its lease lost
         // (exit 3); paused INSIDE a flush the store aborts its idle transaction (K14) and that flush fails
@@ -1056,7 +1067,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const leased = hasLease(st);
       if (leased) await st.acquireLease({ holder: "k20", ttlMs: TTL });
       const put = (ts: bigint, id: string) =>
-        st.apply(ts, [{ table: tid(960), id, json: `{"ts":${ts}}` }], [{ index: tid(961), key: encodeKey([id]), id }]);
+        st.apply(
+          ts,
+          [{ table: tid(960), id, json: `{"ts":${ts}}`, prevTs: null }],
+          [{ index: tid(961), key: encodeKey([id]), table: tid(960), id }],
+        );
       put(10n, "a");
       await st.flush();
       const healthy = await st.get(tid(960), "a", 10n);
@@ -1097,7 +1112,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       proxy.thaw();
       const again = await timed(Promise.resolve(st.get(tid(960), "a", 10n)));
       check(
-        again.answered && again.value === healthy && healthy !== null,
+        again.answered && healthy !== null && (again.value as { json: string } | null)?.json === healthy.json,
         `K20 once the store answers again, so do calls, without reopening (${again.what})`,
       );
       if (leased) await st.releaseLease();
@@ -1214,14 +1229,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
       st.apply(
         10n,
-        [{ table: tid(970), id: "k21read", json: `{"v":1}` }],
-        [{ index: tid(971), key: encodeKey(["k21read"]), id: "k21read" }],
+        [{ table: tid(970), id: "k21read", json: `{"v":1}`, prevTs: null }],
+        [{ index: tid(971), key: encodeKey(["k21read"]), table: tid(970), id: "k21read" }],
       );
       await st.flush();
       proxy.resetOn(/k21read/, 1);
       const once = await settle(Promise.resolve(st.get(tid(970), "k21read", 10n)));
       check(
-        proxy.fired.resets === 1 && once.ok && once.value === `{"v":1}`,
+        proxy.fired.resets === 1 && once.ok && (once.value as { json: string } | null)?.json === `{"v":1}`,
         `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
       );
       proxy.resetOn(/k21read/, 2);
@@ -1321,13 +1336,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
   if (want("K24")) await k24();
-  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   if (want("K27"))
     await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K27–K29 threw: ${e}`));
-  if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30–K31 threw: ${e}`));
+  if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30, K31, K35 threw: ${e}`));
   if (want("K32"))
     await versionChecks(mod, check, log, !!opts.requireVersions).catch((e) => check(false, `K32 threw: ${e}`));
   if (want("K33")) await nanosecondChecks(mod, check).catch((e) => check(false, `K33 threw: ${e}`));
+  if (want("K34")) await prevTsChecks(mod, check).catch((e) => check(false, `K34 threw: ${e}`));
+  if (want("K36")) await indexEntryChecks(mod, check).catch((e) => check(false, `K36 threw: ${e}`));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K26"))

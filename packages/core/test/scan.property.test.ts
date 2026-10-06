@@ -31,7 +31,7 @@ const versions = fc
   .map((rows) => rows.map(([k, id], ts): Version => ({ key: k, ts, id })));
 
 /** For each key, its newest version; live ones in scan order, the first `limit`. */
-function oracle(vs: Version[], lo: Uint8Array, hi: Uint8Array, limit: number, desc: boolean): string[] {
+function oracle(vs: Version[], lo: Uint8Array, hi: Uint8Array, limit: number, desc: boolean): [string, bigint][] {
   const newest = new Map<string, Version>();
   for (const v of vs) {
     if (compareKeys(v.key, lo) < 0 || compareKeys(v.key, hi) >= 0) continue;
@@ -43,7 +43,7 @@ function oracle(vs: Version[], lo: Uint8Array, hi: Uint8Array, limit: number, de
     .sort((a, b) => (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)))
     .filter((v) => v.id !== null)
     .slice(0, Math.max(0, limit))
-    .map((v) => v.id!);
+    .map((v): [string, bigint] => [v.id!, BigInt(v.ts)]);
 }
 
 /** A driver that reads index rows in (key, ts desc) order — reversed key order when desc. */
@@ -53,7 +53,7 @@ function plainFetch(vs: Version[], desc: boolean) {
     sorted
       .filter((v) => compareKeys(v.key, lo) >= 0 && compareKeys(v.key, hi) < 0)
       .slice(0, n)
-      .map((v) => ({ key: v.key, deleted: v.id === null, id: v.id }));
+      .map((v) => ({ key: v.key, ts: BigInt(v.ts), deleted: v.id === null, id: v.id }));
 }
 
 /** The same versions stored with split keys, queried as the SQL drivers query them. */
@@ -98,7 +98,9 @@ describe("scanning the newest versions, against a brute-force oracle", () => {
   test("a store that reads (key, ts desc) pages: scanLatest returns the oracle's ids", () => {
     fc.assert(
       fc.property(versions, bounds, limit, fc.boolean(), (vs, [lo, hi], n, desc) => {
-        expect(scanLatestSync(plainFetch(vs, desc), lo, hi, n, desc)).toEqual(oracle(vs, lo, hi, n, desc));
+        // Each live entry with the ts of its key's newest version (what the exact-ts join reads at).
+        const got = scanLatestSync(plainFetch(vs, desc), lo, hi, n, desc).map((e): [string, bigint] => [e.id, e.ts]);
+        expect(got).toEqual(oracle(vs, lo, hi, n, desc));
       }),
       { numRuns: runs(400) },
     );
@@ -108,7 +110,7 @@ describe("scanning the newest versions, against a brute-force oracle", () => {
     await fc.assert(
       fc.asyncProperty(versions, bounds, limit, fc.boolean(), async (vs, [lo, hi], n, desc) => {
         const got = await scanLatest(splitPages(splitSource(vs, desc), desc), lo, hi, n, desc);
-        expect(got).toEqual(oracle(vs, lo, hi, n, desc));
+        expect(got.map((e): [string, bigint] => [e.id, e.ts])).toEqual(oracle(vs, lo, hi, n, desc));
       }),
       { numRuns: runs(300) },
     );
