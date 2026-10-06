@@ -104,7 +104,8 @@ async function rerunAfterWrite(t: Awaited<ReturnType<typeof setup>>) {
   await c.transition(0);
   await t.send("ana", "hi");
   await c.transition(1);
-  return t.engine.committer.visibleTs;
+  // As the JSON gives it (the inspector's and the log's): a number.
+  return Number(t.engine.committer.visibleTs);
 }
 
 const runsOf = (entries: any[], path: string) => entries.filter((e) => e.identifier === path);
@@ -187,19 +188,19 @@ test("with the inspector's ring off, a re-run still says why, with no invalidati
 
 test("the invalidation a run answers: the newest not yet sent", () => {
   const ins = new SyncInspector(8);
-  const write = { index: 1, key: new Uint8Array([1]) };
+  const write = { index: "1", key: new Uint8Array([1]) };
   expect(ins.pending("k")).toBeNull();
-  ins.invalidated("k", 10, "m:a", write);
-  ins.invalidated("k", 11, "m:b", write);
-  ins.invalidated("other", 12, "m:c", write);
+  ins.invalidated("k", 10n, "m:a", write);
+  ins.invalidated("k", 11n, "m:b", write);
+  ins.invalidated("other", 12n, "m:c", write);
   // two commits before the run: it reads at the newer one
-  expect(ins.pending("k")).toMatchObject({ seq: 2, commitTs: 11, source: "m:b" });
+  expect(ins.pending("k")).toMatchObject({ seq: 2, commitTs: 11n, source: "m:b" });
   ins.sent("k");
   expect(ins.pending("k")).toBeNull();
   ins.rerun("k", "codeChange");
   expect(ins.pending("k")).toBeNull();
-  ins.invalidated("k", 13, "m:d", write);
-  expect(ins.pending("k")).toMatchObject({ seq: 4, commitTs: 13 });
+  ins.invalidated("k", 13n, "m:d", write);
+  expect(ins.pending("k")).toMatchObject({ seq: 4, commitTs: 13n });
   // its feed number is the follow stream's
   expect(ins.history("k")[0]).toMatchObject({ kind: "invalidation", seq: 4 });
 });

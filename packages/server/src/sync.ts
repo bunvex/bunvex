@@ -704,7 +704,8 @@ export class SyncHub {
       subscription: {
         argsDigest: q.argsDigest,
         reason,
-        invalidation: pending && { seq: pending.seq, commitTs: pending.commitTs },
+        // The commit ts as the inspector's JSON gives it (`Number`), so the dashboard matches the two.
+        invalidation: pending && { seq: pending.seq, commitTs: Number(pending.commitTs) },
       },
     } as SourcedCaller;
   }
