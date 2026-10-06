@@ -52,11 +52,13 @@ import {
   MAX_VALUE_NESTING,
   measureRawValue,
   rawValueSize,
+  refuseLoneSurrogates,
   TOO_NESTED_MESSAGE,
+  toJsonValue,
   type Value,
 } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
-import { functionNameOf } from "./function-handles.ts";
+import { functionAddress, functionNameOf } from "./function-handles.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
@@ -104,13 +106,23 @@ function parseScheduleArgs(args: unknown): Record<string, Value> {
 }
 
 /** Where a scheduler writes: a mutation's transaction, or (an action) one transaction per call. */
-type Target = { db: Tx; job?: string } | { engine: Engine; job?: string; systemIdentity?: boolean };
+type Target = { db: Tx; job?: string } | { engine: Engine; job?: string; systemIdentity?: boolean; requestId?: string };
 
 export function makeScheduler(functions: Functions, target: Target): Scheduler {
   const write = <T>(f: (db: Tx) => Promise<T>): Promise<T> =>
     "db" in target ? f(target.db) : target.engine.mutation((db) => f(db), "_system/scheduler");
 
   const schedule = async (tsMs: number, fn: SchedulableFunction, args: Record<string, Value>) => {
+    // Convex's `schedule` text (scheduler_impl.ts): an action's request id, the function's address, the time
+    // in seconds, then the arguments; serde reads it before anything is checked (STUDY-135).
+    refuseLoneSurrogates(args, () =>
+      JSON.stringify({
+        ...("engine" in target ? { requestId: target.requestId ?? "" } : {}),
+        ...functionAddress(fn),
+        ts: tsMs / 1000,
+        args: toJsonValue(args),
+      }),
+    );
     // As Convex: the time, then the target (it must exist; its kind is checked when it runs).
     if (Number.isNaN(tsMs))
       throw new Error(

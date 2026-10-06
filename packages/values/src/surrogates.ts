@@ -5,12 +5,24 @@
 /** True when `s` holds a lone surrogate. */
 export const hasLoneSurrogate = (s: string): boolean => !s.isWellFormed();
 
-/** True when a string anywhere in `v` (a field name included) holds a lone surrogate. */
+/**
+ * True when a string anywhere in `v` (a field name included) holds a lone surrogate. Iterative: a value may
+ * nest far deeper than the stack (its nesting is refused with Convex's message after this check).
+ */
 export function valueHasLoneSurrogate(v: unknown): boolean {
-  if (typeof v === "string") return hasLoneSurrogate(v);
-  if (Array.isArray(v)) return v.some(valueHasLoneSurrogate);
-  if (v !== null && typeof v === "object" && !ArrayBuffer.isView(v) && !(v instanceof ArrayBuffer)) {
-    for (const [k, x] of Object.entries(v)) if (hasLoneSurrogate(k) || valueHasLoneSurrogate(x)) return true;
+  const stack: unknown[] = [v];
+  while (stack.length) {
+    const x = stack.pop();
+    if (typeof x === "string") {
+      if (hasLoneSurrogate(x)) return true;
+    } else if (Array.isArray(x)) {
+      for (const e of x) stack.push(e);
+    } else if (x !== null && typeof x === "object" && !ArrayBuffer.isView(x) && !(x instanceof ArrayBuffer)) {
+      for (const [k, e] of Object.entries(x)) {
+        if (hasLoneSurrogate(k)) return true;
+        stack.push(e);
+      }
+    }
   }
   return false;
 }
@@ -70,4 +82,15 @@ export function jsonSurrogateError(text: string): string | null {
     if (!isLow(second)) return `lone leading surrogate in hex escape at line 1 column ${bytes}`;
   }
   return null;
+}
+
+/**
+ * Convex sends a value to Rust as `JSON.stringify` text, and serde refuses a string with a lone surrogate
+ * (STUDY-135): the call fails with "Received invalid json: …", the column counted in that text, whose shape
+ * `text` builds as Convex's JS does for the call. Only a value that holds one pays for building it.
+ */
+export function refuseLoneSurrogates(value: unknown, text: () => string): void {
+  if (!valueHasLoneSurrogate(value)) return;
+  const e = jsonSurrogateError(text());
+  if (e) throw new Error(`Received invalid json: ${e}`);
 }

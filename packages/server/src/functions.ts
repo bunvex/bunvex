@@ -44,13 +44,16 @@ import {
   isBunvexError,
   isBytes,
   isSimpleObject,
+  jsonSurrogateError,
   MAX_VALUE_NESTING,
   measureRawValue,
   rawValueSize,
+  refuseLoneSurrogates,
   TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   v,
+  valueHasLoneSurrogate,
 } from "@bunvex/values";
 import { isolateFetch, nodeFetch } from "./action-fetch.ts";
 
@@ -128,7 +131,7 @@ import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
-import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles.ts";
+import { canonicalPath, functionAddress, functionNameOf, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
   type Completion,
@@ -180,6 +183,16 @@ const registryKey = (name: string) => {
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
  */
 const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
+
+/**
+ * An action's `runQuery` / `runMutation` / `runAction` whose arguments hold a lone surrogate (STUDY-135): the
+ * `actions/*` text (`actions_impl.ts`: the function's address, then the arguments) fails in serde.
+ */
+function refuseLoneSurrogatesInActionCall(ref: unknown, args: unknown) {
+  refuseLoneSurrogates(args, () =>
+    JSON.stringify({ ...functionAddress(ref), args: toJsonValue((args ?? {}) as Value) }),
+  );
+}
 
 /**
  * A callee's error as the action that called it catches it (Convex's `actions_impl.ts` through
@@ -1249,6 +1262,9 @@ export class Functions {
    */
   private checkArgs(f: FunctionDef, args: unknown, measured = measureArgs(args)): AnyArgs {
     const a = args === undefined ? {} : args;
+    // Arguments a client sent with a lone surrogate do not parse into Convex's values (STUDY-135; nested
+    // and scheduled calls are refused before, where their text is sent).
+    if (valueHasLoneSurrogate(a)) throw new FunctionPathError("Invalid arguments provided");
     const { size, nesting } = measured;
     if (nesting > MAX_VALUE_NESTING)
       throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${TOO_NESTED_MESSAGE}`);
@@ -1275,6 +1291,13 @@ export class Functions {
    * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
    */
   private checkReturns(f: FunctionDef, value: unknown) {
+    // Convex's JS sends the result to Rust as JSON text, which serde parses first: a lone surrogate fails it
+    // (STUDY-135, `crates/isolate/src/helpers.rs`).
+    if (valueHasLoneSurrogate(value)) {
+      const e = jsonSurrogateError(JSON.stringify(toJsonValue((value ?? null) as Value)));
+      if (e)
+        throw new FunctionPathError(`Function ${this.pathOf(f)} failed. Could not parse return value as json: ${e}`);
+    }
     // Convex's order: the value is parsed (its 64-level nesting limit), then measured — one walk here.
     const { size, nesting } = measureRawValue((value ?? null) as Value);
     if (nesting > MAX_VALUE_NESTING)
@@ -1581,7 +1604,17 @@ export class Functions {
       // Where the caller called: its error's frames (Convex raises it at the call, in the caller's code).
       const site = new Error();
       const run = queue
-        .then(() => pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth)))
+        .then(() => {
+          // Convex's `runUdf` text (registration_impl.ts): serde reads it first (STUDY-135).
+          refuseLoneSurrogates(args, () =>
+            JSON.stringify({
+              udfType: opts?.useStaleSnapshot ? "snapshotQuery" : kind,
+              args: toJsonValue((args ?? {}) as Value),
+              ...functionAddress(ref),
+            }),
+          );
+          return pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth));
+        })
         .catch((e) => {
           throw atCallSite(e, site);
         });
@@ -2117,6 +2150,7 @@ export class Functions {
       // Once the action timed out, nothing it calls starts (STUDY-77).
       runQuery: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
+        refuseLoneSurrogatesInActionCall(n, a);
         return acrossCall(
           await asActionCaller(
             this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
@@ -2125,6 +2159,7 @@ export class Functions {
       },
       runMutation: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
+        refuseLoneSurrogatesInActionCall(n, a);
         return acrossCall(
           await asActionCaller(
             this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
@@ -2133,6 +2168,7 @@ export class Functions {
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
+        refuseLoneSurrogatesInActionCall(n, a);
         return acrossCall(
           await asActionCaller(
             this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
@@ -2146,6 +2182,8 @@ export class Functions {
       scheduler: cutOffWithAction(
         makeScheduler(this, {
           engine: this.engine,
+          // Convex's action scheduler sends its request id first (an HTTP action's is "").
+          requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
           systemIdentity: isSystemIdentity(caller),
           job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
         }),

@@ -19,16 +19,15 @@ import {
   type GenericValidator,
   isCommitTsPlaceholder,
   isSimpleObject,
-  jsonSurrogateError,
   keyBytesLength,
   MAX_COMMIT_TS,
   MAX_VALUE_NESTING,
   rawValueSize,
+  refuseLoneSurrogates,
   TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   v,
-  valueHasLoneSurrogate,
   valueNesting,
 } from "@bunvex/values";
 import { BTree } from "./btree.ts";
@@ -368,18 +367,6 @@ function extractCommitTs(
     return { value: out, paths };
   }
   return { value, paths };
-}
-
-/**
- * Convex sends a write's value to Rust as `JSON.stringify` text, and serde refuses a string with a lone
- * surrogate (STUDY-135): "Received invalid json: …", the column counted in that text, whose shape `text`
- * builds as Convex's `database_impl.ts` does (`{table, value}`, `{id, value}`). Only a value that holds one
- * pays for building it.
- */
-export function refuseLoneSurrogates(value: unknown, text: () => string) {
-  if (!valueHasLoneSurrogate(value)) return;
-  const e = jsonSurrogateError(text());
-  if (e) throw new Error(`Received invalid json: ${e}`);
 }
 
 /** A patch's value as Convex's `patchValueToJson` writes it: a top-level `undefined` is `{$undefined: null}`. */
