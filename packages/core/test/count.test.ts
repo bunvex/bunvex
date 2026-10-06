@@ -4,7 +4,7 @@
 // summaries are built, Convex's `TableSummariesUnavailable`.
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
-import { SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "../src/catalog.ts";
+import { FILE_STORAGE_TABLE, SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "../src/catalog.ts";
 import { OutOfRetentionError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
@@ -112,11 +112,12 @@ test("only on the query initializer, which it leaves usable", async () => {
   expect(shapes).toEqual([1, 1, "undefined", "undefined", "undefined", "undefined", 1]);
 });
 
+// The virtual tables (STUDY-125) count as their system tables: `_storage` as `_file_storage`.
 test("virtual tables are counted through db.system; db.query refuses them", async () => {
   const e = await engine();
   await e.mutation(async (db) => {
     for (let i = 0; i < 3; i++)
-      await db.asSystem(() => db.insert(STORAGE_TABLE, { storageId: `s${i}`, blobKey: `b${i}`, sha256: "x", size: 1 }));
+      await db.asSystem(() => db.insert(FILE_STORAGE_TABLE, { storageId: `s${i}`, storageKey: `b${i}`, size: 1n }));
   });
   const counts = await e.query(async (db) => [
     await db.system.query(STORAGE_TABLE).count(),
@@ -127,7 +128,7 @@ test("virtual tables are counted through db.system; db.query refuses them", asyn
   // Inside a mutation, its own writes count too.
   expect(
     await e.mutation(async (db) => {
-      await db.asSystem(() => db.insert(STORAGE_TABLE, { storageId: "s9", blobKey: "b9", sha256: "x", size: 1 }));
+      await db.asSystem(() => db.insert(FILE_STORAGE_TABLE, { storageId: "s9", storageKey: "b9", size: 1n }));
       return db.system.query(STORAGE_TABLE).count();
     }),
   ).toBe(4);

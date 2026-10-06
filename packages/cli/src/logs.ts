@@ -4,6 +4,7 @@
 // with `--success`, a line for each successful execution; with `--jsonl`, each entry as JSON. Convex's prefix
 // says CONVEX; bunvex's says BUNVEX (rule 5).
 import { VERSION } from "@bunvex/client";
+import { argumentError, invalidArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -192,10 +193,9 @@ export async function logsCommand(args: string[], io: Io, opts: { signal?: Abort
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex logs: ${taken}`);
-    return 2;
-  }
+  // Convex's `logs` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, LOGS_USAGE);
+  const positional: string[] = [];
   let history: number | true | undefined;
   let success = false;
   let jsonl = false;
@@ -209,17 +209,16 @@ export async function logsCommand(args: string[], io: Io, opts: { signal?: Abort
       if (name === "--tail")
         io.err("`--tail` is unnecessary: `bunvex logs` already tails by default. Treating it as `--history`.");
       const inline = a.includes("=") ? a.slice(a.indexOf("=") + 1) : undefined;
-      const next = inline ?? (r[i + 1] !== undefined && /^\d+$/.test(r[i + 1]!) ? r[++i] : undefined);
+      // Commander takes an optional value from the next argument unless that one looks like an option.
+      const next = inline ?? (r[i + 1] !== undefined && !r[i + 1]!.startsWith("-") ? r[++i] : undefined);
       if (next === undefined) history = history ?? true;
-      else if (!/^\d+$/.test(next)) {
-        io.err(`bunvex logs: option '${name} [n]' argument '${next}' is invalid. Not a number.`);
-        return 2;
-      } else history = Number(next);
-    } else {
-      io.err(`bunvex logs: unknown option ${a}\n\n${LOGS_USAGE}`);
-      return 2;
-    }
+      else if (!/^\d+$/.test(next))
+        return argumentError(io, invalidArgument(`${name} [n]`, next, "Not a number."), LOGS_USAGE);
+      else history = Number(next);
+    } else if (!a.startsWith("-")) positional.push(a);
+    else return argumentError(io, unknownOption(a, optionsIn(LOGS_USAGE)), LOGS_USAGE);
   }
+  if (positional.length) return argumentError(io, tooManyArguments("logs", 0, positional.length), LOGS_USAGE);
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
     acquired = await acquireTarget(taken.flags, io);

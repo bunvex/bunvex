@@ -182,3 +182,106 @@ export function keyBytesLength(values: (Value | undefined)[]): number {
   for (const v of values) n += keyLength(v);
   return n;
 }
+
+// ------------------------------------------------------------------ decoding (STUDY-131 AD-25)
+
+class Reader {
+  i = 0;
+  constructor(readonly b: Uint8Array) {}
+  /** The next byte, or throws at the end. */
+  next(): number {
+    if (this.i >= this.b.length) throw new RangeError("key ends inside a value");
+    return this.b[this.i++]!;
+  }
+  /** Bytes up to an unescaped 0x00 (consumed), with each 0x00 0xFF read as 0x00. */
+  escaped(): Uint8Array {
+    const out: number[] = [];
+    for (;;) {
+      const x = this.next();
+      if (x !== TERMINATOR) {
+        out.push(x);
+        continue;
+      }
+      if (this.i < this.b.length && this.b[this.i] === ESCAPE) {
+        this.i++;
+        out.push(TERMINATOR);
+        continue;
+      }
+      return Uint8Array.from(out);
+    }
+  }
+}
+
+const utf8Decoder = new TextDecoder();
+
+function read(r: Reader): Value | undefined {
+  const tag = r.next();
+  if (tag === UNDEFINED) return undefined;
+  if (tag === NULL) return null;
+  if (tag >= ZERO_INT - 4 && tag <= ZERO_INT + 4) {
+    if (tag === ZERO_INT) return 0n;
+    const width = Math.abs(tag - ZERO_INT);
+    const bytes = 1 << (width - 1);
+    let u = 0n;
+    for (let k = 0; k < bytes; k++) u = (u << 8n) | BigInt(r.next());
+    return BigInt.asIntN(bytes * 8, u);
+  }
+  if (tag === FLOAT) {
+    const raw = new Uint8Array(8);
+    for (let k = 0; k < 8; k++) raw[k] = r.next();
+    if (raw[0]! & 0x80) raw[0] = raw[0]! & 0x7f;
+    else for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    return new DataView(raw.buffer).getFloat64(0);
+  }
+  if (tag === FALSE) return false;
+  if (tag === TRUE) return true;
+  if (tag === STRING) return utf8Decoder.decode(r.escaped());
+  if (tag === BYTES) return r.escaped().slice().buffer as ArrayBuffer;
+  if (tag === ARRAY) {
+    const out: Value[] = [];
+    for (;;) {
+      if (r.i < r.b.length && r.b[r.i] === TERMINATOR) {
+        r.i++;
+        return out;
+      }
+      out.push(read(r) as Value);
+    }
+  }
+  if (tag === OBJECT) {
+    const out: Record<string, Value> = {};
+    for (;;) {
+      // An empty field name is its terminator then the escape; the object's own terminator is a lone 0x00.
+      if (r.i < r.b.length && r.b[r.i] === TERMINATOR && r.b[r.i + 1] !== ESCAPE) {
+        r.i++;
+        return out;
+      }
+      let name: string;
+      if (r.b[r.i] === TERMINATOR && r.b[r.i + 1] === ESCAPE) {
+        r.i += 2;
+        name = "";
+      } else name = utf8Decoder.decode(r.escaped());
+      out[name] = read(r) as Value;
+    }
+  }
+  throw new RangeError(`unknown type tag 0x${tag.toString(16)}`);
+}
+
+/**
+ * The values a sort key encodes, read back (the inverse of `valuesToKey`), as far as they are complete:
+ * `consumed` is how many bytes they took. What follows (an interval bound's `0xFF`, or a key cut short) is
+ * left to the caller. For reading keys back for people (STUDY-131 AD-25), not on any hot path.
+ */
+export function keyToValues(key: Uint8Array): { values: (Value | undefined)[]; consumed: number } {
+  const r = new Reader(key);
+  const values: (Value | undefined)[] = [];
+  let consumed = 0;
+  while (r.i < key.length) {
+    try {
+      values.push(read(r));
+    } catch {
+      break;
+    }
+    consumed = r.i;
+  }
+  return { values, consumed };
+}

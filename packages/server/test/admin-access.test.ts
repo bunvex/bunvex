@@ -94,6 +94,10 @@ const NOT_FOUND = (p: string) => ({
   ),
 });
 /** The error a sync client sees for a missing function (with its request id). */
+/** A `_system/` query refused to a session that is not an admin's (Convex's `SystemIdentityRequired`). */
+const refusedLine = expect.stringMatching(
+  /^error: \[Request ID: [0-9a-f]{16}\] Server Error\nOperation query not permitted\n$/,
+);
 const notFoundLine = (p: string) =>
   expect.stringMatching(
     new RegExp(
@@ -193,11 +197,11 @@ describe("HTTP: who reaches what", () => {
     expect((await call("query", "m:whoami", {}, `Bunvex ${SYSTEM}:${user}`)).status).toBe(500);
   });
 
-  test("_system/* functions: missing without a key; an admin calls them with its operations", async () => {
+  test("_system/* functions: refused without a key (Operation … not permitted); an admin calls them with its operations", async () => {
     const { call } = await setup();
-    expect((await call("query", "_system/frontend/listCronJobs")).body).toMatchObject(
-      NOT_FOUND("_system/frontend/listCronJobs"),
-    );
+    const anon = await call("query", "_system/frontend/listCronJobs");
+    expect([anon.status, anon.body.status]).toEqual([200, "error"]);
+    expect(anon.body.errorMessage).toEndWith("Server Error\nOperation query not permitted\n");
     expect((await call("query", "_system/frontend/listCronJobs", {}, `Bunvex ${KEY}`)).body).toMatchObject({
       status: "success",
       value: [],
@@ -213,8 +217,8 @@ describe("HTTP: who reaches what", () => {
     ]);
     const ok = await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl", {}, `Bunvex ${KEY}`);
     expect(ok.body.value).toMatch(/\/api\/storage\/upload\?token=/);
-    expect((await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl")).body).toMatchObject(
-      NOT_FOUND("_system/frontend/fileStorageV2:generateUploadUrl"),
+    expect((await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl")).body.errorMessage).toEndWith(
+      "Server Error\nOperation mutation not permitted\n",
     );
   });
 
@@ -325,7 +329,7 @@ describe("sync: Authenticate Admin", () => {
     anon.modify([add(1, "m:secret"), add(2, "_system/frontend/listCronJobs")]);
     await anon.until(() => history(anon.transitions(), 2).length);
     expect(history(anon.transitions(), 1)).toEqual([notFoundLine("m:secret")]);
-    expect(history(anon.transitions(), 2)).toEqual([notFoundLine("_system/frontend/listCronJobs")]);
+    expect(history(anon.transitions(), 2)).toEqual([refusedLine]);
     // And the other way round: an admin after a denied session still gets the result.
     const admin2 = await v1Client(syncUrl(server.server.port));
     admin2.send(authenticate(KEY));

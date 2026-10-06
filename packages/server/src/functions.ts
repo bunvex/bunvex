@@ -22,6 +22,7 @@ import {
   pausingUserTime,
   type SessionRequestId,
   type SessionRequestOutcome,
+  type Span,
   setFetchMeter,
   setFetchSender,
   stringifyValue,
@@ -100,6 +101,7 @@ import {
   BadDeployKeyError,
   type DeploymentOp,
   OperationNotPermittedError,
+  SystemIdentityRequiredError,
 } from "./admin-keys.ts";
 import type { AppMetrics } from "./app-metrics.ts";
 import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
@@ -135,6 +137,7 @@ import {
 } from "./logs.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import type { ServerMetrics } from "./server-metrics.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
@@ -276,8 +279,15 @@ export const adminCallerOf = (admin: AdminKeyIdentity, actingAs: Record<string, 
   // (the query cache's per-caller entries, sync's shared runs). Convex keys an admin by its operations too.
   key: `admin:${admin.kind}:${admin.kind === "admin" && admin.readOnly ? "ro" : "rw"}:${actingAs ? stringifyValue(actingAs as never) : ""}`,
   admin,
+  systemIdentity: actingAs === null,
 });
 const adminOf = (caller: Caller | undefined) => (caller as AdminCaller | undefined)?.admin;
+/**
+ * Whether `caller` may reach a `_system/` function: an admin or the system acting as itself (Convex's
+ * `identity.is_admin() || identity.is_system()`); not a user, nobody, nor an admin acting as a user.
+ */
+export const isSystemIdentity = (caller: Caller | undefined) =>
+  adminOf(caller) !== undefined && caller!.identity == null;
 const INTERNAL_OPS = {
   query: "RunInternalQueries",
   mutation: "RunInternalMutations",
@@ -286,6 +296,34 @@ const INTERNAL_OPS = {
 const isSystemPath = (name: string) => name.startsWith("_system/");
 const notFound = (name: string) =>
   new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+/**
+ * A `_system/` function an admin asks for that does not exist, as Convex's module lookup words it (checked
+ * against Convex's local backend): no such system module (`Couldn't find system module '"no/such.js"'.`, the
+ * path without `_system/`), or no such function in one (`Couldn't find "nope" in module "_system/cli/tables.js".`).
+ */
+function systemNotFound(name: string): FunctionPathError {
+  const key = registryKey(name);
+  const i = key.lastIndexOf(":");
+  const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
+  const exists = [...Object.keys(SYSTEM_QUERIES), ...Object.keys(SYSTEM_MUTATIONS)].some(
+    (k) => registryKey(k).slice(0, registryKey(k).lastIndexOf(":")) === module,
+  );
+  return new FunctionPathError(
+    exists
+      ? `Couldn't find "${fn}" in module "${module}.js".`
+      : `Couldn't find system module '"${module.slice("_system/".length)}.js"'.`,
+  );
+}
+/**
+ * An action's `runQuery` / `runMutation` / `runAction` of a `_system/` function: Convex's action runtime never
+ * resolves one, whoever runs the action (`TaskExecutor::resolve`, "Couldn't resolve api._system.….<fn>").
+ */
+/** The function an action's call names, as the registry keys it; never a `_system/` one (`unresolvable`). */
+const actionTarget = (name: string) => {
+  if (isSystemPath(name)) throw unresolvable(name);
+  return registryKey(name);
+};
+const unresolvable = (name: string) => new Error(`Couldn't resolve api.${registryKey(name).replace(/[/:]/g, ".")}`);
 const copy = <T>(x: T): T => (x === null ? x : structuredClone(x));
 /** A transaction's `ctx.auth`: reading the identity marks the result as the caller's (the query cache). */
 const txAuth = (db: Tx): Auth => ({
@@ -367,6 +405,26 @@ function runReason(caller: CallerName, udfType: UdfType): RunReason {
 }
 
 const strippedPath = (name: string) => name.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
+
+/** A function span's kind word: `query`, `mutation`, `action`, `http_action`. */
+const spanKindOf = (udfType: UdfType) => (udfType === "HttpAction" ? "http_action" : udfType.toLowerCase());
+
+/** End an execution's span with what it did: its path and kind, whether the cache answered, what it read. */
+function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unknown }) {
+  span
+    .set("bunvex.function.path", r.identifier)
+    .set("bunvex.function.kind", spanKindOf(r.udfType))
+    .set("bunvex.function.environment", r.environment)
+    .set("bunvex.function.cached", r.cached)
+    .set("bunvex.request_id", r.requestId);
+  const tx = r.tx as Tx | null;
+  if (tx) {
+    const used = tx.usage;
+    span.set("bunvex.function.documents_read", used.documentsRead).set("bunvex.function.bytes_read", used.bytesRead);
+  }
+  if (!res.ok) span.fail(res.error);
+  span.finish();
+}
 
 /** The transaction the current logged execution runs in, for its usage. */
 function noteTx(db: Tx) {
@@ -647,7 +705,7 @@ export class Functions {
    * action or HTTP action each line as a Progress event as it is printed. A function an action calls is
    * logged with the action as its parent, in its request. System functions are not logged, as in Convex.
    */
-  async logged<T>(
+  logged<T>(
     udfType: UdfType,
     name: string,
     caller: Caller | undefined,
@@ -663,10 +721,42 @@ export class Functions {
      */
     settled?: (value: T) => Promise<() => void> | null,
   ): Promise<T> {
+    // Traced (STUDY-131 AD-26): a span for the execution, under the request's, with what it read.
+    const tracer = this.engine.tracer;
+    const span = tracer.on ? tracer.child(`${spanKindOf(udfType)} ${strippedPath(name)}`) : null;
+    if (span)
+      return tracer.within(span, () =>
+        this.loggedRun(span, udfType, name, caller, run, outcome, routePath, args, settled),
+      );
+    return this.loggedRun(null, udfType, name, caller, run, outcome, routePath, args, settled);
+  }
+
+  private async loggedRun<T>(
+    span: Span | null,
+    udfType: UdfType,
+    name: string,
+    caller: Caller | undefined,
+    run: () => Promise<T>,
+    outcome: ((value: T) => Outcome) | undefined,
+    routePath: string | undefined,
+    args: unknown,
+    settled: ((value: T) => Promise<() => void> | null) | undefined,
+  ): Promise<T> {
     const log = this.functionLog;
     // System functions are not logged, as in Convex, but their compute and bandwidth are metered.
     const system = isSystemPath(name);
-    if (!log || (system && !this.usageMeter)) return run();
+    if (!log || (system && !this.usageMeter)) {
+      if (!span) return run();
+      span.set("bunvex.function.path", strippedPath(name)).set("bunvex.function.kind", spanKindOf(udfType));
+      try {
+        return await run();
+      } catch (e) {
+        span.fail(e);
+        throw e;
+      } finally {
+        span.finish();
+      }
+    }
     const up = currentOwner();
     const parent = up instanceof Running ? up : null;
     const r = new Running(
@@ -715,6 +805,7 @@ export class Functions {
       }
     }
     const res = await withOwner(r, run);
+    if (span) functionSpanEnd(span, r, res);
     const o: Outcome = res.ok ? (outcome?.(res.value) ?? {}) : { error: res.error };
     const retried = !res.ok && res.error instanceof OccError && sourced?.retriesOcc === true;
     const later = res.ok && !o.skip ? settled?.(res.value) : null;
@@ -771,6 +862,8 @@ export class Functions {
 
   /** The app metrics (STUDY-58); set by `createServer`. */
   appMetrics: AppMetrics | null = null;
+  /** The Prometheus metrics (STUDY-114); set by `createServer`. */
+  serverMetrics: ServerMetrics | null = null;
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
@@ -895,6 +988,7 @@ export class Functions {
       executionTime: c.executionTime,
       ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
     });
+    this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
   }
 
@@ -976,7 +1070,10 @@ export class Functions {
     private engine: Engine,
     opts: { actionPermits?: ConcurrencyLimiter; limits?: FunctionLimits } = {},
   ) {
-    this.limits = opts.limits ?? functionLimitsFromEnv(process.env, opts.actionPermits ?? ActionPermits.fromEnv());
+    const rt = engine.runtime;
+    this.limits =
+      opts.limits ??
+      functionLimitsFromEnv(process.env, opts.actionPermits ?? ActionPermits.fromEnv(process.env, rt), rt);
     this.actionPermits = this.limits.action;
   }
 
@@ -1076,8 +1173,8 @@ export class Functions {
     return [...fns, ...routes];
   }
 
-  /** An id's table, for `v.id` (the engine's catalog). */
-  private tableOf = (n: number) => this.engine.catalog.byNumber(n)?.name;
+  /** An id's table, for `v.id`: `_storage` for a `_file_storage` id, as Convex names it (STUDY-125). */
+  private tableOf = (n: number) => this.engine.catalog.publicNameOf(n);
 
   /**
    * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
@@ -1304,7 +1401,7 @@ export class Functions {
    */
   userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
   systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
-  private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs);
+  private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs, this.engine.runtime.monotonicNow);
   /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
   actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS);
   nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS);
@@ -1455,6 +1552,20 @@ export class Functions {
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
+    // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
+    // or the system; for them it runs, in this transaction.
+    if (isSystemPath(name)) {
+      // the outcome depends on who calls: the query cache keeps it per caller
+      db.readIdentity();
+      if (!db.systemIdentity) throw notFound(name);
+      if (depth >= MAX_NESTED_CALL_DEPTH)
+        throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
+      const body =
+        kind === "query"
+          ? this.systemQueryBody(name, args, false, undefined, true)
+          : this.systemMutationBody(name, args, false, undefined, true);
+      return body(db);
+    }
     const f = this.fn(name, kind, false);
     const a = this.checkArgs(f, args === undefined ? {} : args, measured);
     if (depth >= MAX_NESTED_CALL_DEPTH)
@@ -1539,7 +1650,10 @@ export class Functions {
    * The canonical name (`module.js:function`) of a function to schedule, which must exist, of any kind or
    * visibility (Convex's `validate_schedule_args`; the kind is checked when the job runs).
    */
-  scheduledTarget(name: string): string {
+  scheduledTarget(name: string, systemIdentity = false): string {
+    // Convex reads the target's module first (`ModuleModel::get_metadata`), which refuses a `_system/` module
+    // to anyone but an admin or the system.
+    if (isSystemPath(name) && !systemIdentity) throw new SystemIdentityRequiredError("get_module");
     const key = registryKey(name);
     const i = key.lastIndexOf(":");
     const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
@@ -1583,11 +1697,20 @@ export class Functions {
    * result shapes. From a client, only an admin (or the system) finds it, and its key must allow the
    * function's operation (Convex's `queryPrivateSystem("ViewData")`).
    */
-  /** A client's access to a system function: only an admin finds it, and needs its operation. */
-  private systemAccess(n: string, f: SystemQuery | undefined, fallback: DeploymentOp, caller?: Caller) {
-    const admin = adminOf(caller);
-    if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
-    if (!f || !admin) throw notFound(n);
+  /**
+   * A client's access to a system function, as Convex's `application_function_runner`: refused to anyone but
+   * an admin or the system acting as itself (403 `SystemIdentityRequired`, before the function is looked
+   * up); then the function must exist, and the key must allow its operation.
+   */
+  private systemAccess(
+    n: string,
+    f: SystemQuery | undefined,
+    fallback: DeploymentOp,
+    kind: "query" | "mutation",
+    caller?: Caller,
+  ) {
+    if (!isSystemIdentity(caller)) throw new SystemIdentityRequiredError(kind);
+    if (!f) throw systemNotFound(n);
     if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
@@ -1598,22 +1721,29 @@ export class Functions {
   checkQueryAccess(name: string, caller?: Caller) {
     if (isSystemPath(name)) {
       const n = name.replace(/:default$/, "");
-      this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", caller);
+      this.systemAccess(n, SYSTEM_QUERIES[n], "ViewData", "query", caller);
     } else this.checkAccess(this.fns.get(name) ?? this.fns.get(registryKey(name)), name, "query", caller);
   }
 
   private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
     const n = name.replace(/:default$/, "");
     const q = SYSTEM_QUERIES[n];
-    if (fromClient) this.systemAccess(n, q, "ViewData", caller);
-    // function code never finds an admin-call-only query (STUDY-131 AD-24), as if it did not exist
-    else if (!q || (q.adminCallOnly && !inProcess)) throw notFound(n);
+    if (fromClient) this.systemAccess(n, q, "ViewData", "query", caller);
+    else {
+      // function code never finds an admin-call-only query (STUDY-131 AD-24), as if it did not exist
+      if (q?.adminCallOnly && !inProcess) throw notFound(n);
+      // function code (an action's `runQuery`) reaches it only for an admin or the system, as Convex's runner;
+      // no caller at all is the server itself, in process
+      if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
+        throw new SystemIdentityRequiredError("query");
+      if (!q) throw notFound(n);
+    }
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
-      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
       return this.warned(
         db,
         a,
@@ -1624,17 +1754,21 @@ export class Functions {
     };
   }
 
-  private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+  private systemMutationBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
     const n = name.replace(/:default$/, "");
     const m = SYSTEM_MUTATIONS[n];
-    if (fromClient) this.systemAccess(n, m, "WriteData", caller);
-    else if (!m) throw notFound(n);
+    if (fromClient) this.systemAccess(n, m, "WriteData", "mutation", caller);
+    else {
+      if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
+        throw new SystemIdentityRequiredError("mutation");
+      if (!m) throw notFound(n);
+    }
     const a = this.systemArgs(args, m!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
-      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
       return this.warned(
         db,
         a,
@@ -1652,7 +1786,7 @@ export class Functions {
 
   /** A dashboard system mutation, in process; one transaction, as Convex's. */
   async runSystemMutation(name: string, args: unknown = {}): Promise<unknown> {
-    return this.engine.mutation(this.systemMutationBody(name, args, false), name);
+    return this.engine.mutation(this.systemMutationBody(name, args, false, undefined, true), name);
   }
 
   /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
@@ -1855,6 +1989,8 @@ export class Functions {
       caller,
       async () => {
         await this.failActionWhileNotRunning();
+        // As Convex's runner: a `_system/` path only for an admin or the system (there are no system actions)
+        if (isSystemPath(name) && !isSystemIdentity(caller)) throw new SystemIdentityRequiredError("action");
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
         const a = this.checkArgs(f, args);
@@ -1924,7 +2060,7 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runQuery(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
       },
@@ -1932,20 +2068,24 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runMutation(registryKey(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await this.runAction(await functionNameOf(n, null, this.engine), a, caller, { internal: true, authError }),
+          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
+            internal: true,
+            authError,
+          }),
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
       scheduler: cutOffWithAction(
         makeScheduler(this, {
           engine: this.engine,
+          systemIdentity: isSystemIdentity(caller),
           job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
         }),
       ),

@@ -8,6 +8,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, readInstanceRecord } from "@bunvex/core";
 import { adminKeyCipherKey, issueAdminKey, openPersistence, persistenceConfigFromEnv } from "@bunvex/server";
+import {
+  argumentError,
+  conflictingOptions,
+  missingArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import type { Io } from "./io.ts";
 
 /** The data directory: `--data-dir`, else DATA, else ./.data. */
@@ -46,13 +54,23 @@ function parseFlags(args: string[]): Flags | string {
     else if (name === "--system") f.system = true;
     else if (name === "--instance-name" || name === "--instance-secret" || name === "--data-dir") {
       const v = inline ?? args[++i];
-      if (!v) return `${name} needs a value`;
+      if (!v)
+        return missingArgument(
+          (
+            {
+              "--instance-name": "--instance-name <name>",
+              "--instance-secret": "--instance-secret <hex>",
+              "--data-dir": "--data-dir <dir>",
+            } as Record<string, string>
+          )[name]!,
+        );
       if (name === "--instance-name") f.instanceName = v;
       else if (name === "--instance-secret") f.instanceSecret = v;
       else f.dataDir = v;
-    } else return `unknown option ${a}`;
+    } else if (a.startsWith("-")) return unknownOption(a, optionsIn(ADMIN_KEY_USAGE));
+    else return tooManyArguments("admin-key", 0, args.filter((x) => !x.startsWith("-")).length);
   }
-  if (f.readOnly && f.system) return "--read-only and --system cannot be combined";
+  if (f.readOnly && f.system) return conflictingOptions("--system", "--read-only");
   return f;
 }
 
@@ -62,10 +80,8 @@ export async function adminKeyCommand(args: string[], io: Io): Promise<number> {
     return 0;
   }
   const flags = parseFlags(args);
-  if (typeof flags === "string") {
-    io.err(`bunvex admin-key: ${flags}\n\n${ADMIN_KEY_USAGE}`);
-    return 2;
-  }
+  // As every command's argument errors (STUDY-124); admin-key has no Convex counterpart, so no help after.
+  if (typeof flags === "string") return argumentError(io, flags);
   const dataDir = dataDirOf(io, flags.dataDir);
   const files = readCredentials(dataDir);
   let name = flags.instanceName ?? (io.env.INSTANCE_NAME || files.name);

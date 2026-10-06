@@ -189,8 +189,12 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     const flags = ["--url", d.url, "--admin-key", KEY];
     const failed = io(app);
     expect(await main(["deploy", ...flags], failed.it)).toBe(1);
+    expect(failed.err.slice(-2)).toEqual([
+      "✖ TypeScript typecheck via `tsc` failed.",
+      "To ignore failing typecheck, use `--typecheck=disable`.",
+    ]);
     // `--pretty true`, as Convex runs the compiler (STUDY-117): colored, `file:line:column`.
-    expect(Bun.stripANSI(failed.err.join("\n"))).toContain(`bunvex/a.ts:3:`);
+    expect(Bun.stripANSI(failed.out.join("\n"))).toContain(`bunvex/a.ts:3:`);
     expect((await d.call("query", "a:q")).status).toBe("error"); // nothing was deployed
     expect(await main(["deploy", "--typecheck=disable", ...flags], io(app).it)).toBe(0);
     // Deployed despite the type error: its `returns` check fails at run time.
@@ -203,7 +207,12 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
     });
     expect(await main(["deploy", "--codegen=disable", "--typecheck=disable", ...flags], io(app).it)).toBe(0);
     expect(readFileSync(join(app, "bunvex/_generated/api.d.ts"), "utf8")).toBe(before);
-    expect(await main(["deploy", "--codegen=sometimes", ...flags], io(app).it)).toBe(2);
+    const bad = io(app);
+    expect(await main(["deploy", "--codegen=sometimes", ...flags], bad.it)).toBe(1);
+    expect(bad.err.slice(0, 2)).toEqual([
+      "error: option '--codegen <mode>' argument 'sometimes' is invalid. Allowed choices are enable, disable.",
+      "",
+    ]);
   }, 120_000);
 
   test("the index diff, as Convex's printDiff: added, staged, enabled, staged again, deleted; a dry run says would", async () => {

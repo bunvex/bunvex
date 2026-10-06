@@ -6,6 +6,7 @@ import { v } from "@bunvex/values";
 import { readSearchIndexStates } from "../src/engine.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { tsGlobal } from "../src/persistence-globals.ts";
 
 const schema = defineSchema({
   notes: defineTable(v.any())
@@ -98,7 +99,7 @@ test("an idle index is fast-forwarded; a start replays nothing older and retenti
   await crash(e2);
 
   // Retention past the segments' ts but not the fast-forward's: the segments are used, nothing replayed.
-  await p.setGlobal("document_min_snapshot_ts", second.text_search);
+  await p.setGlobal("document_min_snapshot_ts", tsGlobal(second.text_search!));
   const e3 = await open(p, store);
   expect([e3.searchStats.fromSegments, e3.searchStats.replayed]).toEqual([2, 0]);
   expect(await hello(e3)).toBe(1);

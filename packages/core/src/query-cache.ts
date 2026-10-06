@@ -46,6 +46,16 @@ export type WaitingEntry = {
 export type CacheEntry = ReadyEntry | WaitingEntry;
 
 /**
+ * Why a lookup ran the query instead of answering from the cache (STUDY-131 AD-25): never cached (`new`),
+ * pushed out by the LRU (`evicted`), a commit wrote into its reads (`invalidated`), it read the clock and grew
+ * too old (`expired`), or only a newer result was there for an older snapshot (`snapshot`).
+ */
+export type MissReason = "new" | "evicted" | "invalidated" | "expired" | "snapshot";
+
+/** How many evicted keys are remembered, to tell a miss after an eviction from a first one. */
+const EVICTED_MEMORY = 1024;
+
+/**
  * Rough heap bytes per entry beyond its strings: the Map slot, the entry and result objects, the read-set
  * array and the companion's array. Measured: 200 000 entries of a 100-byte result take about 500 bytes each
  * (`packages/server/bench/query-cache.ts memory`).
@@ -87,6 +97,10 @@ export class QueryCache {
   bytes = 0;
   /** Entries dropped to stay within the budget. */
   evictions = 0;
+  /** The misses by reason (STUDY-131 AD-25). */
+  readonly misses: Record<MissReason, number> = { new: 0, evicted: 0, invalidated: 0, expired: 0, snapshot: 0 };
+  /** The last keys evicted, oldest first (a Set keeps insertion order). */
+  private evicted = new Set<string>();
 
   constructor(readonly maxBytes: number = QUERY_CACHE_MAX_BYTES) {}
 
@@ -143,6 +157,21 @@ export class QueryCache {
     this.enforceLimit();
   }
 
+  /** Count a miss of `keys`: `reason` when the caller knows it, else a first lookup or one after an eviction. */
+  noteMiss(keys: readonly string[], reason?: MissReason) {
+    let r = reason;
+    if (r === undefined) {
+      r = "new";
+      for (const k of keys) if (this.evicted.delete(k)) r = "evicted";
+    }
+    this.misses[r]++;
+  }
+
+  /** The entries, least recently used first, for the inspector (STUDY-131 AD-25): not on any hot path. */
+  inspect(): { key: string; entry: CacheEntry }[] {
+    return [...this.entries].map(([key, entry]) => ({ key, entry }));
+  }
+
   /** Drop everything (the catalog changed under the cached results). */
   clear() {
     this.entries.clear();
@@ -171,6 +200,8 @@ export class QueryCache {
       if (first.done) break;
       this.delete(first.value[0], first.value[1]);
       this.evictions++;
+      this.evicted.add(first.value[0]);
+      if (this.evicted.size > EVICTED_MEMORY) this.evicted.delete(this.evicted.values().next().value!);
     }
   }
 }

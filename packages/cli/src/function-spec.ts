@@ -4,6 +4,7 @@
 // written to `function_spec_<ms>.json`.
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { argumentError, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -32,18 +33,17 @@ export async function functionSpecCommand(args: string[], io: Io, opts: { now?: 
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex function-spec: ${taken}`);
-    return 2;
-  }
+  // Convex's `function-spec` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, FUNCTION_SPEC_USAGE);
   let file = false;
+  const positional = taken.rest.filter((a) => !a.startsWith("-"));
   for (const a of taken.rest) {
     if (a === "--file") file = true;
-    else {
-      io.err(`bunvex function-spec: unknown option ${a}\n\n${FUNCTION_SPEC_USAGE}`);
-      return 2;
-    }
+    else if (a.startsWith("-"))
+      return argumentError(io, unknownOption(a, optionsIn(FUNCTION_SPEC_USAGE)), FUNCTION_SPEC_USAGE);
   }
+  if (positional.length)
+    return argumentError(io, tooManyArguments("function-spec", 0, positional.length), FUNCTION_SPEC_USAGE);
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
     acquired = await acquireTarget(taken.flags, io);

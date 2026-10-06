@@ -19,6 +19,7 @@
 import { type Committer, OutOfRetentionError } from "./committer.ts";
 import type { DocPrune, IndexPrune, Persistence, RetentionStore } from "./persistence/index.ts";
 import { LeaseLostError } from "./persistence/index.ts";
+import { readTsGlobal, tsGlobal } from "./persistence-globals.ts";
 
 /** Convex's knobs (crates/common/src/knobs.rs), as milliseconds and counts. */
 export type RetentionOptions = {
@@ -103,10 +104,8 @@ export class Retention {
 
   /** Read the recorded windows and cursors (Convex's startup), then start the three loops. */
   async start() {
-    const num = async (k: string) => {
-      const v = await this.store.getGlobal(k);
-      return typeof v === "number" && Number.isFinite(v) ? v : 0;
-    };
+    // Convex's encoding (STUDY-134): `{"$integer": …}` of nanoseconds.
+    const num = async (k: string) => readTsGlobal(await this.store.getGlobal(k));
     this.minIndexTs = await num(RETENTION_GLOBALS.minIndexTs);
     this.minDocumentTs = Math.min(await num(RETENTION_GLOBALS.minDocumentTs), this.minIndexTs);
     this.indexCursor = Math.min(await num(RETENTION_GLOBALS.indexCursor), this.minIndexTs);
@@ -212,14 +211,14 @@ export class Retention {
     const top = this.committer.visibleTs;
     const idx = top - this.opts.indexDelayMs * 1000; // timestamps are wall-clock µs (STUDY-06 D9)
     if (idx > this.minIndexTs) {
-      await this.store.setGlobal(RETENTION_GLOBALS.minIndexTs, idx);
+      await this.store.setGlobal(RETENTION_GLOBALS.minIndexTs, tsGlobal(idx));
       this.minIndexTs = idx;
       this.stats.advances++;
       this.wake.index?.();
     }
     const doc = Math.min(top - this.opts.documentDelayMs * 1000, this.minIndexTs);
     if (doc > this.minDocumentTs) {
-      await this.store.setGlobal(RETENTION_GLOBALS.minDocumentTs, doc);
+      await this.store.setGlobal(RETENTION_GLOBALS.minDocumentTs, tsGlobal(doc));
       this.minDocumentTs = doc;
     }
     return false;
@@ -300,7 +299,7 @@ export class Retention {
     if (!force && now - this.lastCheckpoint[which] < this.opts.checkpointEveryMs) return;
     await this.store.setGlobal(
       which === "index" ? RETENTION_GLOBALS.indexCursor : RETENTION_GLOBALS.documentCursor,
-      which === "index" ? this.indexCursor : this.documentCursor,
+      tsGlobal(which === "index" ? this.indexCursor : this.documentCursor),
     );
     this.lastCheckpoint[which] = now;
   }

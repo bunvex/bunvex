@@ -1,0 +1,195 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "note": "persistence_globals values (table_summary_v2 cut to two tables).",
+  "globals": {
+    "min_snapshot_ts": {
+      "$integer": "mLRGRJ692xg="
+    },
+    "confirmed_deleted_ts": {
+      "$integer": "fygHGp292xg="
+    },
+    "document_min_snapshot_ts": {
+      "$integer": "mBQSM7Zx1xg="
+    },
+    "document_confirmed_deleted_ts": {
+      "$integer": "lxQSM7Zx1xg="
+    },
+    "table_summary_v2": {
+      "tables": {
+        "ca0vqcsTaoYPWanyp_ZQ-w": {
+          "totalSize": "KhAAAAAAAAA=",
+          "inferredTypeWithOptionalFields": {
+            "numValues": 36,
+            "variant": {
+              "kind": "Object",
+              "fields": [
+                {
+                  "fieldName": "_creationTime",
+                  "type": {
+                    "type": {
+                      "numValues": 36,
+                      "variant": {
+                        "kind": "NormalFloat64"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "_id",
+                  "type": {
+                    "type": {
+                      "numValues": 36,
+                      "variant": {
+                        "kind": "Id",
+                        "tableNumber": 513
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "name",
+                  "type": {
+                    "type": {
+                      "numValues": 36,
+                      "variant": {
+                        "kind": "FieldName"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "number",
+                  "type": {
+                    "type": {
+                      "numValues": 36,
+                      "variant": {
+                        "kind": "Int64"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "state",
+                  "type": {
+                    "type": {
+                      "numValues": 36,
+                      "variant": {
+                        "kind": "StringLiteral",
+                        "literal": "active"
+                      }
+                    },
+                    "optional": false
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "mcmszPSGG_5i-Q8x1jxQ-w": {
+          "totalSize": "KQEAAAAAAAA=",
+          "inferredTypeWithOptionalFields": {
+            "numValues": 1,
+            "variant": {
+              "kind": "Object",
+              "fields": [
+                {
+                  "fieldName": "_creationTime",
+                  "type": {
+                    "type": {
+                      "numValues": 1,
+                      "variant": {
+                        "kind": "NormalFloat64"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "_id",
+                  "type": {
+                    "type": {
+                      "numValues": 1,
+                      "variant": {
+                        "kind": "StringLiteral",
+                        "literal": "h02cr2a0wvh3w8pt5waem0hdmn8fqvth"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "awsPrefixSecret",
+                  "type": {
+                    "type": {
+                      "numValues": 1,
+                      "variant": {
+                        "kind": "FieldName"
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "storageType",
+                  "type": {
+                    "type": {
+                      "numValues": 1,
+                      "variant": {
+                        "kind": "Object",
+                        "fields": [
+                          {
+                            "fieldName": "dir",
+                            "type": {
+                              "type": {
+                                "numValues": 1,
+                                "variant": {
+                                  "kind": "FieldName"
+                                }
+                              },
+                              "optional": false
+                            }
+                          },
+                          {
+                            "fieldName": "tag",
+                            "type": {
+                              "type": {
+                                "numValues": 1,
+                                "variant": {
+                                  "kind": "StringLiteral",
+                                  "literal": "local"
+                                }
+                              },
+                              "optional": false
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "optional": false
+                  }
+                },
+                {
+                  "fieldName": "version",
+                  "type": {
+                    "type": {
+                      "numValues": 1,
+                      "variant": {
+                        "kind": "Int64"
+                      }
+                    },
+                    "optional": false
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ts": "WG7e+9S92xg="
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_tables",
+  "rows": [
+    {
+      "_creationTime": 1791233999249.507,
+      "_id": "g4273b9fn75h6tm61xctkwn7ys8fpd4f",
+      "name": "_tables",
+      "number": {
+        "$integer": "AQIAAAAAAAA="
+      },
+      "state": "active"
+    },
+    {
+      "_creationTime": 1791233999249.5078,
+      "_id": "g42d7qsgh90fr9pf0p5fs00d2s8fq6sq",
+      "name": "_index",
+      "number": {
+        "$integer": "AgIAAAAAAAA="
+      },
+      "state": "active"
+    },
+    {
+      "_creationTime": 1791233999255.9624,
+      "_id": "g425j6f9gz7fm5gf0bewsqxwpx8fq75d",
+      "name": "_modules",
+      "number": {
+        "$integer": "CQIAAAAAAAA="
+      },
+      "state": "active"
+    },
+    {
+      "_creationTime": 1791234000150.188,
+      "_id": "g42cc9w45eces0par08w4zkr6d8fqy35",
+      "name": "things",
+      "number": {
+        "$integer": "EScAAAAAAAA="
+      },
+      "state": "active"
+    }
+  ]
+}
