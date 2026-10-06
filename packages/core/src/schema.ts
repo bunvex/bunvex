@@ -135,12 +135,8 @@ export class TableDefinition<
     this.document = (document as GenericValidator)?.isValidator
       ? (document as GenericValidator)
       : v.object(document as PropertyValidators);
-    const d = this.document;
-    const ok =
-      d.kind === "object" ||
-      d.kind === "any" ||
-      (d.kind === "union" && (d.members as GenericValidator[]).every((m) => m.kind === "object"));
-    if (!ok) throw new Error("A table's document validator must be v.object(...), a v.union of objects, or v.any().");
+    // As Convex's `defineTable`, nothing else is checked here: a push refuses a validator a table cannot have
+    // (`documentTypeError`, STUDY-14 §6).
   }
   /**
    * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
@@ -682,6 +678,35 @@ export function referencedTables(v: ValidatorJSON, out = new Set<string>()): Set
       break;
   }
   return out;
+}
+
+/**
+ * Convex's check when a table definition is exported (`TableDefinition.export`): the document validator's JSON
+ * must be an object. `schemaToJson`, bunvex's `export`, runs it; a push answers it as Convex does
+ * (`InvalidSchemaExport`). Convex's message ends with a docs link, left out (DV-397).
+ */
+export function documentJson(document: GenericValidator): ValidatorJSON {
+  const json: unknown = document.json;
+  if (typeof json !== "object")
+    throw new Error("Invalid validator: please make sure that the parameter of `defineTable` is valid");
+  return json as ValidatorJSON;
+}
+
+/**
+ * Convex's parse of a pushed schema's `documentType` (`DocumentSchema::try_from`, crates/common/src/schemas/
+ * json.rs): an object, a union of objects, or `v.any()`. The first table's failure, naming the validator (for a
+ * union, its first member that is not an object), or null. Convex's message ends with a docs link, left out
+ * (DV-397).
+ */
+export function documentTypeError(schema: SchemaDefinition): string | null {
+  for (const t of schema.tables.values()) {
+    const d = t.document;
+    if (d.kind === "object" || d.kind === "any") continue;
+    const bad = d.kind === "union" ? (d.members as GenericValidator[]).find((m) => m.kind !== "object") : d;
+    if (bad)
+      return `The document validator in a schema must be an object, a union of objects, or \`v.any()\`. Found ${displayValidator(bad)}.`;
+  }
+  return null;
 }
 
 /**

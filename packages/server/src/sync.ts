@@ -251,9 +251,25 @@ export type SyncDeps = {
    * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
    */
   onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
+  /**
+   * The `/metrics` histograms the sync protocol records (STUDY-114), as Convex's sync worker: the arguments'
+   * bytes of each ModifyQuerySet (its added queries'), Mutation and Action message, and each message sent.
+   */
+  metrics?: SyncMetrics;
   /** The WS ping interval and the client timeout; defaults: Convex's 5 s and 120 s. For tests. */
   wsHeartbeat?: Partial<WsHeartbeatOptions>;
 };
+
+type Observer = { observe(v: number): void };
+export type SyncMetrics = {
+  queryModificationArgs: Observer;
+  mutationArgs: Observer;
+  actionArgs: Observer;
+  transitionMessageSize: Observer;
+};
+
+/** Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`. */
+const argsBytes = (args: v1.JSONValue[]) => Buffer.byteLength(JSON.stringify(args));
 
 /** One query run at one snapshot, ready to splice into frames. */
 type Execution = {
@@ -334,6 +350,12 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** The queries subscribed to across every session (read when `/metrics` is scraped). */
+  subscriptionCount(): number {
+    let n = 0;
+    for (const s of this.sessions) n += s.querySetSize;
+    return n;
+  }
   /** A WebSocket mutation's time limit (tests lower it). */
   mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
@@ -760,6 +782,10 @@ export class SyncSession {
   private received = { querySet: 0, identity: 0 };
   private version: v1.StateVersion = { querySet: 0, ts: 0n, identity: 0 };
   private queries = new Map<number, SessionQuery>();
+  /** The queries subscribed to (the `/metrics` subscriptions gauge). */
+  get querySetSize(): number {
+    return this.queries.size;
+  }
   private pending: (v1.AddQuery | v1.RemoveQuery)[] = [];
   private identityChanged = false;
   /** Who this connection acts as (STUDY-27), and when its token expires (seconds; none without a token). */
@@ -821,8 +847,11 @@ export class SyncSession {
   transitionChunks = false;
 
   private sendTransition(json: string) {
+    if (this.closed || !this.ws) return;
+    // A transition's size is its whole message's, before it is chunked (Convex measures it in the worker).
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(json));
     const frames = transitionFrames(json, this.transitionChunks);
-    for (let i = 0; i < frames.length; i++) this.send(frames[i]!, i === frames.length - 1);
+    for (let i = 0; i < frames.length; i++) this.write(frames[i]!, i === frames.length - 1);
   }
 
   /**
@@ -837,8 +866,15 @@ export class SyncSession {
   private head = 0;
   private transitionsInBuffer = 0;
 
+  /** Send a message other than a transition (Convex's worker measures every message it sends). */
+  private send(frame: string) {
+    if (this.closed || !this.ws) return;
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(frame));
+    this.write(frame);
+  }
+
   /** `transition`: the frame is a transition's (its last frame, when it is sent in chunks). */
-  private send(frame: string, transition = false) {
+  private write(frame: string, transition = false) {
     if (this.closed || !this.ws) return;
     const ws = this.ws;
     if (this.head === this.inBuffer.length) {
@@ -916,7 +952,8 @@ export class SyncSession {
    */
   private fail(f: SyncFailure) {
     if (this.closed) return;
-    if (isDeterministicUserError(f.code)) this.send(v1.encodeServerMessage({ type: "FatalError", error: f.msg }));
+    // Not measured: Convex sends its fatal errors outside the worker loop that measures messages.
+    if (isDeterministicUserError(f.code)) this.write(v1.encodeServerMessage({ type: "FatalError", error: f.msg }));
     const frame = closeFrame(f);
     if (frame) this.ws?.close(frame.code, frame.reason);
     else this.ws?.close(0);
@@ -962,7 +999,8 @@ export class SyncSession {
    */
   private authError(error: string, authUpdateAttempted: boolean) {
     if (this.closed) return;
-    this.send(
+    // Not measured, as a FatalError.
+    this.write(
       v1.encodeServerMessage({ type: "AuthError", error, baseVersion: this.received.identity, authUpdateAttempted }),
     );
     this.ws?.close(0);
@@ -1017,7 +1055,13 @@ export class SyncSession {
           );
         return;
       }
-      case "ModifyQuerySet":
+      case "ModifyQuerySet": {
+        const metrics = this.hub.deps.metrics;
+        if (metrics) {
+          let bytes = 0;
+          for (const q of m.modifications) if (q.type === "Add") bytes += argsBytes(q.args);
+          metrics.queryModificationArgs.observe(bytes);
+        }
         if (m.baseVersion !== this.received.querySet)
           return this.badRequest(
             `Base version ${m.baseVersion} passed up doesn't match the current version ${this.received.querySet}`,
@@ -1027,9 +1071,12 @@ export class SyncSession {
         this.pending.push(...m.modifications);
         this.received.querySet = m.newVersion;
         return this.schedule();
+      }
       case "Mutation":
+        this.hub.deps.metrics?.mutationArgs.observe(argsBytes(m.args));
         return this.mutation(m);
       case "Action":
+        this.hub.deps.metrics?.actionArgs.observe(argsBytes(m.args));
         return this.action(m);
       case "Authenticate": {
         if (m.baseVersion !== this.received.identity)

@@ -25,6 +25,7 @@ services:
       - BUNVEX_CLOUD_ORIGIN=${BUNVEX_CLOUD_ORIGIN:-http://127.0.0.1:${PORT:-3210}}
       - BUNVEX_SITE_ORIGIN=${BUNVEX_SITE_ORIGIN:-http://127.0.0.1:${SITE_PROXY_PORT:-3211}}
       - DATABASE_URL
+      - DISABLE_METRICS_ENDPOINT=${DISABLE_METRICS_ENDPOINT:-true} # Set false for the Prometheus /metrics endpoint
       - DOCUMENT_RETENTION_DELAY=${DOCUMENT_RETENTION_DELAY:-172800} # 2 days, as Convex's compose file
       - DO_NOT_REQUIRE_SSL
       - INSTANCE_NAME

@@ -10,7 +10,7 @@
 import { heapStats } from "bun:jsc";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { v } from "@bunvex/values";
 
@@ -29,7 +29,7 @@ const note = (i: number) => ({
 });
 
 const dir = `${where}.search`;
-const files: SearchSnapshotStore = {
+const files: SearchSegmentStore = {
   put: async (d) => {
     const key = crypto.randomUUID();
     await Bun.write(join(dir, key), d);
@@ -45,7 +45,7 @@ const files: SearchSnapshotStore = {
 async function open() {
   const t = performance.now();
   const e = await new Engine(schema, new SqlitePersistence(where!, { durable: true }), {
-    searchSnapshots: files,
+    searchStorage: files,
   }).init();
   await e.searchReady();
   return { e, ms: Math.round(performance.now() - t) };
@@ -71,10 +71,26 @@ if (child === "crash") {
   await e.summaryCheckpointer?.tick(true);
   process.exit(0);
 }
+if (child === "build") {
+  // Building the indexes from the table, as for a new index: the stored segments are gone.
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const { e, ms } = await open();
+  Bun.gc(true);
+  console.log(
+    `built from the table: ${ms} ms, heap ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${(process.memoryUsage().rss / 2 ** 20).toFixed(0)} MiB ${JSON.stringify(e.searchStats ?? {})}`,
+  );
+  await e.close();
+  process.exit(0);
+}
 if (child === "open") {
   // A start in a process of its own, as a restart is: until the indexes are ready.
   const { e, ms } = await open();
-  console.log(`${ms} ms ${JSON.stringify(e.searchStats ?? {})}`);
+  Bun.gc(true);
+  const rss = (process.memoryUsage().rss / 2 ** 20).toFixed(0);
+  console.log(
+    `${ms} ms, heap ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${rss} MiB ${JSON.stringify(e.searchStats ?? {})}`,
+  );
   await e.close();
   process.exit(0);
 }
@@ -100,7 +116,9 @@ mkdirSync(dir, { recursive: true });
   console.log(`write throughput: ${n} documents in ${s.toFixed(1)} s (${Math.round(Number(n) / s)} documents/s)`);
   await e.searchReady();
   Bun.gc(true);
-  console.log(`heap with the indexes ready: ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB`);
+  console.log(
+    `heap with the indexes ready: ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${(process.memoryUsage().rss / 2 ** 20).toFixed(0)} MiB`,
+  );
   const text: number[] = [];
   for (let i = 0; i < 200; i++) {
     const s0 = performance.now();

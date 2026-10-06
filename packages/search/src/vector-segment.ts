@@ -4,6 +4,7 @@
 // their filter keys, read in place; its deletes are a separate, rewritable bitset.
 import {
   Bitset,
+  mergeTables,
   NO_FILTER_KEY as NO_KEY,
   SegmentFileError,
   SegmentKind,
@@ -85,6 +86,58 @@ export class VectorSegment {
       w.strings(keys.map((x) => x.key));
       w.u32(Uint32Array.from(entries, (e) => ord.get(e.doc.filters[field]!) ?? NO_KEY));
     }
+    return w.finish();
+  }
+
+  /** The live documents of `parts` as one segment (Convex's compaction), their vectors copied in id order. */
+  static async merge(
+    parts: readonly { segment: VectorSegment; deletes: VectorSegmentDeletes }[],
+    dimensions: number,
+    filterFields: readonly string[],
+    pause: () => Promise<void> = async () => {},
+  ): Promise<Uint8Array> {
+    const segs = parts.map((p) => p.segment);
+    for (const s of segs)
+      if (s.dimensions !== dimensions || JSON.stringify(s.filterFields) !== JSON.stringify(filterFields))
+        throw new Error("segments of another definition");
+    const ids = mergeTables(
+      segs.map((s) => s.ids),
+      (k, d) => !parts[k]!.deletes.has(d),
+    );
+    const n = ids.strings.length;
+    const source = new Uint32Array(n);
+    const local = new Uint32Array(n);
+    ids.remap.forEach((r, k) => {
+      for (let d = 0; d < r.length; d++)
+        if (r[d]! >= 0) {
+          source[r[d]!] = k;
+          local[r[d]!] = d;
+        }
+    });
+    const vectors = new Float32Array(n * dimensions);
+    for (let i = 0; i < n; i++) {
+      vectors.set(segs[source[i]!]!.vector(local[i]!), i * dimensions);
+      if (i % 8192 === 8191) await pause();
+    }
+    const w = new SegmentWriter(SegmentKind.Vector);
+    w.json({
+      uid: crypto.randomUUID(),
+      numDocs: n,
+      dimensions,
+      filterFields: [...filterFields],
+    } satisfies VectorSegmentMeta);
+    w.strings(ids.strings);
+    w.f32(vectors);
+    filterFields.forEach((_, f) => {
+      const keys = mergeTables(segs.map((s) => s.filterKeys[f]!));
+      w.strings(keys.strings);
+      w.u32(
+        Uint32Array.from({ length: n }, (_, i) => {
+          const ord = segs[source[i]!]!.filterOrds[f]![local[i]!]!;
+          return ord === NO_KEY ? NO_KEY : keys.remap[source[i]!]![ord]!;
+        }),
+      );
+    });
     return w.finish();
   }
 

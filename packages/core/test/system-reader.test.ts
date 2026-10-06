@@ -85,7 +85,7 @@ test("every query shape returns the public projection only", async () => {
   await e.close();
 });
 
-test("only the public indexes; no search indexes; other system tables are not accessible", async () => {
+test("only the public indexes; no search indexes; other system tables read as empty (STUDY-107)", async () => {
   const e = await withFiles([1]);
   await expect(
     e.query(async (db) => db.system.query(STORAGE_TABLE).withIndex("by_storage_id").collect()),
@@ -98,9 +98,8 @@ test("only the public indexes; no search indexes; other system tables are not ac
         .collect(),
     ),
   ).rejects.toThrow("Index _storage.s not found.");
-  await expect(e.query(async (db) => db.system.query("_tables").collect())).rejects.toThrow(
-    "System table _tables is not accessible here.",
-  );
+  // Convex's `db.system.query` takes any `_` name; a function sees a private table's index as missing.
+  expect(await e.query(async (db) => db.system.query("_tables").collect())).toEqual([]);
   const r = await e.query(async (db) => {
     const id = (await db.system.query(STORAGE_TABLE).first())!._id as string;
     return {

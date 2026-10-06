@@ -31,6 +31,7 @@ import {
 import { BTree } from "./btree.ts";
 import {
   Catalog,
+  databaseIndexRows,
   INDEX_TABLE,
   IndexBackfillingError,
   type IndexMeta,
@@ -40,11 +41,12 @@ import {
   TABLES_TABLE,
   type TableMeta,
 } from "./catalog.ts";
-import type { Interval, SearchRead } from "./committer.ts";
+import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
@@ -78,6 +80,7 @@ import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } f
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { ProjectedQuery, SystemReader } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
+import { TableSummariesUnavailableError } from "./table-summaries.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
 const ANY = v.any();
@@ -269,6 +272,8 @@ export type TxQuery = TxQueryChained & {
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained;
   withSearchIndex(name: string, filter: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQueryChained;
   fullTableScan(): TxQueryChained;
+  /** The number of documents in the table (STUDY-107). Internal, as Convex's: not in the public types. */
+  count(): Promise<number>;
 };
 
 /** Convex's `PaginationOptions`. */
@@ -614,6 +619,11 @@ export class Tx {
     return t;
   }
 
+  /** Whether the catalog this transaction runs on has table `name` (system code: a table it may write). */
+  hasTable(name: string): boolean {
+    return this.catalog.tables.has(name);
+  }
+
   /** A table visible to this transaction (the catalog, or one it created), or undefined. */
   private findTable(name: string): TableDef | undefined {
     if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
@@ -717,12 +727,19 @@ export class Tx {
     this.systemDepth++;
     try {
       const tables = (await this.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
-      const indexes = (await this.query(INDEX_TABLE).collect()) as unknown as IndexMeta[];
-      const plan = planCatalog([{ name, indexes: {}, document: ANY }], tables, indexes);
+      const indexes = databaseIndexRows(await this.query(INDEX_TABLE).collect());
+      const plan = planCatalog(
+        [{ name, indexes: {}, document: ANY }],
+        tables,
+        indexes,
+        true,
+        await readNextIndexId(this),
+      );
       const meta = plan.insertTables[0];
       let metaId: string | undefined;
       for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, t);
       for (const i of plan.insertIndexes) await this.insert(INDEX_TABLE, i);
+      await writeNextIndexId(this, plan.nextIndexId);
       const def = new Catalog().add(
         name,
         meta.tablet,
@@ -906,6 +923,25 @@ export class Tx {
     const st: QState = {
       t,
       ix: t?.indexes.get("by_creation_time"),
+      range: FULL,
+      desc: false,
+      orderSet: false,
+      ops: [],
+      closed: false,
+      iterated: false,
+    };
+    return this.makeQuery(table, st);
+  }
+
+  /**
+   * @internal (SystemReader) A query of a system table an app may not read (Convex's
+   * `StableIndexName::Missing` for a private system table): every read finds nothing and records none, any
+   * index name included; its `count()` still counts the table, as Convex's `1.0/count` (STUDY-107).
+   */
+  privateSystemQuery(table: string): TxQuery {
+    const st: QState = {
+      t: undefined,
+      ix: undefined,
       range: FULL,
       desc: false,
       orderSet: false,
@@ -1654,16 +1690,25 @@ export class Tx {
   searchIndexes: SearchIndexes | null = null;
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
-  /** A table's document count from the table summaries (STUDY-52 PR 2); set by the engine. */
-  tableCount: ((tablet: number) => number) | null = null;
+  /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
+  tableCount: ((tablet: number, snapshot: number) => number) | null = null;
 
   /**
-   * The number of documents of `table` (Convex's internal `count()`, which its `tableSize` system functions
-   * use): the summaries' count with this transaction's own inserts and deletes. The read covers the whole
-   * table, so a cached query or a subscription re-runs when it changes. System transactions only.
+   * The number of documents of `table` (Convex's internal `count()`: `db.query(table).count()` and its
+   * `tableSize` system functions, STUDY-107): the summaries' count at this transaction's snapshot with its own
+   * inserts and deletes. The read covers the whole table (not its documents: no read limit is charged), so a
+   * cached query or a subscription re-runs when it changes. A system table needs system access.
    */
+  /**
+   * The system tables the catalog has, by name, `_tables` and `_index` included (they have no `_tables` row):
+   * for the system-table browser (STUDY-131 AD-24). System access only.
+   */
+  systemTableNames(): string[] {
+    if (!this.systemAccess) throw new Error("systemTableNames is for system transactions");
+    return [...this.catalog.tables.keys()].filter((n) => n.startsWith("_")).sort();
+  }
+
   async countTable(table: string): Promise<number> {
-    if (!this.systemAccess) throw new Error("countTable is for system transactions");
     const t = this.findTable(table);
     if (!t) {
       this.readMissingTable();
@@ -1671,7 +1716,15 @@ export class Tx {
     }
     const ix = t.indexes.get("by_creation_time")!;
     this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
-    let n = this.tableCount ? this.tableCount(t.id) : 0;
+    let n = 0;
+    try {
+      n = this.tableCount ? this.tableCount(t.id, this.snapshot) : 0;
+    } catch (e) {
+      // The summaries are still being built (Convex's bootstrapping error), or the snapshot is older than the
+      // write log keeps: system errors, which the function cannot catch.
+      if (e instanceof TableSummariesUnavailableError || e instanceof OutOfRetentionError) failExecution(e);
+      throw e;
+    }
     for (const w of this.writes.values()) if (w.table.id === t.id) n += (w.next ? 1 : 0) - (w.old ? 1 : 0);
     return n;
   }
@@ -2154,6 +2207,20 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
 
   fullTableScan(): TxQueryChained {
     return this.chain(() => {});
+  }
+
+  /**
+   * Convex's internal `count()` (STUDY-107; `@internal` in its types, and so not in bunvex's public ones): the
+   * table's documents at this snapshot, with this transaction's own writes. On the initializer only, and it
+   * leaves the query usable, as Convex's (a call of its own, by table name).
+   */
+  async count(): Promise<number> {
+    try {
+      checkIdentifier("table", this.table);
+    } catch (e) {
+      throw new Error(`Invalid argument \`table\` for \`db.count\`: ${(e as Error).message}`);
+    }
+    return this.tx.countTable(this.table);
   }
 }
 

@@ -6,9 +6,9 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 231 | 4 | 10 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 232 | 3 | 10 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 192 | 37 | 26 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 205 | 30 | 22 |
 
 Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
 mock), 2 accepted, 1 deferred, none proposed (2026-10-05).
@@ -160,25 +160,13 @@ gaps.
 
 - Client:
   - arguments-size metrics.
-- Server API:
-  - `.count()` on the query builder.
-- Limits and checks:
-  - the 1024-concurrent-request and upload-concurrency (4) limits.
 - Operations:
   - the `clear_tables` audit event, which comes with streaming import (missing). The other audit events
     bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - persisted search segments (STUDY-111, being built): segments, the flusher and the start from them are in;
-    the paged backfill, the compactor and fast-forward are not yet;
-  - `/instance_version`, `/`, `/echo`;
-  - Prometheus `/metrics`;
-  - `_index_worker_metadata`, `_auth`, `_db`;
   - an upgrade guide.
-- CLI:
-  - `typecheck`, `mcp` commands;
-  - `mcp`, `usage-limits` commands;
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;

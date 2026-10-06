@@ -21,7 +21,7 @@ import { installDeterminismIn, runImportPhase } from "@bunvex/core";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
-import { describeUncaught } from "./errors.ts";
+import { describeUncaught, isError } from "./errors.ts";
 import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
@@ -90,6 +90,17 @@ function analyzeExport(f: FunctionDef, method: ValidatorExport, id: string): str
  */
 function uncaught(e: unknown): string {
   return describeUncaught(e).message.trimEnd();
+}
+
+/**
+ * An error a module raises before any of its code runs (compiling or linking it: a `SyntaxError`), as Convex's
+ * isolate reports one: `Uncaught <Name>: <message>` alone. None of the module's code is on the stack then; its
+ * frames are the server's own (`node:vm`, this file), which an app never sees (STUDY-95 §7).
+ */
+function uncaughtAtCompile(e: unknown): string {
+  // An error of the module's own realm (its context) is not an `instanceof Error` here.
+  if (!isError(e)) return uncaught(e);
+  return `Uncaught ${e.name}: ${e.message}`;
 }
 
 /** Convex's limits (crates/common/src/knobs.rs). */
@@ -253,7 +264,7 @@ export class CodeVersion {
           identifier: m.path,
         });
       } catch (e) {
-        throw new InvalidModulesError(`Failed to analyze ${m.path}: ${describeUncaught(e).message.trimEnd()}`);
+        throw new InvalidModulesError(`Failed to analyze ${m.path}: ${uncaughtAtCompile(e)}`);
       }
       modules.set(m.path, { source: m, module, hash: sha256(m) });
     }
@@ -308,7 +319,7 @@ export class CodeVersion {
         await l.module.link(linker);
       } catch (e) {
         if (e instanceof InvalidModulesError) throw e;
-        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e)}`);
+        throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaughtAtCompile(e)}`);
       }
     }
     for (const [path, l] of modules) {

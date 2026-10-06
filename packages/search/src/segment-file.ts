@@ -278,6 +278,41 @@ export class StringTable {
   }
 }
 
+/**
+ * The union of sorted string tables, sorted, each string once (`include` leaves strings out), and per table the
+ * position of each of its strings in the union (-1 when left out). Tables are merged, not re-sorted.
+ */
+export function mergeTables(
+  tables: readonly StringTable[],
+  include: (table: number, i: number) => boolean = () => true,
+): { strings: Uint8Array[]; remap: Int32Array[] } {
+  const strings: Uint8Array[] = [];
+  const remap = tables.map((t) => new Int32Array(t.size).fill(-1));
+  const at = tables.map(() => 0);
+  const skip = (k: number) => {
+    while (at[k]! < tables[k]!.size && !include(k, at[k]!)) at[k]!++;
+  };
+  for (let k = 0; k < tables.length; k++) skip(k);
+  for (;;) {
+    let min: Uint8Array | null = null;
+    for (let k = 0; k < tables.length; k++)
+      if (at[k]! < tables[k]!.size) {
+        const s = tables[k]!.bytesAt(at[k]!);
+        if (!min || compareBytes(s, min) < 0) min = s;
+      }
+    if (!min) break;
+    const pos = strings.length;
+    strings.push(min);
+    for (let k = 0; k < tables.length; k++)
+      if (at[k]! < tables[k]!.size && compareBytes(tables[k]!.bytesAt(at[k]!), min) === 0) {
+        remap[k]![at[k]!] = pos;
+        at[k]!++;
+        skip(k);
+      }
+  }
+  return { strings, remap };
+}
+
 /** A set of document numbers, one bit each. */
 export class Bitset {
   constructor(readonly bits: Uint8Array) {}

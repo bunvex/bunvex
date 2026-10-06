@@ -135,6 +135,7 @@ import {
 } from "./logs.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
+import type { ServerMetrics } from "./server-metrics.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
@@ -771,6 +772,8 @@ export class Functions {
 
   /** The app metrics (STUDY-58); set by `createServer`. */
   appMetrics: AppMetrics | null = null;
+  /** The Prometheus metrics (STUDY-114); set by `createServer`. */
+  serverMetrics: ServerMetrics | null = null;
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
@@ -895,6 +898,7 @@ export class Functions {
       executionTime: c.executionTime,
       ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
     });
+    this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
   }
 
@@ -1602,11 +1606,12 @@ export class Functions {
     } else this.checkAccess(this.fns.get(name) ?? this.fns.get(registryKey(name)), name, "query", caller);
   }
 
-  private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller) {
+  private systemQueryBody(name: string, args: unknown, fromClient: boolean, caller?: Caller, inProcess = false) {
     const n = name.replace(/:default$/, "");
     const q = SYSTEM_QUERIES[n];
     if (fromClient) this.systemAccess(n, q, "ViewData", caller);
-    else if (!q) throw notFound(n);
+    // function code never finds an admin-call-only query (STUDY-131 AD-24), as if it did not exist
+    else if (!q || (q.adminCallOnly && !inProcess)) throw notFound(n);
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
@@ -1646,7 +1651,7 @@ export class Functions {
 
   /** A dashboard system query, in process (as the system: no key involved). */
   async runSystemQuery(name: string, args: unknown = {}): Promise<unknown> {
-    return this.engine.query(this.systemQueryBody(name, args, false));
+    return this.engine.query(this.systemQueryBody(name, args, false, undefined, true));
   }
 
   /** A dashboard system mutation, in process; one transaction, as Convex's. */
