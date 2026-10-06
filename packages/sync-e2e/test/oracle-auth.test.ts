@@ -53,14 +53,23 @@ describe("the official client's setAuth against bunvex", () => {
     const sub = c.onUpdate(api.notes.whoami, {}, () => {});
     await until(() => sub.getCurrentValue() === null, "anonymous result");
     const changes: boolean[] = [];
+    // One token, fetched twice (the cached one, then the fresh one): the client sees the fresh one is the same
+    // and confirms once. A token signed at each fetch would differ when a second ticked in between (its `iat`),
+    // and the client would confirm twice.
+    const token = await issuer.sign({ sub: "ada" });
+    let fetches = 0;
     c.setAuth(
-      async () => issuer.sign({ sub: "ada" }),
+      async () => {
+        fetches++;
+        return token;
+      },
       (isAuthenticated) => changes.push(isAuthenticated),
     );
     await until(() => sub.getCurrentValue() === "ada", "signed-in result");
-    await until(() => changes.length > 0, "auth confirmed");
-    expect(changes).toEqual([true]);
+    await until(() => fetches === 2, "the fresh token fetched");
+    // A mutation's result comes after any authentication the client sent before it.
     expect(await c.mutation(api.notes.add, {})).toBe("ada");
+    expect(changes).toEqual([true]);
 
     // A token the server refuses: the client retries with a fresh one, then gives up and signs out.
     c.setAuth(

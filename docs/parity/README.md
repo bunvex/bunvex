@@ -8,10 +8,10 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 232 | 3 | 10 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 204 | 30 | 23 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 210 | 28 | 23 |
 
-Beyond Convex, [additions.md](additions.md) lists 23 additions: 20 built (11 of them dashboard screens on the
-mock), 2 accepted, 1 deferred, none proposed (2026-10-05).
+Beyond Convex, [additions.md](additions.md) lists 27 additions: 21 built (11 of them dashboard screens on the
+mock), 5 accepted, 1 deferred, none proposed (2026-10-05).
 
 These counts were recounted on 2026-10-05 (with #398–#408) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -166,7 +166,6 @@ gaps.
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - Prometheus `/metrics`;
   - an upgrade guide.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;

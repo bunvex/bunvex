@@ -318,7 +318,6 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
 /** Each streamed user table's reduced shape now (computed from its documents, as `/api/shapes2`). */
 async function shapes(engine: Engine): Promise<{ name: string; shape: DashboardShape }[]> {
   const at = engine.committer.visibleTs;
-  const byNumber = new Map([...engine.catalog.tables.values()].map((t) => [t.number, t.name]));
   const out: { name: string; shape: DashboardShape }[] = [];
   const active = [...engine.catalog.tables.values()].filter((t) => !t.name.startsWith("_"));
   for (const t of active.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
@@ -342,7 +341,7 @@ async function shapes(engine: Engine): Promise<{ name: string; shape: DashboardS
       if (page.length < 1000) break;
       last = page[page.length - 1]!._id as string;
     }
-    out.push({ name: t.name, shape: reduceShape(b.build(), (n) => byNumber.get(n)) });
+    out.push({ name: t.name, shape: reduceShape(b.build(), (n) => engine.catalog.publicNameOf(n)) });
   }
   return out;
 }

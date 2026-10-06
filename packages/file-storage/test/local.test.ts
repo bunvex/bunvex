@@ -15,6 +15,18 @@ test("blobs live at <dir>/files/<key>.blob", async () => {
   }
 });
 
+test("filePath names the file a blob is kept in, for readers that map it; null for a non-key", async () => {
+  const d = mkdtempSync(join(tmpdir(), "bunvex-blobs-"));
+  try {
+    const store = new LocalBlobStore(d);
+    const w = await store.put(new Uint8Array([1, 2, 3]));
+    expect(store.filePath(w.key)).toBe(join(d, "files", `${w.key}.blob`));
+    expect(store.filePath("../escape")).toBeNull();
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test("the environment picks S3 when its files bucket is set, else STORAGE_DIR, else <DATA>/storage", () => {
   const d = mkdtempSync(join(tmpdir(), "bunvex-env-"));
   try {

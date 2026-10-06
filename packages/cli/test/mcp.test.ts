@@ -291,7 +291,7 @@ describe("bunvex mcp start", () => {
       expect(r.isError).toBe(false);
       expect(r.value.tables.messages.schema).toMatchObject({
         tableName: "messages",
-        indexes: [{ indexDescriptor: "by_body", fields: ["body"] }],
+        indexes: [{ indexDescriptor: "by_body", fields: ["body", "_creationTime"] }], // as stored, Convex's `_creationTime` appended
         searchIndexes: [],
         vectorIndexes: [],
       });

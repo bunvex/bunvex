@@ -9,6 +9,7 @@
 import type { Value } from "@bunvex/values";
 import { IndexesUnavailableError } from "./catalog.ts";
 import { OutOfRetentionError } from "./committer.ts";
+import { fromJsonInteger, jsonInteger, tsNanos } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
 import {
   NEVER,
@@ -27,8 +28,9 @@ export type TableSummary = { count: number; size: number; shape: Shape };
 
 /**
  * A checkpoint of every table's summary at one ts (STUDY-72), as Convex's `TableSummarySnapshot` JSON in the
- * `table_summary_v2` persistence global: per tablet its total size (a decimal string, as Convex's
- * `JsonInteger`) and its counted shape, whose count is the table's; and the ts.
+ * `table_summary_v2` persistence global (STUDY-134): per table its total size (a `JsonInteger`: base64 of the
+ * int64's little-endian bytes) and its counted shape, whose count is the table's; and the ts, a `JsonInteger`
+ * of nanoseconds. Tables are keyed by bunvex's tablet number (Convex: its tablet id; DV-428, STUDY-133).
  */
 export type SummaryCheckpoint = {
   ts: string;
@@ -233,7 +235,7 @@ export class TableSummaries {
     const tables = new Map<number, { count: number; size: number; shape: Shape }>();
     for (const [key, t] of Object.entries(checkpoint.tables)) {
       const tablet = Number(key);
-      const size = Number(t.totalSize);
+      const size = Number(fromJsonInteger(t.totalSize));
       const shape = shapeFromJson(t.inferredTypeWithOptionalFields);
       if (!Number.isSafeInteger(tablet) || !Number.isSafeInteger(size)) throw new Error("not a summary checkpoint");
       if (tablets.has(tablet) && shape.n > 0) tables.set(tablet, { count: shape.n, size, shape });
@@ -261,8 +263,11 @@ export class TableSummaries {
     this.fold();
     const tables: SummaryCheckpoint["tables"] = {};
     for (const [tablet, t] of this.tables)
-      tables[tablet] = { totalSize: String(t.size), inferredTypeWithOptionalFields: shapeToJson(t.shape) };
-    return { ts: String(this.at), tables };
+      tables[tablet] = {
+        totalSize: jsonInteger(BigInt(t.size)),
+        inferredTypeWithOptionalFields: shapeToJson(t.shape),
+      };
+    return { tables, ts: jsonInteger(tsNanos(this.at)) };
   }
 
   /** The build: every document of a tablet as of the build's snapshot `at`. */

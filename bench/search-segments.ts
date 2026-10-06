@@ -2,10 +2,14 @@
 // (a filter field, a 64-dimension vector), on SQLite (durable) and file blobs:
 //   - write throughput: inserting the documents in mutations of 500;
 //   - query latency: a text search (`take(10)`, a read-only query) and a vector search, medians;
-//   - memory: the heap once the indexes are ready;
+//   - memory: the heap, the RSS and (macOS) the physical footprint, which leaves out clean file pages the OS can
+//     drop (mapped segments'), once the indexes are ready and compacted;
 //   - restart: how long a start takes until the indexes are ready, after a clean close and after a crash
-//     (the process killed with writes since the last flush).
+//     (the process killed with writes since the last flush); each restart also measures query latency, the
+//     first query (cold) and medians.
 //   bun bench/search-segments.ts <sqlite path> <documents> [writes before the crash]
+// With SEARCH_DISK=1, segments are read from the store's files (memory-mapped, STUDY-111 PR 9) rather than held
+// in memory; with SEARCH_DISK=cache, from a local cache of them, as for S3 (`<sqlite path>.cache`).
 
 import { heapStats } from "bun:jsc";
 import { mkdirSync, rmSync } from "node:fs";
@@ -40,12 +44,14 @@ const files: SearchSegmentStore = {
     return (await f.exists()) ? new Uint8Array(await f.arrayBuffer()) : null;
   },
   delete: async (k) => rmSync(join(dir, k), { force: true }),
+  localPath: process.env.SEARCH_DISK === "1" ? (k) => join(dir, k) : undefined,
 };
 
 async function open() {
   const t = performance.now();
   const e = await new Engine(schema, new SqlitePersistence(where!, { durable: true }), {
     searchStorage: files,
+    ...(process.env.SEARCH_DISK === "cache" ? { searchCacheDir: `${where}.cache` } : {}),
   }).init();
   await e.searchReady();
   return { e, ms: Math.round(performance.now() - t) };
@@ -60,6 +66,43 @@ async function insert(e: Engine, from: number, count: number) {
 
 function median(xs: number[]) {
   return xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+}
+
+/** The heap, the RSS and, on macOS, the physical footprint (dirty memory: not the clean pages of mapped files). */
+function memory() {
+  Bun.gc(true);
+  const mib = (b: number) => `${(b / 2 ** 20).toFixed(0)} MiB`;
+  let out = `heap ${mib(heapStats().heapSize)}, rss ${mib(process.memoryUsage().rss)}`;
+  if (process.platform === "darwin") {
+    const fp = Bun.spawnSync(["footprint", String(process.pid)]).stdout.toString();
+    const m = fp.match(/Footprint: ([\d.]+ \w+)/);
+    if (m) out += `, footprint ${m[1]}`;
+  }
+  return out;
+}
+
+/** Query latency: the first text and vector query (cold), then medians of many. */
+async function latency(e: Engine) {
+  const textQuery = (i: number) =>
+    e.query((db) =>
+      db
+        .query("notes")
+        .withSearchIndex("search_body", (q) => q.search("body", words[i % words.length]!))
+        .take(10),
+    );
+  const time = async (f: () => unknown) => {
+    const s0 = performance.now();
+    await f();
+    return performance.now() - s0;
+  };
+  const coldText = await time(() => textQuery(0));
+  const coldVector = await time(() => e.vectorSearch("notes", "by_v", { vector: note(0).v, limit: 10 }));
+  const text: number[] = [];
+  for (let i = 0; i < 200; i++) text.push(await time(() => textQuery(i)));
+  const vector: number[] = [];
+  for (let i = 0; i < 50; i++)
+    vector.push(await time(() => e.vectorSearch("notes", "by_v", { vector: note(i).v, limit: 10 })));
+  return `first query text ${coldText.toFixed(1)} ms, vector ${coldVector.toFixed(1)} ms; median text ${median(text).toFixed(2)} ms, vector ${median(vector).toFixed(2)} ms`;
 }
 
 if (child === "crash") {
@@ -86,10 +129,14 @@ if (child === "build") {
 if (child === "open") {
   // A start in a process of its own, as a restart is: until the indexes are ready.
   const { e, ms } = await open();
-  Bun.gc(true);
-  const rss = (process.memoryUsage().rss / 2 ** 20).toFixed(0);
+  // A compaction the start scheduled is waited for, so memory is that of the index at rest.
+  const c = performance.now();
+  await e.searchCompacted();
+  const compacting = Math.round(performance.now() - c);
+  const ready = memory();
+  const queries = await latency(e);
   console.log(
-    `${ms} ms, heap ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${rss} MiB ${JSON.stringify(e.searchStats ?? {})}`,
+    `${ms} ms (then ${compacting} ms compacting); ${ready}; after the queries ${memory()}; mapped ${e.searchSegmentsMapped}; ${queries} ${JSON.stringify(e.searchStats ?? {})}`,
   );
   await e.close();
   process.exit(0);
@@ -115,28 +162,11 @@ mkdirSync(dir, { recursive: true });
   const s = (performance.now() - t) / 1000;
   console.log(`write throughput: ${n} documents in ${s.toFixed(1)} s (${Math.round(Number(n) / s)} documents/s)`);
   await e.searchReady();
-  Bun.gc(true);
-  console.log(
-    `heap with the indexes ready: ${(heapStats().heapSize / 2 ** 20).toFixed(0)} MiB, rss ${(process.memoryUsage().rss / 2 ** 20).toFixed(0)} MiB`,
-  );
-  const text: number[] = [];
-  for (let i = 0; i < 200; i++) {
-    const s0 = performance.now();
-    await e.query((db) =>
-      db
-        .query("notes")
-        .withSearchIndex("search_body", (q) => q.search("body", words[i % words.length]!))
-        .take(10),
-    );
-    text.push(performance.now() - s0);
-  }
-  const vector: number[] = [];
-  for (let i = 0; i < 50; i++) {
-    const s0 = performance.now();
-    e.vectorSearch("notes", "by_v", { vector: note(i).v, limit: 10 });
-    vector.push(performance.now() - s0);
-  }
-  console.log(`latency (median): text ${median(text).toFixed(2)} ms, vector ${median(vector).toFixed(2)} ms`);
+  const c0 = performance.now();
+  await e.searchCompacted();
+  console.log(`compactions after the load: ${Math.round(performance.now() - c0)} ms`);
+  console.log(`memory with the indexes ready: ${memory()}`);
+  console.log(`latency after the load: ${await latency(e)}`);
   // As in the crash run: the table summaries' checkpoint up to date, so restarts measure the search indexes.
   await e.summariesReady();
   await e.summaryCheckpointer?.tick(true);

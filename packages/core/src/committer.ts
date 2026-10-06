@@ -15,10 +15,11 @@
 // Convex's `is_stale`: only the indexes read, only the writes in the snapshot's window, and each key tested
 // against the read intervals by binary search.
 
-import { outsideExecution, wallClockUs } from "./determinism.ts";
+import { monotonicNow, outsideExecution, wallClockUs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
+import { type CommitSpans, detached } from "./tracing.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
 import type { WriteThroughputLimiter } from "./write-throughput.ts";
 
@@ -285,6 +286,8 @@ type PendingCommit = {
   searchReads?: SearchRead[];
   /** Its `commitWriteBytes`, once its write batch is sized: what the write throughput limit records. */
   bytes?: number;
+  /** Its trace (STUDY-131 AD-26), when the mutation that commits it is traced. */
+  trace?: CommitSpans;
   resolve: (ts: number) => void;
   reject: (e: unknown) => void;
 };
@@ -304,6 +307,14 @@ export class Committer {
   /** Flushes made: a group is written as one or more write batches (DV-62). */
   batches = 0;
   conflicts = 0;
+  /** Commits made durable and visible. */
+  commits = 0;
+  /**
+   * Told of each write batch once it is durable: how many commits it carried and how long its flush took, in
+   * seconds (the server's `/metrics`, as Convex's `database_write_batch_commits` and
+   * `database_commit_persistence_write_seconds`).
+   */
+  onBatch: ((commits: number, flushSeconds: number) => void) | null = null;
   /** Commits refused because their snapshot was older than the write log (OutOfRetentionError). */
   outOfRetention = 0;
   /** The write log, oldest first, from `log[logHead]` (trimmed by advancing the head; compacted now and then). */
@@ -440,16 +451,48 @@ export class Committer {
   }
 
   commit(c: Omit<PendingCommit, "resolve" | "reject">): Promise<number> {
-    if (this.stopped) return Promise.reject(this.stopped);
+    if (this.stopped) {
+      c.trace?.settle(null, this.stopped);
+      return Promise.reject(this.stopped);
+    }
     return new Promise((resolve, reject) => {
-      this.queue.push({ ...c, resolve, reject });
+      const t = c.trace;
+      this.queue.push(
+        t
+          ? {
+              ...c,
+              resolve: (ts) => {
+                t.settle(ts);
+                resolve(ts);
+              },
+              reject: (e) => {
+                t.settle(null, e);
+                reject(e);
+              },
+            }
+          : { ...c, resolve, reject },
+      );
       if (!this.running) {
         this.running = true;
-        // setImmediate, not a microtask: callers whose previous commit just resolved get to enqueue
-        // their next one first, so they land in the SAME group.
-        setImmediate(() => this.drain());
+        this.drainSoon();
       }
     });
+  }
+
+  /**
+   * Whether commits may carry a trace (STUDY-131 AD-26): set by the engine when its tracer is on. Off, the
+   * committer reads no clock for them.
+   */
+  traced = false;
+
+  /**
+   * Drain on the next turn: setImmediate, not a microtask, so callers whose previous commit just resolved get
+   * to enqueue their next one first and land in the SAME group. Traced, the drain runs outside the span of
+   * the commit that started it: the group, and the listeners it calls, belong to no one request.
+   */
+  private drainSoon() {
+    if (this.traced) detached(() => setImmediate(() => this.drain()));
+    else setImmediate(() => this.drain());
   }
 
   /**
@@ -523,7 +566,7 @@ export class Committer {
     // nothing: drain again for it.
     if (this.queue.length && !this.stopped) {
       this.running = true;
-      setImmediate(() => this.drain());
+      this.drainSoon();
     }
   }
 
@@ -535,7 +578,9 @@ export class Committer {
       // a commit is checked against the ones before it in the group although they are not durable yet.
       const accepted: [PendingCommit, LogEntry][] = [];
       for (const p of group) {
+        if (p.trace) p.trace.validateStart = monotonicNow();
         const refused = this.validate(p);
+        if (p.trace) p.trace.validateEnd = monotonicNow();
         if (refused instanceof OutOfRetentionError) {
           this.outOfRetention++;
           p.reject(refused);
@@ -605,6 +650,7 @@ export class Committer {
       refuseRest();
       return false;
     }
+    const writeStart = this.traced ? monotonicNow() : 0;
     try {
       for (let i = from; i < to; i++) {
         const [p, e] = accepted[i];
@@ -617,6 +663,7 @@ export class Committer {
       refuseRest();
       return false;
     }
+    const flushStart = performance.now();
     try {
       await this.flushWithRetries();
     } catch (e) {
@@ -629,6 +676,9 @@ export class Committer {
       return false;
     }
     this.batches++;
+    if (this.traced) this.traceWrite(accepted, from, to, writeStart);
+    this.commits += to - from;
+    this.onBatch?.(to - from, (performance.now() - flushStart) / 1000);
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
@@ -654,6 +704,21 @@ export class Committer {
     // As Convex, once the commits are published to subscriptions, relative to the latest of them.
     this.enforceRetention(this.visibleTs);
     return true;
+  }
+
+  /** The write batch `accepted[from, to)`, flushed since `start`, on each of its traced commits. */
+  private traceWrite(accepted: [PendingCommit, LogEntry][], from: number, to: number, start: number) {
+    const end = monotonicNow();
+    let documents = 0;
+    for (let i = from; i < to; i++) documents += accepted[i][0].docs.length;
+    for (let i = from; i < to; i++) {
+      const t = accepted[i][0].trace;
+      if (!t) continue;
+      t.writeStart = start;
+      t.writeEnd = end;
+      t.batchCommits = to - from;
+      t.batchDocuments = documents;
+    }
   }
 
   /**

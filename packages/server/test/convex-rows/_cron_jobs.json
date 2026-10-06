@@ -1,0 +1,26 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_cron_jobs",
+  "rows": [
+    {
+      "_creationTime": 1791234000229.068,
+      "_id": "jc2fqtzwp3vewjhmqer5hw5dm18fqnpr",
+      "cronSpec": {
+        "cronSchedule": {
+          "hourUTC": {
+            "$integer": "AwAAAAAAAAA="
+          },
+          "minuteUTC": {
+            "$integer": "AAAAAAAAAAA="
+          },
+          "type": "daily"
+        },
+        "udfArgs": {
+          "$bytes": "W3sid2h5IjoiY3JvbiJ9XQ=="
+        },
+        "udfPath": "fns.js:tick"
+      },
+      "name": "daily tick"
+    }
+  ]
+}
