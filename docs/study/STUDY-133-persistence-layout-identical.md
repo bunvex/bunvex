@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity).
+- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity), PR 3 (the interface, with PR 11).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
