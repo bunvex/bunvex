@@ -1,6 +1,8 @@
 // Package @bunvex/react — React bindings (STUDY-26 §7), the counterpart of Convex's `convex/react`:
 // `BunvexReactClient` shared through `BunvexProvider`, the hooks, and auth (`BunvexProviderWithAuth`).
 
+/** @internal `bunvexQueryOptions`, re-exported as Convex's `convex/react` re-exports `convexQueryOptions`. */
+export { bunvexQueryOptions, type QueryOptions } from "@bunvex/client";
 export {
   Authenticated,
   AuthLoading,

@@ -136,3 +136,69 @@
   the engine's internals.
 - **Engine:** a missing field vs `null` in an index; boolean after number; bigint and bytes stored and
   read back.
+
+## 8. A float64's text (2026-10-05)
+
+### 8.1 How Convex does it
+
+Convex prints a float64 in two different ways.
+
+- **In messages** (validation errors, `Value: …`, "Cannot negate …", and so on), a value is printed with
+  `Display for ConvexValue` (crates/value/src/lib.rs:339). For a float that is `write!(f, "{n:?}")`, Rust's
+  `{:?}` (`float_to_general_debug` in core::fmt::float):
+  - the shortest digits that round-trip;
+  - plain decimal for zero and for 1e-4 <= |x| < 1e16, always with a fractional part: `1.0`, `0.0001`,
+    `9999999999999998.0`;
+  - otherwise scientific, with no `+` and no point for a single digit: `1e16`, `1.5e-7`, `5e-5`;
+  - `NaN`, `inf`, `-inf`, `-0.0`.
+  - On an exact tie between two shortest candidates, Rust takes the upper one (`…2.3`, where JavaScript
+    takes the even one, `…2.2`).
+- **As JSON** (the snapshot export's lossless encoding, a literal validator's value), Convex uses serde_json. Its
+  lockfile pins 1.0.151, whose float printer (`zmij`) writes:
+  - plain decimal for 1e-5 <= |x| < 1e16, with `.0` after an integer;
+  - otherwise scientific with a sign on a positive exponent: `1e+16`, `1e+21`, `1.5e-7`.
+  - Ties go as JavaScript breaks them.
+
+### 8.2 What bunvex did, and does now
+
+- **Messages.** `displayValue` printed `${v}.0` for an integer below 1e16, and otherwise JavaScript's `String`. So
+  it gave `10000000000000000`, `1e+21` and `0.00005`, and tie digits as JavaScript breaks them. It now uses
+  `floatDebugText` (`packages/values/src/float-text.ts`), written from scratch to Rust's rules:
+  - JavaScript's shortest digits (`toExponential()`), with an exact BigInt tie check that takes the upper
+    candidate as Rust does;
+  - the check only runs for 16 or more digits: with fewer, no two candidates can both round-trip.
+  - It applies to every value shown in messages, nested ones too (owner, 2026-10-05).
+- **The export.** `formatExportFloat` followed ryu's older layout (`1e16`). It now writes the `+` that Convex's
+  pinned serde_json writes (`1e+16`). An export file now matches Convex's text for those floats; the importer
+  read both forms already.
+
+### 8.3 Divergences
+
+None.
+
+### 8.4 Tests and measurement
+
+- **The reference.** A small Rust program, built against serde_json 1.0.151 (the version Convex's lockfile pins),
+  prints `{:?}` and serde_json's text for f64 bit patterns. Against it, both formatters agreed on 2 000 000
+  generated doubles, with 0 mismatches. The doubles were:
+  - edge cases;
+  - every power of ten and its neighbouring doubles;
+  - mantissas times every power of ten;
+  - random bit patterns;
+  - the 1e-5..1e-4 band;
+  - random 1–17 digit decimals.
+- **The tests.** `packages/values/test/float-text.test.ts` checks:
+  - 2 500 of those doubles from `fixtures/float-text.tsv` (bits, Rust's `{:?}`, serde_json's text);
+  - the layout cases;
+  - nested values in `displayValue`;
+  - four tie cases taken from the reference.
+
+  `export-json.test.ts` and `hot-paths.property.test.ts` now expect the `+`.
+- **Sabotage checks**, each caught:
+  - ties broken as JavaScript (tie test);
+  - the small threshold at 1e-5, and the large one at 1e21 (fixture and layout tests);
+  - the export without its `+` (3 tests);
+  - `1.0e16` instead of `1e16` (fixture and layout tests).
+- **Measurement.** `floatDebugText` costs about 540 ns per float on random 16–17-digit doubles, against 70–90 ns
+  for the old `String`. This is only on the error-message path. `formatExportFloat`'s hot path did not change
+  beyond one condition in its rare scientific branch.

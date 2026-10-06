@@ -255,14 +255,12 @@ describe("_scheduled_functions through db.system", () => {
     expect(((await functions.runQuery("m:jobs", {})) as unknown[]).length).toBe(3);
   });
 
-  test("only by_id and by_creation_time are public; other system tables are not visible", async () => {
+  test("only by_id and by_creation_time are public; other system tables read as empty, as Convex's", async () => {
     const { functions } = await setup({ start: false });
     expect(await functions.runQuery("m:systemQuery", { what: "index" })).toBe(
       "unknown index _scheduled_functions.by_next_ts",
     );
-    expect(await functions.runQuery("m:systemQuery", { what: "other" })).toBe(
-      "System table _session_requests is not accessible here.",
-    );
+    expect(await functions.runQuery("m:systemQuery", { what: "other" })).toBe("ok"); // found nothing (STUDY-107)
   });
 });
 
