@@ -12,8 +12,8 @@ const UNDEFINED = { $undefined: true } as const;
 /**
  * The cases of the app's `limit` op compared on both backends. Case 8, a string with a lone surrogate, is left
  * out: Convex refuses it with its JSON parser's message ("Received invalid json: unexpected end of hex escape
- * at line 1 column N", the column a place in its syscall's arguments), bunvex stores it. Whether bunvex
- * refuses it with that message or with its own is the owner's call (STUDY-122 §4, D3).
+ * at line 1 column N", the column a place in its syscall's arguments), bunvex stores it. The owner decided
+ * bunvex refuses it with Convex's message (STUDY-122 §4, D3: A); the case joins when that is built.
  */
 export const LIMIT_CASES = [0, 1, 2, 3, 4, 5, 6, 7, 9, 10];
 
