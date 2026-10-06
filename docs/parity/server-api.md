@@ -221,7 +221,7 @@ Key bunvex facts behind the statuses:
 | `_id` on every document | server/system_fields.ts | done (#7) | A Convex-format id. |
 | `_creationTime` (float64 ms since epoch) | system_fields.ts; common/src/document.rs | done | |
 | Types `WithoutSystemFields`, `WithOptionalSystemFields`, `SystemFields`, `IdField`, `Doc<T>` | system_fields.ts; codegen | done (STUDY-36) | In `@bunvex/core` (`data-model.ts`); `Doc<T>` comes with `_generated/dataModel`. |
-| Top-level user fields can't start with `_` | crates/common/src/document.rs (validate) | done (#21) | Refused at write: "Field '…' starts with an underscore, which is only allowed for system fields like '_id'". |
+| Top-level user fields can't start with `_` | crates/common/src/document.rs (validate) | done (#21) | Refused at write, as `must_validate`: "Document(value: {…}) isn't a valid document: Field '…' starts with an underscore, which is only allowed for system fields like '_id'", every violation joined by "\n " (`core/test/writes.test.ts`, found by the differential tests). |
 | Field names: ≤1024 chars, non-control ASCII, no leading `$` | crates/convex/sync_types/src/identifier.rs; values/value.ts | done (#21) | `validateObjectField`, with the same messages. |
 | Documents must be objects | common/src/document.rs | done (#21) | A non-object write value throws ("expected an object"). |
 
@@ -336,9 +336,9 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | Document size ≤ 1 MiB (`MAX_USER_SIZE`, including system fields) | crates/common/src/document.rs | done (#35) | |
-| Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | done (#35) | |
+| Document nesting ≤ 16 levels (`MAX_DOCUMENT_NESTING`) | crates/common/src/document.rs | done (#35) | The message follows the document's display, as `must_validate`'s. |
 | Generic value (args/results) size ≤ 32 MiB and nesting ≤ 64 | crates/value/src/size.rs | done (STUDY-109) | Nesting: arguments 63 levels (Convex parses `[args]`), results 64, written values 64 (a patch: each field 64), with Convex's messages and order (nesting, then size, then validator; a written value before its table and document; `runUdf`'s message for a query's or mutation's nested call past 64). Any depth fails with the message, never a stack overflow; past serde's 128 JSON levels Convex answers otherwise (DV-363). Size and nesting are measured in one walk. The 32 MiB size is never reached: the 16 MiB argument and result limits and the 1 MiB document limit come first. |
-| Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | |
+| Array length ≤ 8192 | crates/value/src/array.rs | done (#35) | In a write, "Invalid argument \`value\` for \`db.<method>\`: …", as the syscall parses it; objects over 1024 fields too. |
 | Object fields ≤ 1024 | crates/value/src/object.rs | done (#35) |  |
 | Field name ≤ 1024 chars; identifiers (tables, indexes) ≤ 64 | sync_types/identifier.rs | done (#6, #21) |  |
 | Function args ≤ 16 MiB; function result ≤ 16 MiB | knobs.rs (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64 §1.7) | Convex's messages and order (args size before the validator; result size before `returns`); the same knobs. The WS frame cap is 16 MiB, as Convex's. No 80 % warnings yet. |
