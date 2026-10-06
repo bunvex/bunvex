@@ -59,7 +59,8 @@ test("delete_tables: in one commit, as Convex's route", async () => {
     status: 500,
     body: { code: "InternalServerError", message: "Your request couldn't be completed. Try again later." },
   });
-  expect(engine.catalog.tables.has("_storage")).toBe(true);
+  expect(await del({ tableNames: ["_file_storage"] })).toMatchObject({ status: 500 });
+  expect(engine.catalog.tables.has("_file_storage")).toBe(true);
   expect((await del({ tableNames: ["bad-name"] })).body).toMatchObject({ code: "InvalidTableName" });
   expect((await del({ tableNames: ["x"] }, READ_ONLY)).status).toBe(403);
   expect((await del({ tableNames: ["x"], componentId: "abc" })).body).toMatchObject({ code: "ComponentsNotSupported" });

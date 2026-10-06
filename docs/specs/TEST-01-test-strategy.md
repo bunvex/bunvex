@@ -163,7 +163,36 @@ over six runs, so a seed-dependent dip below the floor is not expected.
   what does hold: when one key is a proper prefix of another, the next byte is 0xFF. That is also what led
   to DV-310.
 
-## 6. Later
+## 6. The engine's values, frozen in the tests
+
+Convex runs functions in an isolate: every value crosses into it as a copy, so a function can never change
+the engine's own objects. bunvex runs both in one process, so every crossing must copy by hand, and a missed
+copy corrupts data silently. #410 fixed one: a query over a mutation's own writes handed out the written
+version itself, and mutating the result changed what was stored.
+
+- **What is frozen.** The tests freeze the values the engine keeps: the versions a transaction writes
+  (`stage`), which then flow to the commit and to every commit listener (`engineOwned`, `core/src/engine-owned.ts`).
+  - Code that mutates one throws a `TypeError` at the mutation, instead of passing silently: a function given
+    the engine's object instead of a copy, or a listener changing a version others read.
+  - Values handed to functions are not frozen. They are the function's own, and Convex lets it mutate them.
+- **How it is turned on.**
+  - `BUNVEX_FREEZE_ENGINE_VALUES=1`.
+  - The root test run sets it in its preload (`test/preload.ts`), and so does `test:examples`.
+  - `engine-owned.test.ts` fails if the mode is off.
+  - A server outside the tests does not freeze anything.
+- **Checked.** With #410's copy removed, its test fails in this mode with the `TypeError` at the mutation.
+  - These crossings already copy, as Convex: `db.get` of an own write, `db.insert` / `patch` / `replace`
+    of a nested object mutated afterwards, `ctx.runQuery` results, and scheduled functions' arguments.
+- **Why it is needed.** This is one class of bugs Convex's architecture rules out and bunvex must rule out by
+  hand. Others: global state shared between executions, determinism, the order of async work, error types,
+  limits applied on every path. §7 lists the work that looks for them.
+
+## 7. Later
+
+- **Differential testing against Convex's own backend.** Generated sequences of operations (writes, indexed
+  queries, pagination, nested calls, errors, limits) run on Convex's local backend and on bunvex. The
+  results, errors and final data are compared, and every difference becomes a bug or a recorded divergence.
+  It needs its own study.
 
 - **Mutation testing.** Run a mutator (e.g. Stryker's TypeScript support, or a small AST mutator) over
   the heart-area files, nightly, and report the surviving mutants.

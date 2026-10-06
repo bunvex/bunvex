@@ -37,7 +37,7 @@ function tableAfter(markdown: string, heading: string): string[][] {
 
 describe("content", () => {
   test("the benchmark cells are the full report's, for Convex, bunvex on Postgres and bunvex on SQLite", () => {
-    const report = read("docs/bench/E2E-VPS-2026-09-29.md");
+    const report = read("docs/bench/E2E-VPS-2026-10-05.md");
     const clean = (cell: string) => cell.replace(/[¹²⚠]/g, "").trim();
     const column = (table: string[][], header: string[], name: string) => {
       const i = header.indexOf(name);
@@ -54,7 +54,7 @@ describe("content", () => {
       "uncached indexed read, req/s": [http, httpHeader, "query, uncached"],
       "durable insert, req/s": [http, httpHeader, "insert, durable"],
       "action (query + mutation), req/s": [http, httpHeader, "action (query + mutation)"],
-      "10 000 subscribers, delivered · p99": [fan, fanHeader, "10 000"],
+      "10 000 subscribers, splay off, delivered · p99": [fan, fanHeader, "10 000"],
     };
     expect(BENCH.rows.map((r) => r.metric)).toEqual(Object.keys(SCENARIO));
     for (const row of BENCH.rows) {
@@ -69,12 +69,12 @@ describe("content", () => {
   });
 
   test("the report says Convex ran on the same Postgres as bunvex", () => {
-    expect(read("docs/bench/E2E-VPS-2026-09-29.md")).toContain("**the same instance Convex used**");
+    expect(read("docs/bench/E2E-VPS-2026-10-05.md")).toContain("**the same instance Convex used**");
   });
 
   test("the benchmark report link is the report the README cites", () => {
-    expect(read("README.md")).toContain("(docs/bench/E2E-VPS-2026-09-29.md)");
-    expect(BENCH.report).toBe(blob("docs/bench/E2E-VPS-2026-09-29.md"));
+    expect(read("README.md")).toContain("(docs/bench/E2E-VPS-2026-10-05.md)");
+    expect(BENCH.report).toBe(blob("docs/bench/E2E-VPS-2026-10-05.md"));
   });
 
   test("the roadmap phases are docs/parity's, in order", () => {

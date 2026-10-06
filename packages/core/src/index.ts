@@ -18,33 +18,45 @@ export {
 } from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  AUTH_TABLE,
   BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   IndexBackfillingError,
   IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MAX_USER_TABLES,
   MODULES_TABLE,
+  primaryVirtualTable,
   SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
+  SCHEMA_VALIDATION_PROGRESS_TABLE,
+  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
-  STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  SYSTEM_TABLE_NUMBERS,
+  SYSTEM_TO_VIRTUAL_TABLE,
   searchIndexesUnavailable,
   TooManyTablesError,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
+  VIRTUAL_TO_SYSTEM_TABLE,
   vectorIndexesUnavailable,
 } from "./catalog.ts";
 export {
@@ -96,6 +108,13 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export {
+  DATABASE_VERSION,
+  type DatabaseGlobals,
+  readDatabaseGlobals,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 export type {
   BaseDatabaseReader,
   BaseDatabaseReaderWithTable,
@@ -217,21 +236,32 @@ export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export { type Runtime, type RuntimeTimer, realRuntime } from "./runtime.ts";
 export {
+  argsFromBytes,
+  argsToBytes,
   cancelJob,
   completeJob,
   deleteCompletedJobs,
+  deleteJob,
   dueJobs,
   getJob,
   insertJob,
   isJobId,
   type JobDoc,
   type JobState,
+  jobArgs,
+  msToNs,
   nextJobTs,
+  nsToMs,
   type PublicJob,
+  parseJob,
   patchJob,
-  publicJob,
+  SCHEDULED_BY_NAME_AND_NEXT_TS,
+  SCHEDULED_BY_NEXT_TS,
+  type ScheduledJobDoc,
+  type StoredJobState,
   TRANSACTION_MAX_NUM_SCHEDULED,
   TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+  virtualJob,
 } from "./scheduled-jobs.ts";
 export {
   checkIdentifier,
@@ -240,6 +270,7 @@ export {
   type DocValidator,
   defineSchema,
   defineTable,
+  documentTypeError,
   docValidator,
   type Expand,
   type FieldValue,
@@ -257,6 +288,7 @@ export {
   type SchemaValidators,
   type SearchIndexDef,
   type SystemFieldValidators,
+  stagedDocumentError,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
@@ -267,7 +299,13 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
-export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
+export {
+  type SchemaValidation,
+  type SchemaValidationProgress,
+  schemaValidationProgress,
+  type ValidationState,
+} from "./schema-validations.ts";
+export type { SearchSegmentStore } from "./search-segments.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
@@ -286,7 +324,7 @@ export {
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
-export { SystemReader } from "./system-reader.ts";
+export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
 export {
@@ -310,6 +348,13 @@ export {
   type TxQuery,
   type TxQueryChained,
 } from "./tx.ts";
+export {
+  type FileStorageDoc,
+  VIRTUAL_TABLES,
+  type VirtualTable,
+  virtualFile,
+  virtualTableOfSystem,
+} from "./virtual-tables.ts";
 export {
   formatByteCount,
   formatWindow,

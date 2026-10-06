@@ -124,8 +124,13 @@ test("a 403 ends it with the error (other failures retry); bad options are usage
   };
   expect(await logsCommand([], io, { signal: new AbortController().signal })).toBe(1);
   expect(err.at(-1)).toBe("bunvex logs: not allowed to view logs");
-  expect((await run(["--history", "x"], () => true)).code).toBe(2);
-  expect((await run(["--nope"], () => true)).code).toBe(2);
+  const history = await run(["--history", "x"], () => true);
+  expect([history.code, history.err[0]]).toEqual([
+    1,
+    "error: option '--history [n]' argument 'x' is invalid. Not a number.",
+  ]);
+  const nope = await run(["--sucess"], () => true);
+  expect([nope.code, nope.err[0]]).toEqual([1, "error: unknown option '--sucess'\n(Did you mean --success?)"]);
 });
 
 test("Convex's line format: string lines, structured lines, errors, colors", () => {

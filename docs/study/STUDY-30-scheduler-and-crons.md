@@ -259,7 +259,7 @@ no-op, and `minuteUTC` is optional.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | S1 | Crons are registered by passing them to the server (`createServer({ crons })`) and diffed at startup, not discovered in `convex/crons.ts` at push | bunvex has no push or analyze step until the CLI (Phase 3 item 7); then `crons.ts`'s default export is discovered, keeping the same API | **accepted** (owner, 2026-10-01) |
-| S2 | `_scheduled_functions` is a real system table projected to the public shape, not a virtual table over `_scheduled_jobs` | same documents, ids and indexes for apps; no virtual-table layer to build first | **accepted** (owner, 2026-10-01) |
+| S2 | `_scheduled_functions` is a real system table projected to the public shape, not a virtual table over `_scheduled_jobs` | same documents, ids and indexes for apps; no virtual-table layer to build first | **accepted** (owner, 2026-10-01); **resolved** by STUDY-125 (owner, 2026-10-05: Convex's layout) |
 | S3 | Until log streaming (Phase 4), scheduled and cron runs' log lines go to the server's log output, not a function log; cron run logs are as Convex | bunvex has no function-execution log yet | **accepted** (owner, 2026-10-01) |
 | S4 | A cron string whose day of month is `L-nW` evaluated from certain Mondays: saffron computes `day + n − daysInMonth` unsigned and underflows, which aborts the Convex process; bunvex treats that comparison as false and answers | a crash is not behaviour to copy; every other saffron quirk is kept, so schedules match | **accepted** (owner, 2026-10-01) |
 
