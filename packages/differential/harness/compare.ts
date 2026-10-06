@@ -79,9 +79,9 @@ const ID_IN_TEXT = /\b[0-9a-hjkmnp-tv-z]{31,37}\b/g;
 export function errorText(message: string, ids?: IdMap): string {
   let text = message;
   for (const [from, to] of WORDING) text = text.replace(from, to);
+  // A document's display in a message (Convex's `must_validate`) holds its creation time, a clock.
   return text
     .replace(ID_IN_TEXT, (id) => ids?.name(id) ?? "<id>")
-    // A document's display in a message (Convex's `must_validate`) holds its creation time, a clock.
     .replace(/_creationTime: \d+(\.\d+)?/g, "_creationTime: <time>")
     .replace(/^\[Request ID: [^\]]+\] /, "")
     .split("\n")
