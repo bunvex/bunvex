@@ -150,6 +150,14 @@ describe("the schema text", () => {
     expect(text(2n)).toContain('"value":{"$integer":"AgAAAAAAAAA="}}');
   });
 
+  test("a record field as Convex serializes it: its keys, then its values (never optional)", () => {
+    const s = defineSchema({ t: defineTable({ m: v.record(v.string(), v.array(v.id("t"))) }) });
+    expect(schemaJsonText(s)).toContain(
+      '"m":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"array","value":{"type":"id","tableName":"t"}},"optional":false}},"optional":false}',
+    );
+    expect(schemaToJson(schemaFromJson(JSON.parse(schemaJsonText(s))))).toEqual(schemaToJson(s));
+  });
+
   test("a table's top-level system fields are left out; a one-object union is that object", () => {
     const j = schemaToJson(
       defineSchema({
