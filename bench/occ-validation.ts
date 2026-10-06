@@ -30,15 +30,19 @@ function itemWrite(i: number) {
   return { docs: [], idx };
 }
 
-type Validate = { validate(p: { snapshot: number; reads: Interval[] }): unknown };
+type Validate = { validate(p: { snapshot: bigint; reads: Interval[] }): unknown };
 
 for (const n of SIZES) {
   // Retention far beyond the fill time and size: every commit stays in the log.
-  const c = new Committer(nullPersistence, { minRetentionUs: 3.6e9, maxRetentionUs: 3.6e9, softMaxBytes: 2 ** 40 });
+  const c = new Committer(nullPersistence, {
+    minRetentionNs: 3_600_000_000_000n,
+    maxRetentionNs: 3_600_000_000_000n,
+    softMaxBytes: 2 ** 40,
+  });
   const snapshot = c.visibleTs;
-  const tss: number[] = [];
+  const tss: bigint[] = [];
   for (let i = 0; i < n; i += 1000) {
-    const batch: Promise<number>[] = [];
+    const batch: Promise<bigint>[] = [];
     for (let j = i; j < Math.min(n, i + 1000); j++)
       batch.push(c.commit({ snapshot: c.visibleTs, reads: [], ...itemWrite(j) }));
     tss.push(...(await Promise.all(batch)));

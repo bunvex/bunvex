@@ -14,7 +14,7 @@
 //
 // A driver is described by a MODULE (so K6 can re-open it in a child process) exporting:
 //   open(fresh: boolean): Promise<Persistence>  — fresh = start from an empty store
-//   tearTail?(nextTs: number): void | Promise<void> — log-based drivers only: append half a record (K7)
+//   tearTail?(nextTs: bigint): void | Promise<void> — log-based drivers only: append half a record (K7)
 //   target?() / openThrough?(via, { timeoutMs }) — remote stores only: where the store listens, and an open
 //     through another address with a given call timeout (K20 puts a freezable TCP proxy in between)
 //
@@ -43,6 +43,7 @@ import {
 import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
 import { logChecks } from "./log.ts";
+import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
 import { retentionChecks } from "./retention.ts";
@@ -71,7 +72,7 @@ export type DriverModule = {
   makeForeign?(): Promise<void>;
   /** K22: whether that foreign store is exactly as `makeForeign` left it (a refused open wrote nothing). */
   foreignIntact?(): Promise<boolean>;
-  tearTail?(nextTs: number): void | Promise<void>;
+  tearTail?(nextTs: bigint): void | Promise<void>;
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
   writerInsideFlush?(): Promise<boolean>;
@@ -85,7 +86,7 @@ export type DriverModule = {
   /** Whether the store has its ts index (K25: it is built once the lease is held). */
   hasLogIndex?(): Promise<boolean>;
   /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
-  strayLogRow?(ts: number): Promise<void>;
+  strayLogRow?(ts: bigint): Promise<void>;
 };
 
 // K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30–K31
@@ -107,7 +108,8 @@ export type Check =
   | "K26"
   | "K27"
   | "K30"
-  | "K32";
+  | "K32"
+  | "K33";
 export type ConformanceOptions = {
   name: string;
   /** Absolute path (or resolvable specifier) of the driver module. */
@@ -139,10 +141,12 @@ const IDLE_TX_BOUND_MS = 2500;
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 const rnd = (n: number) => Math.floor(Math.random() * n);
+/** The largest int64: a snapshot above every commit. */
+const MAX_TS = (1n << 63n) - 1n;
 
 type Rows = { docs: number; idx: number };
 /** The rows an engine's store holds at exactly `ts` (audit), or null when the driver cannot tell. */
-const rowsOf = async (e: Engine, ts: number): Promise<Rows | null> =>
+const rowsOf = async (e: Engine, ts: bigint): Promise<Rows | null> =>
   e.persistence.auditRowsAt ? await e.persistence.auditRowsAt(ts) : null;
 const sameRows = (a: Rows | null, b: Rows | null) =>
   a === null || b === null ? a === b : a.docs === b.docs && a.idx === b.idx && a.docs > 0;
@@ -174,14 +178,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       id: `id${i}`,
     }));
     st.apply(
-      1,
+      1n,
       entries.map((x) => ({ table: 900, id: x.id, json: "{}" })),
       entries.map((x) => ({ index: 900, key: x.key, id: x.id })),
     );
     await st.flush();
     const want = [...entries].sort((a, b) => compareKeys(a.key, b.key)).map((x) => x.id);
-    const asc = await st.scan(900, FULL_LO, FULL_HI, 1, 100000, false);
-    const desc = await st.scan(900, FULL_LO, FULL_HI, 1, 100000, true);
+    const asc = await st.scan(900, FULL_LO, FULL_HI, 1n, 100000, false);
+    const desc = await st.scan(900, FULL_LO, FULL_HI, 1n, 100000, true);
     check(
       JSON.stringify(asc) === JSON.stringify(want) && JSON.stringify(desc) === JSON.stringify([...want].reverse()),
       `K1 byte order over ${entries.length} mixed-type keys (asc and desc)`,
@@ -208,7 +212,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         idx.push({ index: 901, key: keyOf(id), id: del ? null : id });
         model.set(id, [...(model.get(id) ?? []), { ts, v }]);
       }
-      st.apply(ts, docs, idx);
+      st.apply(BigInt(ts), docs, idx);
       if (c % 7 === 0) await st.flush(); // groups of several commits
     }
     await st.flush();
@@ -219,9 +223,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const vs = model.get(id)?.filter((x) => x.ts <= T) ?? [];
         return vs.length ? vs[vs.length - 1].v : null;
       };
-      for (let i = 0; i < 60; i++) if ((await st.get(901, `d${i}`, T)) !== at(`d${i}`)) bad++;
+      for (let i = 0; i < 60; i++) if ((await st.get(901, `d${i}`, BigInt(T))) !== at(`d${i}`)) bad++;
       const want = [...model.keys()].filter((id) => at(id) !== null).sort((a, b) => compareKeys(keyOf(a), keyOf(b)));
-      const got = await st.scan(901, FULL_LO, FULL_HI, T, 1000, false);
+      const got = await st.scan(901, FULL_LO, FULL_HI, BigInt(T), 1000, false);
       if (JSON.stringify(got) !== JSON.stringify(want)) bad++;
     }
     check(bad === 0, `K2 snapshot reads equal the reference model at 60 random past snapshots (${bad} mismatches)`);
@@ -246,7 +250,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         idx.push({ index: 903, key: keyOf(i), id: del ? null : id(i) });
         model.set(i, [...(model.get(i) ?? []), { ts, v }]);
       }
-      st.apply(ts, docs, idx);
+      st.apply(BigInt(ts), docs, idx);
       await st.flush();
     };
     await commit(Array.from({ length: N }, (_, i) => [i, false]));
@@ -285,10 +289,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const want = ordered.slice(0, limit);
             const loKey = lo === 0 ? FULL_LO : keyOf(lo);
             const hiKey = hi === N ? FULL_HI : keyOf(hi);
-            const got = await st.scan(903, loKey, hiKey, T, limit, desc);
+            const got = await st.scan(903, loKey, hiKey, BigInt(T), limit, desc);
             if (JSON.stringify(got) !== JSON.stringify(want.map(id))) bad++;
             if (scanDocs) {
-              const docs = await scanDocs(903, 903, loKey, hiKey, T, limit, desc);
+              const docs = await scanDocs(903, 903, loKey, hiKey, BigInt(T), limit, desc);
               if (JSON.stringify(docs) !== JSON.stringify(want.map((i) => at(i, T)))) bad++;
             }
           }
@@ -328,7 +332,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const commit = async (ws: [number, boolean][]) => {
       ts++;
       st.apply(
-        ts,
+        BigInt(ts),
         ws.map(([i, del]) => ({ table: 904, id: entries[i].id, json: del ? null : JSON.stringify({ i, ts }) })),
         ws.map(([i, del]) => ({ index: 904, key: entries[i].key, id: del ? null : entries[i].id })),
       );
@@ -355,13 +359,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const live = ordered.slice(a, b).filter((e) => liveAt(e.id, T));
             const want = (desc ? live.reverse() : live).slice(0, limit).map((e) => e.id);
             probes++;
-            const got = await st.scan(904, lo, hi, T, limit, desc);
+            const got = await st.scan(904, lo, hi, BigInt(T), limit, desc);
             if (JSON.stringify(got) !== JSON.stringify(want)) {
               bad++;
               if (bad <= 3) log(`  K9 mismatch T=${T} limit=${limit} desc=${desc} [${a},${b}): ${got} vs ${want}`);
             }
             if (scanDocs) {
-              const docs = await scanDocs(904, 904, lo, hi, T, limit, desc);
+              const docs = await scanDocs(904, 904, lo, hi, BigInt(T), limit, desc);
               if (docs.length !== want.length) bad++;
             }
           }
@@ -518,7 +522,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
         stdio: ["ignore", "pipe", "inherit"],
       });
-      let lastAck = 0;
+      let lastAck = 0n;
       let started = false;
       let buf = "";
       child.stdout.on("data", (d) => {
@@ -527,7 +531,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         buf = lines.pop()!;
         for (const l of lines) {
           if (l.startsWith("start")) started = true;
-          if (l.startsWith("ack ")) lastAck = Math.max(lastAck, Number(l.slice(4)));
+          if (l.startsWith("ack ")) {
+            const a = BigInt(l.slice(4).split(" ")[0]);
+            if (a > lastAck) lastAck = a;
+          }
         }
       });
       while (!started) await new Promise((r) => setTimeout(r, 20));
@@ -539,7 +546,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       // Under a lease the engine first waits out the killed child's (K15), and maxTs is read after that.
       // Opening an engine on an existing store only reads the catalog (no commit), so M is maxTs.
       const e = await newEngine(st, { lease: { waitMs: 20 * CHILD_TTL_MS } });
-      const M = Number((await st.maxTs?.()) ?? 0);
+      const M = (await st.maxTs?.()) ?? 0n;
       const items = e.catalog.table("items");
       const ixIds = [...items.indexes.values()].map((ix) => ix.id);
       if (M < lastAck) {
@@ -581,17 +588,17 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const st = await mod.open(true);
     const e = await newEngine(st);
     for (let i = 0; i < 50; i++) await e.mutation(insertItem("k7"));
-    const M = Number(await st.maxTs!());
+    const M = await st.maxTs!();
     await e.close();
-    await mod.tearTail(M + 1);
+    await mod.tearTail(M + 1n);
     const st2 = await mod.open(false);
     const e2 = await newEngine(st2);
-    const M2 = Number(await st2.maxTs!());
+    const M2 = await st2.maxTs!();
     await e2.mutation(insertItem("k7"));
     await e2.close();
     const st3 = await mod.open(false); // the record written after recovery must survive a reopen
     const e3 = await newEngine(st3);
-    const M3 = Number(await st3.maxTs!());
+    const M3 = await st3.maxTs!();
     const torn = await st3.get(e3.catalog.table("items").id, "torn", M3);
     await e3.close();
     check(
@@ -615,7 +622,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     };
     const TABLE = 950;
     const INDEX = 951;
-    const row = (ts: number, id: string) =>
+    const row = (ts: bigint, id: string) =>
       [[{ table: TABLE, id, json: `{"ts":${ts}}` }], [{ index: INDEX, key: encodeKey([id]), id }]] as const;
 
     // K10 — exclusive, at the driver and through the engine.
@@ -667,27 +674,27 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const a = await raw(false);
       const b = await raw(false);
       await a.acquireLease({ holder: "k12-a", ttlMs: 200 });
-      const M0 = Number(await a.maxTs!());
-      const [d1, i1] = row(M0 + 1, "k12-a1");
-      a.apply(M0 + 1, [...d1], [...i1]);
+      const M0 = await a.maxTs!();
+      const [d1, i1] = row(M0 + 1n, "k12-a1");
+      a.apply(M0 + 1n, [...d1], [...i1]);
       await a.flush(); // A is the holder: accepted
       await sleep(350);
       const rb = await b.acquireLease({ holder: "k12-b", ttlMs: 30_000 });
-      const M = Number(await b.maxTs!());
-      const [d2, i2] = row(M + 1, "k12-a2");
-      a.apply(M + 1, [...d2], [...i2]);
+      const M = await b.maxTs!();
+      const [d2, i2] = row(M + 1n, "k12-a2");
+      a.apply(M + 1n, [...d2], [...i2]);
       const err = await Promise.resolve(a.flush()).then(
         () => null,
         (e) => e,
       );
-      const seen = await b.scan(INDEX, FULL_LO, FULL_HI, Number.MAX_SAFE_INTEGER, 100, false);
-      const M2 = Number(await b.maxTs!());
+      const seen = await b.scan(INDEX, FULL_LO, FULL_HI, MAX_TS, 100, false);
+      const M2 = await b.maxTs!();
       await b.releaseLease();
       await a.close();
       await b.close();
       check(
         "epoch" in rb &&
-          M === M0 + 1 &&
+          M === M0 + 1n &&
           err instanceof LeaseLostError &&
           JSON.stringify(seen) === JSON.stringify(["k12-a1"]) &&
           M2 === M,
@@ -699,15 +706,15 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     {
       const s = await raw(false);
       await s.acquireLease({ holder: "k16", ttlMs: 30_000 });
-      const M = Number(await s.maxTs!());
-      s.apply(M + 1, [], [{ index: INDEX, key: encodeKey(["k16"]), id: "k16" }]);
+      const M = await s.maxTs!();
+      s.apply(M + 1n, [], [{ index: INDEX, key: encodeKey(["k16"]), id: "k16" }]);
       await s.flush();
       await s.releaseLease();
       await s.close();
       const s2 = await raw(false);
-      const M2 = Number(await s2.maxTs!());
+      const M2 = await s2.maxTs!();
       await s2.close();
-      check(M2 === M + 1, `K16 maxTs counts an index-only commit (${M} → ${M2}, expected ${M + 1})`);
+      check(M2 === M + 1n, `K16 maxTs counts an index-only commit (${M} → ${M2}, expected ${M + 1n})`);
     }
 
     // K18 — a released lease is taken at once, at the driver and through Engine.close().
@@ -1047,21 +1054,21 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const st = await mod.openThrough!(proxy, { timeoutMs: T });
       const leased = hasLease(st);
       if (leased) await st.acquireLease({ holder: "k20", ttlMs: TTL });
-      const put = (ts: number, id: string) =>
+      const put = (ts: bigint, id: string) =>
         st.apply(ts, [{ table: 960, id, json: `{"ts":${ts}}` }], [{ index: 961, key: encodeKey([id]), id }]);
-      put(10, "a");
+      put(10n, "a");
       await st.flush();
-      const healthy = await st.get(960, "a", 10);
+      const healthy = await st.get(960, "a", 10n);
 
       proxy.freeze();
-      const read = await timed(Promise.resolve(st.get(960, "a", 10)));
+      const read = await timed(Promise.resolve(st.get(960, "a", 10n)));
       // A driver may run a timed-out read once more (STUDY-25 L5: Convex's Postgres driver does), so up to two
       // timeouts.
       check(
         read.failed && read.took <= 2 * T + SLACK,
         `K20 a read on a frozen store fails within the ${T} ms timeout, or two with one retry (${read.what})`,
       );
-      put(20, "b");
+      put(20n, "b");
       const flush = await timed(Promise.resolve(st.flush()));
       check(
         flush.failed && flush.took <= T + SLACK,
@@ -1087,7 +1094,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
 
       proxy.thaw();
-      const again = await timed(Promise.resolve(st.get(960, "a", 10)));
+      const again = await timed(Promise.resolve(st.get(960, "a", 10n)));
       check(
         again.answered && again.value === healthy && healthy !== null,
         `K20 once the store answers again, so do calls, without reopening (${again.what})`,
@@ -1203,19 +1210,19 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const leased = hasLease(st);
       if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
       st.apply(
-        10,
+        10n,
         [{ table: 970, id: "k21read", json: `{"v":1}` }],
         [{ index: 971, key: encodeKey(["k21read"]), id: "k21read" }],
       );
       await st.flush();
       proxy.resetOn(/k21read/, 1);
-      const once = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      const once = await settle(Promise.resolve(st.get(970, "k21read", 10n)));
       check(
         proxy.fired.resets === 1 && once.ok && once.value === `{"v":1}`,
         `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
       );
       proxy.resetOn(/k21read/, 2);
-      const twice = await settle(Promise.resolve(st.get(970, "k21read", 10)));
+      const twice = await settle(Promise.resolve(st.get(970, "k21read", 10n)));
       check(
         proxy.fired.resets === 3 && !twice.ok,
         `K21 a read that loses its connection twice fails: one retry only (L5; ${twice.what}, ${proxy.fired.resets - 1} resets)`,
@@ -1281,7 +1288,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   }
 
   /** The rows at `ts`, read through a fresh open of the store (no lease needed to read). */
-  async function rowsOfStore(ts: number): Promise<Rows | null> {
+  async function rowsOfStore(ts: bigint): Promise<Rows | null> {
     const st = await mod.open(false);
     try {
       return st.auditRowsAt ? await st.auditRowsAt(ts) : null;
@@ -1292,7 +1299,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   async function maxTsOfStore() {
     const st = await mod.open(false);
     try {
-      return Number(await st.maxTs?.());
+      return await st.maxTs?.();
     } finally {
       await st.close();
     }
@@ -1316,6 +1323,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30–K31 threw: ${e}`));
   if (want("K32"))
     await versionChecks(mod, check, log, !!opts.requireVersions).catch((e) => check(false, `K32 threw: ${e}`));
+  if (want("K33")) await nanosecondChecks(mod, check).catch((e) => check(false, `K33 threw: ${e}`));
   await mod.open(true).then((s) => s.close());
   if (want("K6")) await k6();
   if (want("K26"))

@@ -134,7 +134,7 @@ export class VectorIndexes {
   }
 
   /** A commit, as it becomes visible: each written document of an indexed table, in its new state. */
-  apply(ts: number, writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
+  apply(ts: bigint, writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
         e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null, ts);

@@ -60,7 +60,7 @@ export interface IndexWorkerHost {
   /** Run a system transaction (OCC retries included). */
   system<T>(body: (db: Tx) => Promise<T>, source: string): Promise<T>;
   /** Install a committed `_index` change into the catalog (called from the commit's visibility). */
-  installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: number): void;
+  installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: bigint): void;
   /** Finish the schema change if nothing it waits for is still backfilling; true once finished. */
   finishSchema(): Promise<boolean>;
   /** The table's document count from the table summaries, or null while they are not built (Convex's `table_count`). */
@@ -241,7 +241,7 @@ export class IndexWorker {
               indexId: p.indexId,
               numDocsIndexed: done[i],
               totalDocs: p.totalDocs,
-              cursor: { snapshotTs: p.cursor?.snapshotTs ?? 0, cursor },
+              cursor: { snapshotTs: p.cursor?.snapshotTs ?? 0n, cursor },
             }),
           );
         }
@@ -327,7 +327,7 @@ export class IndexWorker {
   }
 
   /** Up to `limit` live documents of `t` from `lo` on, in id order, at `snapshot` (pages of `readSize`). */
-  private async readChunk(t: TableDef, lo: Uint8Array, snapshot: number, limit: number): Promise<Doc[]> {
+  private async readChunk(t: TableDef, lo: Uint8Array, snapshot: bigint, limit: number): Promise<Doc[]> {
     const p = this.host.persistence;
     const out: Doc[] = [];
     let from = lo;

@@ -84,7 +84,7 @@ async function throughput() {
 
 async function lag() {
   const c = new Committer(await open(), retention);
-  const history: { t: number; ts: number }[] = []; // visibleTs over time, to take snapshots LAG_MS old
+  const history: { t: number; ts: bigint }[] = []; // visibleTs over time, to take snapshots LAG_MS old
   let noise = 0;
   let attempts = 0;
   let failed = 0;
@@ -107,7 +107,7 @@ async function lag() {
       await Bun.sleep(5);
       const cutoff = performance.now() - LAG_MS;
       if (cutoff < t0) continue;
-      let snap: number | undefined;
+      let snap: bigint | undefined;
       for (let i = history.length - 1; i >= 0; i--)
         if (history[i].t <= cutoff) {
           snap = history[i].ts;
@@ -153,14 +153,14 @@ async function calibrate() {
   // per-index columns validation looks writes up in (STUDY-06 D11).
   const N = 200_000;
   const c = new Committer({ apply() {}, async flush() {} } as unknown as Persistence, {
-    minRetentionUs: 3.6e9,
-    maxRetentionUs: 3.6e9,
+    minRetentionNs: 3_600_000_000_000n,
+    maxRetentionNs: 3_600_000_000_000n,
     softMaxBytes: 2 ** 40,
   });
   Bun.gc(true);
   const before = process.memoryUsage().heapUsed;
   for (let i = 0; i < N; i += 1000) {
-    const batch: Promise<number>[] = [];
+    const batch: Promise<bigint>[] = [];
     for (let j = i; j < i + 1000; j++) {
       const { idx } = itemWrite(`t${j % 64}`, 1.79e12 + j);
       batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs: [], idx }));

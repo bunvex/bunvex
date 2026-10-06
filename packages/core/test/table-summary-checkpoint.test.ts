@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { defineSchema, defineTable, Engine, reduceShape } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { fromJsonInteger, jsonInteger, tsGlobal, tsNanos } from "../src/persistence-globals.ts";
+import { fromJsonInteger, jsonInteger, tsGlobal } from "../src/persistence-globals.ts";
 import { shapeFromJson, shapeOf, shapeToJson, tableShape } from "../src/shapes.ts";
 import { TableSummaries } from "../src/table-summaries.ts";
 import { restoreSummaries, SummaryCheckpointer, TABLE_SUMMARY_GLOBAL } from "../src/table-summary-checkpoint.ts";
@@ -92,7 +92,7 @@ test("retention passing the checkpoint during the restore makes it fall back", a
   await e1.close();
   const read = p.readDocumentLog.bind(p);
   p.readDocumentLog = (async (...a: Parameters<typeof read>) => {
-    await p.setGlobal("document_min_snapshot_ts", tsGlobal(9e15));
+    await p.setGlobal("document_min_snapshot_ts", tsGlobal(9_000_000_000_000_000_000n));
     return read(...a);
   }) as unknown as typeof p.readDocumentLog;
   const e2 = await open(p);
@@ -112,7 +112,7 @@ test("a table the log changed but that no longer exists is left out", async () =
     await db.insert("u", { b: 1 });
   });
   const [t, u] = ["t", "u"].map((n) => e1.catalog.tables.get(n)!.id);
-  const at = (e1 as unknown as { committer: { visibleTs: number } }).committer.visibleTs;
+  const at = (e1 as unknown as { committer: { visibleTs: bigint } }).committer.visibleTs;
   await e1.close();
   // As if `t` were deleted: only `u` exists.
   const s = new TableSummaries();
@@ -144,12 +144,12 @@ for (const [name, spoil] of [
     async (p: MemoryPersistence) =>
       p.setGlobal(TABLE_SUMMARY_GLOBAL, {
         ...((await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as object),
-        ts: jsonInteger(tsNanos(Number.MAX_SAFE_INTEGER)),
+        ts: jsonInteger((1n << 63n) - 1n),
       }),
   ],
   [
     "outside document retention",
-    async (p: MemoryPersistence) => p.setGlobal("document_min_snapshot_ts", tsGlobal(9e15)),
+    async (p: MemoryPersistence) => p.setGlobal("document_min_snapshot_ts", tsGlobal(9_000_000_000_000_000_000n)),
   ],
   [
     "a shape it did not write",

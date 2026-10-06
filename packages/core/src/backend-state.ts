@@ -35,8 +35,8 @@ export async function readBackendState(db: Tx): Promise<BackendState> {
  * pause commits.
  */
 export class BackendStateCache {
-  private writtenTs = 0;
-  private cached: { from: number; state: BackendState; exists: boolean } | null = null;
+  private writtenTs = 0n;
+  private cached: { from: bigint; state: BackendState; exists: boolean } | null = null;
 
   constructor(private readonly byIdIndex: () => number) {}
 

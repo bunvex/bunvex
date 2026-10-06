@@ -14,7 +14,7 @@ import { compareKeys } from "./keyenc.ts";
 type Write = LogEntry["writes"][number];
 
 /** The writes into one index, oldest first, from `head` (trimmed by advancing it, compacted now and then). */
-type Column = { ts: number[]; writes: Write[]; head: number };
+type Column = { ts: bigint[]; writes: Write[]; head: number };
 
 /** One index's read intervals, sorted by `lo`, disjoint and non-adjacent (Convex's `IntervalSet`). */
 export type IntervalSet = { lo: Uint8Array[]; hi: Uint8Array[] };
@@ -97,7 +97,7 @@ export class WritesByIndex {
       const c = this.columns.get(w.index);
       if (!c || c.ts[c.head] !== e.ts || c.writes[c.head] !== w)
         throw new Error(`write log index: the write of ${e.ts} on index ${w.index} is not the oldest`);
-      c.ts[c.head] = 0;
+      c.ts[c.head] = 0n;
       c.writes[c.head] = undefined as unknown as Write; // release it now
       c.head++;
     }
@@ -123,9 +123,9 @@ export class WritesByIndex {
    */
   conflict(
     reads: readonly [number, IntervalSet][],
-    from: number,
-    to: number,
-    sourceOf: (ts: number) => string | undefined,
+    from: bigint,
+    to: bigint,
+    sourceOf: (ts: bigint) => string | undefined,
     lowestKey = false,
   ): Conflict | null {
     for (const [index, set] of reads) {

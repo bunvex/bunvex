@@ -22,7 +22,7 @@ const open = async (s = schema, opts = {}) => {
 async function history(p: MemoryPersistence, e: Engine, tablet: number, name: string): Promise<Row[]> {
   const index = e.catalog.table(INDEX_TABLE).id;
   const out: Row[] = [];
-  for (const r of p.readDocumentLog(0, e.committer.visibleTs, 1e6)) {
+  for (const r of p.readDocumentLog(0n, e.committer.visibleTs, 1e6)) {
     if (r.table !== index || r.deleted) continue;
     const json = JSON.parse((await p.get(index, r.id, r.ts))!) as Row;
     if (json.tablet === tablet && json.name === name) out.push(json);

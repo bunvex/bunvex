@@ -64,7 +64,7 @@ test("one row per search and vector index, in Convex's shape, from backfilling t
   const state = body.onDiskState as Record<string, unknown>;
   expect(state.state).toBe("snapshotted");
   expect(state.version).toBe(2);
-  expect(typeof state.ts).toBe("number");
+  expect(typeof state.ts).toBe("bigint");
   const data = state.data as { data_type: string; segments: Record<string, unknown>[] };
   expect(data.data_type).toBe("MultiSegment");
   expect(Object.keys(data.segments[0]!).sort()).toEqual([
@@ -128,7 +128,7 @@ test("without a segment store the rows are kept: snapshotted, with no segments",
   expect(search.search_body!.onDiskState).toEqual({
     state: "snapshotted",
     data: { data_type: "MultiSegment", segments: [] },
-    ts: 0,
+    ts: 0n,
     version: 2,
   });
   await e.close();

@@ -70,8 +70,8 @@ import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
-type DocRow = [number, string, number, string | null, boolean];
-type IdxRow = [number, Buffer, Buffer | null, Buffer, number, boolean, string | null];
+type DocRow = [number, string, bigint, string | null, boolean];
+type IdxRow = [number, Buffer, Buffer | null, Buffer, bigint, boolean, string | null];
 /** A row's bytes in the INSERT's SQL text, bounded above: a string character is at most 3 UTF-8 bytes (an
  *  escaped one 2), a buffer is sent as X'hex' (2 per byte), plus the numbers, quotes and separators. */
 const docRowBytes = (r: DocRow) => 64 + 3 * r[1].length + (r[3] === null ? 0 : 3 * r[3].length);
@@ -143,7 +143,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush: the group's top, recorded as max_ts by the fence. */
-  private top = 0;
+  private top = 0n;
   /** Our lease's epoch, 0 when we hold none. */
   private epoch = 0;
   private ttlMs = 0;
@@ -178,6 +178,9 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
       connectionLimit: pool,
       multipleStatements: false,
+      // BIGINT columns (timestamps: nanoseconds, above 2^53) come back exact, as decimal strings.
+      supportBigNumbers: true,
+      bigNumberStrings: true,
       connectAttributes: { bunvex_conn: conn },
       ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
     });
@@ -478,7 +481,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     this.epoch = 0;
   }
 
-  apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.top = ts;
     for (const d of docs) this.docs.push([d.table, d.id, ts, d.json, d.json === null]);
     for (const e of idx) {
@@ -529,13 +532,13 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   private retrying = false;
 
   /** Whether the group up to `top` committed, from the lease record (`retriedGroupLanded`, PERSIST-01 C9). */
-  private async landed(top: number) {
+  private async landed(top: bigint) {
     const [rows] = (await this.call((c) => c.query(`select epoch, max_ts from bunvex_lease where id = 1`))) as any;
     const l = rows[0];
-    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: Number(l.max_ts) }, this.epoch, top);
+    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: BigInt(l.max_ts) }, this.epoch, top);
   }
 
-  private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
+  private async flushGroup(docs: DocRow[], idx: IdxRow[], top: bigint) {
     await this.call(async (c, progress) => {
       try {
         await c.beginTransaction();
@@ -567,12 +570,12 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     });
   }
 
-  private latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  private latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const dir = desc ? "desc" : "asc";
     const toRow = (r: any): SplitRow => ({
       prefix: r.key_prefix as Uint8Array, // a Buffer is a Uint8Array: no copy
       suffix: (r.key_suffix as Uint8Array | null) ?? null,
-      ts: Number(r.ts),
+      ts: BigInt(r.ts),
       deleted: !!r.deleted,
       id: r.document_id,
     });
@@ -611,11 +614,11 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     );
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     return this.latestEntries(index, lo, hi, ts, limit, desc);
   }
 
-  async get(table: number, id: string, ts: number) {
+  async get(table: number, id: string, ts: bigint) {
     const [rows] = (await this.read((c) =>
       c.execute(
         `select json_value, deleted from documents where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`,
@@ -626,8 +629,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  async getVersions(table: number, ids: string[], ts: number) {
-    const found = new Map<string, { json: string | null; ts: number }>();
+  async getVersions(table: number, ids: string[], ts: bigint) {
+    const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
     for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
       const chunk = unique.slice(i, i + VERSIONS_CHUNK);
@@ -640,7 +643,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
           [table, ...chunk, ts],
         ),
       )) as any;
-      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: Number(r.ts) });
+      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: BigInt(r.ts) });
     }
     return versionsInOrder(ids, found);
   }
@@ -650,7 +653,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     index: number,
     lo: Uint8Array,
     hi: Uint8Array,
-    ts: number,
+    ts: bigint,
     limit: number,
     desc: boolean,
   ) {
@@ -682,7 +685,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
    * last of the first `limit` commits, and the rows up to it come back in ts order, with the newest ts at
    * or before `afterTs`.
    */
-  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
     if (limit <= 0) return [];
     // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on another
     // connection after an operational error.
@@ -701,17 +704,17 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     if (!rows.length) return [];
     return groupLog(
       (rows as any[]).map((r) => ({
-        ts: Number(r.ts),
+        ts: BigInt(r.ts),
         index: r.index_id as number,
         key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
         id: r.document_id as string | null,
       })),
-      Number(rows[0].prev ?? 0),
+      BigInt(rows[0].prev ?? 0),
     );
   }
 
   /** PERSIST-01 C12: as readLog, over `documents`. */
-  async readDocumentLog(afterTs: number, upToTs: number, limit: number): Promise<DocLogRow[]> {
+  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
     const [rows] = (await this.read((c) =>
       c.query(
@@ -724,7 +727,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       ),
     )) as any;
     return (rows as any[]).map((r) => ({
-      ts: Number(r.ts),
+      ts: BigInt(r.ts),
       table: r.table_id as number,
       id: r.id as string,
       deleted: !!r.deleted,
@@ -742,7 +745,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     if (!entries.length) return 0;
     await this.assertEpoch();
     // We implicitly delete everything below each ts, so only the highest per key matters (Convex's v5).
-    const top = new Map<string, { index: number; prefix: Buffer; hash: Buffer; ts: number }>();
+    const top = new Map<string, { index: number; prefix: Buffer; hash: Buffer; ts: bigint }>();
     for (const e of entries) {
       const k = splitKey(e.key);
       const prefix = Buffer.from(k.prefix);
@@ -821,10 +824,10 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
          greatest((select coalesce(max(ts), 0) from documents), (select coalesce(max(ts), 0) from indexes))) as m`,
       ),
     )) as any;
-    return Number(rows[0].m);
+    return BigInt(rows[0].m);
   }
 
-  async auditLiveDocs(table: number, ts: number) {
+  async auditLiveDocs(table: number, ts: bigint) {
     const [rows] = (await this.read((c) =>
       c.query(
         `select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
@@ -835,7 +838,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return Number(rows[0].n);
   }
 
-  async auditRowsAt(ts: number) {
+  async auditRowsAt(ts: bigint) {
     const [rows] = (await this.read((c) =>
       c.query(
         `select (select count(*) from documents where ts = ?) as docs, (select count(*) from indexes where ts = ?) as idx`,
@@ -855,7 +858,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
 opaqueToInspect(MysqlPersistence);
 
 /** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
-function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {
+function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: bigint }>) {
   return ids.map((id) => {
     const v = found.get(id);
     return v && v.json !== null ? { json: v.json, ts: v.ts } : null;

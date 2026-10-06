@@ -140,7 +140,7 @@ async function m3() {
     // 1000 tenants x 100 items, committed in groups of 1000 (the seed does not measure anything)
     const base = 1.79e12;
     for (let t = 0; t < 1000; t++) {
-      const batch: Promise<number>[] = [];
+      const batch: Promise<bigint>[] = [];
       for (let i = 0; i < 100; i++) {
         const { docs, idx } = itemWrite(`t${t}`, base + i * 1000);
         batch.push(c.commit({ snapshot: c.visibleTs, reads: [], docs, idx }));

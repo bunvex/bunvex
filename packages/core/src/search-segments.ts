@@ -34,6 +34,8 @@ export function searchWorkersFromEnv(env: Record<string, string | undefined> = p
   };
 }
 
+/** A row as a comparable string (int64 fields are `bigint`s, which JSON cannot hold). */
+const rowKey = (row: unknown) => JSON.stringify(row, (_k, x) => (typeof x === "bigint" ? `${x}n` : x));
 /** Retention's global for the oldest document snapshot it keeps (retention.ts). */
 const MIN_DOCUMENT_TS_GLOBAL = "document_min_snapshot_ts";
 /** Convex's `TextSnapshotVersion::current()` (V2UseStringIds): the version a text snapshot is written with. */
@@ -228,7 +230,7 @@ export type IndexSegmentsState = {
    * Every commit up to `ts` is in the segments (with their deletes); while backfilling, for the documents up to
    * the cursor only (Convex's `last_segment_ts`).
    */
-  ts: number;
+  ts: bigint;
   segments: SegmentRef[];
   /** While the index is built from its table: the last document id read (null: none yet). */
   backfill?: { cursor: string | null };
@@ -352,7 +354,7 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
       if (o.state === "snapshotted" || o.state === "backfilled2") {
         const snap = (o.state === "snapshotted" ? o : o.snapshot) as {
           data: { segments: unknown };
-          ts: number;
+          ts: bigint;
           version: number;
         };
         if (snap.version !== TEXT_SNAPSHOT_VERSION) return null;
@@ -360,15 +362,24 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
         return { kind: "text", tablet, name, def, ts: snap.ts, segments: segs(snap.data.segments), staged };
       }
       if (o.state === "backfilling")
-        return { kind: "text", tablet, name, def, ts: 0, segments: [], backfill: { cursor: null }, staged: !!o.staged };
-      if (o.state === "backfilling2") {
-        const cur = o.cursor as { table_scan_cursor: ArrayBuffer; last_segment_ts: number } | null;
         return {
           kind: "text",
           tablet,
           name,
           def,
-          ts: cur ? cur.last_segment_ts : 0,
+          ts: 0n,
+          segments: [],
+          backfill: { cursor: null },
+          staged: !!o.staged,
+        };
+      if (o.state === "backfilling2") {
+        const cur = o.cursor as { table_scan_cursor: ArrayBuffer; last_segment_ts: bigint } | null;
+        return {
+          kind: "text",
+          tablet,
+          name,
+          def,
+          ts: cur ? cur.last_segment_ts : 0n,
           segments: segs(o.segments),
           backfill: { cursor: cur ? decoder.decode(cur.table_scan_cursor) : null },
           staged: !!o.staged,
@@ -392,7 +403,7 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
           id: g.id as string,
         }));
       if (o.state === "snapshotted" || o.state === "backfilled2") {
-        const snap = (o.state === "snapshotted" ? o : o.snapshot) as { data: { segments: unknown }; ts: number };
+        const snap = (o.state === "snapshotted" ? o : o.snapshot) as { data: { segments: unknown }; ts: bigint };
         const staged = o.state === "backfilled2" && !!o.staged;
         return { kind: "vector", tablet, name, def, ts: snap.ts, segments: segs(snap.data.segments), staged };
       }
@@ -403,7 +414,7 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
           tablet,
           name,
           def,
-          ts: (o.last_segment_ts as number | null) ?? 0,
+          ts: (o.last_segment_ts as bigint | null) ?? 0n,
           segments: segs(o.segments),
           backfill: { cursor: cursor ? decoder.decode(cursor) : null },
           staged: !!o.staged,
@@ -441,7 +452,7 @@ export class SearchSegmentsState {
   private states = new Map<string, IndexSegmentsState>();
   private ids = new Map<string, string>();
   /** Each index's fast-forward ts (Convex's `_index_worker_metadata`), by state key, with its row's id. */
-  private forwarded = new Map<string, { ts: number; _id?: string }>();
+  private forwarded = new Map<string, { ts: bigint; _id?: string }>();
   /** Where segments are mapped from, when they are read from disk (STUDY-111 PR 9). */
   files: SegmentFiles | null = null;
   private writes: Promise<void> = Promise.resolve();
@@ -472,9 +483,9 @@ export class SearchSegmentsState {
     const keyOf = new Map([...this.ids].map(([k, id]) => [id, k]));
     for (const r of rows) {
       const k = keyOf.get(r.index_id as string);
-      const meta = r.index_metadata as { metadata?: { fast_forward_ts?: number } } | undefined;
+      const meta = r.index_metadata as { metadata?: { fast_forward_ts?: bigint } } | undefined;
       const ts = meta?.metadata?.fast_forward_ts;
-      if (k !== undefined && typeof ts === "number") this.forwarded.set(k, { ts, _id: r._id as string });
+      if (k !== undefined && typeof ts === "bigint") this.forwarded.set(k, { ts, _id: r._id as string });
     }
   }
 
@@ -482,16 +493,16 @@ export class SearchSegmentsState {
    * The ts an index's state is current at: its segments' (`ts`), or later when it was fast-forwarded with nothing
    * written since (Convex's `max(snapshot ts, fast_forward_ts)`).
    */
-  currentTs(s: IndexSegmentsState): number {
+  currentTs(s: IndexSegmentsState): bigint {
     const f = s.backfill ? undefined : this.forwarded.get(stateKey(s.kind, s.tablet, s.name));
-    return Math.max(s.ts, f?.ts ?? 0);
+    return f && f.ts > s.ts ? f.ts : s.ts;
   }
 
   /**
    * The `_index_worker_metadata` writes that move these indexes' fast-forward ts to `ts` (their `_index` rows'
    * ids, the rows to insert or patch), and once they are stored, `done` records them.
    */
-  forward(keys: string[], ts: number) {
+  forward(keys: string[], ts: bigint) {
     const writes: { _id?: string; index_id: string; metadata_type: string }[] = [];
     for (const k of keys) {
       const indexId = this.ids.get(k);
@@ -537,14 +548,14 @@ export class SearchSegmentsState {
     stored?: () => void,
   ): Promise<boolean> {
     const run = this.writes.then(async () => {
-      const before = new Map([...this.states].map(([k, v]) => [k, JSON.stringify(stateToRow(v))]));
+      const before = new Map([...this.states].map(([k, v]) => [k, rowKey(stateToRow(v))]));
       const keysBefore = this.files ? segmentKeys(this.states) : null;
       if (change(this.states) === false) return false;
       const writes: IndexRowWrite[] = [];
       const inserted: string[] = [];
       for (const [k, v] of this.states) {
         const row = stateToRow(v);
-        if (before.get(k) === JSON.stringify(row)) continue;
+        if (before.get(k) === rowKey(row)) continue;
         const _id = this.ids.get(k);
         if (_id === undefined) inserted.push(k);
         writes.push(_id === undefined ? { row } : { _id, row });
@@ -581,11 +592,11 @@ export class SearchSegmentsState {
     tablet: number,
     name: string,
     def: SearchIndexDef | VectorIndexDef,
-    at: number,
+    at: bigint,
   ): Promise<IndexSegmentsState | null> {
     const s = this.get(kind, tablet, name);
     if (!this.store || !this.blobs) return null;
-    if (!s || !sameSpec(s.def, def) || !Number.isSafeInteger(s.ts) || this.currentTs(s) > at) return null;
+    if (!s || !sameSpec(s.def, def) || typeof s.ts !== "bigint" || s.ts < 0n || this.currentTs(s) > at) return null;
     if (this.currentTs(s) < readTsGlobal(await this.store.getGlobal(MIN_DOCUMENT_TS_GLOBAL))) return null;
     return s;
   }
@@ -634,21 +645,22 @@ export function segmentRefs(
  * The log is read once per table from the oldest ts any of its indexes asks for.
  */
 export class SegmentReplay {
-  private reads = new Map<number, { since: number; changes: Promise<Map<string, { ts: number; doc: Doc | null }>> }>();
+  private reads = new Map<number, { since: bigint; changes: Promise<Map<string, { ts: bigint; doc: Doc | null }>> }>();
 
   constructor(
     private store: Store,
-    readonly at: number,
+    readonly at: bigint,
     private decode: (json: string) => Doc,
     /** The oldest ts each table's indexes start from (the log is read once from there). */
-    private oldest: Map<number, number>,
+    private oldest: Map<number, bigint>,
   ) {}
 
   /** Each document of `tablet` the log changed in `(since, at]`, at its state as of `at`. */
-  async since(tablet: number, since: number): Promise<[string, Doc | null][]> {
+  async since(tablet: number, since: bigint): Promise<[string, Doc | null][]> {
     let r = this.reads.get(tablet);
     if (!r) {
-      const from = Math.min(this.oldest.get(tablet) ?? since, since);
+      const oldest = this.oldest.get(tablet) ?? since;
+      const from = oldest < since ? oldest : since;
       r = { since: from, changes: this.read(tablet, from) };
       this.reads.set(tablet, r);
     }
@@ -658,7 +670,7 @@ export class SegmentReplay {
     return out;
   }
 
-  private read(tablet: number, since: number) {
+  private read(tablet: number, since: bigint) {
     return changedSince(this.store, tablet, since, this.at, this.decode);
   }
 }
@@ -670,19 +682,19 @@ export class SegmentReplay {
 export async function changedSince(
   store: Store,
   tablet: number,
-  since: number,
-  at: number,
+  since: bigint,
+  at: bigint,
   decode: (json: string) => Doc,
   keep: (id: string) => boolean = () => true,
-): Promise<Map<string, { ts: number; doc: Doc | null }>> {
-  const last = new Map<string, number>();
+): Promise<Map<string, { ts: bigint; doc: Doc | null }>> {
+  const last = new Map<string, bigint>();
   for (let cursor = since; cursor < at; ) {
     const rows: DocLogRow[] = await store.readDocumentLog(cursor, at, LOG_PAGE);
     if (!rows.length) break;
     for (const r of rows) if (r.table === tablet && keep(r.id)) last.set(r.id, r.ts);
     cursor = rows[rows.length - 1]!.ts;
   }
-  const out = new Map<string, { ts: number; doc: Doc | null }>();
+  const out = new Map<string, { ts: bigint; doc: Doc | null }>();
   const ids = [...last.keys()];
   for (let i = 0; i < ids.length; i += VERSIONS_PAGE) {
     const page = ids.slice(i, i + VERSIONS_PAGE);

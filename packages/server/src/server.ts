@@ -140,7 +140,6 @@ import {
   tableColumnNames,
 } from "./streaming-export.ts";
 import {
-  fromWireTs,
   MAX_PENDING_MUTATIONS,
   type SplayOptions,
   SyncHub,
@@ -148,7 +147,6 @@ import {
   splayOptions,
   supportsTransitionChunks,
   type WsHeartbeatOptions,
-  wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
 import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
@@ -693,7 +691,7 @@ export function createServer(opts: ServerOptions) {
    */
   const queryBatch = async (
     queries: { path: string; args: unknown; format?: string | null }[],
-    at: number,
+    at: bigint,
     caller: Caller,
     client: string | null,
   ): Promise<Response> => {
@@ -997,7 +995,7 @@ export function createServer(opts: ServerOptions) {
       return json({
         ...engine.stats,
         storage: opts.label, // field name kept for the benchmark harness
-        ts: c.visibleTs,
+        ts: Number(c.visibleTs),
         groups: c.groups,
         conflicts: c.conflicts,
         syncSessions: sync.sessions.size,
@@ -1379,7 +1377,7 @@ export function createServer(opts: ServerOptions) {
       // The latest ts, for a consistent series of HTTP queries (Convex's `/api/query_ts`): base64 u64, as the
       // sync protocol encodes timestamps.
       if (url.pathname === "/api/query_ts" && req.method === "POST")
-        return json({ ts: v1.encodeU64(wireTs(engine.committer.visibleTs)) });
+        return json({ ts: v1.encodeU64(engine.committer.visibleTs) });
       // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
       if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
       const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function|run\/.+)$/.exec(url.pathname);
@@ -1501,14 +1499,16 @@ export function createServer(opts: ServerOptions) {
       if (kind === "action" && isSystemPath(body.path) && isSystemIdentity(caller))
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       // A query at a ts `query_ts` gave (Convex's `/api/query_at_ts`): every such query reads one snapshot.
-      let at: number | undefined;
+      let at: bigint | undefined;
       if (kind === "query_at_ts") {
+        let ts: bigint;
         try {
-          at = fromWireTs(v1.decodeU64(String(body.ts)));
+          ts = v1.decodeU64(String(body.ts));
         } catch (e) {
           return requestError(400, "BadJsonBody", `invalid field \`ts\`: ${(e as Error).message}`);
         }
-        if (at > engine.committer.visibleTs)
+        at = ts;
+        if (ts > engine.committer.visibleTs)
           return requestError(400, "InvalidTimestamp", "The timestamp is ahead of the latest known timestamp");
       }
       return udfResponse(

@@ -10,7 +10,7 @@ import { encodeKey, prefixEnd } from "./keyenc.ts";
 import { type Doc, fieldValue, type SearchIndexDef, type TableDef } from "./schema.ts";
 
 /** How long the log of recent changes is kept: transactions older than this cannot search (5 minutes). */
-export const SEARCH_LOG_RETENTION_US = 5 * 60 * 1_000_000;
+export const SEARCH_LOG_RETENTION_NS = 5n * 60n * 1_000_000_000n;
 
 /** An `eq` value as the index compares it: its sort key (so int64 ≠ float64; a missing field is `undefined`). */
 export const filterKey = (v: unknown): string => Buffer.from(encodeKey([v as never])).toString("hex");
@@ -59,9 +59,9 @@ export type SearchIndexEntry = {
   /** The index: its segments and memory part (STUDY-111). */
   index: SegmentedTextIndex;
   /** Changes applied after the backfill began, oldest first: what each document was before. */
-  log: { ts: number; id: string; before: IndexedDoc | null }[];
+  log: { ts: bigint; id: string; before: IndexedDoc | null }[];
   /** Commits at or before this ts can no longer be undone from `log`. */
-  retainedFrom: number;
+  retainedFrom: bigint;
   /** Documents a commit set while the backfill ran: the backfill's older copy must not replace them. */
   touched: Set<string> | null;
 };
@@ -127,7 +127,7 @@ export class SearchIndexes {
    */
   reconcile(
     wanted: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean }[],
-    visibleTs: number,
+    visibleTs: bigint,
     /** The first reconcile after the process started: every index is rebuilt, not new (STUDY-79). */
     bootstrapping = false,
   ) {
@@ -181,7 +181,7 @@ export class SearchIndexes {
    * the new states `commitWrites` already computed, by index).
    */
   apply(
-    ts: number,
+    ts: bigint,
     writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>,
     indexed?: Map<SearchIndexEntry, Map<string, IndexedDoc>>,
   ) {
@@ -194,7 +194,7 @@ export class SearchIndexes {
     // Keep the log to the retention window.
     for (const e of this.entries.values()) {
       let drop = 0;
-      while (drop < e.log.length && e.log[drop]!.ts < ts - SEARCH_LOG_RETENTION_US) drop++;
+      while (drop < e.log.length && e.log[drop]!.ts < ts - SEARCH_LOG_RETENTION_NS) drop++;
       if (drop) {
         e.retainedFrom = e.log[drop - 1]!.ts;
         e.log.splice(0, drop);
@@ -254,7 +254,7 @@ export class SearchIndexes {
    * Search `e` as of `snapshot`, with a transaction's pending writes (`null`: deleted) on top. The changes
    * committed after the snapshot are undone first.
    */
-  search(e: SearchIndexEntry, q: TextQuery, snapshot: number, pending: Map<string, Doc | null>): TextHit[] {
+  search(e: SearchIndexEntry, q: TextQuery, snapshot: bigint, pending: Map<string, Doc | null>): TextHit[] {
     if (snapshot < e.retainedFrom) throw new OutOfRetentionError(snapshot, e.retainedFrom);
     const overlay = new Map<string, IndexedDoc | null>();
     for (const c of e.log) if (c.ts > snapshot && !overlay.has(c.id)) overlay.set(c.id, c.before);

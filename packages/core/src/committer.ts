@@ -15,7 +15,7 @@
 // Convex's `is_stale`: only the indexes read, only the writes in the snapshot's window, and each key tested
 // against the read intervals by binary search.
 
-import { monotonicNow, outsideExecution, wallClockUs } from "./determinism.ts";
+import { monotonicNow, outsideExecution, wallClockNs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
@@ -29,7 +29,7 @@ export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
  * removed entry) and its write source (the mutation's name, when the caller gave one).
  */
 export type LogEntry = {
-  ts: number;
+  ts: bigint;
   writes: { index: number; key: Uint8Array; id: string | null }[];
   source?: string;
   /** The documents a commit wrote into search indexes, before and after (STUDY-45 PR 3), for OCC. */
@@ -78,15 +78,15 @@ export function overlaps(writes: LogEntry["writes"], reads: Interval[]): boolean
  * wrote into its read-set (its ts, the index and document of the write, and its write source). Absent
  * fields are unknown, e.g. for a snapshot older than the write log.
  */
-export type Conflict = { writeTs: number; index?: number; id?: string | null; source?: string };
+export type Conflict = { writeTs: bigint; index?: number; id?: string | null; source?: string };
 
 /**
  * Convex's write-log knobs (crates/common/src/knobs.rs `WRITE_LOG_MIN_RETENTION_SECS`,
- * `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`), in microseconds and bytes. Timestamps are
- * wall-clock microseconds (STUDY-06 D9), so a commit's age is read off its ts, as Convex does.
+ * `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`), in nanoseconds and bytes. Timestamps are
+ * wall-clock nanoseconds (STUDY-06 D9, STUDY-133 §5.3), so a commit's age is read off its ts, as Convex does.
  */
-export const WRITE_LOG_MIN_RETENTION_US = 30_000_000;
-export const WRITE_LOG_MAX_RETENTION_US = 300_000_000;
+export const WRITE_LOG_MIN_RETENTION_NS = 30_000_000_000n;
+export const WRITE_LOG_MAX_RETENTION_NS = 300_000_000_000n;
 export const WRITE_LOG_SOFT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
 /**
  * NOT in Convex: the default hard byte cap on the write log (DV-128, decided by the owner on 2026-10-01, may
@@ -97,14 +97,14 @@ export const WRITE_LOG_HARD_MAX_BYTES = 256 * 1024 * 1024;
  * Convex's `MAX_TRANSACTION_WINDOW` (10 s): how far behind the latest snapshot a transaction may BEGIN
  * (crates/database/src/snapshot_manager.rs `push` / `snapshot`).
  */
-export const MAX_TRANSACTION_WINDOW_US = 10_000_000;
+export const MAX_TRANSACTION_WINDOW_NS = 10_000_000_000n;
 
 export type WriteLogRetention = {
-  /** Commits younger than this (relative to the latest commit) are always kept. */
-  minRetentionUs: number;
-  /** Commits older than this are always dropped. */
-  maxRetentionUs: number;
-  /** Above this approximate size, commits older than `minRetentionUs` are dropped too. */
+  /** Commits younger than this (relative to the latest commit), in ns, are always kept. */
+  minRetentionNs: bigint;
+  /** Commits older than this, in ns, are always dropped. */
+  maxRetentionNs: bigint;
+  /** Above this approximate size, commits older than `minRetentionNs` are dropped too. */
   softMaxBytes: number;
   /**
    * NOT in Convex (DV-128; default `WRITE_LOG_HARD_MAX_BYTES`, 256 MiB): above this approximate size, the
@@ -116,8 +116,8 @@ export type WriteLogRetention = {
 };
 
 const DEFAULT_RETENTION: WriteLogRetention = {
-  minRetentionUs: WRITE_LOG_MIN_RETENTION_US,
-  maxRetentionUs: WRITE_LOG_MAX_RETENTION_US,
+  minRetentionNs: WRITE_LOG_MIN_RETENTION_NS,
+  maxRetentionNs: WRITE_LOG_MAX_RETENTION_NS,
   softMaxBytes: WRITE_LOG_SOFT_MAX_SIZE_BYTES,
   hardMaxBytes: WRITE_LOG_HARD_MAX_BYTES,
 };
@@ -152,8 +152,8 @@ const WRITE_OVERHEAD = 104;
 export class OutOfRetentionError extends Error {
   override name = "OutOfRetentionError";
   constructor(
-    readonly ts: number,
-    readonly minTs: number,
+    readonly ts: bigint,
+    readonly minTs: bigint,
     message = `Timestamp ${ts} is outside of write log retention window (minimum timestamp ${minTs})`,
   ) {
     super(message);
@@ -162,7 +162,7 @@ export class OutOfRetentionError extends Error {
 
 /** A commit refused by validation: something it read changed after its snapshot. The engine retries it. */
 export class ConflictError extends Error {
-  constructor(readonly conflict: Conflict = { writeTs: 0 }) {
+  constructor(readonly conflict: Conflict = { writeTs: 0n }) {
     super("write conflict");
   }
 }
@@ -257,7 +257,7 @@ export type FlushRetryOptions = {
 };
 
 type PendingCommit = {
-  snapshot: number;
+  snapshot: bigint;
   reads: Interval[];
   docs: DocWrite[];
   idx: IndexWrite[];
@@ -273,9 +273,9 @@ type PendingCommit = {
    * Called with the ts as soon as it is assigned, before anything is logged or written: the commit's final
    * documents and index entries (a commit timestamp resolved in them, STUDY-53).
    */
-  atTs?: (ts: number) => { docs: DocWrite[]; idx: IndexWrite[] };
+  atTs?: (ts: bigint) => { docs: DocWrite[]; idx: IndexWrite[] };
   /** Called with the ts once the commit is visible, before the commit listeners (a catalog change). */
-  onVisible?: (ts: number) => void;
+  onVisible?: (ts: bigint) => void;
   /**
    * Log-only writes (STUDY-45 PR 3): the synthetic keys of the search indexes, for the query cache and
    * subscriptions; never persisted.
@@ -288,7 +288,7 @@ type PendingCommit = {
   bytes?: number;
   /** Its trace (STUDY-131 AD-26), when the mutation that commits it is traced. */
   trace?: CommitSpans;
-  resolve: (ts: number) => void;
+  resolve: (ts: bigint) => void;
   reject: (e: unknown) => void;
 };
 
@@ -299,9 +299,9 @@ const defaultOnRetry = (e: unknown, failures: number, delayMs: number) =>
 
 export class Committer {
   /** Highest ts assigned to a commit (not necessarily applied to persistence or durable yet). */
-  appliedTs = 0;
+  appliedTs = 0n;
   /** Highest ts that is DURABLE: new transactions read at this snapshot. */
-  visibleTs = 0;
+  visibleTs = 0n;
   /** Groups committed: the commits queued while the previous group was being written. */
   groups = 0;
   /** Flushes made: a group is written as one or more write batches (DV-62). */
@@ -333,29 +333,29 @@ export class Committer {
   private listenerNames: (string | undefined)[] = [];
   private fatalListeners: ((e: CommitterStoppedError) => void)[] = [];
   /** Callers of `waitForVisible`, woken once `visibleTs` reaches their ts. */
-  private visibleWaiters: { ts: number; resolve: () => void }[] = [];
+  private visibleWaiters: { ts: bigint; resolve: () => void }[] = [];
   /**
    * Every commit with a ts above this is in the write log; the ones at or below it are not (trimmed, or
    * made before the store was opened). Timestamps are sparse (STUDY-06 D9), so "the log reaches back to a
    * snapshot" is `snapshot >= purgedTs`, never a guess from the first entry's ts.
    */
-  private purgedTs = 0;
+  private purgedTs = 0n;
   /** Set once persistence has failed; the committer accepts nothing afterwards. */
   stopped: CommitterStoppedError | null = null;
   /** Told each published commit's bytes (STUDY-78), as Convex's snapshot manager tells its limiter. */
   writeThroughput: WriteThroughputLimiter | null = null;
 
   /** The clock commit timestamps follow, now: a lower bound of the next commit's ts. */
-  clockNow(): number {
-    return this.clockUs();
+  clockNow(): bigint {
+    return this.clockNs();
   }
 
   constructor(
     private persistence: Persistence,
     /** The write log's retention (default: Convex's knobs). */
     retention: Partial<WriteLogRetention> = {},
-    /** The clock commit timestamps follow, in microseconds (tests pass their own). */
-    private clockUs: () => number = wallClockUs,
+    /** The clock commit timestamps follow, in nanoseconds (tests pass their own). */
+    private clockNs: () => bigint = wallClockNs,
     /** How a flush that failed with a transient error is retried (STUDY-25 L4). */
     private retry: FlushRetryOptions = {},
     /** The soft caps on what one flush carries (default: Convex's 64 documents / 64 KiB; DV-62). */
@@ -383,12 +383,12 @@ export class Committer {
   }
 
   /** Every commit with a ts above this is in the write log (Convex's `purged_ts`). */
-  get logStartTs(): number {
+  get logStartTs(): bigint {
     return this.purgedTs;
   }
 
   /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
-  resume(maxTs: number) {
+  resume(maxTs: bigint) {
     this.appliedTs = this.visibleTs = this.purgedTs = maxTs;
   }
 
@@ -398,7 +398,7 @@ export class Committer {
    * `extend_validity`). True when the write log no longer reaches back to `from`, as the absence of a
    * conflict can then not be proven.
    */
-  changedBetween(reads: Interval[], from: number, to: number): boolean {
+  changedBetween(reads: Interval[], from: bigint, to: bigint): boolean {
     if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
     if (from >= to) return false;
     if (from < this.purgedTs) return true; // Convex's `refresh_token`: out of retention, re-run
@@ -407,7 +407,7 @@ export class Committer {
   }
 
   /** The write source of the commit at `ts` (in the log): a binary search, only to report a conflict. */
-  private sourceAt = (ts: number): string | undefined => {
+  private sourceAt = (ts: bigint): string | undefined => {
     let lo = this.logHead;
     let hi = this.log.length;
     while (lo < hi) {
@@ -437,7 +437,7 @@ export class Committer {
    * mutation retried after a conflict first waits for the write it conflicted with, so its next snapshot
    * includes it.
    */
-  waitForVisible(ts: number): Promise<void> {
+  waitForVisible(ts: bigint): Promise<void> {
     if (ts <= this.visibleTs || this.stopped) return Promise.resolve();
     return new Promise((resolve) => this.visibleWaiters.push({ ts, resolve }));
   }
@@ -450,7 +450,7 @@ export class Committer {
     for (const w of ready) w.resolve();
   }
 
-  commit(c: Omit<PendingCommit, "resolve" | "reject">): Promise<number> {
+  commit(c: Omit<PendingCommit, "resolve" | "reject">): Promise<bigint> {
     if (this.stopped) {
       c.trace?.settle(null, this.stopped);
       return Promise.reject(this.stopped);
@@ -502,15 +502,15 @@ export class Committer {
    * before `latest - window` (or the oldest one known); anything before it is `OutOfRetention`
    * ("Timestamp … is too early, retry with a higher timestamp").
    */
-  checkBeginTs(ts: number, windowUs = MAX_TRANSACTION_WINDOW_US) {
-    const earliest = this.earliestBeginTs(windowUs);
+  checkBeginTs(ts: bigint, windowNs = MAX_TRANSACTION_WINDOW_NS) {
+    const earliest = this.earliestBeginTs(windowNs);
     if (ts < earliest)
       throw new OutOfRetentionError(ts, earliest, `Timestamp ${ts} is too early, retry with a higher timestamp`);
   }
 
   /** The earliest snapshot a transaction may begin at (see `checkBeginTs`). */
-  earliestBeginTs(windowUs = MAX_TRANSACTION_WINDOW_US): number {
-    const bound = this.visibleTs - windowUs;
+  earliestBeginTs(windowNs = MAX_TRANSACTION_WINDOW_NS): bigint {
+    const bound = this.visibleTs - windowNs;
     // The last durable commit with ts < bound: binary search the retained log (sorted by ts).
     let lo = this.logHead;
     let hi = this.log.length;
@@ -550,7 +550,13 @@ export class Committer {
     const reads = intervalSetsByIndex(p.reads);
     return (
       this.byIndex.conflict(reads, p.snapshot, this.visibleTs, this.sourceAt) ??
-      this.byIndex.conflict(reads, Math.max(p.snapshot, this.visibleTs), this.appliedTs, this.sourceAt, true)
+      this.byIndex.conflict(
+        reads,
+        p.snapshot > this.visibleTs ? p.snapshot : this.visibleTs,
+        this.appliedTs,
+        this.sourceAt,
+        true,
+      )
     );
   }
 
@@ -593,7 +599,9 @@ export class Committer {
         }
         // As Convex's `next_commit_ts`: the wall clock, but always above the last timestamp assigned, so
         // timestamps strictly increase even when the clock stands still or steps back (STUDY-06 D9).
-        const ts = Math.max(this.appliedTs + 1, this.clockUs());
+        const next = this.appliedTs + 1n;
+        const now = this.clockNs();
+        const ts = now > next ? now : next;
         this.appliedTs = ts;
         if (p.atTs) ({ docs: p.docs, idx: p.idx } = p.atTs(ts));
         const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
@@ -726,10 +734,10 @@ export class Committer {
    * the max retention, or older than the min retention while the log is over its soft size. `purgedTs`
    * becomes the ts of the last one dropped.
    */
-  private enforceRetention(currentTs: number) {
-    const { minRetentionUs, maxRetentionUs, softMaxBytes, hardMaxBytes } = this.retention;
-    const hardLimit = currentTs - minRetentionUs;
-    const softLimit = currentTs - maxRetentionUs;
+  private enforceRetention(currentTs: bigint) {
+    const { minRetentionNs, maxRetentionNs, softMaxBytes, hardMaxBytes } = this.retention;
+    const hardLimit = currentTs - minRetentionNs;
+    const softLimit = currentTs - maxRetentionNs;
     while (this.logHead < this.log.length) {
       const e = this.log[this.logHead];
       if (

@@ -241,15 +241,10 @@ export type IndexMeta = {
   state: IndexState;
   staged?: boolean;
   /** While backfilling: a commit ts at or before the index's creation (Convex's `indexCreatedLowerBound`). */
-  createdLowerBound?: number;
+  createdLowerBound?: bigint;
   /** While backfilling: the table's documents are all in it, only catching up is left (`retentionStarted`). */
   retentionStarted?: boolean;
 };
-
-/** bunvex's commit timestamps (microseconds, DV-30) as Convex's in a row: int64 nanoseconds. */
-export const tsToRow = (ts: number): bigint => BigInt(ts) * 1000n;
-/** A row's int64 nanoseconds as a bunvex commit timestamp. */
-export const tsFromRow = (ns: bigint | number): number => Number(BigInt(ns) / 1000n);
 
 /**
  * A database index's `_index` row as stored: Convex's `SerializedTabletIndexMetadata`, `config` its
@@ -267,7 +262,7 @@ export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: str
     onDiskState = {
       type: "Backfilling",
       backfillState: {
-        indexCreatedLowerBound: tsToRow(m.createdLowerBound ?? 0),
+        indexCreatedLowerBound: m.createdLowerBound ?? 0n,
         retentionStarted: m.retentionStarted ?? false,
         staged: m.staged ?? false,
       },
@@ -301,7 +296,7 @@ export function indexMeta(row: Record<string, unknown>): IndexMeta {
   if (o.type === "Backfilling") {
     const b = o.backfillState as { indexCreatedLowerBound: bigint; retentionStarted: boolean; staged: boolean };
     m.staged = b.staged;
-    m.createdLowerBound = tsFromRow(b.indexCreatedLowerBound);
+    m.createdLowerBound = b.indexCreatedLowerBound;
     m.retentionStarted = b.retentionStarted;
   }
   return m;
@@ -339,7 +334,7 @@ export type IndexBackfillMeta = {
    * The last document id written into the index, and the snapshot the backfill began at; null for a search or
    * vector index (its progress is in its `_index` row).
    */
-  cursor: { snapshotTs: number; cursor: string | null } | null;
+  cursor: { snapshotTs: bigint; cursor: string | null } | null;
 };
 
 /** A `_index_backfills` document as stored. */
@@ -347,7 +342,7 @@ export const backfillRow = (m: Omit<IndexBackfillMeta, "_id">) => ({
   indexId: m.indexId,
   numDocsIndexed: BigInt(m.numDocsIndexed),
   totalDocs: m.totalDocs === null ? null : BigInt(m.totalDocs),
-  cursor: m.cursor === null ? null : { snapshotTs: tsToRow(m.cursor.snapshotTs), cursor: m.cursor.cursor },
+  cursor: m.cursor === null ? null : { snapshotTs: m.cursor.snapshotTs, cursor: m.cursor.cursor },
 });
 
 /** A `_index_backfills` document read back. */
@@ -358,7 +353,7 @@ export function backfillMeta(row: Record<string, unknown>): IndexBackfillMeta {
     indexId: row.indexId as string,
     numDocsIndexed: Number(row.numDocsIndexed as bigint),
     totalDocs: row.totalDocs === null ? null : Number(row.totalDocs as bigint),
-    cursor: c === null ? null : { snapshotTs: tsFromRow(c.snapshotTs), cursor: c.cursor },
+    cursor: c === null ? null : { snapshotTs: c.snapshotTs, cursor: c.cursor },
   };
 }
 
@@ -521,7 +516,7 @@ export class Catalog {
    * transactions that began before it keep the catalog they started with, as Convex's index registry is
    * part of a snapshot. `enabled` indexes serve reads from `readyTs`, that commit's ts.
    */
-  withIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, readyTs: number): Catalog {
+  withIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, readyTs: bigint): Catalog {
     const c = new Catalog();
     for (const t of this.tables.values()) {
       const nt: TableDef = { ...t, indexes: new Map(), pending: [] };

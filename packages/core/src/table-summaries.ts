@@ -9,7 +9,7 @@
 import type { Value } from "@bunvex/values";
 import { IndexesUnavailableError } from "./catalog.ts";
 import { OutOfRetentionError } from "./committer.ts";
-import { fromJsonInteger, jsonInteger, tsNanos } from "./persistence-globals.ts";
+import { fromJsonInteger, jsonInteger } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
 import {
   NEVER,
@@ -57,6 +57,9 @@ type Write = { tablet: number; old: Doc | null; next: Doc | null };
 /** Shape changes waiting to be folded in: past this many, they are folded in the background. */
 const FOLD_AFTER = 1000;
 
+/** No transaction pins a snapshot: the largest int64, above every ts. */
+const NO_PIN = (1n << 63n) - 1n;
+
 export class TableSummaries {
   private tables = new Map<number, { count: number; size: number; shape: Shape }>();
   /**
@@ -66,38 +69,38 @@ export class TableSummaries {
   private pendingShapes: Write[] = [];
   private folding = false;
   /** Commits that became visible while the summaries were being built, with their ts. */
-  private queued: { ts: number; writes: Write[] }[] | null = [];
+  private queued: { ts: bigint; writes: Write[] }[] | null = [];
   /** The snapshot the build read (commits at or before it are in the scan). */
-  private builtAt: number | null = null;
+  private builtAt: bigint | null = null;
   /** The ts the summaries are at: the last commit applied, or the build's snapshot. */
-  private at = 0;
+  private at = 0n;
   /** Commits applied since the build (Convex's `write_commits_since_load`), for checkpoint pacing. */
   commits = 0;
   /**
    * The recent commits' count changes (STUDY-107), oldest first from `deltaHead`: a transaction counts at its
    * snapshot, as Convex's (whose count is its snapshot's summary), not at the latest commit.
    */
-  private deltas: { ts: number; tablet: number; d: number }[] = [];
+  private deltas: { ts: bigint; tablet: number; d: number }[] = [];
   private deltaHead = 0;
   /** The build's snapshot: no count is known before it. */
-  private builtFloor = 0;
+  private builtFloor = 0n;
   /** The last change dropped: counts are known at every snapshot from it on. */
-  private droppedTs = 0;
+  private droppedTs = 0n;
   /**
    * Changes at or before this ts are dropped: the engine's write log start (`Committer.logStartTs`), so they
    * are kept as long as the commits themselves. A snapshot older than that is out of retention already.
    */
-  retainedAfter: () => number = () => Number.NEGATIVE_INFINITY;
+  retainedAfter: () => bigint = () => -1n;
   /**
    * The snapshots of the transactions running now, with how many hold each: their changes are kept for as long
    * as they run, however old, as Convex's transaction holds its count snapshot for its whole life.
    */
-  private pins = new Map<number, number>();
-  /** The oldest pinned snapshot (+∞ with none). */
-  private oldestPin = Number.POSITIVE_INFINITY;
+  private pins = new Map<bigint, number>();
+  /** The oldest pinned snapshot (the largest int64 with none). */
+  private oldestPin = NO_PIN;
 
   /** Keep the changes after `snapshot` until the returned function is called (once the transaction ends). */
-  pin(snapshot: number): () => void {
+  pin(snapshot: bigint): () => void {
     this.pins.set(snapshot, (this.pins.get(snapshot) ?? 0) + 1);
     if (snapshot < this.oldestPin) this.oldestPin = snapshot;
     let released = false;
@@ -111,7 +114,7 @@ export class TableSummaries {
       }
       this.pins.delete(snapshot);
       if (snapshot === this.oldestPin) {
-        let oldest = Number.POSITIVE_INFINITY;
+        let oldest = NO_PIN;
         for (const s of this.pins.keys()) if (s < oldest) oldest = s;
         this.oldestPin = oldest;
       }
@@ -140,7 +143,7 @@ export class TableSummaries {
    * since. Before the build, Convex's bootstrapping error. A snapshot no running transaction pinned and older
    * than the write log keeps is out of retention (a transaction begun there, as Convex refuses one).
    */
-  countAt(tablet: number, snapshot: number): number {
+  countAt(tablet: number, snapshot: bigint): number {
     if (!this.ready || snapshot < this.builtFloor) throw new TableSummariesUnavailableError(COUNT_UNAVAILABLE);
     if (snapshot < this.droppedTs) throw new OutOfRetentionError(snapshot, this.droppedTs);
     let n = this.tables.get(tablet)?.count ?? 0;
@@ -150,7 +153,7 @@ export class TableSummaries {
   }
 
   /** A commit's writes, as it becomes visible. */
-  apply(ts: number, writes: Write[]) {
+  apply(ts: bigint, writes: Write[]) {
     if (this.queued) {
       this.queued.push({ ts, writes });
       return;
@@ -167,7 +170,7 @@ export class TableSummaries {
   }
 
   /** A commit's writes, with its count changes kept for `countAt`; the changes past retention are dropped. */
-  private applyCommit(ts: number, writes: Write[]) {
+  private applyCommit(ts: bigint, writes: Write[]) {
     const deltas = this.deltas;
     for (const w of writes) {
       this.applyOne(w);
@@ -179,7 +182,8 @@ export class TableSummaries {
     }
     this.at = ts;
     // Dropped once both the write log and every running transaction are past them.
-    const horizon = Math.min(this.retainedAfter(), this.oldestPin);
+    const retained = this.retainedAfter();
+    const horizon = retained < this.oldestPin ? retained : this.oldestPin;
     while (this.deltaHead < deltas.length && deltas[this.deltaHead].ts <= horizon)
       this.droppedTs = deltas[this.deltaHead++].ts;
     // Compact once the dropped prefix is the larger part: amortized O(1) per commit.
@@ -231,7 +235,7 @@ export class TableSummaries {
    * The build from a checkpoint (STUDY-72): its summaries for the tablets that still exist, as of the build's
    * snapshot `at`; `replace` then moves each document the log changed since the checkpoint.
    */
-  restore(at: number, checkpoint: SummaryCheckpoint, tablets: Set<number>) {
+  restore(at: bigint, checkpoint: SummaryCheckpoint, tablets: Set<number>) {
     const tables = new Map<number, { count: number; size: number; shape: Shape }>();
     for (const [key, t] of Object.entries(checkpoint.tables)) {
       const tablet = Number(key);
@@ -267,11 +271,11 @@ export class TableSummaries {
         totalSize: jsonInteger(BigInt(t.size)),
         inferredTypeWithOptionalFields: shapeToJson(t.shape),
       };
-    return { tables, ts: jsonInteger(tsNanos(this.at)) };
+    return { tables, ts: jsonInteger(this.at) };
   }
 
   /** The build: every document of a tablet as of the build's snapshot `at`. */
-  build(at: number, tablet: number, docs: Iterable<Doc>) {
+  build(at: bigint, tablet: number, docs: Iterable<Doc>) {
     this.builtAt = at;
     this.at = at;
     this.builtFloor = at;

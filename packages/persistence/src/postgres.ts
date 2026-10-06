@@ -72,9 +72,10 @@ import type postgresDriver from "postgres";
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 
-type DocRow = [number, string, number, string | null, boolean];
+// ts as a decimal string: the rows travel as JSON, which has no 64-bit integers.
+type DocRow = [number, string, string, string | null, boolean];
 // index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
-type IdxRow = [number, string, string | null, string, number, boolean, string | null];
+type IdxRow = [number, string, string | null, string, string, boolean, string | null];
 const hex = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
 
 const STORE = "this Postgres database";
@@ -119,7 +120,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   private docs: DocRow[] = [];
   private idx: IdxRow[] = [];
   /** The highest ts applied since the last flush (the group's top, written to the lease row as max_ts). */
-  private top = 0;
+  private top = 0n;
   /** Our lease's epoch, 0 when we hold none. */
   private epoch = 0;
   private ttlMs = 0;
@@ -424,12 +425,13 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     this.epoch = 0;
   }
 
-  apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.top = ts;
-    for (const d of docs) this.docs.push([d.table, d.id, ts, d.json, d.json === null]);
+    const t = String(ts);
+    for (const d of docs) this.docs.push([d.table, d.id, t, d.json, d.json === null]);
     for (const e of idx) {
       const k = splitKey(e.key);
-      this.idx.push([e.index, hex(k.prefix), k.suffix && hex(k.suffix), hex(k.suffixHash), ts, e.id === null, e.id]);
+      this.idx.push([e.index, hex(k.prefix), k.suffix && hex(k.suffix), hex(k.suffixHash), t, e.id === null, e.id]);
     }
   }
 
@@ -466,12 +468,12 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   private retrying = false;
 
   /** Whether the group up to `top` committed, from the lease record (`retriedGroupLanded`, PERSIST-01 C9). */
-  private async landed(top: number) {
+  private async landed(top: bigint) {
     const [l] = await this.call((sql) => sql`select epoch, max_ts from bunvex_lease where id = 1`);
-    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: Number(l.max_ts) }, this.epoch, top);
+    return retriedGroupLanded(l && { epoch: Number(l.epoch), maxTs: BigInt(l.max_ts) }, this.epoch, top);
   }
 
-  private async flushGroup(docs: DocRow[], idx: IdxRow[], top: number) {
+  private async flushGroup(docs: DocRow[], idx: IdxRow[], top: bigint) {
     // One jsonb parameter per statement, expanded server-side (postgres.js does not bind boolean[]/bytea[]
     // arrays for unnest). Keys travel as hex. At most 1 024 rows per statement, as Convex's
     // `INSERTS_PER_STATEMENT` (DV-62): a large commit is several statements of one transaction.
@@ -501,7 +503,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
             `with l as (update bunvex_lease set max_ts = $2 where id = 1 and epoch = $3 returning 1),
               w as (${first} where exists (select 1 from l))
          select count(*)::int as n from l`,
-            [JSON.stringify(rows), top, this.epoch] as any,
+            [JSON.stringify(rows), String(top), this.epoch] as any,
           );
           if (f.n !== 1) throw new LeaseLostError();
           progress();
@@ -524,7 +526,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
    * left. That order is the key order unless a key is longer than the prefix, so a result holding such a
    * key (or a bound that long) falls back to the paged, group-sorting scan.
    */
-  async scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  async scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     if (limit <= 0) return [];
     if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
       const dir = desc ? "desc" : "asc";
@@ -535,7 +537,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
            from indexes where index_id = $1 and key_prefix >= $2 and key_prefix < $3 and ts <= $4
            order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc) e
          where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $5`,
-          [index, Buffer.from(lo), Buffer.from(hi), ts, limit] as any,
+          [index, Buffer.from(lo), Buffer.from(hi), String(ts), limit] as any,
         ),
       );
       if (!rows.some((r) => r.long)) return rows.map((r) => r.document_id as string);
@@ -543,12 +545,13 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return scanLatest(splitPages(this.splitSource(index, ts, desc), desc), lo, hi, limit, desc);
   }
 
-  private splitSource(index: number, ts: number, desc: boolean) {
+  private splitSource(index: number, ts: bigint, desc: boolean) {
     const dir = desc ? "desc" : "asc";
+    const at = String(ts);
     const toRow = (r: any): SplitRow => ({
       prefix: r.key_prefix as Uint8Array, // a Buffer is a Uint8Array: no copy
       suffix: (r.key_suffix as Uint8Array | null) ?? null,
-      ts: Number(r.ts),
+      ts: BigInt(r.ts),
       deleted: r.deleted,
       id: r.document_id,
     });
@@ -561,7 +564,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
              where index_id = $1 and key_prefix ${b.loStrict ? ">" : ">="} $2 and key_prefix ${b.hiInclusive ? "<=" : "<"} $3
                and ts <= $4
              order by key_prefix ${dir}, key_suffix_hash ${dir}, ts desc limit $5`,
-              [index, Buffer.from(b.lo), Buffer.from(b.hi), ts, b.n] as any,
+              [index, Buffer.from(b.lo), Buffer.from(b.hi), at, b.n] as any,
             ),
           )
         ).map(toRow),
@@ -571,35 +574,35 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
             sql.unsafe(
               `select key_prefix, key_suffix, ts, deleted, document_id from indexes
              where index_id = $1 and key_prefix = $2 and ts <= $3`,
-              [index, Buffer.from(prefix), ts] as any,
+              [index, Buffer.from(prefix), at] as any,
             ),
           )
         ).map(toRow),
     };
   }
 
-  async get(table: number, id: string, ts: number) {
+  async get(table: number, id: string, ts: bigint) {
     const [r] = await this.read((sql) =>
       sql.unsafe(
         `select json_value, deleted from documents where table_id = $1 and id = $2 and ts <= $3 order by ts desc limit 1`,
-        [table, id, ts] as any,
+        [table, id, String(ts)] as any,
       ),
     );
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  async getVersions(table: number, ids: string[], ts: number) {
-    const found = new Map<string, { json: string | null; ts: number }>();
+  async getVersions(table: number, ids: string[], ts: bigint) {
+    const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
     for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
       const rows = await this.read((sql) =>
         sql.unsafe(
           `select distinct on (id) id, ts, json_value, deleted from documents
            where table_id = $1 and id = any($2::text[]) and ts <= $3 order by id, ts desc`,
-          [table, unique.slice(i, i + VERSIONS_CHUNK), ts] as any,
+          [table, unique.slice(i, i + VERSIONS_CHUNK), String(ts)] as any,
         ),
       );
-      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: Number(r.ts) });
+      for (const r of rows) found.set(r.id, { json: r.deleted ? null : (r.json_value as string), ts: BigInt(r.ts) });
     }
     return versionsInOrder(ids, found);
   }
@@ -609,7 +612,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     index: number,
     lo: Uint8Array,
     hi: Uint8Array,
-    ts: number,
+    ts: bigint,
     limit: number,
     desc: boolean,
   ) {
@@ -626,7 +629,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
          left join lateral (select json_value, deleted from documents
                             where table_id = $5 and id = e.document_id and ts <= $4 order by ts desc limit 1) d on true
          where not e.deleted order by e.key_prefix ${dir}, e.key_suffix_hash ${dir} limit $6`,
-          [index, Buffer.from(lo), Buffer.from(hi), ts, table, limit] as any,
+          [index, Buffer.from(lo), Buffer.from(hi), String(ts), table, limit] as any,
         ),
       );
       if (!rows.some((r) => r.long))
@@ -652,16 +655,13 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
    * `limit` commits, and the rows up to it come back in ts order with the newest ts at or before `afterTs`
    * (one more index probe).
    */
-  async readLog(afterTs: number, upToTs: number, limit: number): Promise<LogCommit[]> {
+  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
     if (limit <= 0) return [];
     // The bounds are inlined, not bound: a prepared statement may switch to a generic plan after five runs,
     // and without the values Postgres estimates a range on ts as a large part of the table and plans
     // sequential scans (36 ms against 0.7 ms at 300k rows, measured with plan_cache_mode =
     // force_generic_plan). Inlined, every call gets the index plan. They are integers, checked here.
-    const [after, upTo, n] = [afterTs, Math.min(upToTs, Number.MAX_SAFE_INTEGER), limit].map((x) => {
-      if (!Number.isSafeInteger(x)) throw new Error(`readLog: ${x} is not an integer timestamp or limit`);
-      return x;
-    });
+    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
     // `c` finds the first `limit` commit timestamps one index probe at a time (a loose index scan): a plain
     // `select distinct ts … order by ts limit n` is planned from statistics, and on a log that just grew
     // they say the range is small, so Postgres hashes the whole range and sorts it (54 ms against 3 ms for
@@ -687,22 +687,19 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     if (!rows.length) return [];
     return groupLog(
       rows.map((r) => ({
-        ts: Number(r.ts),
+        ts: BigInt(r.ts),
         index: r.index_id as number,
         key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
         id: r.document_id as string | null,
       })),
-      Number(rows[0].prev ?? 0),
+      BigInt(rows[0].prev ?? 0),
     );
   }
 
   /** PERSIST-01 C12: as readLog, over `documents`. */
-  async readDocumentLog(afterTs: number, upToTs: number, limit: number): Promise<DocLogRow[]> {
+  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
-    const [after, upTo, n] = [afterTs, Math.min(upToTs, Number.MAX_SAFE_INTEGER), limit].map((x) => {
-      if (!Number.isSafeInteger(x)) throw new Error(`readDocumentLog: ${x} is not an integer timestamp or limit`);
-      return x;
-    });
+    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
     // Bounds inlined and commits found one index probe at a time, for readLog's reasons.
     const rows = await this.read((sql) =>
       sql.unsafe(
@@ -719,7 +716,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
         { prepare: false },
       ),
     );
-    return rows.map((r) => ({ ts: Number(r.ts), table: r.table_id as number, id: r.id as string, deleted: r.deleted }));
+    return rows.map((r) => ({ ts: BigInt(r.ts), table: r.table_id as number, id: r.id as string, deleted: r.deleted }));
   }
 
   /** PERSIST-01 C13: one statement per batch, behind the epoch check (see the header). */
@@ -727,7 +724,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     if (!entries.length) return 0;
     const rows = entries.map((e) => {
       const k = splitKey(e.key);
-      return [e.index, hex(k.prefix), hex(k.suffixHash), e.ts];
+      return [e.index, hex(k.prefix), hex(k.suffixHash), String(e.ts)];
     });
     return this.fenced(
       `delete from indexes i using jsonb_array_elements($1::text::jsonb) r
@@ -742,7 +739,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return this.fenced(
       `delete from documents d using jsonb_array_elements($1::text::jsonb) r
        where d.table_id = (r->>0)::int and d.id = r->>1 and d.ts <= (r->>2)::bigint`,
-      entries.map((e) => [e.table, e.id, e.ts]),
+      entries.map((e) => [e.table, e.id, String(e.ts)]),
     );
   }
 
@@ -794,24 +791,25 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
       (sql) => sql`select coalesce((select max_ts from bunvex_lease where id = 1),
       greatest((select coalesce(max(ts), 0) from documents), (select coalesce(max(ts), 0) from indexes)))::bigint as m`,
     );
-    return Number(r.m);
+    return BigInt(r.m);
   }
 
-  async auditLiveDocs(table: number, ts: number) {
+  async auditLiveDocs(table: number, ts: bigint) {
     const [r] = await this.read((sql) =>
       sql.unsafe(
         `select count(*)::int as n from (select distinct on (id) json_value from documents
        where table_id = $1 and ts <= $2 order by id, ts desc) v where json_value is not null`,
-        [table, ts] as any,
+        [table, String(ts)] as any,
       ),
     );
     return Number(r.n);
   }
 
-  async auditRowsAt(ts: number) {
+  async auditRowsAt(ts: bigint) {
+    const at = String(ts);
     const [r] = await this.read(
-      (sql) => sql`select (select count(*) from documents where ts = ${ts})::int as docs,
-      (select count(*) from indexes where ts = ${ts})::int as idx`,
+      (sql) => sql`select (select count(*) from documents where ts = ${at}::bigint)::int as docs,
+      (select count(*) from indexes where ts = ${at}::bigint)::int as idx`,
     );
     return { docs: Number(r.docs), idx: Number(r.idx) };
   }
@@ -828,7 +826,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
 opaqueToInspect(PostgresPersistence);
 
 /** PERSIST-01 C16's answer in the ids' order (duplicates included), from the rows found per id. */
-function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: number }>) {
+function versionsInOrder(ids: string[], found: Map<string, { json: string | null; ts: bigint }>) {
   return ids.map((id) => {
     const v = found.get(id);
     return v && v.json !== null ? { json: v.json, ts: v.ts } : null;
@@ -837,3 +835,13 @@ function versionsInOrder(ids: string[], found: Map<string, { json: string | null
 
 /** Ids per `getVersions` statement: one round trip each, within every store's parameter limits. */
 const VERSIONS_CHUNK = 1000;
+
+/** The largest int64: a ts bound above every commit. */
+const MAX_I64 = (1n << 63n) - 1n;
+
+/** A log read's bounds, to inline in SQL: integers, checked (the upper one capped at the largest int64). */
+function inlineBounds(afterTs: bigint, upToTs: bigint, limit: number): [string, string, number] {
+  if (typeof afterTs !== "bigint" || typeof upToTs !== "bigint" || !Number.isSafeInteger(limit))
+    throw new Error(`a log read's bounds must be integers: ${afterTs}, ${upToTs}, ${limit}`);
+  return [String(afterTs), String(upToTs < MAX_I64 ? upToTs : MAX_I64), limit];
+}

@@ -183,16 +183,14 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
   const { engine } = deps;
   const f = parseFormat(args.format as string | undefined);
   const selection = selectionOf(args);
-  const nowUs = engine.committer.visibleTs;
+  const now = engine.committer.visibleTs;
   let snapshotNs: bigint;
-  if (args.snapshot === undefined || args.snapshot === null) snapshotNs = BigInt(nowUs) * 1000n;
+  if (args.snapshot === undefined || args.snapshot === null) snapshotNs = now;
   else {
     snapshotNs = BigInt(args.snapshot as string);
-    if (snapshotNs > BigInt(nowUs) * 1000n)
-      throw bad("SnapshotTooNew", `Snapshot value ${snapshotNs} is in the future.`);
-    if (BigInt(nowUs) * 1000n - snapshotNs > LIST_SNAPSHOT_MAX_AGE_NS) throw tooOld(snapshotNs);
+    if (snapshotNs > now) throw bad("SnapshotTooNew", `Snapshot value ${snapshotNs} is in the future.`);
+    if (now - snapshotNs > LIST_SNAPSHOT_MAX_AGE_NS) throw tooOld(snapshotNs);
   }
-  const snapshotUs = Number(snapshotNs / 1000n);
   let cursor: { tablet: number; id: string | null } | null = null;
   if (args.cursor !== undefined && args.cursor !== null) {
     try {
@@ -227,7 +225,7 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
       undefined,
       undefined,
       undefined,
-      snapshotUs,
+      snapshotNs,
     )) as Record<string, Value>[];
   } catch (e) {
     if (e instanceof OutOfRetentionError) throw tooOld(snapshotNs);
@@ -239,12 +237,12 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
     ? await engine.persistence.getVersions(
         t.id,
         page.map((d) => d._id as string),
-        snapshotUs,
+        snapshotNs,
       )
     : null;
   const values = page.map((d, i) => {
     const v = versions?.[i];
-    return docJson(t.name, v ? BigInt(v.ts) * 1000n : snapshotNs, null, pickColumns(d, cols!), f);
+    return docJson(t.name, v ? v.ts : snapshotNs, null, pickColumns(d, cols!), f);
   });
   if (page.length >= SNAPSHOT_LIST_LIMIT)
     return out(values, JSON.stringify({ tablet: t.id, id: page[page.length - 1]!._id }));
@@ -263,21 +261,20 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
   const selection = selectionOf(args);
   const cursorNs = BigInt(args.cursor as string);
   if (cursorNs < 0n) throw new Error("negative cursor");
-  const cursorUs = Number(cursorNs / 1000n);
   const store = engine.persistence;
   if (!hasRetention(store)) throw new Error("this persistence has no document log");
-  const upperUs = engine.committer.visibleTs;
+  const upper = engine.committer.visibleTs;
   const values: string[] = [];
   let rowsRead = 0;
-  let after = cursorUs;
-  let newCursor: number | null = null;
+  let after = cursorNs;
+  let newCursor: bigint | null = null;
   let hasMore = false;
   outer: for (;;) {
-    const rows = await store.readDocumentLog(after, upperUs, 16);
+    const rows = await store.readDocumentLog(after, upper, 16);
     if (rows.length === 0) break;
-    const commits = new Map<number, typeof rows>();
+    const commits = new Map<bigint, typeof rows>();
     for (const r of rows) (commits.get(r.ts) ?? commits.set(r.ts, []).get(r.ts)!).push(r);
-    for (const [ts, commit] of [...commits].sort(([a], [b]) => a - b)) {
+    for (const [ts, commit] of [...commits].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (newCursor !== null) {
         hasMore = true;
         break outer;
@@ -289,13 +286,12 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
         if (!t || t.name.startsWith("_") || engine.catalog.deleting.has(r.table)) continue;
         const cols = tableSelection(selection, t.name);
         if (!cols) continue;
-        const tsNs = BigInt(ts) * 1000n;
-        if (r.deleted) values.push(docJson(t.name, tsNs, true, { _id: r.id }, f));
+        if (r.deleted) values.push(docJson(t.name, ts, true, { _id: r.id }, f));
         else {
           const json = await store.get(r.table, r.id, ts);
           if (json === null) continue;
           const doc = fromJsonValue(JSON.parse(json) as JSONValue) as Record<string, Value>;
-          values.push(docJson(t.name, tsNs, false, pickColumns(doc, cols), f));
+          values.push(docJson(t.name, ts, false, pickColumns(doc, cols), f));
         }
       }
       if (rowsRead >= DOCUMENT_DELTAS_LIMIT || values.length >= DOCUMENT_DELTAS_LIMIT) newCursor = ts;
@@ -303,13 +299,13 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
     }
   }
   // Convex's `validate_document_snapshot`, after the read: the range must still be in the document window.
-  const minDoc = engine.retention?.minDocumentTs ?? 0;
-  if (cursorNs + 1n < BigInt(minDoc) * 1000n)
+  const minDoc = engine.retention?.minDocumentTs ?? 0n;
+  if (cursorNs + 1n < minDoc)
     throw bad(
       "InvalidWindowToReadDocuments",
       `Trying to synchronize from timestamp ${cursorNs + 1n}, which is older than the database’s retention window. This may happen if you paused your Fivetran or Airbyte connector for a long period of time. Please perform a full sync of the connector. See https://fivetran.com/docs/connectors/troubleshooting/trigger-historical-re-syncs or https://docs.airbyte.com/platform/operator-guides/refreshes`,
     );
-  const cursorOut = hasMore ? BigInt(newCursor!) * 1000n : BigInt(upperUs) * 1000n;
+  const cursorOut = hasMore ? newCursor! : upper;
   return `{"values":[${values.join(",")}],"cursor":${cursorOut},"hasMore":${hasMore}}`;
 }
 

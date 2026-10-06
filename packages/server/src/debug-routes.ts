@@ -79,7 +79,7 @@ function historyJson(ctx: Ctx, h: HistoryRecord) {
   return {
     kind: "invalidation",
     at: h.at,
-    commitTs: h.commitTs,
+    commitTs: Number(h.commitTs),
     source: h.source,
     ...writtenKeyJson(ctx, h.index, h.key),
     sentAfterMs: h.sentAfterMs === null ? null : Math.round(h.sentAfterMs * 1000) / 1000,
@@ -110,8 +110,8 @@ function subscriptions(ctx: Ctx, url: URL) {
         queryId,
         path: q.udfPath,
         argsDigest: argsDigest(q.argsJson),
-        ts: exec?.ts ?? null,
-        validAt: q.validAt,
+        ts: exec ? Number(exec.ts) : null,
+        validAt: Number(q.validAt),
         cached: q.cached === true,
         lastRunAt: q.lastRunAt ?? null,
         result: exec === null ? "pending" : exec.type === "QueryFailed" ? "error" : "value",
@@ -126,7 +126,7 @@ function subscriptions(ctx: Ctx, url: URL) {
       sessions.push({ sessionId: info.sessionId, identity: info.identity, queries: shown });
   }
   return {
-    ts: ctx.engine.committer.visibleTs,
+    ts: Number(ctx.engine.committer.visibleTs),
     historySize: sync.inspector.size,
     sessions,
     totals: { sessions: sync.sessions.size, queries },
@@ -163,8 +163,8 @@ function queryCache(ctx: Ctx, url: URL) {
           shared: e.shared,
           state: "ready",
           size: e.entry.size,
-          originalTs: e.entry.result.originalTs,
-          tokenTs: e.entry.result.tokenTs,
+          originalTs: Number(e.entry.result.originalTs),
+          tokenTs: Number(e.entry.result.tokenTs),
           observedTime: e.entry.result.observedTime,
           readSet: readSetJson(ctx, e.entry.result.reads),
         };

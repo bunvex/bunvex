@@ -7,11 +7,12 @@ import type { DriverModule } from "./index.ts";
 import { insertItem, newEngine, schemaWithAmount } from "./workload.ts";
 
 type Check = (ok: boolean, what: string) => void;
-type ModelCommit = { ts: number; writes: IndexWrite[] };
+type ModelCommit = { ts: bigint; writes: IndexWrite[] };
 
 const rnd = (n: number) => Math.floor(Math.random() * n);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-const MAX = Number.MAX_SAFE_INTEGER;
+const MAX = (1n << 63n) - 1n;
+const cmp = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** A commit's write set in a canonical order (C11 leaves the order inside a commit unspecified). */
 const canon = (ws: IndexWrite[]) =>
@@ -21,24 +22,27 @@ const canon = (ws: IndexWrite[]) =>
     .join(",");
 
 /** What `readLog(after, upTo, limit)` must return over `model` (every commit durable). */
-function expected(model: ModelCommit[], after: number, upTo: number, limit: number) {
-  const out: { ts: number; prevTs: number; writes: string }[] = [];
+function expected(model: ModelCommit[], after: bigint, upTo: bigint, limit: number) {
+  const out: { ts: string; prevTs: string; writes: string }[] = [];
   if (limit <= 0) return out;
-  let prev = 0;
+  let prev = 0n;
   for (const c of model) {
     if (c.ts <= after) {
       prev = c.ts;
       continue;
     }
     if (c.ts > upTo || out.length >= limit) break;
-    out.push({ ts: c.ts, prevTs: prev, writes: canon(c.writes) });
+    out.push({ ts: String(c.ts), prevTs: String(prev), writes: canon(c.writes) });
     prev = c.ts;
   }
   return out;
 }
 
-const shape = (got: LogCommit[]) => got.map((c) => ({ ts: c.ts, prevTs: c.prevTs, writes: canon(c.writes) }));
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const shape = (got: LogCommit[]) =>
+  got.map((c) => ({ ts: String(c.ts), prevTs: String(c.prevTs), writes: canon(c.writes) }));
+/** Deep equality by JSON, timestamps (`bigint`) as decimal strings. */
+const json = (x: unknown) => JSON.stringify(x, (_k, v) => (typeof v === "bigint" ? String(v) : v));
+const same = (a: unknown, b: unknown) => json(a) === json(b);
 
 export async function logChecks(mod: DriverModule, check: Check, log: (l: string) => void, required: boolean) {
   let st: Persistence = await mod.open(true);
@@ -48,7 +52,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     else log(`skip K25: the driver has no readLog (PERSIST-01 C11 is optional for third-party drivers)`);
     return;
   }
-  const read = (s: Persistence, after: number, upTo: number, limit: number) =>
+  const read = (s: Persistence, after: bigint, upTo: bigint, limit: number) =>
     Promise.resolve(s.readLog!(after, upTo, limit));
   const lease = async (s: Persistence, holder: string) => {
     if (hasLease(s)) await s.acquireLease({ holder, ttlMs: 60_000 });
@@ -56,7 +60,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
   await lease(st, "k25");
 
   // An empty store has an empty log.
-  const empty = await read(st, 0, MAX, 100);
+  const empty = await read(st, 0n, MAX, 100);
 
   // Random commits over two indexes: sparse timestamps, deletes (id null), index-only commits (no
   // documents: a backfill), keys longer than the 2500-byte prefix SQL stores split off, flushed in groups.
@@ -67,13 +71,13 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       : encodeKey([`k${i}`]),
   );
   const model: ModelCommit[] = [];
-  let ts = 1000;
+  let ts = 1000n;
   let indexOnly = 0;
   let deletes = 0;
   for (let c = 0; c < 300; ) {
     const group = 1 + rnd(8);
     for (let g = 0; g < group && c < 300; g++, c++) {
-      ts += 1 + (Math.random() < 0.3 ? 0 : rnd(5000)); // sometimes ts + 1, mostly a gap
+      ts += BigInt(1 + (Math.random() < 0.3 ? 0 : rnd(5000))); // sometimes ts + 1, mostly a gap
       const writes: IndexWrite[] = [];
       const used = new Set<string>();
       for (let w = 0; w < 1 + rnd(5); w++) {
@@ -98,26 +102,26 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
   }
   const last = model[model.length - 1].ts;
 
-  const all = await read(st, 0, MAX, 1_000_000);
+  const all = await read(st, 0n, MAX, 1_000_000);
   check(
-    empty.length === 0 && same(shape(all), expected(model, 0, MAX, 1_000_000)),
+    empty.length === 0 && same(shape(all), expected(model, 0n, MAX, 1_000_000)),
     `K25 readLog returns every commit in ts order with its write set and prevTs chain (${all.length}/${model.length} commits, ${indexOnly} index-only, ${deletes} removed entries)`,
   );
 
   // Random windows: `after` on a commit, inside a gap, before the first or past the last; `upTo` likewise
   // (sometimes below `after`: an empty window); limits from 0 up.
-  const point = () => {
+  const point = (): bigint => {
     const r = Math.random();
-    if (r < 0.05) return 0;
-    if (r < 0.1) return last + 1 + rnd(1000);
+    if (r < 0.05) return 0n;
+    if (r < 0.1) return last + 1n + BigInt(rnd(1000));
     const c = model[rnd(model.length)].ts;
-    return r < 0.6 ? c : c - 1 - rnd(3);
+    return r < 0.6 ? c : c - 1n - BigInt(rnd(3));
   };
   let bad = 0;
   let emptyWindows = 0;
   for (let i = 0; i < 300; i++) {
     // Mostly after <= upTo; sometimes the other way round (empty by definition).
-    const [a, b] = [point(), point()].sort((x, y) => x - y);
+    const [a, b] = [point(), point()].sort(cmp);
     const r = Math.random();
     const [after, upTo] = r < 0.1 ? [a, MAX] : r < 0.25 ? [b, a] : [a, b];
     const limit = [0, -1, 1, 2, 3, 7, 50, 1000][rnd(8)];
@@ -138,7 +142,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
 
   // Catch-up in pages: each page starts where the last one ended, and its first prevTs names that end.
   {
-    let after = 0;
+    let after = 0n;
     const pages: LogCommit[] = [];
     let chain = true;
     // Bounded: a driver that ignores afterTs returns the same page forever.
@@ -150,7 +154,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       after = page[page.length - 1].ts;
     }
     check(
-      chain && same(shape(pages), expected(model, 0, MAX, 1_000_000)),
+      chain && same(shape(pages), expected(model, 0n, MAX, 1_000_000)),
       "K25 paging by 7 from 0 rebuilds the whole log; each page's first prevTs is the previous page's last ts",
     );
   }
@@ -160,17 +164,17 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     const pending: ModelCommit[] = [];
     let t = last;
     for (let i = 0; i < 3; i++) {
-      t += 10;
+      t += 10n;
       const writes = [{ index: 960, key: encodeKey([`pending${i}`]), id: `p${i}` }];
       st.apply(t, [{ table: 960, id: `p${i}`, json: "{}" }], writes);
       pending.push({ ts: t, writes });
     }
     const before = await read(st, last, MAX, 100);
-    const beforeAll = await read(st, 0, MAX, 1_000_000);
+    const beforeAll = await read(st, 0n, MAX, 1_000_000);
     await st.flush();
     model.push(...pending);
     const after = await read(st, last, MAX, 100);
-    const maxTs = Number((await st.maxTs?.()) ?? t);
+    const maxTs = (await st.maxTs?.()) ?? t;
     check(
       before.length === 0 &&
         beforeAll.length === model.length - 3 &&
@@ -183,8 +187,8 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
   // A row above the durable prefix (the remains of a flush interrupted before its commit marker, or written
   // around the fence) is not part of the log. Only stores whose rows can be written behind the driver's back.
   if (mod.strayLogRow) {
-    const durable = Number(await st.maxTs!());
-    await mod.strayLogRow(durable + 1000);
+    const durable = await st.maxTs!();
+    await mod.strayLogRow(durable + 1000n);
     const above = await read(st, durable, MAX, 100);
     check(above.length === 0, `K25 a stray row above the durable prefix is not returned (${above.length} commits)`);
   }
@@ -197,20 +201,20 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
   if (mod.dropLogIndex) await mod.dropLogIndex();
   st = await mod.open(false);
   {
-    const again = await read(st, 0, MAX, 1_000_000);
-    const tail = await read(st, model[100].ts - 1, model[110].ts, 5);
+    const again = await read(st, 0n, MAX, 1_000_000);
+    const tail = await read(st, model[100].ts - 1n, model[110].ts, 5);
     check(
-      same(shape(again), expected(model, 0, MAX, 1_000_000)) &&
-        same(shape(tail), expected(model, model[100].ts - 1, model[110].ts, 5)),
+      same(shape(again), expected(model, 0n, MAX, 1_000_000)) &&
+        same(shape(tail), expected(model, model[100].ts - 1n, model[110].ts, 5)),
       `K25 after a reopen${mod.dropLogIndex ? " of a store without the ts index" : ""}, readLog returns the same log`,
     );
     if (mod.hasLogIndex) {
       await lease(st, "k25-upgrade");
       const built = await mod.hasLogIndex();
-      const still = await read(st, 0, MAX, 1_000_000);
+      const still = await read(st, 0n, MAX, 1_000_000);
       if (hasLease(st)) await st.releaseLease();
       check(
-        built && same(shape(still), expected(model, 0, MAX, 1_000_000)),
+        built && same(shape(still), expected(model, 0n, MAX, 1_000_000)),
         "K25 a store written before C11 has its ts index once the lease is held",
       );
     }
@@ -243,8 +247,12 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     const persistence = e.persistence;
     const got = await read(persistence, from, to, 1_000_000);
     await e.close();
-    seen.sort((a, b) => a.ts - b.ts);
-    const want = seen.map((c, i) => ({ ts: c.ts, prevTs: i ? seen[i - 1].ts : from, writes: canon(c.writes) }));
+    seen.sort((a, b) => cmp(a.ts, b.ts));
+    const want = seen.map((c, i) => ({
+      ts: String(c.ts),
+      prevTs: String(i ? seen[i - 1].ts : from),
+      writes: canon(c.writes),
+    }));
     check(
       seen.length === 80 && same(shape(got), want),
       `K25 through the engine: the log between two snapshots is exactly the committer's commits and write sets (${got.length}/${seen.length})`,

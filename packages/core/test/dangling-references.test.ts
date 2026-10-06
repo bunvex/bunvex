@@ -18,7 +18,7 @@ function losing(p: Persistence, lost: { id: string | null }, onLost = () => {}):
   return new Proxy(p, {
     get(target, prop) {
       if (prop === "get")
-        return (table: number, id: string, ts: number) => {
+        return (table: number, id: string, ts: bigint) => {
           if (id !== lost.id) return target.get(table, id, ts);
           onLost();
           return null;
@@ -77,8 +77,8 @@ describe("an index entry without its document (PERSIST-01 C15)", () => {
       throw new DanglingReferenceError(index, "x", ts, true);
     };
     e.retention = {
-      check(ts: number) {
-        if (pruned) throw new OutOfRetentionError(ts, ts + 1, `out of the window: ${ts}`);
+      check(ts: bigint) {
+        if (pruned) throw new OutOfRetentionError(ts, ts + 1n, `out of the window: ${ts}`);
       },
       stop: async () => {},
     } as unknown as Retention;
@@ -91,8 +91,8 @@ describe("an index entry without its document (PERSIST-01 C15)", () => {
     let pruned = false;
     const { e, ids } = await seeded(5, (p) => losing(p, lost, () => (pruned = true)));
     e.retention = {
-      check(ts: number) {
-        if (pruned) throw new OutOfRetentionError(ts, ts + 1, `out of the window: ${ts}`);
+      check(ts: bigint) {
+        if (pruned) throw new OutOfRetentionError(ts, ts + 1n, `out of the window: ${ts}`);
       },
       stop: async () => {},
     } as unknown as Retention;

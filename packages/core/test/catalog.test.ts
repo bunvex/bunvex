@@ -138,7 +138,7 @@ describe("catalog (_tables / _index)", () => {
   test("an unchanged schema commits nothing on open", async () => {
     const open = store();
     const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
-    let ts = 0;
+    let ts = 0n;
     await open(schema, async (e) => {
       ts = e.committer.visibleTs;
     });

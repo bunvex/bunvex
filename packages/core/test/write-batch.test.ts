@@ -23,7 +23,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-type Flush = { ts: number[]; docs: number; bytes: number; last: { docs: number; bytes: number } };
+type Flush = { ts: bigint[]; docs: number; bytes: number; last: { docs: number; bytes: number } };
 
 /** A memory store that records what each flush carries, and fails flushes as scripted. */
 async function recorded(path: string | null = null) {
@@ -33,7 +33,7 @@ async function recorded(path: string | null = null) {
   let cur: Flush = { ts: [], docs: 0, bytes: 0, last: { docs: 0, bytes: 0 } };
   const script: (null | ((inner: Persistence) => Promise<void>))[] = [];
   const store: Persistence = Object.create(inner);
-  store.apply = (ts: number, docs: DocWrite[], idx: IndexWrite[]) => {
+  store.apply = (ts: bigint, docs: DocWrite[], idx: IndexWrite[]) => {
     const bytes = commitWriteBytes(docs, idx);
     cur.ts.push(ts);
     cur.docs += docs.length;
@@ -61,7 +61,7 @@ function commitOf(n: number, size: number) {
     docs.push({ table: 1, id, json: JSON.stringify({ id, pad: "x".repeat(size) }) });
     idx.push({ index: 1, key: encodeKey([id]), id });
   }
-  return { snapshot: 0, reads: [], docs, idx };
+  return { snapshot: 0n, reads: [], docs, idx };
 }
 
 /** Every flush obeys Convex's batch rule: everything before its last commit is under both caps. */
@@ -75,7 +75,7 @@ describe("bounded flushes (DV-62, Convex's write batcher)", () => {
   test("a group over the caps is flushed in batches of whole commits, each within Convex's soft caps", async () => {
     const { store, flushes } = await recorded();
     const c = new Committer(store);
-    const published: number[][] = [];
+    const published: bigint[][] = [];
     c.onCommit((entries) => published.push(entries.map((e) => e.ts)));
     // 300 commits queued at once form one group: 300 documents, ~600 KiB.
     const commits = Array.from({ length: 300 }, () => commitOf(1, 2000));
@@ -131,7 +131,7 @@ describe("bounded flushes (DV-62, Convex's write batcher)", () => {
       throw new Error("disk full");
     });
     const results = await Promise.allSettled(Array.from({ length: 12 }, () => c.commit(commitOf(1, 10))));
-    const ok = results.filter((r) => r.status === "fulfilled").map((r) => (r as PromiseFulfilledResult<number>).value);
+    const ok = results.filter((r) => r.status === "fulfilled").map((r) => (r as PromiseFulfilledResult<bigint>).value);
     expect(ok).toHaveLength(4);
     for (const r of results.slice(4)) {
       expect(r.status).toBe("rejected");

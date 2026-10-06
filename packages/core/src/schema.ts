@@ -38,7 +38,7 @@ export type IndexDef = {
   fields: string[];
   metaId?: string;
   staged?: boolean;
-  readyTs?: number;
+  readyTs?: bigint;
   /** The read of its `_index` document a query records (built on first use; never mutated). */
   metaRead?: { index: number; lo: Uint8Array; hi: Uint8Array };
 };

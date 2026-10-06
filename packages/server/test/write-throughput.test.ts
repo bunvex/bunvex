@@ -33,43 +33,43 @@ const until = async (cond: () => boolean | Promise<boolean>, what: string, ms = 
 };
 
 describe("the limiter (Convex's write_throughput_limiter tests)", () => {
-  const W = 1_000_000; // the window, in µs
+  const W = 1_000_000_000n; // the window, in ns
   test("allows writes under the limit, blocks writes over it", () => {
     const under = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 1000 });
-    under.record(10, 999);
-    expect(under.allows(20)).toBe(true);
-    under.record(30, 1);
-    expect(under.allows(40)).toBe(true); // exactly the limit
-    under.record(50, 1);
-    expect(under.allows(60)).toBe(false);
+    under.record(10000n, 999);
+    expect(under.allows(20000n)).toBe(true);
+    under.record(30000n, 1);
+    expect(under.allows(40000n)).toBe(true); // exactly the limit
+    under.record(50000n, 1);
+    expect(under.allows(60000n)).toBe(false);
   });
 
   test("evicts old writes when it records", () => {
     const l = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 1000 });
-    l.record(0, 1001);
-    expect(l.allows(10)).toBe(false);
-    l.record(W + 1000, 100);
-    expect(l.allows(W + 1000)).toBe(true);
+    l.record(0n, 1001);
+    expect(l.allows(10000n)).toBe(false);
+    l.record(W + 1000000n, 100);
+    expect(l.allows(W + 1000000n)).toBe(true);
   });
 
   test("passes once the window ends, without new writes", () => {
     const l = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 1000 });
-    l.record(0, 1001);
+    l.record(0n, 1001);
     expect(l.allows(W)).toBe(false); // the window includes its edge
-    expect(l.allows(W + 1)).toBe(true);
+    expect(l.allows(W + 1000n)).toBe(true);
   });
 
   test("accumulates the writes in the window", () => {
     const l = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 1000 });
-    l.record(0, 500);
-    l.record(100_000, 501);
-    expect(l.allows(200_000)).toBe(false);
+    l.record(0n, 500);
+    l.record(100000000n, 501);
+    expect(l.allows(200000000n)).toBe(false);
   });
 
   test("a window other than 1 s scales the limit", () => {
     const l = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 500 });
-    l.record(0, 501);
-    expect(l.allows(1)).toBe(false);
+    l.record(0n, 501);
+    expect(l.allows(1000n)).toBe(false);
   });
 
   test("Convex's defaults and message", () => {

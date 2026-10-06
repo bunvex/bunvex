@@ -2,6 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
+- **Built so far:** PR 1 (ns `bigint` timestamps).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -701,3 +702,26 @@ processes the rule differs by driver (newest wins on SQL servers, oldest wins on
 
 The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the session scratchpad
 (`agent-layout/`), not in the repo; §1.12 and §4.3 record their results.
+
+## 11. As built
+
+### PR 1 — nanosecond timestamps
+
+- Commit timestamps are `bigint` nanoseconds everywhere: `wallClockNs` (`determinism.ts`), the committer and its
+  write log, `Persistence` (every `ts` parameter and field), retention, table summaries, search state rows
+  (`ts`, `last_segment_ts`, `fast_forward_ts` as int64), the query cache, the sync protocol (the engine's ts is
+  the wire ts: `wireTs` is gone), streaming export and data sync cursors, imports, exports, function handles
+  and `getSnapshotTs`. Convex's knobs are ns constants (`WRITE_LOG_*_RETENTION_NS`, `MAX_TRANSACTION_WINDOW_NS`,
+  `SEARCH_LOG_RETENTION_NS`); retention delays stay in ms options, converted once.
+- Drivers: `bun:sqlite` statements that read a ts use `safeIntegers`; Postgres parses `int8` text with
+  `BigInt` and binds strings; MySQL connects with `supportBigNumbers` / `bigNumberStrings` and binds `bigint`;
+  MongoDB decodes int64 as `bigint` (`useBigInt64`) and stores `ts` as int64; the memory log writes `ts` as a
+  decimal string. `LAYOUT_VERSION` is 2, so a µs store is refused.
+- The memory driver stamps each version with its commit's sequence number and maps a snapshot ts to a sequence
+  once per read: comparing `bigint`s per version cost 22 % on index range reads over many versions.
+- Tests: conformance K33 (two commits 1 ns apart above 2^53, exact through a reopen, every driver). Sabotage:
+  SQLite without safe integers, MySQL without big numbers, Postgres through a JS number, the memory log through a
+  JS number (each turns K33 red); a µs wall clock turns the sync test "timestamps travel as Convex's" red.
+- Measured (engine, in-process, M-series, median of 3 × 4 s; ops/s main → PR 1): memory insert 40 384 → 39 903,
+  patch 31 825 → 31 720, get 280 213 → 298 602, index range 7 376 → 7 224 (a back-to-back rerun after the
+  sequence change; 6 045 → 4 719 before it); SQLite insert 7 176 → 7 336, patch 5 064 → 5 120, get 92 168 → 96 434, index range 775 → 793.

@@ -93,7 +93,7 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
     expect([
       ...index.matchingEntries([
         {
-          ts: 1,
+          ts: 1n,
           writes: [
             { ...w, id: null },
             { ...w, id: null },

@@ -66,14 +66,18 @@ export const RETENTION_GLOBALS = {
 /** Commits read from a log per round trip. */
 const LOG_PAGE = 256;
 
+const minTs = (a: bigint, b: bigint) => (a < b ? a : b);
+/** A delay in ms as nanoseconds, the unit of commit timestamps. */
+const msToNs = (ms: number) => BigInt(Math.round(ms)) * 1_000_000n;
+
 export class Retention {
   readonly opts: Required<RetentionOptions>;
   /** The index window: snapshots below it fail. Starts at what the store recorded. */
-  minIndexTs = 0;
-  minDocumentTs = 0;
+  minIndexTs = 0n;
+  minDocumentTs = 0n;
   /** Everything at or below these has been pruned. */
-  indexCursor = 0;
-  documentCursor = 0;
+  indexCursor = 0n;
+  documentCursor = 0n;
   readonly stats = { indexRowsDeleted: 0, documentRowsDeleted: 0, advances: 0, errors: 0 };
   private stopped = false;
   /** Sleeps in progress: their timer, and how to end them early (on stop). */
@@ -107,9 +111,9 @@ export class Retention {
     // Convex's encoding (STUDY-134): `{"$integer": …}` of nanoseconds.
     const num = async (k: string) => readTsGlobal(await this.store.getGlobal(k));
     this.minIndexTs = await num(RETENTION_GLOBALS.minIndexTs);
-    this.minDocumentTs = Math.min(await num(RETENTION_GLOBALS.minDocumentTs), this.minIndexTs);
-    this.indexCursor = Math.min(await num(RETENTION_GLOBALS.indexCursor), this.minIndexTs);
-    this.documentCursor = Math.min(await num(RETENTION_GLOBALS.documentCursor), this.minDocumentTs);
+    this.minDocumentTs = minTs(await num(RETENTION_GLOBALS.minDocumentTs), this.minIndexTs);
+    this.indexCursor = minTs(await num(RETENTION_GLOBALS.indexCursor), this.minIndexTs);
+    this.documentCursor = minTs(await num(RETENTION_GLOBALS.documentCursor), this.minDocumentTs);
     if (!this.opts.background) return;
     this.loop(
       "advance",
@@ -138,7 +142,7 @@ export class Retention {
   }
 
   /** Convex's `validate_snapshot`: a read at `ts` is refused once the index window passed it. */
-  check(ts: number) {
+  check(ts: bigint) {
     if (ts < this.minIndexTs)
       throw new OutOfRetentionError(
         ts,
@@ -209,14 +213,14 @@ export class Retention {
    */
   async advance(): Promise<boolean> {
     const top = this.committer.visibleTs;
-    const idx = top - this.opts.indexDelayMs * 1000; // timestamps are wall-clock µs (STUDY-06 D9)
+    const idx = top - msToNs(this.opts.indexDelayMs); // timestamps are wall-clock ns (STUDY-06 D9)
     if (idx > this.minIndexTs) {
       await this.store.setGlobal(RETENTION_GLOBALS.minIndexTs, tsGlobal(idx));
       this.minIndexTs = idx;
       this.stats.advances++;
       this.wake.index?.();
     }
-    const doc = Math.min(top - this.opts.documentDelayMs * 1000, this.minIndexTs);
+    const doc = minTs(top - msToNs(this.opts.documentDelayMs), this.minIndexTs);
     if (doc > this.minDocumentTs) {
       await this.store.setGlobal(RETENTION_GLOBALS.minDocumentTs, tsGlobal(doc));
       this.minDocumentTs = doc;
@@ -254,7 +258,7 @@ export class Retention {
       const through = page[page.length - 1].ts;
       const entries: IndexPrune[] = [];
       for (const c of page)
-        for (const w of c.writes) entries.push({ index: w.index, key: w.key, ts: w.id === null ? c.ts : c.ts - 1 });
+        for (const w of c.writes) entries.push({ index: w.index, key: w.key, ts: w.id === null ? c.ts : c.ts - 1n });
       for (let i = 0; i < entries.length; i += this.opts.indexChunk)
         this.stats.indexRowsDeleted += await this.store.pruneIndexes(
           entries.slice(i, i + this.opts.indexChunk),
@@ -277,7 +281,7 @@ export class Retention {
         break;
       }
       const through = rows[rows.length - 1].ts;
-      const entries: DocPrune[] = rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1 }));
+      const entries: DocPrune[] = rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1n }));
       for (let i = 0; i < entries.length; i += this.opts.documentChunk) {
         const chunk = entries.slice(i, i + this.opts.documentChunk);
         const t0 = performance.now();

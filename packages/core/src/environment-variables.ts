@@ -67,8 +67,8 @@ type Row = { _id: string; name: string; value: string };
 /** The variables of one deployment: the cache, the reads functions make, the batch updates. */
 export class EnvironmentVariables {
   /** The ts of the last commit that wrote the table (as far as this process has seen). */
-  private lastWriteTs: number;
-  private cache: { ts: number; vars: Map<string, string> } | null = null;
+  private lastWriteTs: bigint;
+  private cache: { ts: bigint; vars: Map<string, string> } | null = null;
 
   constructor(
     private catalog: () => Catalog,
@@ -81,7 +81,7 @@ export class EnvironmentVariables {
       if (!table) return;
       for (const e of entries)
         if (e.writes.some((w) => w.index === table.byId.id)) {
-          this.lastWriteTs = Math.max(this.lastWriteTs, e.ts);
+          if (e.ts > this.lastWriteTs) this.lastWriteTs = e.ts;
           this.cache = null;
         }
     }, "environment variables");
@@ -99,7 +99,7 @@ export class EnvironmentVariables {
    */
   async snapshot(db: Tx): Promise<Map<string, string>> {
     const c = this.cache;
-    if (c && this.lastWriteTs <= Math.min(db.snapshot, c.ts)) return c.vars;
+    if (c && this.lastWriteTs <= db.snapshot && this.lastWriteTs <= c.ts) return c.vars;
     const vars = new Map((await db.unrecorded(() => this.rows(db))).map((r) => [r.name, r.value]));
     if (this.lastWriteTs <= db.snapshot) this.cache = { ts: db.snapshot, vars };
     return vars;

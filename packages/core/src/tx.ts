@@ -416,7 +416,7 @@ export class Tx {
    * The store's retention window (STUDY-33): every read from the store is checked against it before and
    * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
    */
-  retention: { check(ts: number): void } | null = null;
+  retention: { check(ts: bigint): void } | null = null;
   /**
    * Its index reads, one span per index (STUDY-131 AD-26): set by the engine when the transaction runs under
    * a traced span, else null and no read looks at the clock.
@@ -617,7 +617,7 @@ export class Tx {
   constructor(
     private catalog: Catalog,
     private persistence: Persistence,
-    readonly snapshot: number,
+    readonly snapshot: bigint,
     private readonly writable: boolean,
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
@@ -779,7 +779,7 @@ export class Tx {
    * Called with the commit's ts once it is visible, before any commit listener runs: the engine installs a
    * catalog change there (STUDY-29), so nothing sees the commit with the old catalog.
    */
-  onCommitVisible: ((ts: number) => void) | null = null;
+  onCommitVisible: ((ts: bigint) => void) | null = null;
 
   /**
    * @internal (QueryImpl) The index `withIndex(name)` reads, as Convex's `require_enabled`: an enabled
@@ -790,7 +790,7 @@ export class Tx {
     const ix = t.indexes.get(name);
     if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
     // An index enabled after this snapshot was still being built at it.
-    if (ix && (ix.readyTs ?? 0) <= this.snapshot) {
+    if (ix && (ix.readyTs ?? 0n) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
       return ix;
     }
@@ -1770,7 +1770,7 @@ export class Tx {
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
   /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
-  tableCount: ((tablet: number, snapshot: number) => number) | null = null;
+  tableCount: ((tablet: number, snapshot: bigint) => number) | null = null;
 
   /**
    * The number of documents of `table` (Convex's internal `count()`: `db.query(table).count()` and its

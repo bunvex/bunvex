@@ -161,7 +161,7 @@ test("retries stop when the connection closes", async () => {
 test("an update whose ts left the write log's retention starts again at a newer ts", async () => {
   const { url, fail } = await setup();
   const c = await v1Client(url);
-  fail.error = () => new OutOfRetentionError(1, 2);
+  fail.error = () => new OutOfRetentionError(1n, 2n);
   fail.reads = 1;
   c.modify([add(1, "m:read")]);
   await c.transition(0);

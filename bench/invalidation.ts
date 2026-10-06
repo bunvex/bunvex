@@ -19,7 +19,7 @@ const readsOf = (o: number): Interval[] => {
     { index: BY_ID, lo: idKey(o), hi: prefixEnd(idKey(o)) },
   ];
 };
-const commitOn = (o: number, ts: number): LogEntry[] => [
+const commitOn = (o: number, ts: bigint): LogEntry[] => [
   {
     ts,
     writes: [
@@ -35,7 +35,7 @@ const us = (ms: number, n: number) => Number(((ms * 1000) / n).toFixed(3));
 for (const N of NS) {
   const owners = new Map<number, Interval[]>();
   for (let o = 0; o < N; o++) owners.set(o, readsOf(o));
-  const commits = Array.from({ length: COMMITS }, (_, i) => commitOn(Math.floor(Math.random() * N), i + 1));
+  const commits = Array.from({ length: COMMITS }, (_, i) => commitOn(Math.floor(Math.random() * N), BigInt(i + 1)));
 
   // Before: every owner, every entry, every write × interval (what onCommit did).
   const linearCommits = Math.max(20, Math.min(COMMITS, Math.floor(2e7 / N / 8)));

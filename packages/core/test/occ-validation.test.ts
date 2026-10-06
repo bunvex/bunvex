@@ -26,9 +26,11 @@ const nullPersistence = { apply() {}, async flush() {} } as unknown as Persisten
 const KEYS = 16;
 const INDEXES = 4;
 const key = (k: number) => encodeKey([k]);
-type Entry = { ts: number; writes: { index: number; key: Uint8Array; id: string | null }[]; source?: string };
+const minTs = (xs: bigint[]) => xs.reduce((a, b) => (b < a ? b : a));
+const rand = (r: () => number, n: number) => BigInt(Math.floor(r() * n));
+type Entry = { ts: bigint; writes: { index: number; key: Uint8Array; id: string | null }[]; source?: string };
 type Internals = {
-  validate(p: { snapshot: number; reads: Interval[] }): Conflict | OutOfRetentionError | null;
+  validate(p: { snapshot: bigint; reads: Interval[] }): Conflict | OutOfRetentionError | null;
   byIndex: { writeCount: number; indexCount: number };
 };
 
@@ -37,7 +39,7 @@ function inside(k: Uint8Array, r: Interval) {
 }
 
 /** The linear validator this replaced: every write of every commit in (from, to] against every interval. */
-function linearConflicts(log: Entry[], reads: Interval[], from: number, to: number) {
+function linearConflicts(log: Entry[], reads: Interval[], from: bigint, to: bigint) {
   const out: (Conflict & { key: Uint8Array })[] = [];
   for (const e of log)
     if (e.ts > from && e.ts <= to)
@@ -57,7 +59,7 @@ function expectSame(
   got: Conflict | null,
   want: (Conflict & { key?: Uint8Array })[],
   what: string,
-  published = Number.POSITIVE_INFINITY,
+  published = (1n << 63n) - 1n,
 ) {
   if (want.length === 0) {
     expect(got, what).toBeNull();
@@ -84,8 +86,8 @@ function expectSame(
   if (pending) {
     const lowest = inIndex.map((c) => c.key as Uint8Array).sort(Buffer.compare)[0];
     const atLowest = inIndex.filter((c) => Buffer.compare(c.key as Uint8Array, lowest) === 0);
-    expect(g.writeTs, `${what} (pending)`).toBe(Math.min(...atLowest.map((c) => c.writeTs)));
-  } else expect(g.writeTs, what).toBe(Math.min(...inIndex.map((c) => c.writeTs)));
+    expect(g.writeTs, `${what} (pending)`).toBe(minTs(atLowest.map((c) => c.writeTs)));
+  } else expect(g.writeTs, what).toBe(minTs(inIndex.map((c) => c.writeTs)));
 }
 
 function randomReads(r: () => number): Interval[] {
@@ -114,13 +116,13 @@ function randomCommitWrites(r: () => number): IndexWrite[] {
 
 async function run(seed: number) {
   const r = rng(seed);
-  let clock = 1_000;
+  let clock = 1_000n;
   // Small retention windows in clock units, and sometimes a small soft size, so the log is trimmed often.
   const c = new Committer(
     nullPersistence,
     {
-      minRetentionUs: 3 + Math.floor(r() * 5),
-      maxRetentionUs: 10 + Math.floor(r() * 30),
+      minRetentionNs: 3n + rand(r, 5),
+      maxRetentionNs: 10n + rand(r, 30),
       softMaxBytes: r() < 0.5 ? 2_000 + Math.floor(r() * 4_000) : Number.POSITIVE_INFINITY,
     },
     () => clock,
@@ -131,12 +133,13 @@ async function run(seed: number) {
   let checks = 0;
   let conflicts = 0;
   for (let batch = 0; batch < 60; batch++) {
-    clock += Math.floor(r() * 4); // sometimes stands still: ts = last + 1
+    clock += rand(r, 4); // sometimes stands still: ts = last + 1
     // One group: commits queued together are validated in order, each also against those accepted before it.
     const purged = c.logStartTs;
     const n = 1 + Math.floor(r() * 4);
     const pending = Array.from({ length: n }, (_, i) => {
-      const snapshot = Math.max(0, c.visibleTs - Math.floor(r() * 12));
+      const back = c.visibleTs - rand(r, 12);
+      const snapshot = back > 0n ? back : 0n;
       const reads = randomReads(r);
       const idx = randomCommitWrites(r);
       const source = r() < 0.5 ? `m${batch}.${i}` : undefined;
@@ -168,8 +171,8 @@ async function run(seed: number) {
         expectSame((got as ConflictError).conflict, want, what, published);
         continue;
       }
-      expect(typeof got, `${what}: ${got}`).toBe("number");
-      const ts = got as number;
+      expect(typeof got, `${what}: ${got}`).toBe("bigint");
+      const ts = got as bigint;
       log.push({ ts, writes: p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id })), source: p.source });
       appliedBefore = ts;
     }
@@ -186,21 +189,22 @@ async function run(seed: number) {
     );
     for (let q = 0; q < 8; q++) {
       const reads = randomReads(r);
-      const lo = c.logStartTs - 2;
-      const snapshot = lo + Math.floor(r() * (c.visibleTs - lo + 2));
+      const lo = c.logStartTs - 2n;
+      const snapshot = lo + rand(r, Number(c.visibleTs - lo + 2n));
       const got = internals.validate({ snapshot, reads });
       checks++;
       if (snapshot < c.logStartTs) expect(got).toBeInstanceOf(OutOfRetentionError);
       else expectSame(got as Conflict | null, linearConflicts(log, reads, snapshot, c.visibleTs), `seed ${seed}`);
 
-      const from = lo + Math.floor(r() * (c.visibleTs - lo + 1));
-      const to = Math.min(c.visibleTs, from + Math.floor(r() * 10));
+      const from = lo + rand(r, Number(c.visibleTs - lo + 1n));
+      const ahead = from + rand(r, 10);
+      const to = ahead < c.visibleTs ? ahead : c.visibleTs;
       const changed = c.changedBetween(reads, from, to);
       const want = from >= to ? false : from < c.logStartTs ? true : linearConflicts(log, reads, from, to).length > 0;
       expect(changed, `seed ${seed}: changedBetween(${from}, ${to})`).toBe(want);
     }
   }
-  return { checks, conflicts, trimmed: c.logStartTs > 1_000 };
+  return { checks, conflicts, trimmed: c.logStartTs > 1_000n };
 }
 
 describe("commit validation through the indexed write log (STUDY-06 D11)", () => {

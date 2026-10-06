@@ -1497,7 +1497,7 @@ export class Functions {
     // The snapshot in nanoseconds; reading it makes the result time-dependent, as `Date.now()` does.
     const getSnapshotTs = () => {
       observeTime();
-      return BigInt(db.snapshot) * 1000n;
+      return db.snapshot;
     };
     const meta = { getFunctionMetadata, getTransactionMetrics, getDeploymentMetadata, getSnapshotTs };
     return f.kind === "mutation" ? { ...meta, getRequestMetadata } : meta;
@@ -1884,7 +1884,7 @@ export class Functions {
    * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query
    * cache, as in Convex: a result cached at or before `ts` and still valid at `ts` answers it.
    */
-  async runQueryAtJson(name: string, args: unknown, ts: number, caller?: Caller): Promise<string> {
+  async runQueryAtJson(name: string, args: unknown, ts: bigint, caller?: Caller): Promise<string> {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
@@ -1911,7 +1911,7 @@ export class Functions {
     fromClient = true,
     caller?: Caller,
     deadline?: Deadline,
-  ): Promise<{ value: unknown; ts: number }> {
+  ): Promise<{ value: unknown; ts: bigint }> {
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
     if (isSystemPath(name))
       return this.engine.mutationWithTs(
@@ -1947,7 +1947,7 @@ export class Functions {
     request: SessionRequestId,
     caller?: Caller,
     deadline?: Deadline,
-  ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
+  ): Promise<{ ts: bigint } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
     const run = () =>
       this.engine.sessionMutation(
         isSystemPath(name)

@@ -86,7 +86,7 @@ describe("the cursor", () => {
     const t = await setup();
     const [id] = await t.call("m:put", { table: "a", n: 1 });
     const c: DataSyncCursor = {
-      syncedTs: 1_700_000_000_000_123,
+      syncedTs: 1_700_000_000_000_123_456n,
       synced: [{ tablet: 7, component: "", table: "x" }],
       current: { tablet: 9, component: "", table: "a", currentId: id, docsSynced: 3 },
       syncId: "fivetran-abc",
@@ -182,7 +182,7 @@ test("limits: by-id pages of `pageSize`; a log page never splits a commit; catch
   // A document the walk already passed changes: only the log can carry it (Convex's "captured").
   await t.call("m:del", { id: first[0] });
   const walkedAt = page.cursor.syncedTs;
-  page = await dataSyncPage(t.engine, page.cursor, all, ids, { ...small, byIdFreshnessUs: 0 });
+  page = await dataSyncPage(t.engine, page.cursor, all, ids, { ...small, byIdFreshnessNs: 0n });
   // A log page: the sync's timestamp moved on.
   expect(page.cursor.syncedTs).toBeGreaterThan(walkedAt);
   let tombstones = page.values.filter((x) => x.deleted).map((x) => JSON.parse(x.json)._id);
@@ -268,7 +268,7 @@ test("a cursor behind the retention window is DataSyncCursorExpired", async () =
   const { cursor } = await untilUpToDate(t);
   await t.call("m:put", { table: "a", n: 1 });
   const real = t.engine.retention;
-  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs + 1 };
+  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs + 1n };
   const r = await t.sync({ cursor });
   (t.engine as { retention: unknown }).retention = real;
   expect(r.body.code).toBe("DataSyncCursorExpired");

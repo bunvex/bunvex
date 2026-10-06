@@ -20,7 +20,7 @@ const INDEX_A = 981;
 const INDEX_B = 982;
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
-const MAX = Number.MAX_SAFE_INTEGER;
+const MAX = (1n << 63n) - 1n;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const key = (id: string) => encodeKey([id]);
 /** [key(id), key(id) + 0x00): the singleton range of one entry. */
@@ -39,7 +39,7 @@ export async function referenceChecks(mod: DriverModule, check: Check) {
 }
 
 /** The rejection of `scanDocs`, or what it returned instead. */
-async function outcome(st: Persistence & Partial<ScanDocs>, lo: Uint8Array, hi: Uint8Array, ts: number, desc = false) {
+async function outcome(st: Persistence & Partial<ScanDocs>, lo: Uint8Array, hi: Uint8Array, ts: bigint, desc = false) {
   try {
     return { rejected: false, docs: await st.scanDocs!(TABLE, INDEX, lo, hi, ts, 100, desc) };
   } catch (e) {
@@ -54,21 +54,25 @@ async function k30(st: Persistence & Partial<ScanDocs>, check: Check) {
   // ts 20: `gone` is deleted, its index entry left in place (the index no longer agrees with the table).
   const json = (id: string) => `{"id":"${id}"}`;
   st.apply(
-    10,
+    10n,
     ["a", "c", "e", "gone"].map((id) => ({ table: TABLE, id, json: json(id) })),
     ["a", "c", "dangling", "e", "gone"].map((id) => ({ index: INDEX, key: key(id), id })),
   );
-  st.apply(20, [{ table: TABLE, id: "gone", json: null }], []);
+  st.apply(20n, [{ table: TABLE, id: "gone", json: null }], []);
   await st.flush();
 
   const ids = ["a", "c", "dangling", "e", "gone"];
-  const scanned = await st.scan(INDEX, FULL_LO, FULL_HI, 20, 100, false);
-  const scannedDesc = await st.scan(INDEX, FULL_LO, FULL_HI, 20, 100, true);
+  const scanned = await st.scan(INDEX, FULL_LO, FULL_HI, 20n, 100, false);
+  const scannedDesc = await st.scan(INDEX, FULL_LO, FULL_HI, 20n, 100, true);
   check(
     same(scanned, ids) && same(scannedDesc, [...ids].reverse()),
     `K30 scan returns index entries whatever their documents: one never written, one deleted (${JSON.stringify(scanned)})`,
   );
-  const gets = [await st.get(TABLE, "dangling", 20), await st.get(TABLE, "gone", 20), await st.get(TABLE, "gone", 10)];
+  const gets = [
+    await st.get(TABLE, "dangling", 20n),
+    await st.get(TABLE, "gone", 20n),
+    await st.get(TABLE, "gone", 10n),
+  ];
   check(
     gets[0] === null && gets[1] === null && gets[2] === json("gone"),
     `K30 get is null for a document never written and for one deleted, and the deleted one still reads below its delete (${JSON.stringify(gets)})`,
@@ -76,12 +80,12 @@ async function k30(st: Persistence & Partial<ScanDocs>, check: Check) {
 
   if (!st.scanDocs) return;
   // [what, lo, hi, ts, desc, the `deleted` flag the error must carry (undefined: either, several entries)]
-  const cases: [string, Uint8Array, Uint8Array, number, boolean, boolean | undefined][] = [
-    ["the whole index", FULL_LO, FULL_HI, 20, false, undefined],
-    ["the whole index, descending", FULL_LO, FULL_HI, 20, true, undefined],
-    ["the dangling entry alone", ...only("dangling"), 20, false, false],
-    ["the entry of the deleted document alone", ...only("gone"), 20, false, true],
-    ["the whole index below the delete (the dangling entry only)", FULL_LO, FULL_HI, 10, false, false],
+  const cases: [string, Uint8Array, Uint8Array, bigint, boolean, boolean | undefined][] = [
+    ["the whole index", FULL_LO, FULL_HI, 20n, false, undefined],
+    ["the whole index, descending", FULL_LO, FULL_HI, 20n, true, undefined],
+    ["the dangling entry alone", ...only("dangling"), 20n, false, false],
+    ["the entry of the deleted document alone", ...only("gone"), 20n, false, true],
+    ["the whole index below the delete (the dangling entry only)", FULL_LO, FULL_HI, 10n, false, false],
   ];
   for (const [what, lo, hi, ts, desc, deleted] of cases) {
     const r = await outcome(st, lo, hi, ts, desc);
@@ -91,8 +95,8 @@ async function k30(st: Persistence & Partial<ScanDocs>, check: Check) {
     );
   }
   // Ranges without a broken reference still read: [a, c] at ts 20, and `gone` alone below its delete.
-  const clean = await outcome(st, key("a"), Uint8Array.from([...key("c"), 0]), 20);
-  const before = await outcome(st, ...only("gone"), 10);
+  const clean = await outcome(st, key("a"), Uint8Array.from([...key("c"), 0]), 20n);
+  const before = await outcome(st, ...only("gone"), 10n);
   check(
     !clean.rejected &&
       same(clean.docs, [json("a"), json("c")]) &&
@@ -108,7 +112,7 @@ async function k31(st: Persistence & Partial<ScanDocs>, check: Check) {
   const jsonA = `{"t":"a"}`;
   const jsonB = `{"t":"b","more":[1,2,3]}`;
   st.apply(
-    30,
+    30n,
     [
       { table: TABLE_A, id, json: jsonA },
       { table: TABLE_B, id, json: jsonB },
@@ -121,7 +125,7 @@ async function k31(st: Persistence & Partial<ScanDocs>, check: Check) {
   // Then the copy in table A is replaced and the one in B deleted; each must stay apart from the other.
   const jsonA2 = `{"t":"a","v":2}`;
   st.apply(
-    40,
+    40n,
     [
       { table: TABLE_A, id, json: jsonA2 },
       { table: TABLE_B, id, json: null },
@@ -131,10 +135,10 @@ async function k31(st: Persistence & Partial<ScanDocs>, check: Check) {
   await st.flush();
 
   const gets = [
-    await st.get(TABLE_A, id, 30),
-    await st.get(TABLE_B, id, 30),
-    await st.get(TABLE_A, id, 40),
-    await st.get(TABLE_B, id, 40),
+    await st.get(TABLE_A, id, 30n),
+    await st.get(TABLE_B, id, 30n),
+    await st.get(TABLE_A, id, 40n),
+    await st.get(TABLE_B, id, 40n),
     await st.get(TABLE_A, id, MAX),
   ];
   check(
@@ -142,16 +146,16 @@ async function k31(st: Persistence & Partial<ScanDocs>, check: Check) {
     `K31 the same id in two tables: get answers each table's own document at every snapshot (${JSON.stringify(gets)})`,
   );
   const scans = [
-    await st.scan(INDEX_A, FULL_LO, FULL_HI, 30, 10, false),
-    await st.scan(INDEX_B, FULL_LO, FULL_HI, 30, 10, false),
-    await st.scan(INDEX_B, FULL_LO, FULL_HI, 40, 10, false),
+    await st.scan(INDEX_A, FULL_LO, FULL_HI, 30n, 10, false),
+    await st.scan(INDEX_B, FULL_LO, FULL_HI, 30n, 10, false),
+    await st.scan(INDEX_B, FULL_LO, FULL_HI, 40n, 10, false),
   ];
   check(same(scans, [[id], [id], []]), `K31 each table's index scan sees its own entry (${JSON.stringify(scans)})`);
   if (!st.scanDocs) return;
   const docs = [
-    await st.scanDocs(TABLE_A, INDEX_A, FULL_LO, FULL_HI, 30, 10, false),
-    await st.scanDocs(TABLE_B, INDEX_B, FULL_LO, FULL_HI, 30, 10, false),
-    await st.scanDocs(TABLE_A, INDEX_A, FULL_LO, FULL_HI, 40, 10, false),
+    await st.scanDocs(TABLE_A, INDEX_A, FULL_LO, FULL_HI, 30n, 10, false),
+    await st.scanDocs(TABLE_B, INDEX_B, FULL_LO, FULL_HI, 30n, 10, false),
+    await st.scanDocs(TABLE_A, INDEX_A, FULL_LO, FULL_HI, 40n, 10, false),
   ];
   check(
     same(docs, [[jsonA], [jsonB], [jsonA2]]),

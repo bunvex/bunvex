@@ -21,9 +21,12 @@ type Check = (ok: boolean, what: string) => void;
 type Store = Persistence & RetentionStore;
 
 const rnd = (n: number) => Math.floor(Math.random() * n);
-const MAX = Number.MAX_SAFE_INTEGER;
+const MAX = (1n << 63n) - 1n;
+const cmp = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Deep equality by JSON, timestamps (`bigint`) as decimal strings. */
+const json = (x: unknown) => JSON.stringify(x, (_k, v) => (typeof v === "bigint" ? String(v) : v));
+const same = (a: unknown, b: unknown) => json(a) === json(b);
 const TABLE = 970;
 const BY_ID = 970;
 const BY_VAL = 971;
@@ -31,19 +34,19 @@ const BACKFILL = 972;
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 
-type DocRow = { ts: number; id: string; deleted: boolean };
-type IdxRow = { ts: number; index: number; key: Uint8Array; deleted: boolean };
+type DocRow = { ts: bigint; id: string; deleted: boolean };
+type IdxRow = { ts: bigint; index: number; key: Uint8Array; deleted: boolean };
 
 /** What retention deletes for the rows of the log at or below the window: a live row supersedes the
  *  versions below it; a tombstone takes itself too. */
-const indexPrunes = (rows: { ts: number; index: number; key: Uint8Array; deleted: boolean }[]): IndexPrune[] =>
-  rows.map((r) => ({ index: r.index, key: r.key, ts: r.deleted ? r.ts : r.ts - 1 }));
-const docPrunes = (rows: { ts: number; table: number; id: string; deleted: boolean }[]): DocPrune[] =>
-  rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1 }));
+const indexPrunes = (rows: { ts: bigint; index: number; key: Uint8Array; deleted: boolean }[]): IndexPrune[] =>
+  rows.map((r) => ({ index: r.index, key: r.key, ts: r.deleted ? r.ts : r.ts - 1n }));
+const docPrunes = (rows: { ts: bigint; table: number; id: string; deleted: boolean }[]): DocPrune[] =>
+  rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1n }));
 
 /** Rows that must remain after pruning at `w`: everything above it, and each key's newest row at or below
  *  it when that row is live. */
-function survivors<T extends { ts: number; deleted: boolean }>(rows: T[], keyOf: (r: T) => string, w: number) {
+function survivors<T extends { ts: bigint; deleted: boolean }>(rows: T[], keyOf: (r: T) => string, w: bigint) {
   const newest = new Map<string, T>();
   let n = 0;
   for (const r of rows) {
@@ -77,17 +80,17 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   // deletes, and tombstones of documents that never lived (created and deleted in one transaction).
   const docRows: DocRow[] = [];
   const idxRows: IdxRow[] = [];
-  const docCommits: { ts: number; rows: DocRow[] }[] = [];
+  const docCommits: { ts: bigint; rows: DocRow[] }[] = [];
   const live = new Map<string, number>();
   const ids = Array.from({ length: 40 }, (_, i) => `d${i}`);
   const kId = (id: string) => encodeKey([id]);
   const kVal = (v: number, id: string) => encodeKey([v, id]);
-  let ts = 5000;
-  const commitTs: number[] = [];
+  let ts = 5000n;
+  const commitTs: bigint[] = [];
   for (let c = 0; c < 400; ) {
     const group = 1 + rnd(6);
     for (let g = 0; g < group && c < 400; g++, c++) {
-      ts += 1 + (Math.random() < 0.3 ? 0 : rnd(3000));
+      ts += BigInt(1 + (Math.random() < 0.3 ? 0 : rnd(3000)));
       const docs: { table: number; id: string; json: string | null }[] = [];
       const idx: IndexWrite[] = [];
       if (Math.random() < 0.1) {
@@ -136,10 +139,10 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const last = commitTs[commitTs.length - 1];
 
   // K27: the document log, whole and in random windows.
-  const docLog = async (s: Store, a: number, b: number, n: number) =>
+  const docLog = async (s: Store, a: bigint, b: bigint, n: number) =>
     (await s.readDocumentLog(a, b, n)).map((r) => ({ ts: r.ts, id: r.id, deleted: r.deleted, t: r.table }));
-  const expectDocLog = (a: number, b: number, n: number) => {
-    const out: { ts: number; id: string; deleted: boolean; t: number }[] = [];
+  const expectDocLog = (a: bigint, b: bigint, n: number) => {
+    const out: { ts: bigint; id: string; deleted: boolean; t: number }[] = [];
     if (n <= 0) return out;
     let k = 0;
     for (const c of docCommits) {
@@ -150,22 +153,22 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     }
     return out;
   };
-  const canon = (rows: { ts: number; id: string; deleted: boolean; t: number }[]) =>
+  const canon = (rows: { ts: bigint; id: string; deleted: boolean; t: number }[]) =>
     rows.map((r) => `${r.ts}:${r.t}:${r.id}:${r.deleted ? 1 : 0}`).sort();
   {
     let bad = 0;
-    const all = await docLog(st, 0, MAX, 1_000_000);
+    const all = await docLog(st, 0n, MAX, 1_000_000);
     const ordered = all.every((r, i) => i === 0 || all[i - 1].ts <= r.ts);
-    if (!ordered || !same(canon(all), canon(expectDocLog(0, MAX, 1_000_000)))) bad++;
-    const point = () => {
+    if (!ordered || !same(canon(all), canon(expectDocLog(0n, MAX, 1_000_000)))) bad++;
+    const point = (): bigint => {
       const r = Math.random();
-      if (r < 0.05) return 0;
-      if (r < 0.1) return last + 1 + rnd(100);
+      if (r < 0.05) return 0n;
+      if (r < 0.1) return last + 1n + BigInt(rnd(100));
       const c = commitTs[rnd(commitTs.length)];
-      return r < 0.6 ? c : c - 1 - rnd(3);
+      return r < 0.6 ? c : c - 1n - BigInt(rnd(3));
     };
     for (let i = 0; i < 200; i++) {
-      const [a, b] = [point(), point()].sort((x, y) => x - y);
+      const [a, b] = [point(), point()].sort(cmp);
       const n = [0, -1, 1, 2, 5, 40, 1000][rnd(7)];
       const got = await docLog(st, a, b, n);
       if (!same(canon(got), canon(expectDocLog(a, b, n)))) {
@@ -180,7 +183,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   }
 
   // K28: prune at two successive windows, as retention does (the second continues from the first).
-  const snapshotAnswers = async (s: Store, at: number[]) => {
+  const snapshotAnswers = async (s: Store, at: bigint[]) => {
     const out: unknown[] = [];
     for (const t of at) {
       for (const index of [BY_ID, BY_VAL, BACKFILL])
@@ -195,7 +198,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     return out;
   };
   const rowCount = async (s: Store) => (s.auditRowCount ? await s.auditRowCount() : null);
-  const pruneInChunks = async (s: Store, ip: IndexPrune[], dp: DocPrune[], through: number) => {
+  const pruneInChunks = async (s: Store, ip: IndexPrune[], dp: DocPrune[], through: bigint) => {
     let n = 0;
     for (let i = 0; i < ip.length; ) {
       const k = 1 + rnd(60);
@@ -209,12 +212,12 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     }
     return n;
   };
-  const windows = [commitTs[Math.floor(commitTs.length * 0.4)], commitTs[Math.floor(commitTs.length * 0.75)] + 1];
-  let cursor = 0;
+  const windows = [commitTs[Math.floor(commitTs.length * 0.4)], commitTs[Math.floor(commitTs.length * 0.75)] + 1n];
+  let cursor = 0n;
   for (const w of windows) {
     const at = [
       w,
-      w + 1,
+      w + 1n,
       ...Array.from({ length: 4 }, () => commitTs.filter((t) => t >= w)[rnd(10)] ?? last),
       last,
       MAX,
@@ -223,7 +226,11 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     const rowsBefore = await rowCount(st);
     // Below the window the log holds what retention left, so the first commit's prevTs may change.
     const above = async (s: Store) =>
-      (await s.readLog?.(w, MAX, 1_000_000))?.map((c, i) => ({ ...c, prevTs: i === 0 ? 0 : c.prevTs }));
+      (await s.readLog?.(w, MAX, 1_000_000))?.map((c, i) => ({
+        ts: String(c.ts),
+        prevTs: i === 0 ? "0" : String(c.prevTs),
+        writes: c.writes,
+      }));
     const logAbove = await above(st);
     const docLogAbove = await docLog(st, w, MAX, 1_000_000);
     const ixLog = (await st.readLog!(cursor, w, 1_000_000)).flatMap((c) =>
@@ -261,7 +268,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
 
   // A write after pruning lands and reads back (the store is still a store).
   {
-    const t = last + 10;
+    const t = last + 10n;
     st.apply(t, [{ table: TABLE, id: "after", json: `{"v":1}` }], [{ index: BY_ID, key: kId("after"), id: "after" }]);
     await st.flush();
     check(

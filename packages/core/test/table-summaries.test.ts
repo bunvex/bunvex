@@ -86,9 +86,9 @@ test("built on start from the documents already there; unavailable until then", 
 
 test("commits that land while the summaries are being built are counted once", () => {
   const s = new TableSummaries();
-  s.apply(5, [{ tablet: 7, old: null, next: { _id: "a", _creationTime: 1, x: 1n } }]); // in the scan (ts ≤ 5)
-  s.apply(9, [{ tablet: 7, old: null, next: { _id: "b", _creationTime: 2, x: 2n } }]); // after it
-  s.build(5, 7, [{ _id: "a", _creationTime: 1, x: 1n }]);
+  s.apply(5n, [{ tablet: 7, old: null, next: { _id: "a", _creationTime: 1, x: 1n } }]); // in the scan (ts ≤ 5)
+  s.apply(9n, [{ tablet: 7, old: null, next: { _id: "b", _creationTime: 2, x: 2n } }]); // after it
+  s.build(5n, 7, [{ _id: "a", _creationTime: 1, x: 1n }]);
   s.finish();
   expect(s.get(7).count).toBe(2);
 });

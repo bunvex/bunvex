@@ -20,7 +20,7 @@ export type InvalidationRecord = {
   kind: "invalidation";
   /** Wall-clock ms when the hub matched the commit. */
   at: number;
-  commitTs: number;
+  commitTs: bigint;
   /** The mutation (or system writer) that committed, when it gave its name. */
   source: string | null;
   /** The first write of the commit inside the key's reads: its index and full index key. */
@@ -73,7 +73,7 @@ export class SyncInspector {
   /** A commit invalidated `execKey`; `write` is its first write inside the key's reads. */
   invalidated(
     execKey: string,
-    commitTs: number,
+    commitTs: bigint,
     source: string | undefined,
     write: { index: number; key: Uint8Array },
   ) {

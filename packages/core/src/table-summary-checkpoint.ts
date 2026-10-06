@@ -8,7 +8,7 @@
 // document retention — falls back to the scan (DV-318; Convex retries it forever, the summaries unavailable).
 import { outsideExecution } from "./determinism.ts";
 import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
-import { fromJsonInteger, readTsGlobal, tsMicros } from "./persistence-globals.ts";
+import { fromJsonInteger, readTsGlobal } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
 import type { SummaryCheckpoint, TableSummaries } from "./table-summaries.ts";
 
@@ -54,19 +54,19 @@ export function canCheckpoint(p: Persistence): p is Store {
 export async function restoreSummaries(
   store: Store,
   summaries: TableSummaries,
-  at: number,
+  at: bigint,
   tablets: Set<number>,
   decode: (json: string) => Doc,
 ): Promise<boolean> {
   const raw = (await store.getGlobal(TABLE_SUMMARY_GLOBAL)) as SummaryCheckpoint | null;
   if (raw === null || raw === undefined) return false;
-  let from: number;
+  let from: bigint;
   try {
-    from = tsMicros(fromJsonInteger(raw?.ts));
+    from = fromJsonInteger(raw?.ts);
   } catch {
     return false;
   }
-  if (!Number.isSafeInteger(from) || from > at) return false;
+  if (from < 0n || from > at) return false;
   const inRetention = async () => from >= readTsGlobal(await store.getGlobal(MIN_DOCUMENT_TS_GLOBAL));
   if (!(await inRetention())) return false;
   try {

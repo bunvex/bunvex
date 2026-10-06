@@ -51,7 +51,6 @@ import { ZipReader } from "./zip-reader.ts";
 
 export { ImportError };
 
-const NS_PER_US = 1000n;
 /** Convex's MAX_IMPORT_AGE (7 days). */
 export const MAX_IMPORT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Half of Convex's transaction limits (TRANSACTION_MAX_USER_WRITE_SIZE_BYTES / NUM_USER_WRITES), per batch. */
@@ -862,7 +861,7 @@ export class ImportService {
       await this.write((db) =>
         this.setState(db, row._id, () => ({
           state: "completed",
-          timestamp: BigInt(ts) * NS_PER_US,
+          timestamp: ts,
           num_rows_written: BigInt(total),
         })),
       );

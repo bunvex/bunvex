@@ -25,7 +25,7 @@ async function trial(open: () => Promise<Persistence>, drop: (p: Persistence) =>
       { index: 1, key: encodeKey([d.id]), id: d.id },
       { index: 2, key: encodeKey([c % 997, d.id]), id: d.id },
     ]);
-    p.apply(c, docs, idx);
+    p.apply(BigInt(c), docs, idx);
     if (c % 50 === 0) await p.flush();
   }
   await p.flush();
