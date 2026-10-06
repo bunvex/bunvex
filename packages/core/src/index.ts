@@ -237,6 +237,8 @@ export {
   type DocPrune,
   type DocVersion,
   type DocWrite,
+  decodeGlobal,
+  encodeGlobal,
   hasLease,
   hasRetention,
   type IndexEntryAt,

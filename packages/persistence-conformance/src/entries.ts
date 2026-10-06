@@ -6,7 +6,7 @@
 // ts and joins that version; one at the same (index, key, ts) replaces it; none is in the log or moves `maxTs`;
 // they survive a reopen; a writer without the lease is refused.
 import { encodeKey, hasLease, hasRetention, type Persistence } from "@bunvex/core";
-import { tid } from "./ids.ts";
+import { did, didName, tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 import { insertItem, newEngine } from "./workload.ts";
 
@@ -30,17 +30,17 @@ export async function prevTsChecks(mod: DriverModule, check: Check) {
   const k = encodeKey(["x"]);
   st.apply(
     10n,
-    [{ table: TABLE, id: "x", json: `{"v":1}`, prevTs: null }],
-    [{ index: BY_ID, key: k, table: TABLE, id: "x" }],
+    [{ table: TABLE, id: did("x"), json: `{"v":1}`, prevTs: null }],
+    [{ index: BY_ID, key: k, table: TABLE, id: did("x") }],
   );
   st.apply(
     20n,
-    [{ table: TABLE, id: "x", json: `{"v":2}`, prevTs: 10n }],
-    [{ index: BY_ID, key: k, table: TABLE, id: "x" }],
+    [{ table: TABLE, id: did("x"), json: `{"v":2}`, prevTs: 10n }],
+    [{ index: BY_ID, key: k, table: TABLE, id: did("x") }],
   );
   st.apply(
     30n,
-    [{ table: TABLE, id: "x", json: null, prevTs: 20n }],
+    [{ table: TABLE, id: did("x"), json: null, prevTs: 20n }],
     [{ index: BY_ID, key: k, table: null, id: null }],
   );
   await st.flush();
@@ -87,27 +87,27 @@ export async function indexEntryChecks(mod: DriverModule, check: Check) {
   // ts 100: a; ts 200: b; ts 300: a's second version. Only `by_id` is maintained by these commits.
   st.apply(
     100n,
-    [{ table: TABLE, id: "a", json: `{"a":1}`, prevTs: null }],
-    [{ index: BY_ID, key: kid("a"), table: TABLE, id: "a" }],
+    [{ table: TABLE, id: did("a"), json: `{"a":1}`, prevTs: null }],
+    [{ index: BY_ID, key: kid("a"), table: TABLE, id: did("a") }],
   );
   st.apply(
     200n,
-    [{ table: TABLE, id: "b", json: `{"b":1}`, prevTs: null }],
-    [{ index: BY_ID, key: kid("b"), table: TABLE, id: "b" }],
+    [{ table: TABLE, id: did("b"), json: `{"b":1}`, prevTs: null }],
+    [{ index: BY_ID, key: kid("b"), table: TABLE, id: did("b") }],
   );
   st.apply(
     300n,
-    [{ table: TABLE, id: "a", json: `{"a":2}`, prevTs: 100n }],
-    [{ index: BY_ID, key: kid("a"), table: TABLE, id: "a" }],
+    [{ table: TABLE, id: did("a"), json: `{"a":2}`, prevTs: 100n }],
+    [{ index: BY_ID, key: kid("a"), table: TABLE, id: did("a") }],
   );
   await st.flush();
   // The backfill of `LATE`: each document's entry at its version's own ts.
   await st.writeIndexEntries([
-    { index: LATE, key: late("a"), table: TABLE, id: "a", ts: 300n },
-    { index: LATE, key: late("b"), table: TABLE, id: "b", ts: 200n },
+    { index: LATE, key: late("a"), table: TABLE, id: did("a"), ts: 300n },
+    { index: LATE, key: late("b"), table: TABLE, id: did("b"), ts: 200n },
   ]);
   const view = async (s: Persistence, ts: bigint) =>
-    (await s.scan(TABLE, LATE, FULL_LO, FULL_HI, ts, 100, false)).map((d) => `${d.id}@${d.ts}:${d.json}`);
+    (await s.scan(TABLE, LATE, FULL_LO, FULL_HI, ts, 100, false)).map((d) => `${didName(d.id)}@${d.ts}:${d.json}`);
   const at250 = await view(st, 250n);
   const at400 = await view(st, 400n);
   check(
@@ -134,7 +134,7 @@ export async function indexEntryChecks(mod: DriverModule, check: Check) {
     const other = (await mod.open(false)) as Persistence;
     let refused = false;
     try {
-      await other.writeIndexEntries([{ index: LATE, key: late("c"), table: TABLE, id: "a", ts: 100n }]);
+      await other.writeIndexEntries([{ index: LATE, key: late("c"), table: TABLE, id: did("a"), ts: 100n }]);
     } catch (e) {
       refused = (e as Error)?.name === "LeaseLostError";
     }

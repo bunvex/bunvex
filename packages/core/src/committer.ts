@@ -224,6 +224,12 @@ export class CommitterStoppedError extends Error {
 export const WRITE_RETRY_INITIAL_BACKOFF_MS = 100;
 export const WRITE_RETRY_MAX_BACKOFF_MS = 10_000;
 
+/** Convex's `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY` (5 s) and `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY` (1 h). */
+export const MAX_REPEATABLE_TS_COMMIT_DELAY_MS = 5_000;
+export const MAX_REPEATABLE_TS_IDLE_MS = 3_600_000;
+/** The persistence global Convex keeps `max_repeatable_ts` in (`PersistenceGlobalKey::MaxRepeatableTimestamp`). */
+export const MAX_REPEATABLE_TS_GLOBAL = "max_repeatable_ts";
+
 /**
  * Convex's write batcher's soft caps (crates/common/src/knobs.rs `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS` = 64,
  * `COMMITTER_MAX_WRITE_BATCH_BYTES` = 64 KiB; STUDY-06 §10): a flush carries whole commits, and stops taking
@@ -716,6 +722,7 @@ export class Committer {
     }
     for (const [p, e] of batch) p.resolve(e.ts);
     this.wakeVisible();
+    this.bumpSoon();
     // As Convex, once the commits are published to subscriptions, relative to the latest of them.
     this.enforceRetention(this.visibleTs);
     return true;
@@ -810,6 +817,97 @@ export class Committer {
     }
   }
 
+  /** The `max_repeatable_ts` bumps, once started: what writes the global, and when the next one is due. */
+  private repeatable: {
+    write: (ts: bigint) => Promise<void>;
+    commitDelayMs: number;
+    idleMs: number;
+    /** The wait after the last bump; null while a bump is being written. */
+    wait: number | null;
+    last: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null = null;
+  /** `max_repeatable_ts` bumps written (tests and measurements). */
+  repeatableBumps = 0;
+
+  /**
+   * Convex's `max_repeatable_ts` (crates/database/src/committer.rs `bump_max_repeatable_ts`): a timestamp no
+   * future commit will be at or below, written to the store `commitDelayMs` after a commit (Convex's
+   * `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY`, 5 s) and otherwise every `idleMs` to twice that, jittered
+   * (`MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, 1 h). With commits in flight it is the last durable ts, below
+   * all of them; with none it takes the next commit ts, which is then also visible. A failed write is tried
+   * again after `commitDelayMs`.
+   */
+  startRepeatableBumps(write: (ts: bigint) => Promise<void>, opts: { commitDelayMs?: number; idleMs?: number } = {}) {
+    const commitDelayMs = opts.commitDelayMs ?? MAX_REPEATABLE_TS_COMMIT_DELAY_MS;
+    this.repeatable = {
+      write,
+      commitDelayMs,
+      idleMs: opts.idleMs ?? MAX_REPEATABLE_TS_IDLE_MS,
+      wait: commitDelayMs,
+      last: performance.now(),
+      timer: null,
+    };
+    this.scheduleBump();
+  }
+
+  /** Stop the bumps (a clean shutdown, before the store closes); a bump being written finishes. */
+  stopRepeatableBumps() {
+    const r = this.repeatable;
+    if (r?.timer) clearTimeout(r.timer);
+    this.repeatable = null;
+  }
+
+  private scheduleBump() {
+    const r = this.repeatable;
+    if (!r || r.wait === null || this.stopped) return;
+    if (r.timer) clearTimeout(r.timer);
+    r.timer = setTimeout(() => void this.bumpRepeatable(), Math.max(0, r.last + r.wait - performance.now()));
+    r.timer.unref?.();
+  }
+
+  /** After a published commit: the next bump is due `commitDelayMs` after the last one at the latest. */
+  private bumpSoon() {
+    const r = this.repeatable;
+    if (!r || r.wait === null || r.wait <= r.commitDelayMs) return;
+    r.wait = r.commitDelayMs;
+    this.scheduleBump();
+  }
+
+  private async bumpRepeatable() {
+    const r = this.repeatable;
+    if (!r || this.stopped) return;
+    r.timer = null;
+    r.wait = null;
+    let ts: bigint;
+    let idle = false;
+    if (this.running || this.queue.length || this.appliedTs > this.visibleTs) ts = this.visibleTs;
+    else {
+      // As Convex's `next_max_repeatable_ts` with no pending write: the next commit ts, taken.
+      const next = this.appliedTs + 1n;
+      const now = this.clockNs();
+      ts = now > next ? now : next;
+      this.appliedTs = ts;
+      idle = true;
+    }
+    try {
+      await r.write(ts);
+      this.repeatableBumps++;
+      if (idle && ts > this.visibleTs) {
+        this.visibleTs = ts;
+        this.wakeVisible();
+      }
+      // The real Math.random: this may run in the async context of a mutation.
+      r.wait = r.idleMs * (1 + outsideExecution(Math.random));
+    } catch (e) {
+      if (this.repeatable === r)
+        console.error(`bunvex: max_repeatable_ts was not written: ${e instanceof Error ? e.message : String(e)}`);
+      r.wait = r.commitDelayMs;
+    }
+    r.last = performance.now();
+    if (this.repeatable === r) this.scheduleBump();
+  }
+
   /** Resolve once nothing is queued or being flushed (a clean shutdown lets the last group land). */
   async idle() {
     while (this.running || this.queue.length) await new Promise((r) => setTimeout(r, 1));
@@ -824,6 +922,7 @@ export class Committer {
     if (this.stopped) return;
     this.stopped = new CommitterStoppedError(cause, context);
     this.wakeRetry?.();
+    if (this.repeatable?.timer) clearTimeout(this.repeatable.timer);
     const queued = this.queue;
     this.queue = [];
     for (const p of queued) p.reject(this.stopped);

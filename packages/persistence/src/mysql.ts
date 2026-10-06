@@ -40,7 +40,9 @@ import {
   type DocPrune,
   type DocVersion,
   type DocWrite,
+  decodeGlobal,
   decodeLayoutVersion,
+  encodeGlobal,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -802,7 +804,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     const [rows] = (await this.read((c) =>
       c.query("select json_value from persistence_globals where `key` = ?", [key]),
     )) as any;
-    return rows.length ? JSON.parse(String(rows[0].json_value)) : null;
+    return rows.length ? decodeGlobal(String(rows[0].json_value)) : null;
   }
 
   async setGlobal(key: string, value: unknown) {
@@ -810,7 +812,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     await this.read((c) =>
       c.query(
         "insert into persistence_globals (`key`, json_value) values (?, ?) on duplicate key update json_value = values(json_value)",
-        [key, JSON.stringify(value)],
+        [key, encodeGlobal(value)],
       ),
     );
   }

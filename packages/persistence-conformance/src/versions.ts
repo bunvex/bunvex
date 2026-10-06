@@ -3,7 +3,7 @@
 // there. A random history (inserts, rewrites, deletes, re-inserts, another table with the same ids) is
 // checked against a reference model at random snapshots, with unknown and repeated ids, and against `get`.
 import { hasLease, type Persistence } from "@bunvex/core";
-import { tid } from "./ids.ts";
+import { did, tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -27,7 +27,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
   try {
     // The reference: per (table, id), its versions in ts order (json null = deleted).
     const history = new Map<string, { ts: bigint; json: string | null }[]>();
-    const ids = Array.from({ length: 30 }, (_, i) => `v${i}`);
+    const ids = Array.from({ length: 30 }, (_, i) => did(`v${i}`));
     let ts = 9000n;
     const commits: bigint[] = [];
     for (let c = 0; c < 200; c++) {
@@ -63,7 +63,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
       const at = Math.random() < 0.2 ? commits[rnd(commits.length)]! : 8990n + BigInt(rnd(Number(ts - 8980n)));
       const table = Math.random() < 0.25 ? OTHER : TABLE;
       const asked = Array.from({ length: 1 + rnd(12) }, () =>
-        Math.random() < 0.1 ? `unknown${rnd(3)}` : ids[rnd(ids.length)]!,
+        Math.random() < 0.1 ? did(`unknown${rnd(3)}`) : ids[rnd(ids.length)]!,
       );
       if (asked.length > 1 && Math.random() < 0.5) asked.push(asked[0]!); // a duplicate
       const got = await st.getVersions!(table, asked, at);

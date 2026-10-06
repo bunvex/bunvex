@@ -16,7 +16,7 @@ import {
   type Persistence,
   type RetentionStore,
 } from "@bunvex/core";
-import { tid } from "./ids.ts";
+import { did, tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -33,6 +33,10 @@ const TABLE = tid(970);
 const BY_ID = tid(970);
 const BY_VAL = tid(971);
 const BACKFILL = tid(972);
+// Document ids: valid internal ids (`did`), as a store in the reference layout keeps them as bytes.
+const M0 = did("m0");
+const B0 = did("b0");
+const AFTER = did("after");
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 
@@ -121,7 +125,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const idxRows: IdxRow[] = [];
   const docCommits: { ts: bigint; rows: DocRow[] }[] = [];
   const live = new Map<string, number>();
-  const ids = Array.from({ length: 40 }, (_, i) => `d${i}`);
+  const ids = Array.from({ length: 40 }, (_, i) => did(`d${i}`));
   // Each live document's newest version's ts: the next version's `prevTs` (none after a delete: a new document).
   const lastTs = new Map<string, bigint>();
   // Each live version's `v`, by `id@ts`: the model's `valueAt`.
@@ -164,29 +168,25 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const put = (id: string, key: Uint8Array, index = BY_ID): IndexWrite => ({ index, key, table: TABLE, id });
   commit(
     1000n,
-    [{ table: TABLE, id: "m0", json: `{"v":1}`, prevTs: null }],
-    [put("m0", kId("m0")), put("m0", kVal(1, "m0"), BY_VAL)],
+    [{ table: TABLE, id: M0, json: `{"v":1}`, prevTs: null }],
+    [put(M0, kId(M0)), put(M0, kVal(1, M0), BY_VAL)],
   );
   commit(
     1001n,
-    [{ table: TABLE, id: "m0", json: `{"v":2}`, prevTs: 1000n }],
-    [
-      put("m0", kId("m0")),
-      { index: BY_VAL, key: kVal(1, "m0"), table: null, id: null },
-      put("m0", kVal(2, "m0"), BY_VAL),
-    ],
+    [{ table: TABLE, id: M0, json: `{"v":2}`, prevTs: 1000n }],
+    [put(M0, kId(M0)), { index: BY_VAL, key: kVal(1, M0), table: null, id: null }, put(M0, kVal(2, M0), BY_VAL)],
   );
   commit(
     1002n,
-    [{ table: TABLE, id: "b0", json: `{"v":3}`, prevTs: null }],
-    [put("b0", kId("b0")), put("b0", kVal(3, "b0"), BY_VAL)],
+    [{ table: TABLE, id: B0, json: `{"v":3}`, prevTs: null }],
+    [put(B0, kId(B0)), put(B0, kVal(3, B0), BY_VAL)],
   );
   await st.flush();
-  await backfill(["b0"]);
+  await backfill([B0]);
   commit(
     1003n,
-    [{ table: TABLE, id: "b0", json: `{"v":3,"c":1}`, prevTs: 1002n }],
-    [put("b0", kId("b0")), put("b0", kVal(3, "b0"), BY_VAL)],
+    [{ table: TABLE, id: B0, json: `{"v":3,"c":1}`, prevTs: 1002n }],
+    [put(B0, kId(B0)), put(B0, kVal(3, B0), BY_VAL)],
   );
   await st.flush();
 
@@ -394,7 +394,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
       };
       const got = [await scanAt(BY_VAL, 1000n), await scanAt(BACKFILL, 1002n), await scanAt(BY_VAL, 1001n)];
       check(
-        same(got, [[], [], ["m0@1001"]]),
+        same(got, [[], [], [`${M0}@1001`]]),
         `K28 a key whose document moved keeps no entry at the replaced version's ts, and a backfill entry superseded by a later version is pruned (${json(got)})`,
       );
     }
@@ -412,13 +412,13 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     const t = last + 10n;
     st.apply(
       t,
-      [{ table: TABLE, id: "after", json: `{"v":1}`, prevTs: null }],
-      [{ index: BY_ID, key: kId("after"), table: TABLE, id: "after" }],
+      [{ table: TABLE, id: AFTER, json: `{"v":1}`, prevTs: null }],
+      [{ index: BY_ID, key: kId(AFTER), table: TABLE, id: AFTER }],
     );
     await st.flush();
     check(
-      (await st.get(TABLE, "after", t))?.json === `{"v":1}` &&
-        (await st.scan(TABLE, BY_ID, FULL_LO, FULL_HI, t, 100_000, false)).some((d) => d.id === "after"),
+      (await st.get(TABLE, AFTER, t))?.json === `{"v":1}` &&
+        (await st.scan(TABLE, BY_ID, FULL_LO, FULL_HI, t, 100_000, false)).some((d) => d.id === AFTER),
       `K28 a commit after pruning reads back`,
     );
   }
@@ -433,6 +433,12 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     g0 === null && same(g1, { x: 1, s: "é", n: [1, 2] }) && g2 === 42,
     "K29 a global reads back as set; an unset one is null",
   );
+  // An integer above 2^53 (`max_repeatable_ts`, nanoseconds) is stored as a plain JSON integer and reads back
+  // exactly, as a bigint.
+  const big = 1_791_309_835_128_171_123n;
+  await st.setGlobal("k29_big", big);
+  const g3 = await st.getGlobal("k29_big");
+  check(g3 === big, `K29 an integer global above 2^53 reads back exactly (${String(g3)})`);
   if (hasLease(st)) await st.releaseLease();
   await st.close();
   st = (await mod.open(false)) as Store;
@@ -450,10 +456,10 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
       }
     };
     const untouched = async (s: Store) =>
-      (await s.get(TABLE, "after", MAX))?.json === `{"v":1}` && (await s.getGlobal("k29")) === 42;
+      (await s.get(TABLE, AFTER, MAX))?.json === `{"v":1}` && (await s.getGlobal("k29")) === 42;
     await st.releaseLease();
-    const r1 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId("after"), ts: MAX }], MAX));
-    const r2 = await refused(() => st.pruneDocuments([{ table: TABLE, id: "after", ts: MAX }], MAX));
+    const r1 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId(AFTER), ts: MAX }], MAX));
+    const r2 = await refused(() => st.pruneDocuments([{ table: TABLE, id: AFTER, ts: MAX }], MAX));
     const r3 = await refused(() => st.setGlobal("k29", 7));
     await st.close();
     st = (await mod.open(false)) as Store;
@@ -476,7 +482,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
         got = "epoch" in r;
         if (!got) await Bun.sleep(100);
       }
-      const r4 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId("after"), ts: MAX }], MAX));
+      const r4 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId(AFTER), ts: MAX }], MAX));
       const r5 = await refused(() => st.setGlobal("k29", 8));
       check(
         got && r4 && r5 && (await untouched(other)),

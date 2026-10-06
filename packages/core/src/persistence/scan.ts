@@ -4,10 +4,11 @@
 // range is exhausted: old versions and removed entries can never make a scan come back short.
 import { compareKeys } from "../keyenc.ts";
 
-/** One index row version as a driver reads it, with its ts. `id === null` (or `deleted`) is a removed entry. */
-export type IndexRow = { key: Uint8Array; ts: bigint; deleted: boolean; id: string | null };
+/** One index row version as a driver reads it, with its ts. `id === null` (or `deleted`) is a removed entry.
+ *  The id is as the driver keeps it: its string form, or its bytes (SQLite). */
+export type IndexRow<I = string> = { key: Uint8Array; ts: bigint; deleted: boolean; id: I | null };
 /** A live entry: its key's newest version at the scan's ts, and the ts that version was written at. */
-export type LiveEntry = { key: Uint8Array; ts: bigint; id: string };
+export type LiveEntry<I = string> = { key: Uint8Array; ts: bigint; id: I };
 /** A page request: rows with lo ≤ key < hi and ts ≤ snapshot, in scan order, at most n. */
 export type PageRequest = { lo: Uint8Array; hi: Uint8Array; n: number };
 /**
@@ -16,17 +17,17 @@ export type PageRequest = { lo: Uint8Array; hi: Uint8Array; n: number };
  * keys) returns `exhausted` explicitly; it may then return an empty page that is not the end, and must
  * make progress on the next request.
  */
-export type Page = IndexRow[] | { rows: IndexRow[]; exhausted: boolean };
+export type Page<I = string> = IndexRow<I>[] | { rows: IndexRow<I>[]; exhausted: boolean };
 
 const MAX_PAGE = 4096;
 
-function* latestLive(
+function* latestLive<I>(
   lo: Uint8Array,
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): Generator<PageRequest, LiveEntry[], Page> {
-  const out: LiveEntry[] = [];
+): Generator<PageRequest, LiveEntry<I>[], Page<I>> {
+  const out: LiveEntry<I>[] = [];
   if (limit <= 0) return out;
   let n = Math.min(Math.max(limit * 2, 8), MAX_PAGE);
   let last: Uint8Array | null = null;
@@ -60,27 +61,27 @@ function successor(k: Uint8Array): Uint8Array {
   return s;
 }
 
-export function scanLatestSync(
-  fetch: (p: PageRequest) => Page,
+export function scanLatestSync<I = string>(
+  fetch: (p: PageRequest) => Page<I>,
   lo: Uint8Array,
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): LiveEntry[] {
-  const g = latestLive(lo, hi, limit, desc);
+): LiveEntry<I>[] {
+  const g = latestLive<I>(lo, hi, limit, desc);
   let step = g.next();
   while (!step.done) step = g.next(fetch(step.value));
   return step.value;
 }
 
-export async function scanLatest(
-  fetch: (p: PageRequest) => Promise<Page>,
+export async function scanLatest<I = string>(
+  fetch: (p: PageRequest) => Promise<Page<I>>,
   lo: Uint8Array,
   hi: Uint8Array,
   limit: number,
   desc: boolean,
-): Promise<LiveEntry[]> {
-  const g = latestLive(lo, hi, limit, desc);
+): Promise<LiveEntry<I>[]> {
+  const g = latestLive<I>(lo, hi, limit, desc);
   let step = g.next();
   while (!step.done) step = g.next(await fetch(step.value));
   return step.value;

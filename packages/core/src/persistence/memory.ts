@@ -14,6 +14,7 @@ import { type FileHandle, open } from "node:fs/promises";
 import { BTree } from "../btree.ts";
 import { opaqueToInspect } from "../inspect.ts";
 import { compareKeys } from "../keyenc.ts";
+import { decodeGlobal, encodeGlobal } from "./global-json.ts";
 import type {
   DocLogRow,
   DocPrune,
@@ -257,7 +258,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         value?: unknown;
       };
       try {
-        rec = JSON.parse(line);
+        // A global's integers above 2^53 (`max_repeatable_ts`) keep their digits.
+        rec = (line.startsWith('{"global"') ? decodeGlobal(line) : JSON.parse(line)) as typeof rec;
       } catch {
         break; // torn inside the line
       }
@@ -270,7 +272,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         continue;
       }
       if (rec.global !== undefined) {
-        this.globals.set(rec.global, JSON.stringify(rec.value));
+        this.globals.set(rec.global, encodeGlobal(rec.value));
         good += enc.encode(line).length + 1;
         pos = nl + 1;
         continue;
@@ -464,7 +466,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** PERSIST-01 C14: a log record of its own, durable when this returns. */
   getGlobal(key: string): unknown {
     const v = this.globals.get(key);
-    return v === undefined ? null : JSON.parse(v);
+    return v === undefined ? null : decodeGlobal(v);
   }
 
   /** PERSIST-01 C17: entries at past timestamps, a log record of their own, durable when this returns. */
@@ -501,11 +503,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   async setGlobal(key: string, value: unknown) {
     this.assertWriter();
-    this.globals.set(key, JSON.stringify(value));
+    this.globals.set(key, encodeGlobal(value));
     // After a group's write in flight, never inside it: records stay whole lines.
     while (this.writing) await this.writing.catch(() => {});
     if (this.fh !== null) {
-      writeSync(this.fh.fd, `${JSON.stringify({ global: key, value })}\n`);
+      writeSync(this.fh.fd, `${encodeGlobal({ global: key, value })}\n`);
       if (this.durable) fdatasyncSync(this.fh.fd);
     }
   }

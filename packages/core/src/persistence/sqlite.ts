@@ -1,16 +1,23 @@
-// The SQLite driver: Convex's two generic tables in bun:sqlite (WAL mode). A flush is one SQLite
-// transaction, so a group of commits is durable (and crash-atomic) as a whole. Ships with @bunvex/core:
-// bun:sqlite is built into Bun, so this driver has no dependency at all.
+// The SQLite driver: Convex's SQLite layout (crates/sqlite/src/lib.rs, STUDY-133 §1.5) in bun:sqlite. A flush is
+// one SQLite transaction, so a group of commits is durable (and crash-atomic) as a whole. Ships with
+// @bunvex/core: bun:sqlite is built into Bun, so this driver has no dependency at all.
 //
-// Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): `persistence_globals` ('layout_version', as
-// Convex's SQLite store names its globals table) and `read_only` (Convex's name; its SQLite store has none).
-// They are checked before the file is changed in any way (even the WAL pragma rewrites its header).
+// The tables are Convex's, created with Convex's own statements: `documents` keyed by `(ts, table_id, id)` with
+// `documents_by_table_and_id`, `indexes` keyed by `(index_id, key, ts)`, `persistence_globals`. Ids, tablets and
+// index ids are the 16 bytes of their internal ids. A store Convex wrote opens here, and one written here opens
+// in Convex.
 //
-// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (`documents_by_ts`,
-// built when missing, as `indexes_by_ts`); prunes are `ts <= X` per key, Convex's SQLite statements;
-// globals are `persistence_globals` rows.
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+// Two decided divergences (STUDY-133 §8a): the file is in WAL mode (DV-411; Convex keeps the rollback journal and
+// opens a WAL file as it is), and the store has bunvex's `.lock` file next to it and a `read_only` table (DV-412;
+// Convex ignores both). There is no layout record (DV-418): the open checks that the tables it finds have
+// Convex's columns, before the file is changed in any way (even the WAL pragma rewrites its header).
+//
+// Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by its key's leading `ts`; prunes
+// are Convex's `ts <= X` statements per key; globals are `persistence_globals` rows.
+import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { opaqueToInspect } from "../inspect.ts";
+import { internalIdBytes, internalIdString } from "../internal-id.ts";
+import { decodeGlobal, encodeGlobal } from "./global-json.ts";
 import type {
   DocLogRow,
   DocPrune,
@@ -29,16 +36,7 @@ import type {
   TabletId,
 } from "./index.ts";
 import { DanglingReferenceError, LeaseLostError } from "./index.ts";
-import {
-  checkLayoutVersion,
-  checkUnversionedTables,
-  decodeLayoutVersion,
-  LAYOUT_VERSION,
-  LayoutError,
-  type OpenOptions,
-  ReadOnlyError,
-  type ReadOnlyFlag,
-} from "./layout.ts";
+import { checkStoreTables, LayoutError, type OpenOptions, ReadOnlyError, type ReadOnlyFlag } from "./layout.ts";
 import { ProcessLock } from "./lock.ts";
 import { scanLatestSync } from "./scan.ts";
 
@@ -49,11 +47,70 @@ declare module "bun:sqlite" {
   }
 }
 
-/** bunvex's columns, as `pragma table_info` declares them: how an unversioned store is recognised. */
+/**
+ * Convex's SQLite DDL (crates/sqlite/src/lib.rs `DOCUMENTS_INIT`, `INDEXES_INIT`, `PERSISTENCE_GLOBALS_INIT`),
+ * statement for statement and in its spacing, so that `sqlite_master` reads the same in a store either wrote.
+ * Format data, run on every open as Convex runs it.
+ */
+export const SQLITE_LAYOUT = `
+CREATE TABLE IF NOT EXISTS documents (
+    id BLOB NOT NULL,
+    ts INTEGER NOT NULL,
+
+    table_id BLOB NOT NULL,
+
+    json_value TEXT NULL,
+    deleted INTEGER NOT NULL,
+
+    prev_ts INTEGER,
+
+    PRIMARY KEY (ts, table_id, id)
+);
+CREATE INDEX IF NOT EXISTS documents_by_table_and_id ON documents (table_id, id, ts);
+
+CREATE TABLE IF NOT EXISTS indexes (
+    index_id BLOB NOT NULL,
+    ts INTEGER NOT NULL,
+
+    key BLOB NOT NULL,
+
+    deleted INTEGER NOT NULL,
+
+    table_id BLOB NULL,
+    document_id BLOB NULL,
+
+    PRIMARY KEY (index_id, key, ts)
+);
+
+CREATE TABLE IF NOT EXISTS persistence_globals (
+    key TEXT NOT NULL,
+    json_value TEXT NOT NULL,
+
+    PRIMARY KEY (key)
+);
+`;
+
+/** The layout's columns, as `pragma table_info` declares them: what an existing store must have. */
 const COLUMNS = {
-  documents: ["table_id text", "id text", "ts integer", "json_value text", "deleted integer", "prev_ts integer"],
-  indexes: ["index_id text", "key blob", "ts integer", "deleted integer", "table_id text", "document_id text"],
+  documents: ["id blob", "ts integer", "table_id blob", "json_value text", "deleted integer", "prev_ts integer"],
+  indexes: ["index_id blob", "ts integer", "key blob", "deleted integer", "table_id blob", "document_id blob"],
+  persistence_globals: ["key text", "json_value text"],
 };
+
+/** A tablet's or an index's bytes, by id: few distinct ones, bound on every statement. */
+const idBytesCache = new Map<string, Uint8Array>();
+function cachedBytes(id: string): Uint8Array {
+  let b = idBytesCache.get(id);
+  if (b === undefined) {
+    b = internalIdBytes(id);
+    if (idBytesCache.size > 4096) idBytesCache.clear();
+    idBytesCache.set(id, b);
+  }
+  return b;
+}
+const idString = (b: Uint8Array) => internalIdString(b);
+/** A live index entry's document id and its document at the entry's ts (null columns: no such version). */
+type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
 
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   /** PERSIST-01 C7 as an OS lock on the file, held for the process's life (STUDY-25 L9). */
@@ -67,8 +124,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private scanAsc;
   private scanDesc;
   private getDoc;
-  private docAt;
-  private logPrev;
+  private maxDocTs;
   private docLogRows;
   private pruneIdx;
   private pruneDoc;
@@ -94,26 +150,27 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
     this.db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
       pragma temp_store = memory; pragma cache_size = -262144;`);
-    this.db.exec(`
-      create table if not exists documents (table_id text not null, id text not null, ts integer not null,
-        json_value text, deleted integer not null, prev_ts integer, primary key (table_id, id, ts)) without rowid;
-      create table if not exists indexes (index_id text not null, key blob not null, ts integer not null,
-        deleted integer not null, table_id text, document_id text, primary key (index_id, key, ts)) without rowid;
-      create table if not exists persistence_globals (key text primary key, json_value text not null);
-      create table if not exists read_only (id integer primary key);`);
-    // The log by ts (PERSIST-01 C11). Building it writes the file, so only the lock holder does it: here when
-    // the lock is ours, else when acquireLease takes it.
-    if (this.inMemory || this.lock) this.ensureLogIndex();
-    this.insDoc = this.db.prepare(`insert into documents values (?, ?, ?, ?, ?, ?)`);
+    this.db.exec(SQLITE_LAYOUT);
+    this.db.exec(`create table if not exists read_only (id integer primary key);`);
+    this.insDoc = this.db.prepare(
+      `insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values (?, ?, ?, ?, ?, ?)`,
+    );
     this.insIdx = this.db.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
     this.putIdx = this.db.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
-    // Newest version per key at or before ts: order by key, ts desc and keep the first row of each key.
+    // Newest version per key at or before ts, joined to its document at the entry's own ts, as Convex's
+    // `index_scan` (crates/sqlite/src/lib.rs): the key's max ts from the primary key's index alone (it holds
+    // every column the grouping reads, so old versions and tombstones cost no row lookup), then that one row
+    // and its document. A page is at most `?5` keys; `scanLatestSync` pages on.
     // Timestamps are nanoseconds above 2^53 (STUDY-133 §5.3): the statements that read them return
     // integers as `bigint`.
     const scan = (dir: "asc" | "desc") =>
       this.db
-        .prepare(`select key, ts, deleted, document_id from indexes
-        where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4 order by key ${dir}, ts desc limit ?5`)
+        .prepare(`select a.key, a.ts, b.deleted, b.document_id, c.json_value, c.deleted as doc_deleted
+        from (select key, max(ts) as ts from indexes where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4
+              group by key order by key ${dir} limit ?5) a
+        join indexes b on b.index_id = ?1 and b.key = a.key and b.ts = a.ts
+        left join documents c on c.ts = b.ts and c.table_id = b.table_id and c.id = b.document_id
+        order by a.key ${dir}`)
         .safeIntegers(true);
     this.scanAsc = scan("asc");
     this.scanDesc = scan("desc");
@@ -121,34 +178,25 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       .prepare(`select json_value, deleted, ts from documents
         where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`)
       .safeIntegers(true);
-    // An index entry's document at the entry's own ts (Convex's exact-ts join, DV-67 reversed).
-    this.docAt = this.db.prepare(`select json_value, deleted from documents where table_id = ? and id = ? and ts = ?`);
-    // The newest ts written (the durable prefix, once a flush has committed it).
-    this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`).safeIntegers(true);
+    // The newest ts written (the durable prefix, once a flush has committed it): the key's leading column.
+    this.maxDocTs = this.db.prepare(`select max(ts) as m from documents`).safeIntegers(true);
     this.docLogRows = this.db
       .prepare(`select ts, table_id, id, deleted, prev_ts from documents
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts`)
+        order by ts, table_id, id`)
       .safeIntegers(true);
-    this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and key = ? and ts <= ?`);
+    // Convex's `DELETE_INDEX` and `DELETE_DOCUMENT`.
+    this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
     this.pruneDoc = this.db.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
-  }
-
-  /** The ts indexes, only when missing (STUDY-25 L1): a store written before PERSIST-01 C11 (indexes) or
-   *  C12 (documents) gets them here. */
-  private ensureLogIndex() {
-    for (const t of ["indexes", "documents"])
-      if (!this.db.query(`select 1 from sqlite_master where type = 'index' and name = '${t}_by_ts'`).get())
-        this.db.exec(`create index if not exists ${t}_by_ts on ${t} (ts)`);
   }
 
   private get inMemory() {
     return this.path === ":memory:" || this.path === "";
   }
 
-  /** PERSIST-01 C10, reading only: the layout version, or bunvex's columns on a store without one; and the
-   *  read-only flag. Refusing needs no lock: nothing is written. */
+  /** PERSIST-01 C10, reading only: the tables have the layout's columns; and the read-only flag. Refusing needs
+   *  no lock: nothing is written. */
   private checkStore(opts: OpenOptions) {
     const store = `the SQLite store ${this.path}`;
     let tables: Set<string>;
@@ -163,21 +211,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         throw new LayoutError(`${store} is not a bunvex store: the file is not a SQLite database`);
       throw e;
     }
-    const v = tables.has("persistence_globals")
-      ? (this.db.query(`select json_value from persistence_globals where key = 'layout_version'`).get() as {
-          json_value: string;
-        } | null)
-      : null;
-    if (v) checkLayoutVersion(decodeLayoutVersion(v.json_value), store);
-    else {
-      const found: Record<string, string[]> = {};
-      for (const t of ["documents", "indexes"])
-        if (tables.has(t))
-          found[t] = (this.db.query(`pragma table_info(${t})`).all() as { name: string; type: string }[]).map(
-            (c) => `${c.name} ${c.type.toLowerCase()}`,
-          );
-      checkUnversionedTables(store, found, COLUMNS);
-    }
+    const found: Record<string, string[]> = {};
+    for (const t of Object.keys(COLUMNS))
+      if (tables.has(t))
+        found[t] = (this.db.query(`pragma table_info(${t})`).all() as { name: string; type: string }[]).map(
+          (c) => `${c.name} ${c.type.toLowerCase()}`,
+        );
+    checkStoreTables(store, found, COLUMNS);
     if (tables.has("read_only") && this.db.query(`select 1 from read_only limit 1`).get() && !opts.allowReadOnly)
       throw new ReadOnlyError(store);
   }
@@ -188,33 +228,11 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     else this.db.run(`delete from read_only`);
   }
 
-  /** PERSIST-01 C10 under the lease: a new (or pre-C10) store records its layout version; one recorded in the
-   *  meantime by another bunvex is checked again. */
-  private stampLayout() {
-    this.db.run(`insert or ignore into persistence_globals (key, json_value) values ('layout_version', ?)`, [
-      JSON.stringify(LAYOUT_VERSION),
-    ]);
-    const v = this.db.query(`select json_value from persistence_globals where key = 'layout_version'`).get() as {
-      json_value: string;
-    };
-    checkLayoutVersion(decodeLayoutVersion(v.json_value), `the SQLite store ${this.path}`);
-  }
-
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
-    if (this.inMemory) {
-      this.stampLayout();
-      return { epoch: 1 }; // nothing another process could share
-    }
+    if (this.inMemory) return { epoch: 1 }; // nothing another process could share
     this.lock ??= ProcessLock.tryTake(this.path);
     if (!this.lock) return { heldBy: ProcessLock.holderOf(this.path), expiresInMs: null };
-    try {
-      this.stampLayout();
-    } catch (e) {
-      await this.releaseLease();
-      throw e;
-    }
     this.lock.recordHolder(opts.holder);
-    this.ensureLogIndex();
     return { epoch: this.lock.epoch };
   }
 
@@ -233,13 +251,20 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
     if (!this.inTx) {
-      this.durableTs ??= (this.logPrev.get(MAX_I64) as { m: bigint | null }).m ?? 0n;
+      this.durableTs ??= (this.maxDocTs.get() as { m: bigint | null }).m ?? 0n;
       this.db.exec("begin");
       this.inTx = true;
     }
     this.top = ts;
-    for (const d of docs) this.insDoc.run(d.table, d.id, ts, d.json, d.json === null ? 1 : 0, d.prevTs);
-    for (const e of idx) this.insIdx.run(e.index, e.key, ts, e.id === null ? 1 : 0, e.table, e.id);
+    for (const d of docs)
+      this.insDoc.run(internalIdBytes(d.id), ts, cachedBytes(d.table), d.json, d.json === null ? 1 : 0, d.prevTs);
+    for (const e of idx) this.writeEntry(this.insIdx, e, ts);
+  }
+
+  /** One `indexes` row, as Convex's `write`: a tombstone has NULL `table_id` and `document_id`. */
+  private writeEntry(stmt: Statement, e: IndexWrite, ts: bigint) {
+    if (e.id === null) stmt.run(cachedBytes(e.index), ts, e.key, 1, null, null);
+    else stmt.run(cachedBytes(e.index), ts, e.key, 0, cachedBytes(e.table!), internalIdBytes(e.id));
   }
 
   /** PERSIST-01 C17: Convex's `INSERT OR REPLACE` of index rows at their own ts. */
@@ -247,7 +272,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.assertWriter();
     if (!entries.length) return;
     const write = () => {
-      for (const e of entries) this.putIdx.run(e.index, e.key, e.ts, e.id === null ? 1 : 0, e.table, e.id);
+      for (const e of entries) this.writeEntry(this.putIdx, e, e.ts);
     };
     // Inside a group being applied, the rows join its transaction; else they are one of their own.
     if (this.inTx) write();
@@ -270,12 +295,18 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return (
       this.docLogRows.all(afterTs, hi, limit) as {
         ts: bigint;
-        table_id: string;
-        id: string;
+        table_id: Uint8Array;
+        id: Uint8Array;
         deleted: bigint;
         prev_ts: bigint | null;
       }[]
-    ).map((r) => ({ ts: r.ts, table: r.table_id, id: r.id, deleted: !!r.deleted, prevTs: r.prev_ts }));
+    ).map((r) => ({
+      ts: r.ts,
+      table: idString(r.table_id),
+      id: idString(r.id),
+      deleted: !!r.deleted,
+      prevTs: r.prev_ts,
+    }));
   }
 
   /** PERSIST-01 C13. Inside a group still being applied, the deletes join its transaction. */
@@ -283,7 +314,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.assertWriter();
     return this.db.transaction(() => {
       let n = 0;
-      for (const e of entries) n += this.pruneIdx.run(e.index, e.key, e.ts).changes;
+      for (const e of entries) n += this.pruneIdx.run(cachedBytes(e.index), e.ts, e.key).changes;
       return n;
     })();
   }
@@ -292,7 +323,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.assertWriter();
     return this.db.transaction(() => {
       let n = 0;
-      for (const e of entries) n += this.pruneDoc.run(e.table, e.id, e.ts).changes;
+      for (const e of entries) n += this.pruneDoc.run(cachedBytes(e.table), internalIdBytes(e.id), e.ts).changes;
       return n;
     })();
   }
@@ -302,16 +333,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     const r = this.db.query(`select json_value from persistence_globals where key = ?`).get(key) as {
       json_value: string;
     } | null;
-    return r ? JSON.parse(r.json_value) : null;
+    return r ? decodeGlobal(r.json_value) : null;
   }
 
+  /** Convex's `WRITE_PERSISTENCE_GLOBAL`. */
   setGlobal(key: string, value: unknown) {
     this.assertWriter();
-    this.db.run(
-      `insert into persistence_globals (key, json_value) values (?, ?)
-       on conflict (key) do update set json_value = excluded.json_value`,
-      [key, JSON.stringify(value)],
-    );
+    this.db.run(`insert or replace into persistence_globals values (?, ?)`, [key, encodeGlobal(value)]);
   }
 
   auditRowCount() {
@@ -323,36 +351,42 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   scan(table: TabletId, index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const q = desc ? this.scanDesc : this.scanAsc;
-    const entries = scanLatestSync(
+    const indexBytes = cachedBytes(index);
+    const entries = scanLatestSync<JoinedEntry>(
       (p) =>
-        (q.all(index, p.lo, p.hi, ts, p.n) as any[]).map((r) => ({
+        (q.all(indexBytes, p.lo, p.hi, ts, p.n) as any[]).map((r) => ({
           key: r.key as Uint8Array,
           ts: r.ts as bigint,
           deleted: !!r.deleted,
-          id: r.document_id as string | null,
+          id:
+            r.document_id === null
+              ? null
+              : { id: r.document_id as Uint8Array, json: r.json_value as string | null, docDeleted: r.doc_deleted },
         })),
       lo,
       hi,
       limit,
       desc,
     );
-    // Embedded: one indexed lookup per entry, at the entry's ts.
+    // Convex's errors: no document at the entry's ts ("Dangling index reference"), or a deleted one.
     return entries.map((e): IndexedDoc => {
-      const d = this.docAt.get(table, e.id, e.ts) as { json_value: string | null; deleted: number } | null;
-      if (!d || d.deleted) throw new DanglingReferenceError(index, e.id, e.ts, !!d);
-      return { id: e.id, ts: e.ts, json: d.json_value! };
+      const id = idString(e.id.id);
+      if (e.id.docDeleted === null || e.id.docDeleted !== 0n)
+        throw new DanglingReferenceError(index, id, e.ts, e.id.docDeleted !== null);
+      return { id, ts: e.ts, json: e.id.json! };
     });
   }
 
   get(table: TabletId, id: InternalId, ts: bigint): DocVersion {
-    const r = this.getDoc.get(table, id, ts) as any;
+    const r = this.getDoc.get(cachedBytes(table), internalIdBytes(id), ts) as any;
     return r && !r.deleted ? { json: r.json_value as string, ts: r.ts as bigint } : null;
   }
 
   getVersions(table: TabletId, ids: string[], ts: bigint) {
     // Embedded: one indexed lookup per id is the fastest form (no round trips to save).
+    const tableBytes = cachedBytes(table);
     return ids.map((id) => {
-      const r = this.getDoc.get(table, id, ts) as any;
+      const r = this.getDoc.get(tableBytes, internalIdBytes(id), ts) as any;
       return r && !r.deleted ? { json: r.json_value as string, ts: r.ts as bigint } : null;
     });
   }
@@ -361,20 +395,15 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     const r = this.db
       .query(`select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
               from documents where table_id = ? and ts <= ?) where rn = 1 and json_value is not null`)
-      .get(table, ts) as { n: number };
+      .get(cachedBytes(table), ts) as { n: number };
     return Number(r.n);
   }
 
-  // A flush is one SQLite transaction, so the newest ts of either table IS the last durable commit
-  // (PERSIST-01 C4/C5). Both tables: a backfill commit writes index entries only (STUDY-24 S2).
+  // A flush is one SQLite transaction, so the newest ts in `documents` IS the last durable commit (PERSIST-01
+  // C4/C5), as Convex's `max_ts` reads it. Index entries are never above it: a commit writes its documents, and
+  // a backfill writes entries at their documents' own ts (C17).
   maxTs(): bigint {
-    const r = this.db
-      .query(
-        `select max(coalesce((select max(ts) from documents), 0), coalesce((select max(ts) from indexes), 0)) as m`,
-      )
-      .safeIntegers(true)
-      .get() as { m: bigint };
-    return r.m;
+    return (this.maxDocTs.get() as { m: bigint | null }).m ?? 0n;
   }
 
   close() {
@@ -384,8 +413,6 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 }
 
-/** The largest int64: a bound above every timestamp. */
-const MAX_I64 = (1n << 63n) - 1n;
 const minTs = (a: bigint, b: bigint) => (a < b ? a : b);
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).

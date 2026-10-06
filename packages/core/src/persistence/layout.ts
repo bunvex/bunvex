@@ -84,6 +84,31 @@ export function checkUnversionedTables(
   }
 }
 
+/**
+ * PERSIST-01 C10 for a driver in the reference layout (STUDY-133: Convex's DDL, no version record): the store
+ * opens when each of its tables that the layout names has exactly the layout's columns (absent tables are
+ * created). Any other `documents` / `indexes` (an older bunvex layout, or a stranger's) is refused, never
+ * written to. `found` / `want`: per table, its columns as "name type", in any order.
+ */
+export function checkStoreTables(
+  store: string,
+  found: Record<string, string[]>,
+  want: Record<string, string[]>,
+  /** How the store names them: "table"/"columns", or "collection"/"fields" (MongoDB). */
+  words: [string, string] = ["table", "columns"],
+) {
+  for (const [table, cols] of Object.entries(found)) {
+    const expected = want[table];
+    if (!expected) continue;
+    const a = [...cols].sort().join(", ");
+    const b = [...expected].sort().join(", ");
+    if (a === b) continue;
+    throw new LayoutError(
+      `${store} is not in the layout this bunvex reads: its ${words[0]} \`${table}\` has the ${words[1]} ${a || "(none)"}, not ${b}. Point bunvex at an empty database, or at one written in this layout`,
+    );
+  }
+}
+
 /** A version record as SQL stores keep it (JSON text in `persistence_globals.json_value`, as Convex's). */
 export function decodeLayoutVersion(raw: unknown): unknown {
   if (raw === null || raw === undefined) return null;
