@@ -1,0 +1,44 @@
+[
+  {
+    "type": "index",
+    "name": "documents_by_table_and_id",
+    "tbl_name": "documents",
+    "sql": "CREATE INDEX documents_by_table_and_id ON documents (table_id, id, ts)"
+  },
+  {
+    "type": "index",
+    "name": "sqlite_autoindex_documents_1",
+    "tbl_name": "documents",
+    "sql": null
+  },
+  {
+    "type": "index",
+    "name": "sqlite_autoindex_indexes_1",
+    "tbl_name": "indexes",
+    "sql": null
+  },
+  {
+    "type": "index",
+    "name": "sqlite_autoindex_persistence_globals_1",
+    "tbl_name": "persistence_globals",
+    "sql": null
+  },
+  {
+    "type": "table",
+    "name": "documents",
+    "tbl_name": "documents",
+    "sql": "CREATE TABLE documents (\n    id BLOB NOT NULL,\n    ts INTEGER NOT NULL,\n\n    table_id BLOB NOT NULL,\n\n    json_value TEXT NULL,\n    deleted INTEGER NOT NULL,\n\n    prev_ts INTEGER,\n\n    PRIMARY KEY (ts, table_id, id)\n)"
+  },
+  {
+    "type": "table",
+    "name": "indexes",
+    "tbl_name": "indexes",
+    "sql": "CREATE TABLE indexes (\n    index_id BLOB NOT NULL,\n    ts INTEGER NOT NULL,\n\n    key BLOB NOT NULL,\n\n    deleted INTEGER NOT NULL,\n\n    table_id BLOB NULL,\n    document_id BLOB NULL,\n\n    PRIMARY KEY (index_id, key, ts)\n)"
+  },
+  {
+    "type": "table",
+    "name": "persistence_globals",
+    "tbl_name": "persistence_globals",
+    "sql": "CREATE TABLE persistence_globals (\n    key TEXT NOT NULL,\n    json_value TEXT NOT NULL,\n\n    PRIMARY KEY (key)\n)"
+  }
+]

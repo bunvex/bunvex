@@ -139,12 +139,14 @@ describe("catalog (_tables / _index)", () => {
   test("an unchanged schema commits nothing on open", async () => {
     const open = store();
     const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
+    // The newest commit in the store, not the visible ts: an open moves that to the clock (Convex's idle
+    // repeatable ts, `max_repeatable_ts`) without committing anything.
     let ts = 0n;
     await open(schema, async (e) => {
-      ts = e.committer.visibleTs;
+      ts = await e.persistence.maxTs!();
     });
     await open(schema, async (e) => {
-      expect(e.committer.visibleTs).toBe(ts);
+      expect(await e.persistence.maxTs!()).toBe(ts);
     });
   });
 

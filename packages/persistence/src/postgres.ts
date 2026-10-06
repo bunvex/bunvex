@@ -41,7 +41,9 @@ import {
   type DocPrune,
   type DocVersion,
   type DocWrite,
+  decodeGlobal,
   decodeLayoutVersion,
+  encodeGlobal,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -775,7 +777,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   /** PERSIST-01 C14. */
   async getGlobal(key: string): Promise<unknown> {
     const [r] = await this.read((sql) => sql`select json_value::text as v from persistence_globals where key = ${key}`);
-    return r ? JSON.parse(r.v as string) : null;
+    return r ? decodeGlobal(r.v as string) : null;
   }
 
   async setGlobal(key: string, value: unknown) {
@@ -785,7 +787,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
               u as (insert into persistence_globals (key, json_value) select $1, $2 where exists (select 1 from l)
                     on conflict (key) do update set json_value = excluded.json_value returning 1)
          select (select count(*) from l)::int as ok`,
-        [key, JSON.stringify(value), this.epoch] as any,
+        [key, encodeGlobal(value), this.epoch] as any,
       ),
     );
     if (r.ok !== 1) throw new LeaseLostError();

@@ -5,8 +5,8 @@
 //   K5 atomic visibility   K6 crash atomicity (SIGKILL mid-commit)       K7 torn log tail (log drivers)
 // and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
-// stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
-// (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
+// stop the committer); for drivers that check their layout (PERSIST-01 C10), K22 (a layout version record, or
+// the reference layout's tables) and K23 (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
 // driver; K26 (bounded flushes: a group written
 // in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
 // log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden),
@@ -45,7 +45,7 @@ import {
 import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
 import { indexEntryChecks, prevTsChecks } from "./entries.ts";
-import { tid } from "./ids.ts";
+import { did, didName, tid } from "./ids.ts";
 import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
@@ -71,7 +71,12 @@ export type DriverModule = {
   /** K22: record `v` raw (a future or unknown version), or remove the record (null: a store written
    *  before C10). The store's data stays. */
   setLayoutVersion?(v: unknown): Promise<void>;
-  /** K22: replace the store with one bunvex did not write (e.g. Convex's own tables, with a row). */
+  /** K22, drivers in the reference layout (STUDY-133: Convex's DDL, no version record): replace the store
+   *  with an empty one created from the reference system's own DDL (a fixture, not the driver's statements). */
+  makeReferenceStore?(): Promise<void>;
+  /** K22: replace the store with one bunvex cannot read (another layout's tables, with a row): Convex's own
+   *  tables for a driver with a version record; another layout's (e.g. bunvex's previous one) for a driver in
+   *  the reference layout. */
   makeForeign?(): Promise<void>;
   /** K22: whether that foreign store is exactly as `makeForeign` left it (a refused open wrote nothing). */
   foreignIntact?(): Promise<boolean>;
@@ -173,7 +178,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     };
     const entries = Array.from({ length: 1500 }, (_, i) => ({
       key: encodeKey([vals(), vals(), `id${i}`]),
-      id: `id${i}`,
+      id: did(`id${i}`),
     }));
     st.apply(
       1n,
@@ -207,8 +212,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const del = Math.random() < 0.25;
         const v = del ? null : JSON.stringify({ c, id });
         const prev = model.get(id)?.at(-1)?.ts;
-        docs.push({ table: tid(901), id, json: v, prevTs: prev === undefined ? null : BigInt(prev) });
-        idx.push({ index: tid(901), key: keyOf(id), table: del ? null : tid(901), id: del ? null : id });
+        docs.push({ table: tid(901), id: did(id), json: v, prevTs: prev === undefined ? null : BigInt(prev) });
+        idx.push({ index: tid(901), key: keyOf(id), table: del ? null : tid(901), id: del ? null : did(id) });
         model.set(id, [...(model.get(id) ?? []), { ts, v }]);
       }
       st.apply(BigInt(ts), docs, idx);
@@ -223,12 +228,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         return vs.length ? vs[vs.length - 1].v : null;
       };
       for (let i = 0; i < 60; i++)
-        if (((await st.get(tid(901), `d${i}`, BigInt(T)))?.json ?? null) !== at(`d${i}`)) bad++;
+        if (((await st.get(tid(901), did(`d${i}`), BigInt(T)))?.json ?? null) !== at(`d${i}`)) bad++;
       const want = [...model.keys()].filter((id) => at(id) !== null).sort((a, b) => compareKeys(keyOf(a), keyOf(b)));
       const got = await st.scan(tid(901), tid(901), FULL_LO, FULL_HI, BigInt(T), 1000, false);
-      if (JSON.stringify(idsOf(got)) !== JSON.stringify(want)) bad++;
+      if (JSON.stringify(idsOf(got)) !== JSON.stringify(want.map(did))) bad++;
       // Each entry comes with its document (the version written with it).
-      if (got.some((d) => d.json !== at(d.id))) bad++;
+      if (got.some((d) => d.json !== at(didName(d.id)))) bad++;
     }
     check(bad === 0, `K2 snapshot reads equal the reference model at 60 random past snapshots (${bad} mismatches)`);
   }
@@ -238,8 +243,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   async function k8(st: Persistence) {
     const T0 = 200; // after K2's commits
     const N = 40;
-    const id = (i: number) => `e${String(i).padStart(2, "0")}`;
-    const keyOf = (i: number) => encodeKey([id(i)]);
+    const name = (i: number) => `e${String(i).padStart(2, "0")}`;
+    const id = (i: number) => did(name(i));
+    const keyOf = (i: number) => encodeKey([name(i)]);
     const model = new Map<number, { ts: number; v: string | null }[]>();
     let ts = T0;
     const commit = async (writes: [number, boolean][]) => {
@@ -324,7 +330,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       long("y", 6000, "q"),
       long("z", 2600, ""),
     ];
-    const entries = strings.map((v, i) => ({ key: encodeKey([v, `L${i}`]), id: `L${i}` }));
+    const entries = strings.map((v, i) => ({ key: encodeKey([v, `L${i}`]), id: did(`L${i}`) }));
     const ordered = [...entries].sort((a, b) => compareKeys(a.key, b.key));
     const model = new Map<string, { ts: number; live: boolean }[]>();
     let ts = T0;
@@ -608,7 +614,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const st3 = await mod.open(false); // the record written after recovery must survive a reopen
     const e3 = await newEngine(st3);
     const M3 = await st3.maxTs!();
-    const torn = await st3.get(e3.catalog.table("items").id, "torn", M3);
+    const torn = await st3.get(e3.catalog.table("items").id, did("torn"), M3);
     await e3.close();
     check(
       M2 === M && M3 > M && torn === null,
@@ -633,8 +639,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const INDEX = tid(951);
     const row = (ts: bigint, id: string) =>
       [
-        [{ table: TABLE, id, json: `{"ts":${ts}}`, prevTs: null }],
-        [{ index: INDEX, key: encodeKey([id]), table: TABLE, id }],
+        [{ table: TABLE, id: did(id), json: `{"ts":${ts}}`, prevTs: null }],
+        [{ index: INDEX, key: encodeKey([id]), table: TABLE, id: did(id) }],
       ] as const;
 
     // K10 — exclusive, at the driver and through the engine.
@@ -708,25 +714,33 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         "epoch" in rb &&
           M === M0 + 1n &&
           err instanceof LeaseLostError &&
-          JSON.stringify(seen) === JSON.stringify(["k12-a1"]) &&
+          JSON.stringify(seen) === JSON.stringify([did("k12-a1")]) &&
           M2 === M,
-        `K12 a stale holder's flush throws LeaseLostError and lands nothing (${err?.constructor?.name ?? "no error"}; visible ${JSON.stringify(seen)})`,
+        `K12 a stale holder's flush throws LeaseLostError and lands nothing (${err?.constructor?.name ?? "no error"}; visible ${JSON.stringify(seen.map(didName))})`,
       );
     }
 
-    // K16 — maxTs counts a commit that wrote only index entries.
+    // K16 — maxTs counts a commit that wrote only index entries. In the reference layout (STUDY-133) maxTs is
+    // the newest document version, as Convex's `max_ts`: a commit writes its documents, and an index backfill
+    // writes entries at their documents' own ts (C17), so no commit is index-only; there it counts a commit's
+    // documents.
     {
+      const reference = !!mod.makeReferenceStore;
       const s = await raw(false);
       await s.acquireLease({ holder: "k16", ttlMs: 30_000 });
       const M = await s.maxTs!();
-      s.apply(M + 1n, [], [{ index: INDEX, key: encodeKey(["k16"]), table: TABLE, id: "k16" }]);
+      const [d, i] = row(M + 1n, "k16");
+      s.apply(M + 1n, reference ? [...d] : [], [...i]);
       await s.flush();
       await s.releaseLease();
       await s.close();
       const s2 = await raw(false);
       const M2 = await s2.maxTs!();
       await s2.close();
-      check(M2 === M + 1n, `K16 maxTs counts an index-only commit (${M} → ${M2}, expected ${M + 1n})`);
+      check(
+        M2 === M + 1n,
+        `K16 maxTs counts ${reference ? "a commit's document versions (reference layout)" : "an index-only commit"} (${M} → ${M2}, expected ${M + 1n})`,
+      );
     }
 
     // K18 — a released lease is taken at once, at the driver and through Engine.close().
@@ -987,6 +1001,52 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     await mod.open(true).then((st) => st.close());
   }
 
+  // K22 — PERSIST-01 C10 for a driver in the reference layout (STUDY-133: Convex's DDL, no version record): a
+  // new store keeps no `layout_version`; an empty store created from the reference system's own DDL opens,
+  // bootstraps and takes writes; a store with other columns (another layout) is refused with LayoutError and left
+  // as it was.
+  async function k22Reference() {
+    const items = async (e: Engine) => (await e.query(allOfTenant("k22"))).length;
+    const e1 = await newEngine(await mod.open(true));
+    for (let i = 0; i < 5; i++) await e1.mutation(insertItem("k22"));
+    const record = await e1.persistence.getGlobal("layout_version");
+    await e1.close();
+    const e2 = await newEngine(await mod.open(false));
+    const reopened = await items(e2);
+    await e2.close();
+    check(
+      record === null && reopened === 5,
+      `K22 a new store keeps no layout_version record (found ${JSON.stringify(record)}) and reopens with its data (${reopened}/5 items)`,
+    );
+
+    await mod.makeReferenceStore!();
+    const ref = await mod
+      .open(false)
+      .then((st) => newEngine(st))
+      .catch((err: Error) => err);
+    let wrote = -1;
+    if (!(ref instanceof Error)) {
+      for (let i = 0; i < 5; i++) await ref.mutation(insertItem("k22"));
+      await ref.close();
+      const again = await newEngine(await mod.open(false));
+      wrote = await items(again);
+      await again.close();
+    }
+    check(
+      wrote === 5,
+      `K22 an empty store created with the reference system's own DDL opens, bootstraps, takes writes and reopens with them (${ref instanceof Error ? `${ref.name}: ${ref.message}` : `${wrote}/5 items`})`,
+    );
+
+    await mod.makeForeign!();
+    const foreign = await refusal(() => mod.open(false));
+    const intact = await mod.foreignIntact!();
+    check(
+      foreign instanceof LayoutError && intact,
+      `K22 a store with another layout's columns is refused with LayoutError and not written to (${foreign ? `${foreign.name}: ${foreign.message}` : "opened"}; intact: ${intact})`,
+    );
+    await mod.open(true).then((st) => st.close());
+  }
+
   // K23 — PERSIST-01 C10, the read-only flag (Convex's `read_only`): a store marked read-only does not open
   // for writing (ReadOnlyError); `allowReadOnly` opens it (readers, migration tools); clearing it lets a
   // writer open again.
@@ -1069,15 +1129,15 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const put = (ts: bigint, id: string) =>
         st.apply(
           ts,
-          [{ table: tid(960), id, json: `{"ts":${ts}}`, prevTs: null }],
-          [{ index: tid(961), key: encodeKey([id]), table: tid(960), id }],
+          [{ table: tid(960), id: did(id), json: `{"ts":${ts}}`, prevTs: null }],
+          [{ index: tid(961), key: encodeKey([id]), table: tid(960), id: did(id) }],
         );
       put(10n, "a");
       await st.flush();
-      const healthy = await st.get(tid(960), "a", 10n);
+      const healthy = await st.get(tid(960), did("a"), 10n);
 
       proxy.freeze();
-      const read = await timed(Promise.resolve(st.get(tid(960), "a", 10n)));
+      const read = await timed(Promise.resolve(st.get(tid(960), did("a"), 10n)));
       // A driver may run a timed-out read once more (STUDY-25 L5: Convex's Postgres driver does), so up to two
       // timeouts.
       check(
@@ -1110,7 +1170,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
 
       proxy.thaw();
-      const again = await timed(Promise.resolve(st.get(tid(960), "a", 10n)));
+      const again = await timed(Promise.resolve(st.get(tid(960), did("a"), 10n)));
       check(
         again.answered && healthy !== null && (again.value as { json: string } | null)?.json === healthy.json,
         `K20 once the store answers again, so do calls, without reopening (${again.what})`,
@@ -1229,18 +1289,20 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
       st.apply(
         10n,
-        [{ table: tid(970), id: "k21read", json: `{"v":1}`, prevTs: null }],
-        [{ index: tid(971), key: encodeKey(["k21read"]), table: tid(970), id: "k21read" }],
+        [{ table: tid(970), id: did("k21read"), json: `{"v":1}`, prevTs: null }],
+        [{ index: tid(971), key: encodeKey(["k21read"]), table: tid(970), id: did("k21read") }],
       );
       await st.flush();
-      proxy.resetOn(/k21read/, 1);
-      const once = await settle(Promise.resolve(st.get(tid(970), "k21read", 10n)));
+      // The read's statement carries the id (as text until the server drivers bind bytes).
+      const k21read = new RegExp(did("k21read"));
+      proxy.resetOn(k21read, 1);
+      const once = await settle(Promise.resolve(st.get(tid(970), did("k21read"), 10n)));
       check(
         proxy.fired.resets === 1 && once.ok && (once.value as { json: string } | null)?.json === `{"v":1}`,
         `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
       );
-      proxy.resetOn(/k21read/, 2);
-      const twice = await settle(Promise.resolve(st.get(tid(970), "k21read", 10n)));
+      proxy.resetOn(k21read, 2);
+      const twice = await settle(Promise.resolve(st.get(tid(970), did("k21read"), 10n)));
       check(
         proxy.fired.resets === 3 && !twice.ok,
         `K21 a read that loses its connection twice fails: one retry only (L5; ${twice.what}, ${proxy.fired.resets - 1} resets)`,
@@ -1353,9 +1415,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     if (leased) await leaseChecks();
     else if (opts.requireLease) check(false, "K10–K18 the driver claims PERSIST-01 C7 but has no lease");
   }
-  const layoutHooks = !!(mod.layoutVersion && mod.setLayoutVersion && mod.makeForeign && mod.foreignIntact);
+  const versionHooks = !!(mod.layoutVersion && mod.setLayoutVersion && mod.makeForeign && mod.foreignIntact);
+  const referenceHooks = !!(mod.makeReferenceStore && mod.makeForeign && mod.foreignIntact);
+  const layoutHooks = versionHooks || referenceHooks;
   if (want("K22")) {
-    if (layoutHooks) await k22().catch((e) => check(false, `K22 threw: ${e}`));
+    if (versionHooks) await k22().catch((e) => check(false, `K22 threw: ${e}`));
+    else if (referenceHooks) await k22Reference().catch((e) => check(false, `K22 threw: ${e}`));
     else if (opts.requireLayout)
       check(false, "K22 the driver claims PERSIST-01 C10 but its module has no layout hooks");
   }

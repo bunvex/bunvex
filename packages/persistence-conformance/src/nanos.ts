@@ -3,7 +3,7 @@
 // Linux-written Convex store has them) stay two distinct, ordered commits through a reopen: `maxTs`, `get`,
 // `getVersions`, `scan` and `readDocumentLog` all see the exact values.
 import { encodeKey, hasLease, hasRetention, type Persistence } from "@bunvex/core";
-import { tid } from "./ids.ts";
+import { did, tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -21,13 +21,13 @@ export async function nanosecondChecks(mod: DriverModule, check: Check) {
   if (hasLease(write)) await write.acquireLease({ holder: "k33", ttlMs: 60_000 });
   write.apply(
     T1,
-    [{ table: TABLE, id: "a", json: `{"v":1}`, prevTs: null }],
-    [{ index: INDEX, key: encodeKey(["a"]), table: TABLE, id: "a" }],
+    [{ table: TABLE, id: did("a"), json: `{"v":1}`, prevTs: null }],
+    [{ index: INDEX, key: encodeKey(["a"]), table: TABLE, id: did("a") }],
   );
   write.apply(
     T2,
-    [{ table: TABLE, id: "a", json: `{"v":2}`, prevTs: T1 }],
-    [{ index: INDEX, key: encodeKey(["b"]), table: TABLE, id: "a" }],
+    [{ table: TABLE, id: did("a"), json: `{"v":2}`, prevTs: T1 }],
+    [{ index: INDEX, key: encodeKey(["b"]), table: TABLE, id: did("a") }],
   );
   await write.flush();
   if (hasLease(write)) await write.releaseLease();
@@ -37,15 +37,15 @@ export async function nanosecondChecks(mod: DriverModule, check: Check) {
   try {
     check((await st.maxTs?.()) === T2, `K33 maxTs is the last commit's exact ns (${T2})`);
     check(
-      (await st.get(TABLE, "a", T1))?.json === `{"v":1}` &&
-        (await st.get(TABLE, "a", T2))?.json === `{"v":2}` &&
-        (await st.get(TABLE, "a", T2))?.ts === T2 &&
-        (await st.get(TABLE, "a", T1 - 1n)) === null,
+      (await st.get(TABLE, did("a"), T1))?.json === `{"v":1}` &&
+        (await st.get(TABLE, did("a"), T2))?.json === `{"v":2}` &&
+        (await st.get(TABLE, did("a"), T2))?.ts === T2 &&
+        (await st.get(TABLE, did("a"), T1 - 1n)) === null,
       "K33 get at T1, T1 + 1ns and T1 - 1ns sees three different states",
     );
     if (st.getVersions) {
-      const [v1] = await st.getVersions(TABLE, ["a"], T1);
-      const [v2] = await st.getVersions(TABLE, ["a"], T2);
+      const [v1] = await st.getVersions(TABLE, [did("a")], T1);
+      const [v2] = await st.getVersions(TABLE, [did("a")], T2);
       check(v1?.ts === T1 && v2?.ts === T2, "K33 getVersions returns each version's exact ns");
     }
     const at1 = await st.scan(TABLE, INDEX, FULL_LO, FULL_HI, T1, 10, false);

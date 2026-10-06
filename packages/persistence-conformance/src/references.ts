@@ -10,7 +10,7 @@
 //       never another one: one whose document has only an older version rejects, and one whose document was
 //       replaced later without the entry being rewritten still reads the version of its own ts.
 import { encodeKey, hasLease, type IndexedDoc, type Persistence } from "@bunvex/core";
-import { tid } from "./ids.ts";
+import { did, didName, tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -77,20 +77,20 @@ async function k30(st: Persistence, check: Check) {
   const doc = (id: string) => `{"id":"${id}"}`;
   st.apply(
     10n,
-    ["a", "c", "e", "gone"].map((id) => ({ table: TABLE, id, json: doc(id), prevTs: null })),
-    ["a", "c", "dangling", "e", "gone"].map((id) => ({ index: INDEX, key: key(id), table: TABLE, id })),
+    ["a", "c", "e", "gone"].map((id) => ({ table: TABLE, id: did(id), json: doc(id), prevTs: null })),
+    ["a", "c", "dangling", "e", "gone"].map((id) => ({ index: INDEX, key: key(id), table: TABLE, id: did(id) })),
   );
   st.apply(
     20n,
-    [{ table: TABLE, id: "gone", json: null, prevTs: 10n }],
-    [{ index: INDEX, key: key("gone"), table: TABLE, id: "gone" }],
+    [{ table: TABLE, id: did("gone"), json: null, prevTs: 10n }],
+    [{ index: INDEX, key: key("gone"), table: TABLE, id: did("gone") }],
   );
   await st.flush();
 
   const gets = [
-    await st.get(TABLE, "dangling", 20n),
-    await st.get(TABLE, "gone", 20n),
-    await st.get(TABLE, "gone", 10n),
+    await st.get(TABLE, did("dangling"), 20n),
+    await st.get(TABLE, did("gone"), 20n),
+    await st.get(TABLE, did("gone"), 10n),
   ];
   check(
     gets[0] === null && gets[1] === null && json(gets[2]) === doc("gone") && gets[2]?.ts === 10n,
@@ -119,7 +119,7 @@ async function k30(st: Persistence, check: Check) {
     !clean.rejected &&
       same(jsons(clean.docs!), [doc("a"), doc("c")]) &&
       same(
-        clean.docs!.map((d) => [d.id, String(d.ts)]),
+        clean.docs!.map((d) => [didName(d.id), String(d.ts)]),
         [
           ["a", "10"],
           ["c", "10"],
@@ -133,7 +133,7 @@ async function k30(st: Persistence, check: Check) {
 
 async function k31(st: Persistence, check: Check) {
   // One id, two tables, two different documents, one commit; each table has its own index.
-  const id = "shared";
+  const id = did("shared");
   const jsonA = `{"t":"a"}`;
   const jsonB = `{"t":"b","more":[1,2,3]}`;
   st.apply(
@@ -191,13 +191,13 @@ async function k35(st: Persistence, check: Check) {
   st.apply(
     50n,
     [
-      { table: TABLE_X, id: "stale", json: `{"v":50}`, prevTs: null },
-      { table: TABLE_X, id: "kept", json: `{"v":50}`, prevTs: null },
+      { table: TABLE_X, id: did("stale"), json: `{"v":50}`, prevTs: null },
+      { table: TABLE_X, id: did("kept"), json: `{"v":50}`, prevTs: null },
     ],
-    [{ index: INDEX_X, key: key("kept"), table: TABLE_X, id: "kept" }],
+    [{ index: INDEX_X, key: key("kept"), table: TABLE_X, id: did("kept") }],
   );
-  st.apply(60n, [], [{ index: INDEX_X, key: key("stale"), table: TABLE_X, id: "stale" }]);
-  st.apply(70n, [{ table: TABLE_X, id: "kept", json: `{"v":70}`, prevTs: 50n }], []);
+  st.apply(60n, [], [{ index: INDEX_X, key: key("stale"), table: TABLE_X, id: did("stale") }]);
+  st.apply(70n, [{ table: TABLE_X, id: did("kept"), json: `{"v":70}`, prevTs: 50n }], []);
   await st.flush();
   const stale = await outcome(st, TABLE_X, INDEX_X, ...only("stale"), 80n);
   check(

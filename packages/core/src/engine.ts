@@ -87,11 +87,13 @@ import {
   ConflictError,
   type FlushRetryOptions,
   type Interval,
+  MAX_REPEATABLE_TS_GLOBAL,
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
+  checkDatabaseVersion,
   DATABASE_VERSION,
   initializeDatabaseGlobals,
   initializeStorageType,
@@ -422,6 +424,8 @@ export class Engine {
       storedSchema?: boolean;
       /** Retention's knobs (Convex's INDEX_RETENTION_DELAY, DOCUMENT_RETENTION_DELAY, …; STUDY-33). */
       retention?: RetentionOptions;
+      /** When `max_repeatable_ts` is written (Convex's knobs: 5 s after a commit, every 1–2 h when idle). */
+      repeatableTs?: { commitDelayMs?: number; idleMs?: number };
       /** Table summary checkpoints' knobs (STUDY-72); `false`: none, the summaries scanned on every start. */
       summaryCheckpoints?: SummaryCheckpointOptions | false;
       /**
@@ -500,9 +504,23 @@ export class Engine {
     // A new store gets its bootstrap rows at ts 0 (Convex's `Database::initialize`); then the start reads its
     // catalog from the bootstrap globals (`Database::load`).
     await bootstrapStore(this.persistence);
-    const m = (await this.persistence.maxTs?.()) ?? 0n;
-    this.committer.resume(m);
     this.catalog = bootstrapCatalog(await readBootstrapIds(this.persistence));
+    // A store whose data version bunvex cannot read is refused before anything is written to it (DV-418),
+    // `max_repeatable_ts` included, and before the committer starts its bumps.
+    const globals = (await readSystemRows(this.persistence, DATABASE_GLOBALS_TABLE))[0];
+    if (typeof globals?.version === "bigint") checkDatabaseVersion(globals.version);
+    // As Convex's `new_idle_repeatable_ts` at load: every commit of this start is above the store's newest
+    // commit, its `max_repeatable_ts` and the clock, and the store records that bound first.
+    const m = (await this.persistence.maxTs?.()) ?? 0n;
+    const repeatable = await this.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL);
+    let start = this.committer.clockNow();
+    if (m > start) start = m;
+    if (typeof repeatable === "bigint" && repeatable > start) start = repeatable;
+    await this.persistence.setGlobal(MAX_REPEATABLE_TS_GLOBAL, start);
+    this.committer.resume(start);
+    this.committer.startRepeatableBumps(async (ts) => {
+      await this.persistence.setGlobal(MAX_REPEATABLE_TS_GLOBAL, ts);
+    }, this.opts.repeatableTs);
     // A deployable deployment's schema is the last one pushed (STUDY-35): read before reconciling, or the
     // constructor's (empty) schema would drop every index.
     if (this.opts.storedSchema) {
@@ -624,6 +642,7 @@ export class Engine {
     await this.retention?.stop();
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
+    this.committer.stopRepeatableBumps();
     await this.committer.idle();
     if (this.workerTimer) clearInterval(this.workerTimer);
     // A compaction in progress stops; then every index is flushed.
@@ -659,12 +678,13 @@ export class Engine {
 
   /**
    * The database's globals (`_db`, STUDY-126), written at the store's first start as Convex's bootstrap
-   * does. A version above this bunvex's is warned about, as Convex's migration worker does.
+   * does. Its version is checked (DV-418): an older one is refused; a newer one is warned about, as Convex's
+   * migration worker does.
    */
   private async loadDatabaseGlobals() {
     const uuid = outsideExecution(() => crypto.randomUUID());
     const version = await this.runMutation((db) => initializeDatabaseGlobals(db, () => uuid), true);
-    if (version > DATABASE_VERSION)
+    if (checkDatabaseVersion(version) === "newer")
       console.warn(`persisted db metadata version is ahead at ${version}, this binary is at ${DATABASE_VERSION}`);
   }
 

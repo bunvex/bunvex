@@ -46,6 +46,8 @@ import {
   type DocPrune,
   type DocVersion,
   type DocWrite,
+  decodeGlobal,
+  encodeGlobal,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -685,7 +687,7 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   /** PERSIST-01 C14. */
   async getGlobal(key: string): Promise<unknown> {
     const d = await this.read(() => this.globals.findOne({ _id: key }));
-    return d ? JSON.parse(d.v) : null;
+    return d ? decodeGlobal(d.v) : null;
   }
 
   async setGlobal(key: string, value: unknown) {
@@ -693,7 +695,7 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     await this.call(() =>
       this.globals.updateOne(
         { _id: key },
-        { $set: { v: JSON.stringify(value) } },
+        { $set: { v: encodeGlobal(value) } },
         { upsert: true, writeConcern: { w: "majority" } },
       ),
     );

@@ -80,10 +80,12 @@ export interface Persistence {
   isTransient?(e: unknown): boolean;
   /**
    * PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. Required:
-   * a start finds the catalog from the bootstrap globals (STUDY-133 §5.2).
+   * a start finds the catalog from the bootstrap globals (STUDY-133 §5.2). An integer above 2^53 is a
+   * `bigint` (`decodeGlobal`), as `max_repeatable_ts`.
    */
   getGlobal(key: string): unknown | Promise<unknown>;
-  /** PERSIST-01 C14: set a global; refused (`LeaseLostError`) once the lease is lost. */
+  /** PERSIST-01 C14: set a global; refused (`LeaseLostError`) once the lease is lost. A `bigint` is stored as
+   *  a plain JSON integer (`encodeGlobal`). */
   setGlobal(key: string, value: unknown): void | Promise<void>;
   /** AUDIT ONLY (conformance K6, never used by the engine): live documents of a table at ts. */
   auditLiveDocs?(table: TabletId, ts: bigint): number | Promise<number>;
@@ -213,8 +215,10 @@ export const hasRetention = (p: Persistence): p is Persistence & RetentionStore 
 
 export { opaqueToInspect } from "../inspect.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
+export { decodeGlobal, encodeGlobal } from "./global-json.ts";
 export {
   checkLayoutVersion,
+  checkStoreTables,
   checkUnversionedTables,
   decodeLayoutVersion,
   LAYOUT_VERSION,

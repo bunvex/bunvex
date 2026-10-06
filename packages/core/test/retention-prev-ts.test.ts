@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
-import { internalIdOf } from "../src/internal-id.ts";
+import { internalIdBytes, internalIdOf } from "../src/internal-id.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import type { RetentionOptions } from "../src/retention.ts";
 import { type Doc, defineSchema, defineTable, indexKey, type SchemaDefinition } from "../src/schema.ts";
@@ -43,14 +43,14 @@ const indexRows = (db: import("bun:sqlite").Database, index: string, key: Uint8A
     db
       .query(`select ts, deleted from indexes where index_id = ? and key = ? order by ts`)
       .safeIntegers(true)
-      .all(index, key) as Row[]
+      .all(internalIdBytes(index), key) as Row[]
   ).map((r) => ({ ts: r.ts, deleted: Number(r.deleted) }));
 const docRows = (db: import("bun:sqlite").Database, id: string) =>
   (
     db
       .query(`select ts, deleted from documents where id = ? order by ts`)
       .safeIntegers(true)
-      .all(internalIdOf(id)) as Row[]
+      .all(internalIdBytes(internalIdOf(id))) as Row[]
   ).map((r) => ({ ts: r.ts, deleted: Number(r.deleted) }));
 
 const byN = (e: Engine) => {

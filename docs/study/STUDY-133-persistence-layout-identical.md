@@ -801,3 +801,28 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   predecessor) and conformance K27–K29 deriving the prunes from the store's revision pairs. Sabotage: no
   tombstone prune (red), prune at `prevTs - 1` (red), always prune at the new ts (red), the document pass
   without a delete's tombstone (red), without the pruned-predecessor skip (red).
+
+### PR 4 — SQLite in Convex's layout
+
+- The SQLite driver creates Convex's three tables with Convex's own statements (`SQLITE_LAYOUT`, run with `IF NOT
+  EXISTS` on every open), so a fresh store's `sqlite_master` equals that of a store the Convex binary created
+  (`packages/core/test/fixtures/sqlite-reference-schema.json`), `read_only` aside (DV-412). Ids, tablets and
+  index ids are bound as their 16 bytes. WAL stays (DV-411). The ts indexes, `WITHOUT ROWID` and the
+  `layout_version` record are gone: an open checks that the tables it finds have Convex's columns
+  (`checkStoreTables`), so a Convex store opens and an older bunvex layout is refused untouched (K22 in its
+  reference form). `maxTs` reads `documents` only, as Convex's `max_ts` (PERSIST-01 C5, K16 reworded).
+- Index scans use Convex's form: the newest ts per key from the primary key's index alone (covering), then that
+  row and its document at the entry's ts in one statement. With Convex's rowid tables a plain
+  `order by key, ts desc` scan pays a row lookup per old version; on a fixed store with 20 000 patches a range
+  of 20 took 790 µs that way, 600 µs this way (PR 10, `WITHOUT ROWID`: 550 µs; on a clean store 146 µs against
+  177 µs).
+- `max_repeatable_ts`: every start writes `max(maxTs, the global, the clock)` and resumes there, as Convex's
+  `new_idle_repeatable_ts`; the committer bumps it as Convex's (5 s after a commit, every 1–2 h idle, taking the
+  next commit ts when nothing is pending). Globals' integers above 2^53 travel as `bigint` (`encodeGlobal` /
+  `decodeGlobal`, every driver; conformance K29).
+- `DATABASE_VERSION` is 133 with DV-418's policy, checked before anything is written (`_db` is read right after
+  the bootstrap catalog).
+- Checked locally with the Convex binary: a store it created opens in bunvex, takes a mutation and reads it
+  back; Convex then starts on that store, and on a fresh bunvex store, and serves. Not yet a test (PR 9), and
+  the system tables' shapes are PR 8's.
+- Conformance ids are now valid internal ids (`did(name)`), since SQLite binds bytes.

@@ -3,13 +3,15 @@
 // where the deployment's blobs live: it is null until the first start that sets up storage records it, and
 // from then on a start with another kind of storage is refused (a local directory may move).
 import { DATABASE_GLOBALS_TABLE } from "./catalog.ts";
+import { LayoutError } from "./persistence/layout.ts";
 import type { Tx } from "./tx.ts";
 
 /**
- * The format version of bunvex's stored data, Convex's `DATABASE_VERSION` (crates/migrations_model). bunvex
- * has no migrations yet: it starts at 1, and a store written by a newer bunvex is only warned about.
+ * The format version of the stored data: Convex's `DATABASE_VERSION` (crates/migrations_model/src/lib.rs), since
+ * bunvex's store is in Convex's layout (STUDY-133). bunvex ports none of Convex's migrations, so it reads this
+ * version only: an older store is refused, a newer one warned about, as Convex's migration worker does (DV-418).
  */
-export const DATABASE_VERSION = 1n;
+export const DATABASE_VERSION = 133n;
 
 /** Where the blobs live, as Convex's `StorageType` (serialized with its `tag`). */
 export type StorageType = { tag: "s3"; s3Prefix: string } | { tag: "local"; dir: string };
@@ -42,6 +44,19 @@ export async function initializeDatabaseGlobals(db: Tx, uuid: () => string): Pro
     db.insert(DATABASE_GLOBALS_TABLE, { version: DATABASE_VERSION, awsPrefixSecret: uuid(), storageType: null }),
   );
   return DATABASE_VERSION;
+}
+
+/**
+ * The `_db.version` policy (STUDY-133 Q8, DV-418): this version opens; an older one is refused (it needs
+ * migrations bunvex does not have: the backend that wrote it migrates it when started on a release at this
+ * version or later); a newer one opens with a warning, as Convex's. Whether to warn.
+ */
+export function checkDatabaseVersion(version: bigint): "ok" | "newer" {
+  if (version === DATABASE_VERSION) return "ok";
+  if (version > DATABASE_VERSION) return "newer";
+  throw new LayoutError(
+    `the store's data is at version ${version} (its \`${DATABASE_GLOBALS_TABLE}\` document); this bunvex reads version ${DATABASE_VERSION} and has no migrations from older versions. Start the backend that wrote it on a release at version ${DATABASE_VERSION} or later, which migrates it, then open it here`,
+  );
 }
 
 /** A storage type as Convex's error prints it (Rust's `Debug`). */

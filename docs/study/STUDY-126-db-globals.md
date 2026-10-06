@@ -74,8 +74,10 @@ Before this study bunvex kept the S3 key prefix (`bunvex-<uuid>/`) in its own `_
   its self-hosted image keeps the name with the secret, in its credentials. The owner decided the name stays with
   the secret in `_instance` (2026-10-05, G4).
 
-`version` is bunvex's own data version, `DATABASE_VERSION = 1n` (`database-globals.ts`): bunvex has no
-migrations yet, and Convex's number counts Convex's migrations, not bunvex's format. `awsPrefixSecret` is
+`version` is Convex's, `DATABASE_VERSION = 133n` (`database-globals.ts`), since STUDY-133 PR 4: bunvex's
+store is in Convex's layout, so the number is the data's version for both. bunvex ports none of Convex's
+migrations: 133 opens, a newer version opens with Convex's warning, an older one is refused before anything is
+written (DV-418). It was bunvex's own 1 before. `awsPrefixSecret` is
 written and not read, as in a self-hosted Convex.
 
 Under STUDY-38 K4 a use case with no bucket stays local even with `--s3-storage`; the pin is the deployment's
@@ -86,7 +88,7 @@ kind of storage, as Convex's: S3 with `--s3-storage`.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | G1 (DV-403) | Was: the S3 prefix `bunvex-<uuid>/` in `_instance`, no pin. Now as Convex: `_db` (520), `<instance name>-<uuid>/`, the pin and its messages | match Convex's internal system tables; no legacy data | owner, 2026-10-05: match Convex |
-| G2 | `version` starts at 1 (bunvex's data version), not Convex's 133 | the number counts each system's own migrations; no app or operator sees it | not a behaviour difference; noted |
+| G2 | `version` started at 1 (bunvex's data version), not Convex's 133 | the number counts each system's own migrations; no app or operator sees it | **resolved by STUDY-133 PR 4:** 133, Convex's, with DV-418's policy |
 | G4 (DV-403) | The instance name stays in `_instance` with the secret, not in `_db` | Convex's `_db` has no name field; its self-hosted image keeps name and secret together (DV-159) | owner, 2026-10-05: keep it in `_instance` |
 | G3 | `createServer`'s environment stores record S3 at first use and never pin local | an embedded server has no one local directory flag; the shipped backend pins at start | follows from K4 and the library API; noted |
 
