@@ -3,6 +3,7 @@
 // directory (the server's file name) or to a new path.
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { argumentError, missingArgument, optionsIn, requiredOption, tooManyArguments, unknownOption } from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -42,26 +43,23 @@ export async function exportCommand(args: string[], io: Io, opts: { pollMs?: num
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex export: ${taken}`);
-    return 2;
-  }
+  // Convex's `export` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, EXPORT_USAGE);
   let path: string | undefined;
   let includeStorage = false;
+  const positional: string[] = [];
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
     if (a === "--include-file-storage") includeStorage = true;
-    else if (a === "--path" || a.startsWith("--path=")) path = a.includes("=") ? a.slice(7) : r[++i];
-    else {
-      io.err(`bunvex export: unknown option ${a}\n\n${EXPORT_USAGE}`);
-      return 2;
-    }
+    else if (a === "--path" || a.startsWith("--path=")) {
+      path = a.includes("=") ? a.slice(7) : r[++i];
+      if (path === undefined) return argumentError(io, missingArgument("--path <zipFilePath>"), EXPORT_USAGE);
+    } else if (!a.startsWith("-")) positional.push(a);
+    else return argumentError(io, unknownOption(a, optionsIn(EXPORT_USAGE)), EXPORT_USAGE);
   }
-  if (!path) {
-    io.err(`bunvex export: --path is required\n\n${EXPORT_USAGE}`);
-    return 2;
-  }
+  if (!path) return argumentError(io, requiredOption("--path <zipFilePath>"), EXPORT_USAGE);
+  if (positional.length) return argumentError(io, tooManyArguments("export", 0, positional.length), EXPORT_USAGE);
   const out = resolve(io.cwd, path);
   if (existsSync(out) && !statSync(out).isDirectory()) {
     io.err(`Error: Path ${path} already exists.`);

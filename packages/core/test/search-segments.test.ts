@@ -12,6 +12,7 @@ import { readSearchIndexStates } from "../src/engine.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
+import { tsGlobal } from "../src/persistence-globals.ts";
 import { fileBlobs } from "./fixtures/segments-blobs.ts";
 
 const schemaWith = (filterFields: string[], vector = true) =>
@@ -195,7 +196,7 @@ test("a state not trusted is not used: changed definition, outside retention, mi
   await changed.close();
 
   const b = await seeded();
-  await b.p.setGlobal("document_min_snapshot_ts", Number.MAX_SAFE_INTEGER);
+  await b.p.setGlobal("document_min_snapshot_ts", tsGlobal(Number.MAX_SAFE_INTEGER));
   const old = await open(b.p, b.store);
   expect(old.searchStats.fromSegments).toBe(0);
   expect(await answers(old)).toEqual(b.expected);

@@ -1,0 +1,181 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_modules",
+  "rows": [
+    {
+      "_creationTime": 1791234000229.0671,
+      "_id": "h422w5765pqdfjw4djwwrfy4nd8fq874",
+      "analyzeResult": {
+        "cronSpecs": null,
+        "functions": [],
+        "httpRoutes": null,
+        "sourceMapped": null
+      },
+      "environment": "isolate",
+      "path": "convex.config.js",
+      "sha256": "pskqCVaZZUZKiOHFxP+znL5NAXoaQCCgJzVvY8CSX+w=",
+      "sourcePackageId": "hg2egag5rcz0gvheb1p89rsgh98fpz4x"
+    },
+    {
+      "_creationTime": 1791234000229.0679,
+      "_id": "h4235jt7whegcgqj39mfm99zjd8fp2n2",
+      "analyzeResult": {
+        "cronSpecs": null,
+        "functions": [],
+        "httpRoutes": null,
+        "sourceMapped": null
+      },
+      "environment": "isolate",
+      "path": "schema.js",
+      "sha256": "ew2BoOqXXVc1Xq/DQspAxVL1193ZwPcHwjQXSL3HUes=",
+      "sourcePackageId": "hg2egag5rcz0gvheb1p89rsgh98fpz4x"
+    },
+    {
+      "_creationTime": 1791234000229.067,
+      "_id": "h429txxeapjnq63qkqj1507s218fp6g7",
+      "analyzeResult": null,
+      "environment": "isolate",
+      "path": "_deps/DA6PZB4T.js",
+      "sha256": "E3zwvjngDgIg6uG6ARD7jJjkLAzSc/8ehs3ItMHkB/0=",
+      "sourcePackageId": "hg2egag5rcz0gvheb1p89rsgh98fpz4x"
+    },
+    {
+      "_creationTime": 1791234000229.0676,
+      "_id": "h42a9gtmemaewjghmt45yd5wrn8fq9y3",
+      "analyzeResult": {
+        "cronSpecs": null,
+        "functions": [
+          {
+            "args": "{\"type\":\"object\",\"value\":{}}",
+            "name": "seed",
+            "pos": {
+              "path": "fns.js",
+              "start_col": {
+                "$integer": "EQAAAAAAAAA="
+              },
+              "start_lineno": {
+                "$integer": "BwAAAAAAAAA="
+              }
+            },
+            "returns": "null",
+            "udfType": "Mutation",
+            "visibility": {
+              "kind": "public"
+            }
+          },
+          {
+            "args": "{\"type\":\"object\",\"value\":{\"why\":{\"fieldType\":{\"type\":\"string\"},\"optional\":false}}}",
+            "name": "tick",
+            "pos": {
+              "path": "fns.js",
+              "start_col": {
+                "$integer": "GwAAAAAAAAA="
+              },
+              "start_lineno": {
+                "$integer": "HgAAAAAAAAA="
+              }
+            },
+            "returns": "null",
+            "udfType": "Mutation",
+            "visibility": {
+              "kind": "internal"
+            }
+          },
+          {
+            "args": "{\"type\":\"object\",\"value\":{}}",
+            "name": "uploadUrl",
+            "pos": {
+              "path": "fns.js",
+              "start_col": {
+                "$integer": "KQAAAAAAAAA="
+              },
+              "start_lineno": {
+                "$integer": "JQAAAAAAAAA="
+              }
+            },
+            "returns": "null",
+            "udfType": "Mutation",
+            "visibility": {
+              "kind": "public"
+            }
+          },
+          {
+            "args": "{\"type\":\"object\",\"value\":{\"file\":{\"fieldType\":{\"type\":\"id\",\"tableName\":\"_storage\"},\"optional\":false},\"id\":{\"fieldType\":{\"type\":\"id\",\"tableName\":\"things\"},\"optional\":false}}}",
+            "name": "attach",
+            "pos": {
+              "path": "fns.js",
+              "start_col": {
+                "$integer": "HQAAAAAAAAA="
+              },
+              "start_lineno": {
+                "$integer": "JwAAAAAAAAA="
+              }
+            },
+            "returns": "null",
+            "udfType": "Mutation",
+            "visibility": {
+              "kind": "public"
+            }
+          },
+          {
+            "args": "{\"type\":\"object\",\"value\":{}}",
+            "name": "list",
+            "pos": {
+              "path": "fns.js",
+              "start_col": {
+                "$integer": "YAAAAAAAAAA="
+              },
+              "start_lineno": {
+                "$integer": "KwAAAAAAAAA="
+              }
+            },
+            "returns": "null",
+            "udfType": "Query",
+            "visibility": {
+              "kind": "public"
+            }
+          }
+        ],
+        "httpRoutes": null,
+        "sourceMapped": null
+      },
+      "environment": "isolate",
+      "path": "fns.js",
+      "sha256": "Hktz+7Agkq/4Y8drEgbDiiKsznc9Mqh1eQrSLvwXsZM=",
+      "sourcePackageId": "hg2egag5rcz0gvheb1p89rsgh98fpz4x"
+    },
+    {
+      "_creationTime": 1791234000229.0674,
+      "_id": "h42faptch3vejzk9y1fpk2fjdd8fpr53",
+      "analyzeResult": {
+        "cronSpecs": [
+          {
+            "identifier": "daily tick",
+            "spec": {
+              "cronSchedule": {
+                "hourUTC": {
+                  "$integer": "AwAAAAAAAAA="
+                },
+                "minuteUTC": {
+                  "$integer": "AAAAAAAAAAA="
+                },
+                "type": "daily"
+              },
+              "udfArgs": {
+                "$bytes": "W3sid2h5IjoiY3JvbiJ9XQ=="
+              },
+              "udfPath": "fns.js:tick"
+            }
+          }
+        ],
+        "functions": [],
+        "httpRoutes": null,
+        "sourceMapped": null
+      },
+      "environment": "isolate",
+      "path": "crons.js",
+      "sha256": "sxenQHoWLHty56tXEV2pHnX6dUwwIEr0wgvBtWwicYM=",
+      "sourcePackageId": "hg2egag5rcz0gvheb1p89rsgh98fpz4x"
+    }
+  ]
+}

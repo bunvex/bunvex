@@ -360,7 +360,19 @@ describe("running a code version", () => {
     const gate = new Promise<void>((ok) => {
       release = ok;
     });
-    const hold = Bun.serve({ port: 0, fetch: async () => (await gate, new Response("done")) });
+    // The action's own request is the signal that it runs (on v1): v2 is installed only then.
+    let reached!: () => void;
+    const running = new Promise<void>((ok) => {
+      reached = ok;
+    });
+    const hold = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        reached();
+        await gate;
+        return new Response("done");
+      },
+    });
     stops.push(() => hold.stop(true));
     const { s, call } = await server();
     const act = (n: number) =>
@@ -370,7 +382,7 @@ describe("running a code version", () => {
       );
     await s.installCodeVersion(await load([act(1)]));
     const inFlight = call("action", "slow:run");
-    await Bun.sleep(50);
+    await running;
     await s.installCodeVersion(await load([act(2)]));
     release();
     expect((await inFlight).value).toBe("done v1");

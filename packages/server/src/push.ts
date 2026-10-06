@@ -127,6 +127,8 @@ type Pending = {
   version: CodeVersion;
   modules: ModuleSource[];
   authModule: ModuleSource | null;
+  /** The schema's module: stored with the others, as Convex's (STUDY-134). */
+  schemaModule: ModuleSource | null;
   /** The variables the push was evaluated with (Convex re-reads them at `finish_push`). */
   env: string;
   schema: SchemaDefinition;
@@ -320,6 +322,7 @@ export class PushService {
       version,
       modules,
       authModule: authModule ?? null,
+      schemaModule: req.appDefinition?.schema ?? null,
       env: fingerprint(env),
       schema,
       auth,
@@ -400,7 +403,9 @@ export class PushService {
       throw new PushError("RaceDetected", "Environment variables have changed during push");
     const stored = await storedModules(this.deps.engine);
     const before = new Set((stored?.rows ?? []).map((r) => r.path));
-    const after = new Set(p.version.modules.keys());
+    // As Convex's, the schema and the auth config are modules of the push too (they define no function).
+    const other = [p.authModule, p.schemaModule].filter((m): m is ModuleSource => m !== null);
+    const after = new Set([...p.version.modules.keys(), ...other.map((m) => m.path)]);
     const moduleDiff = {
       added: [...after].filter((m) => !before.has(m) && !m.startsWith("_deps/")),
       removed: [...before].filter((m) => !after.has(m) && !m.startsWith("_deps/")),
@@ -416,7 +421,7 @@ export class PushService {
     const indexDiff = indexAuditDiff(activeSchema, p.schema);
     // The providers the push stores in `_auth` (none without an auth.config, as Convex's `app_auth`).
     const auth = p.auth === null ? [] : parseAuthConfig({ providers: p.auth } as never);
-    const pkg = await writePackage(this.deps.modulesStore, p.authModule ? [...p.modules, p.authModule] : p.modules);
+    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other]);
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff; authDiff: { added: string[]; removed: string[] } };
     };
@@ -424,7 +429,7 @@ export class PushService {
       // Analysis checked the targets (Convex's `validate_cron_jobs`) and kept the specs.
       const specs = new Map(Object.entries(p.version.analysis["crons.js"]?.cronSpecs ?? {}));
       committed = (await this.deps.engine.commitSchemaPush(p.schemaId, async (db) => {
-        const unused = await writeCodeRows(db, pkg, p.version);
+        const unused = await writeCodeRows(db, pkg, p.version, other);
         // Convex's `AuthInfoModel::put`, in the push's commit: its diff is the push's `authDiff`.
         const authDiff = await putAuthInfo(db, auth);
         const crons = (await this.deps.cronExecutor.applyIn(db, specs)) as CronDiff;

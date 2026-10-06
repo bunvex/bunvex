@@ -148,7 +148,8 @@ Delivered as a series of pull requests, each building on the previous one.
 | 3b | `feat/search-segments-backpressure` | `TextIndexTooLarge` / `VectorIndexTooLarge` (DV-228) |
 | 6 | `feat/search-segments-index-rows` | Every search and vector index's `_index` row, as Convex's (the state moves there); the STUDY-96 snapshot removed |
 | 7 | `feat/search-segments-retention` | Fast-forward (`_index_worker_metadata`), `TooOld` flushes, retention |
-| 8 | `feat/search-segments-disk` | (optional) segments queried from disk instead of RAM |
+| 8 | `feat/search-segments-staged` | Staged indexes built and kept `Backfilled { staged }`, as Convex |
+| 9 | `feat/search-segments-disk` | Segments queried from disk (memory-mapped files) instead of RAM |
 
 ### 3.1 The segment formats (PR 1, `@bunvex/search`)
 
@@ -409,7 +410,15 @@ The owner asked (2026-10-05) for every search and vector index to have its `_ind
 - **Blobs a crash left unnamed** (between writing a segment or deletes blob and naming it) stay in the store, as
   Convex's: no search blob is ever deleted (DV-370).
 
-### 3.9 Not built: segments queried from disk
+### 3.9 Staged search and vector indexes (PR 8)
+
+The owner decided (2026-10-05) to match Convex: a staged index is built like any other, in the background
+(`Backfilling { staged }`), then kept `Backfilled2 { snapshot, staged: true }` with its segments, maintained by
+every commit, flushed, compacted and fast-forwarded. A search on it answers `IndexStagedError`, as before. A push
+that un-stages it keeps the built index and enables it at once (its row becomes `snapshotted`); staging it again
+keeps it built. Before, staged indexes were not built at all, and un-staging one started its build.
+
+### 3.10 Not built: segments queried from disk
 
 Segments stay loaded in memory (DV-371). The format reads in place (§3.1), so a memory-mapped file
 (`Bun.mmap`) of a local blob, or of a local cache of an S3 one, can take a loaded blob's place without changing
@@ -420,7 +429,7 @@ the search code; that is the series' optional last PR, not done (§6).
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | E1 | Segments are bunvex's own binary format: a text segment is one blob (terms, postings, documents, forward index) plus a deletes blob, not a tantivy archive with an id tracker, an alive bitset and a deleted-terms table; a vector segment is a flat array of normalized vectors plus a deleted bitset, not a qdrant HNSW segment | Não dá pra fazer: tantivy and qdrant are Rust libraries. The flat vector segment follows DV-269 (exact search). Not observable: answers are the whole index's | owner, 2026-10-05 (build E; the format follows), DV-367 |
-| E2 | Search and vector indexes' `_index` rows are Convex's `config` with bunvex's identity fields (`tablet`, `name`, as its database index rows); a staged index is not built, so its row stays `backfilling` (Convex: `Backfilled { staged }`); the backfill cursor is the document id's bytes, not an index key; there is no `Backfilled` state (an index is enabled once built) | Identity fields: DV-53. Staged: Ainda não fizemos (staged search indexes are not built, platform §search). Cursor and states: bunvex's backfill and push. Count and config as Convex's | owner, 2026-10-05 (rows as Convex's); the rest follows existing decisions. DV-368 |
+| E2 | Search and vector indexes' `_index` rows are Convex's `config` with bunvex's identity fields (`tablet`, `name`, as its database index rows); the backfill cursor is the document id's bytes, not an index key; a non-staged index has no `Backfilled` state (it is enabled once built). Staged indexes are built and kept `Backfilled { staged }`, as Convex's (PR 8) | Identity fields: DV-53. Cursor and states: bunvex's backfill and push. Count, config and staged indexes as Convex's | owner, 2026-10-05 (rows as Convex's; staged as Convex's). DV-368 |
 | E3 | A clean shutdown flushes every index, so the next start replays nothing | Keeps the guarantee of STUDY-96's snapshot (option D, the owner's, 2026-10-04) now that E replaces it; Convex's next start replays the writes since the last flush (at most 10 MiB, or an hour once PR 6 lands). Operational: shutdown takes one flush per index | owner, 2026-10-05: keep it. DV-369 |
 | E4 | ~~Replaced segment and deletes blobs, and those of a removed index, were deleted from the `search` store~~ | Resolved: no search blob is deleted, as Convex's | owner, 2026-10-05 (match Convex). DV-370 |
 | E5 | Segments are loaded into memory at start and searched there, not read from disk through a cache of memory-mapped files | Ainda não fizemos: the format reads in place (PR 1), so a memory-mapped file can take a loaded blob's place (PR 7). Operational: memory | owner, 2026-10-05 (RAM first; disk as a later PR). DV-371 |
@@ -559,6 +568,17 @@ staged flag not kept.
 Sabotage checks (each made a test fail): the fast-forward ts ignored at start; busy indexes fast-forwarded; no
 `TooOld` flush; no fast-forward at shutdown;
 retention checked against the segments' ts only.
+
+**PR 8** (`packages/core/test/search-staged.test.ts`; the `_index` rows test expects `backfilled2`):
+
+- a push with a staged text and a staged vector index builds them: `Backfilled2 { snapshot, staged: true }` with
+  segments, both ready and staged, searches answer `IndexStagedError`; writes keep them current;
+- a push un-staging them enables them at once, with no new backfill step, the answers including the writes made
+  while staged, and the rows `snapshotted`; staging them again keeps them built, `backfilled2` again;
+- a start loads a staged index from its segments.
+
+Sabotage checks (each made tests fail): a staged index not built; un-staging rebuilding the index; a staged index
+not kept current by commits; a staged row written as `snapshotted`.
 
 ## 6. Open questions
 

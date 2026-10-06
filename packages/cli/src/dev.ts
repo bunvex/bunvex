@@ -16,6 +16,15 @@
 import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
 import { join, sep } from "node:path";
 import { BunvexClient, makeFunctionReference } from "@bunvex/client";
+import {
+  argumentError,
+  invalidArgument,
+  invalidChoice,
+  missingArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import type { TypecheckMode } from "./codegen.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
@@ -44,7 +53,7 @@ ${TARGET_OPTIONS}
   --start <command>    after the first successful push, start this shell command
   --typecheck <mode>   enable, try (default) or disable
   --codegen <mode>     enable (default) or disable
-  --tail-logs <mode>   print the deployment's function logs: always, pause-on-deploy (the default: not during
+  --tail-logs [mode]   print the deployment's function logs: always, pause-on-deploy (the default: not during
                        a push) or disable
   --local-cloud-port <n>       the local deployment's API port (default: its saved one, else the first free from 3210)
   --local-site-port <n>        its HTTP actions' port (default: its saved one, else the next free)
@@ -89,32 +98,53 @@ function parseFlags(args: string[]): Flags | string {
         "--local-backend-version",
       ].includes(name)
     ) {
-      const v = inline ?? args[++i];
-      if (v === undefined) return `${name} needs a value`;
+      // `--tail-logs [mode]` takes a value only when the next argument is not an option; alone, it is the default.
+      const optional = name === "--tail-logs";
+      const v =
+        inline ??
+        (optional && (args[i + 1] === undefined || args[i + 1]!.startsWith("-")) ? "pause-on-deploy" : args[++i]);
+      // Convex's option specs (cli/dev.ts), for commander's messages.
+      const spec = DEV_SPECS[name]!;
+      if (v === undefined) return missingArgument(spec);
       if (name === "--run") f.run = v;
       else if (name === "--start") f.start = v;
       else if (name === "--typecheck") {
-        if (v !== "enable" && v !== "try" && v !== "disable") return "--typecheck must be enable, try or disable";
+        if (v !== "enable" && v !== "try" && v !== "disable")
+          return invalidChoice(spec, v, ["enable", "try", "disable"]);
         f.typecheck = v;
       } else if (name === "--codegen") {
-        if (v !== "enable" && v !== "disable") return "--codegen must be enable or disable";
+        if (v !== "enable" && v !== "disable") return invalidChoice(spec, v, ["enable", "disable"]);
         f.codegen = v === "enable";
       } else if (name === "--tail-logs") {
-        if (!["always", "pause-on-deploy", "disable"].includes(v))
-          return "--tail-logs must be always, pause-on-deploy or disable";
+        const modes = ["always", "pause-on-deploy", "disable"];
+        if (!modes.includes(v)) return invalidChoice(spec, v, modes);
         f.tailLogs = v as LogMode;
       } else if (name === "--local-backend-version") f.local.backendVersion = v;
       else {
         const n = Number(v);
-        if (!Number.isInteger(n) || n < 1 || n > 65535) return `${name} must be a port number, got '${v}'`;
+        if (!Number.isInteger(n) || n < 1 || n > 65535) return invalidArgument(spec, v, "Not a port number.");
         if (name === "--local-cloud-port") f.local.cloudPort = n;
         else f.local.sitePort = n;
       }
-    } else return `unknown option ${a}`;
+    } else if (a.startsWith("-")) return unknownOption(a, optionsIn(DEV_USAGE));
+    else return tooManyArguments("dev", 0, args.filter((x) => !x.startsWith("-")).length);
   }
-  if (f.run !== undefined && f.start !== undefined) return "--run and --start cannot be used together";
+  // Convex declares `--run` and `--start` as conflicting, but by their flags (`.conflicts(["--start"])`), which
+  // commander compares with attribute names, so the check never fires: `--run` wins (cli/lib/command.ts).
+  if (f.run !== undefined) f.start = undefined;
   return f;
 }
+
+const DEV_SPECS: Record<string, string> = {
+  "--run": "--run <functionName>",
+  "--start": "--start <command>",
+  "--typecheck": "--typecheck <mode>",
+  "--codegen": "--codegen <mode>",
+  "--tail-logs": "--tail-logs [mode]",
+  "--local-cloud-port": "--local-cloud-port <port>",
+  "--local-site-port": "--local-site-port <port>",
+  "--local-backend-version": "--local-backend-version <version>",
+};
 
 /** Every file's mtime under `dir` (`_generated/`, dotfiles and node_modules aside), by relative path. */
 function mtimes(dir: string): Map<string, number | null> {
@@ -259,10 +289,9 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
   }
   const taken = takeTargetFlags(args);
   const flags = typeof taken === "string" ? taken : parseFlags(taken.rest);
-  if (typeof taken === "string" || typeof flags === "string") {
-    io.err(`bunvex dev: ${typeof taken === "string" ? taken : flags}\n\n${DEV_USAGE}`);
-    return 2;
-  }
+  // Convex's `dev` shows its help after an argument error.
+  if (typeof taken === "string" || typeof flags === "string")
+    return argumentError(io, typeof taken === "string" ? taken : (flags as string), DEV_USAGE);
   const stop = new AbortController();
   const onSignal = () => stop.abort();
   if (opts.signal) opts.signal.addEventListener("abort", onSignal, { once: true });
@@ -285,7 +314,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       flags.local.sitePort !== undefined;
     if (target && localFlags) {
       io.err("bunvex dev: the --local-* options are only for a local deployment");
-      return 2;
+      return 1;
     }
     if (!target) {
       const configured = configuredDeployment(io, taken.flags);

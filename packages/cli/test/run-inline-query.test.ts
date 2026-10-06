@@ -220,13 +220,17 @@ describe("bunvex run --inline-query", () => {
       out: [],
       err: ["`--inline-query` can't be combined with `--identity`."],
     });
-    expect(await run(dir, url, "--inline-query", "1", "--watch")).toEqual({
-      code: 1,
-      out: [],
-      err: ["error: option '--inline-query <query>' cannot be used with option '-w, --watch'"],
-    });
+    // Commander's conflict, with `run`'s help after it, as every argument error of Convex's `run` (STUDY-124).
+    const both = await run(dir, url, "--inline-query", "1", "--watch");
+    expect([both.code, both.out, both.err.slice(0, 2)]).toEqual([
+      1,
+      [],
+      ["error: option '--inline-query <query>' cannot be used with option '-w, --watch'", ""],
+    ]);
     expect((await run(dir, url, "-w", "--inline-query=1")).code).toBe(1);
-    expect((await run(dir, url, "--inline-query")).err).toEqual(["bunvex run: --inline-query needs a value"]);
+    expect((await run(dir, url, "--inline-query")).err[0]).toBe(
+      "error: option '--inline-query <query>' argument missing",
+    );
     // Components (DV-391).
     for (const flag of [["--component", "workflow"], ["--typecheck-components"], ["--live-component-sources"]])
       expect(await run(dir, url, "--inline-query", "1", ...flag)).toEqual({
