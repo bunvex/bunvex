@@ -51,7 +51,6 @@ import { ZipReader } from "./zip-reader.ts";
 
 export { ImportError };
 
-const NS_PER_US = 1000n;
 /** Convex's MAX_IMPORT_AGE (7 days). */
 export const MAX_IMPORT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Half of Convex's transaction limits (TRANSACTION_MAX_USER_WRITE_SIZE_BYTES / NUM_USER_WRITES), per batch. */
@@ -362,7 +361,7 @@ export class ImportService {
     // dropped later by `cleanup()`, as a crash's are.
     try {
       const row = await this.row(id);
-      const tablets = (row?.hidden_tables ?? []).map((h) => Number(h.tablet));
+      const tablets = (row?.hidden_tables ?? []).map((h) => h.tablet);
       if (tablets.length) await this.engine.dropHiddenTables(tablets);
     } catch (e) {
       if (!this.engine.committer.stopped)
@@ -731,8 +730,8 @@ export class ImportService {
   private async run(row: ImportRow) {
     // The hidden tables to activate; a retried or restarted run resumes into the ones it created before
     // (Convex's checkpoints), skipping the documents already in them.
-    const hidden: number[] = [];
-    const previous = new Map((row.hidden_tables ?? []).map((h) => [h.name, Number(h.tablet)]));
+    const hidden: string[] = [];
+    const previous = new Map((row.hidden_tables ?? []).map((h) => [h.name, h.tablet]));
     const skip = new Map<string, number>();
     try {
       this.failIfTooOld(row);
@@ -781,7 +780,7 @@ export class ImportService {
               throw e instanceof ImportBackfillingError ? new ImportError(e.code, e.message) : e;
             });
           hidden.push(def.id);
-          const tablet = String(def.id);
+          const tablet = def.id;
           await this.write(async (db) => {
             const cur = await this.mustGet(db, row._id);
             await db.patch(SNAPSHOT_IMPORTS_TABLE, cur._id, {
@@ -862,7 +861,7 @@ export class ImportService {
       await this.write((db) =>
         this.setState(db, row._id, () => ({
           state: "completed",
-          timestamp: BigInt(ts) * NS_PER_US,
+          timestamp: ts,
           num_rows_written: BigInt(total),
         })),
       );

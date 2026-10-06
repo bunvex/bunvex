@@ -4,7 +4,7 @@ import { TooltipProvider } from "@bunvex/ui/components/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserHistory, type RouterHistory, RouterProvider } from "@tanstack/react-router";
 import { lazy, type ReactNode, Suspense, useState } from "react";
-import { QueryScopeContext } from "./context.tsx";
+import { QueryScopeContext, TraceUrlContext } from "./context.tsx";
 import { type DashboardDataSource, toDataSourceError } from "./data-source.ts";
 import { ExtensionsContext } from "./extensions/context.ts";
 import { extensions as registeredExtensions } from "./extensions/index.ts";
@@ -29,6 +29,13 @@ export type DashboardProps = {
   devtools?: boolean;
   /** The extensions' screens (UI-01 §26). Default: the registry's (`src/extensions/index.ts`). */
   extensions?: readonly DashboardExtension[];
+  /**
+   * Where the Logs screen links a traced execution (STUDY-131 AD-27): a trace UI's URL template, e.g.
+   * `http://localhost:16686/trace/{traceId}` (Jaeger) or a Grafana Tempo explore URL; `{traceId}` and
+   * `{spanId}` are replaced, and a template without `{traceId}` gets the id appended. Unset (the default): the
+   * trace id is shown with no link.
+   */
+  traceUrl?: string;
 };
 
 const Devtools = lazy(() => import("./devtools.tsx"));
@@ -53,6 +60,7 @@ export function Dashboard({
   headerActions,
   devtools = false,
   extensions = registeredExtensions,
+  traceUrl,
 }: DashboardProps) {
   const [queryClient] = useState(() => hostClient ?? createDashboardQueryClient());
   const [queryScope] = useState(() => ({ source: dataSource, scope }));
@@ -70,7 +78,9 @@ export function Dashboard({
         <HeaderActionsContext.Provider value={headerActions}>
           <TooltipProvider>
             <ExtensionsContext.Provider value={extensions}>
-              <RouterProvider router={router} />
+              <TraceUrlContext.Provider value={traceUrl}>
+                <RouterProvider router={router} />
+              </TraceUrlContext.Provider>
             </ExtensionsContext.Provider>
             {devtools && (
               <Suspense>

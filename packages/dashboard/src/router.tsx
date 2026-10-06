@@ -140,14 +140,31 @@ export const validateHistorySearch = (input: Record<string, unknown>): HistorySe
  * The Subscriptions screen (STUDY-131 AD-25): a function path filter, the cache tab, the open live query
  * (`<session>:<queryId>`) or cache entry.
  */
-export type SubscriptionsSearch = { path?: string; tab?: "cache"; query?: string; entry?: string };
-export const validateSubscriptionsSearch = (input: Record<string, unknown>): SubscriptionsSearch => ({
-  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
-  path: str(input.path),
-  tab: input.tab === "cache" ? "cache" : undefined,
-  query: str(input.query),
-  entry: str(input.entry),
-});
+/**
+ * The Subscriptions screen: the path filter, the tab, the open query or cache entry. `args` (with `path`) opens
+ * the live query with that arguments' digest, and `seq` marks one invalidation in its history: where a log
+ * entry's "why it ran" link lands (STUDY-131 AD-27).
+ */
+export type SubscriptionsSearch = {
+  path?: string;
+  tab?: "cache";
+  query?: string;
+  entry?: string;
+  args?: string;
+  seq?: number;
+};
+export const validateSubscriptionsSearch = (input: Record<string, unknown>): SubscriptionsSearch => {
+  const seq = Number(input.seq);
+  return {
+    // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+    path: str(input.path),
+    tab: input.tab === "cache" ? "cache" : undefined,
+    query: str(input.query),
+    entry: str(input.entry),
+    args: str(input.args),
+    seq: input.seq !== undefined && input.seq !== "" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined,
+  };
+};
 
 /** Cron jobs: the job whose details are open. */
 export type CronsSearch = { cron?: string };

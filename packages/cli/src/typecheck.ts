@@ -2,6 +2,7 @@
 // lib/typecheck.ts): the functions typechecked with the app's own compiler — `tsc`, or `tsgo` from
 // `@typescript/native-preview` — chosen by `--typescript-compiler`, else bunvex.json's `typescriptCompiler`,
 // else `tsc`. Convex's messages; the compiler's own output on stdout, ours on stderr.
+import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import { runTypecheck, type TypescriptCompiler } from "./codegen.ts";
 import { functionsDir, typescriptCompilerOf } from "./deploy.ts";
 import type { Io } from "./io.ts";
@@ -21,21 +22,21 @@ export async function typecheckCommand(args: string[], io: Io): Promise<number> 
     return 0;
   }
   let flag: TypescriptCompiler | undefined;
+  let positional = 0;
+  // Argument errors as Convex's commander prints them (STUDY-124); `typecheck` shows no help after them.
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if (name === "--typescript-compiler") {
       const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[++i];
-      if (v !== "tsc" && v !== "tsgo") {
-        io.err(`bunvex typecheck: --typescript-compiler must be tsc or tsgo\n\n${TYPECHECK_USAGE}`);
-        return 2;
-      }
+      const spec = "--typescript-compiler <compiler>";
+      if (v === undefined) return argumentError(io, missingArgument(spec));
+      if (v !== "tsc" && v !== "tsgo") return argumentError(io, invalidChoice(spec, v, ["tsc", "tsgo"]));
       flag = v;
-    } else {
-      io.err(`bunvex typecheck: unknown option ${a}\n\n${TYPECHECK_USAGE}`);
-      return 2;
-    }
+    } else if (a.startsWith("-")) return argumentError(io, unknownOption(a, optionsIn(TYPECHECK_USAGE)));
+    else positional++;
   }
+  if (positional) return argumentError(io, tooManyArguments("typecheck", 0, positional));
   try {
     const compiler = flag ?? typescriptCompilerOf(io.cwd);
     const result = await runTypecheck(functionsDir(io.cwd), io.cwd, compiler);

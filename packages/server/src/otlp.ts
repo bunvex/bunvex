@@ -169,6 +169,7 @@ function keyValue(key: string, v: AttributeValue): string {
   let value: string;
   if (typeof v === "string") value = `{"stringValue":${JSON.stringify(v)}}`;
   else if (typeof v === "boolean") value = `{"boolValue":${v}}`;
+  else if (typeof v === "bigint") value = `{"intValue":"${v}"}`;
   else if (Number.isSafeInteger(v)) value = `{"intValue":"${v}"}`;
   // protobuf's JSON mapping writes the non-finite doubles as strings.
   else if (Number.isFinite(v)) value = `{"doubleValue":${v}}`;

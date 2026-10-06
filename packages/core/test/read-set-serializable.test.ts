@@ -146,7 +146,7 @@ async function run(seed: number) {
   await live.mutation(async (db) => {
     for (const n of initial) await db.insert("items", { n });
   });
-  const committed: { ts: number; op: Op; value: unknown }[] = [];
+  const committed: { ts: bigint; op: Op; value: unknown }[] = [];
   await Promise.all(
     plans.map(async (plan) => {
       for (const op of plan) {
@@ -160,7 +160,7 @@ async function run(seed: number) {
   await serial.mutation(async (db) => {
     for (const n of initial) await db.insert("items", { n });
   });
-  committed.sort((a, b) => a.ts - b.ts);
+  committed.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   const replayed: unknown[] = [];
   for (const c of committed) replayed.push(await serial.mutation(body(c.op, async () => {})));
   return {

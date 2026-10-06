@@ -5,7 +5,7 @@
 // window (`WRITE_THROUGHPUT_WINDOW`, 1 s). The check does not count the transaction about to run: one large
 // commit can take the window over the limit, and then the next writers wait.
 
-import { wallClockUs } from "./determinism.ts";
+import { wallClockNs } from "./determinism.ts";
 
 /** Convex's `MAX_BYTES_WRITTEN_PER_SECOND` default: 4 MiB. */
 export const MAX_BYTES_WRITTEN_PER_SECOND = 4 * 1024 * 1024;
@@ -67,16 +67,16 @@ export class TooManyWritesError extends Error {
 
 /**
  * The sliding window of committed bytes. `record` keeps the commits of the last window (dropping older ones
- * only then, as Convex's); `check` compares the bytes committed within the window before `nowUs`, re-summing
+ * only then, as Convex's); `check` compares the bytes committed within the window before `now`, re-summing
  * only when the running total is over the limit, so an idle deployment's stale total never blocks it.
  */
 export class WriteThroughputLimiter {
   readonly maxBytesPerSecond: number;
   readonly windowMs: number;
   private readonly maxInWindow: number;
-  private readonly windowUs: number;
-  /** Commit timestamps (µs) and their bytes, oldest first, from `head`. */
-  private ts: number[] = [];
+  private readonly windowNs: bigint;
+  /** Commit timestamps (ns) and their bytes, oldest first, from `head`. */
+  private ts: bigint[] = [];
   private bytes: number[] = [];
   private head = 0;
   private total = 0;
@@ -87,12 +87,12 @@ export class WriteThroughputLimiter {
     this.maxBytesPerSecond = o.maxBytesPerSecond ?? MAX_BYTES_WRITTEN_PER_SECOND;
     this.windowMs = o.windowMs ?? WRITE_THROUGHPUT_WINDOW_MS;
     this.maxInWindow = (this.maxBytesPerSecond * this.windowMs) / 1000;
-    this.windowUs = this.windowMs * 1000;
+    this.windowNs = BigInt(Math.round(this.windowMs * 1_000_000));
   }
 
-  /** The bytes of a commit published at `tsUs`. */
-  record(tsUs: number, bytes: number) {
-    while (this.head < this.ts.length && tsUs - this.ts[this.head]! > this.windowUs) {
+  /** The bytes of a commit published at `ts`. */
+  record(ts: bigint, bytes: number) {
+    while (this.head < this.ts.length && ts - this.ts[this.head]! > this.windowNs) {
       this.total -= this.bytes[this.head]!;
       this.head++;
     }
@@ -101,18 +101,18 @@ export class WriteThroughputLimiter {
       this.bytes = this.bytes.slice(this.head);
       this.head = 0;
     }
-    this.ts.push(tsUs);
+    this.ts.push(ts);
     this.bytes.push(bytes);
     this.total += bytes;
   }
 
-  /** Whether a writer may start at `nowUs`: the bytes committed within the window are at most the limit. */
-  allows(nowUs: number): boolean {
+  /** Whether a writer may start at `now`: the bytes committed within the window are at most the limit. */
+  allows(now: bigint): boolean {
     if (this.total <= this.maxInWindow) return true;
     let inWindow = 0;
     for (let i = this.head; i < this.ts.length; i++) {
       const t = this.ts[i]!;
-      if (nowUs < t || nowUs - t <= this.windowUs) inWindow += this.bytes[i]!;
+      if (now < t || now - t <= this.windowNs) inWindow += this.bytes[i]!;
     }
     if (inWindow <= this.maxInWindow) return true;
     this.refused++;
@@ -121,11 +121,11 @@ export class WriteThroughputLimiter {
 
   /** Whether a writer may start now (the wall clock commit timestamps follow). */
   allowsNow(): boolean {
-    return this.allows(wallClockUs());
+    return this.allows(wallClockNs());
   }
 
-  /** Throw `TooManyWritesError` unless a writer may start at `nowUs`. */
-  check(nowUs: number) {
-    if (!this.allows(nowUs)) throw new TooManyWritesError(this.maxBytesPerSecond, this.windowMs);
+  /** Throw `TooManyWritesError` unless a writer may start at `now`. */
+  check(now: bigint) {
+    if (!this.allows(now)) throw new TooManyWritesError(this.maxBytesPerSecond, this.windowMs);
   }
 }

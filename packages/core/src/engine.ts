@@ -15,6 +15,14 @@ import {
 } from "@bunvex/values";
 import { BackendStateCache, initializeBackendState } from "./backend-state.ts";
 import {
+  BOOTSTRAP_GLOBALS,
+  BOOTSTRAP_TABLES,
+  bootstrapStore,
+  loadCatalog,
+  loadCatalogRows,
+  readBootstrapIds,
+} from "./bootstrap.ts";
+import {
   AUTH_TABLE,
   activeTables,
   BACKEND_STATE_TABLE,
@@ -23,7 +31,7 @@ import {
   bootstrapCatalog,
   buildCatalog,
   CANONICAL_URLS_TABLE,
-  type Catalog,
+  Catalog,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
@@ -55,7 +63,6 @@ import {
   LOG_SINKS_TABLE,
   MODULES_TABLE,
   NEXT_PERSISTENCE_INDEX_ID_TABLE,
-  NEXT_TABLET_ID_TABLE,
   planCatalog,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
@@ -73,6 +80,7 @@ import {
   USAGE_LIMITS_TABLE,
   vectorIndexesUnavailable,
 } from "./catalog.ts";
+import { writeCatalogChanges } from "./catalog-writes.ts";
 import {
   Committer,
   type Conflict,
@@ -102,17 +110,19 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
-import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
+import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import {
   hasLease,
   hasRetention,
+  type IndexId,
   type Lease,
   LeaseHeldError,
   LeaseLostError,
   type Persistence,
+  type TabletId,
 } from "./persistence/index.ts";
 import {
   type CachedResult,
@@ -190,7 +200,7 @@ import {
   SummaryCheckpointer,
   type SummaryCheckpointOptions,
 } from "./table-summary-checkpoint.ts";
-import { readNextTablet, writeNextTablet } from "./tablet-ids.ts";
+
 import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 import {
@@ -258,7 +268,7 @@ export class OccError extends Error {
   constructor(
     message: string,
     /** `retries`: how many times the mutation had already been re-run. */
-    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: number; retries: number },
+    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: bigint; retries: number },
   ) {
     super(message);
   }
@@ -308,7 +318,7 @@ export const TABLE_DELETION_BATCH = 1000;
 export class Engine {
   readonly committer: Committer;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
-  catalog: Catalog = bootstrapCatalog();
+  catalog: Catalog = new Catalog();
   /** Signs pagination cursors: INSTANCE_SECRET, or the one stored in `_instance` (set by init()). */
   private instanceSecret = "";
   /** The deployment's name (Convex's INSTANCE_NAME): admin keys carry it (STUDY-34). Set by `init()`. */
@@ -459,7 +469,7 @@ export class Engine {
     this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
     // The table exists once `init()` reconciled the catalog; before that, no commit can write it (-1).
     const backendStateTable = () => this.catalog.tables.get(BACKEND_STATE_TABLE);
-    this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id ?? -1);
+    this.backendState = new BackendStateCache(() => backendStateTable()?.byId.id);
     this.committer.onCommit((entries) => this.backendState.observe(entries), "backend state");
     this.ready = new Promise<void>((resolve, reject) => {
       this.readyState = { resolve, reject, settled: false };
@@ -486,8 +496,12 @@ export class Engine {
   async init() {
     // The lease first (PERSIST-01 C7): maxTs is only meaningful once no other process can write.
     if (hasLease(this.persistence)) await this.acquireLease(this.persistence);
-    const m = (await this.persistence.maxTs?.()) ?? 0;
+    // A new store gets its bootstrap rows at ts 0 (Convex's `Database::initialize`); then the start reads its
+    // catalog from the bootstrap globals (`Database::load`).
+    await bootstrapStore(this.persistence);
+    const m = (await this.persistence.maxTs?.()) ?? 0n;
     this.committer.resume(m);
+    this.catalog = bootstrapCatalog(await readBootstrapIds(this.persistence));
     // A deployable deployment's schema is the last one pushed (STUDY-35): read before reconciling, or the
     // constructor's (empty) schema would drop every index.
     if (this.opts.storedSchema) {
@@ -720,27 +734,17 @@ export class Engine {
   /** Every table the engine declares: its own system tables, then the schema's. */
   private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
+      // Convex's bootstrap tables, created with the store (bootstrap.ts), then its application system tables.
+      ...BOOTSTRAP_TABLES.map((t) => ({ name: t.name, indexes: t.indexes, document: v.any() })),
       { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
-      { name: NEXT_TABLET_ID_TABLE, indexes: {}, document: v.any() },
       { name: DATABASE_GLOBALS_TABLE, indexes: {}, document: v.any() },
       {
         name: SESSION_REQUESTS_TABLE,
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
         document: v.any(),
       },
-      {
-        name: INDEX_BACKFILLS_TABLE,
-        indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId", "_creationTime"] },
-        document: v.any(),
-      },
       { name: SCHEDULED_JOBS_TABLE, indexes: SCHEDULED_JOBS_INDEXES, document: v.any() },
       { name: SCHEDULED_JOB_ARGS_TABLE, indexes: {}, document: v.any() },
-      {
-        name: INDEX_WORKER_METADATA_TABLE,
-        indexes: { [INDEX_WORKER_METADATA_INDEX]: ["index_id"] },
-        document: v.any(),
-      },
-      { name: NEXT_PERSISTENCE_INDEX_ID_TABLE, indexes: {}, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
         name: CRON_NEXT_RUN_TABLE,
@@ -752,17 +756,6 @@ export class Engine {
       { name: MODULES_TABLE, indexes: { by_path: ["path"] }, document: v.any() },
       { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
-      { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
-      {
-        name: SCHEMA_VALIDATIONS_TABLE,
-        indexes: { by_schema_id_and_table_name: ["schemaId", "tableName", "_creationTime"] },
-        document: v.any(),
-      },
-      {
-        name: SCHEMA_VALIDATION_PROGRESS_TABLE,
-        indexes: { by_validation_id: ["validationId", "_creationTime"] },
-        document: v.any(),
-      },
       { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       { name: AUTH_TABLE, indexes: {}, document: v.any() },
       {
@@ -803,42 +796,20 @@ export class Engine {
    * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
   private async reconcileCatalog(): Promise<boolean> {
-    // The stored catalog first, so the change below sees the system tables it reads (the tablet and index id
-    // allocators).
+    // The stored catalog first (Convex's `load_table_and_index_metadata`, from the bootstrap tables), so the
+    // change below sees the system tables it reads.
     const stored = await this.runMutation((db) => readCatalog(db), true);
     this.catalog = buildCatalog(stored.tables, stored.indexes);
-    let created: number[] = [];
+    let created: TabletId[] = [];
     let { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(
-        this.declaredTables(),
-        current.tables,
-        current.indexes,
-        true,
-        current.nextIndexId,
-        current.nextTablet,
-      );
-      created = changes.insertTables.map((t) => t.tablet);
+      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
-      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
-      await writeNextTablet(db, changes.nextTablet);
-      for (const id of changes.deleteIndexes) {
-        await db.delete(INDEX_TABLE, id);
-      }
-      for (const r of changes.restageIndexes) await db.patch(INDEX_TABLE, r._id, indexStatePatch(r, {}));
-      for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
-      await writeNextIndexId(db, changes.nextIndexId);
+      const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
+      created = [...written.tables.values()].map((t) => t.tablet);
       return readCatalog(db); // read-your-own-writes: the catalog as this commit leaves it
     }, true);
     this.catalog = buildCatalog(tables, indexes);
-    // The store's first start created the allocator's table in that commit: its counter is written now, with
-    // the tablets and the index ids that commit took (Convex writes its index id allocator in its bootstrap).
-    await this.runMutation(async (db) => {
-      if ((await readNextTablet(db)) === undefined)
-        await writeNextTablet(db, Math.max(0, ...tables.map((t) => t.tablet)) + 1);
-      if ((await readNextIndexId(db)) === undefined)
-        await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
-    }, true);
     if (await this.backfillNewTables(created, indexes, true))
       ({ tables, indexes } = await this.runMutation(readCatalog, true));
     if (!indexes.some((i) => i.state === "backfilling" && !i.staged)) await this.finishSchema();
@@ -882,11 +853,12 @@ export class Engine {
   }
 
   /**
-   * A new index's `_index` row, created in `db`. Its `indexCreatedLowerBound` is at or below the commit's ts, as
-   * Convex's begin timestamp: the clock now (a commit's ts is at least the clock then), or the snapshot.
+   * A new index's `indexCreatedLowerBound`, for one created in `db`: at or below the commit's ts, as Convex's
+   * begin timestamp: the clock now (a commit's ts is at least the clock then), or the snapshot.
    */
-  private newIndexRow(db: Tx, i: Omit<IndexMeta, "_id">) {
-    return indexRow({ ...i, createdLowerBound: Math.max(db.snapshot, this.committer.clockNow()) });
+  private createdLowerBound(db: Tx): bigint {
+    const now = this.committer.clockNow();
+    return db.snapshot > now ? db.snapshot : now;
   }
 
   /**
@@ -895,7 +867,7 @@ export class Engine {
    * new, so there is next to nothing to copy — so that the change can finish without waiting for the worker.
    * Whether there were any.
    */
-  private async backfillNewTables(created: number[], indexes: IndexMeta[], atStart = false): Promise<boolean> {
+  private async backfillNewTables(created: TabletId[], indexes: IndexMeta[], atStart = false): Promise<boolean> {
     const fresh = indexes.filter((i) => i.state === "backfilling" && created.includes(i.tablet));
     if (!fresh.length) return false;
     this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
@@ -918,7 +890,7 @@ export class Engine {
   private validation: Promise<unknown> | null = null;
 
   /** A commit's search part (STUDY-45 PR 3): its searches to check, its versions and their read-set keys. */
-  private searchCommit(tx: Tx, own: ((ts: number) => void) | undefined) {
+  private searchCommit(tx: Tx, own: ((ts: bigint) => void) | undefined) {
     const writes = tx.writtenDocs();
     const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
     // A commit timestamp (STUDY-53) is written into the documents at `atTs`, after this commit is built: the
@@ -927,7 +899,7 @@ export class Engine {
     const resolvesLater = tx.hasCommitTs;
     return {
       // The search indexes are brought up to date with the commit as it becomes visible, in commit order.
-      onVisible: (ts: number) => {
+      onVisible: (ts: bigint) => {
         own?.(ts);
         const final = resolvesLater ? tx.writtenDocs() : writes;
         this.searchIndexes.apply(ts, final, resolvesLater ? this.searchIndexes.commitWrites(final).indexed : indexed);
@@ -1050,10 +1022,11 @@ export class Engine {
     if (!store || !blobs) return;
     this.searchSegments = state;
     // Each table's log is read once, from the oldest ts any of its indexes starts from.
-    const oldest = new Map<number, number>();
+    const oldest = new Map<TabletId, bigint>();
     for (const s of state.all()) {
       const ts = state.currentTs(s);
-      oldest.set(s.tablet, Math.min(oldest.get(s.tablet) ?? ts, ts));
+      const o = oldest.get(s.tablet);
+      oldest.set(s.tablet, o !== undefined && o < ts ? o : ts);
     }
     this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest);
   }
@@ -1102,7 +1075,8 @@ export class Engine {
     for (const [kind, e] of all) {
       const s = state.get(kind, e.tablet, e.name);
       if (!e.ready || !s || !e.index.changed.size) continue;
-      if (now - state.currentTs(s) >= w.maxCheckpointAgeMs * 1000) this.scheduleFlush(kind, e);
+      if (now - state.currentTs(s) >= BigInt(Math.round(w.maxCheckpointAgeMs)) * 1_000_000n)
+        this.scheduleFlush(kind, e);
     }
     // Fast-forward, debounced.
     const last = this.lastForward;
@@ -1266,7 +1240,7 @@ export class Engine {
   /** After a commit: the ready indexes of its tables whose memory part passed the soft limit are flushed. */
   private flushFull(writes: readonly { table: TableDef }[]) {
     if (!this.searchSegments || this.closed) return;
-    let last = -1;
+    let last: TabletId | null = null;
     for (const w of writes) {
       if (w.table.id === last) continue;
       last = w.table.id;
@@ -1482,7 +1456,7 @@ export class Engine {
       commitBackfill(
         segment: Uint8Array | null,
         deletes: { part: unknown; version: number; bytes: Uint8Array }[],
-        ts: number,
+        ts: bigint,
         keys?: { segment: string; deletes: string | null },
       ): unknown;
       segments: Parameters<typeof segmentRefs>[0];
@@ -1490,7 +1464,7 @@ export class Engine {
     const threshold = kind === "text" ? this.segmentLimits.textSoftLimitBytes : this.segmentLimits.vectorSoftLimitBytes;
     // An interrupted build resumes from its stored cursor (Convex's `Backfilling { cursor, segments }`).
     let cursor: string | null = null;
-    let lastTs: number | null = null;
+    let lastTs: bigint | null = null;
     const resume = await state.usable(kind, e.tablet, e.name, e.def, this.committer.visibleTs).catch(() => null);
     if (resume?.backfill) {
       const parts = await state.fetch(resume).catch(() => null);
@@ -1733,7 +1707,7 @@ export class Engine {
               tablet: e.tablet,
               name: e.name,
               def: e.def,
-              ts: 0,
+              ts: 0n,
               segments: [],
               backfill: { cursor: null },
               staged: e.staged,
@@ -1762,7 +1736,7 @@ export class Engine {
         // since, are still this index.
         const before = states.get(k);
         if (before?.segments.length) return false;
-        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: e.staged });
+        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0n, segments: [], staged: e.staged });
         return true;
       })
       .catch(() => {});
@@ -1969,7 +1943,7 @@ export class Engine {
   /** @internal The checkpoint worker, once the summaries are built. */
   summaryCheckpointer: SummaryCheckpointer | null = null;
 
-  private async scanSummaries(at: number, defs: TableDef[]) {
+  private async scanSummaries(at: bigint, defs: TableDef[]) {
     this.tableSummaries.reset();
     for (const t of defs) {
       let last: string | null = null;
@@ -1996,7 +1970,7 @@ export class Engine {
     }
   }
 
-  private readonly tableCountOf = (tablet: number, snapshot: number) => this.tableSummaries.countAt(tablet, snapshot);
+  private readonly tableCountOf = (tablet: TabletId, snapshot: bigint) => this.tableSummaries.countAt(tablet, snapshot);
 
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
@@ -2122,7 +2096,7 @@ export class Engine {
   }
 
   /** A transaction's commit hook, plus failing the pending schema when one of its writes did not match it. */
-  private withPendingCheck(tx: Tx): ((ts: number) => void) | undefined {
+  private withPendingCheck(tx: Tx): ((ts: bigint) => void) | undefined {
     const own = tx.onCommitVisible;
     const v = tx.pendingViolation;
     if (!v) return own ?? undefined;
@@ -2292,22 +2266,8 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
-        const changes = planCatalog(
-          declared,
-          current.tables,
-          current.indexes,
-          true,
-          current.nextIndexId,
-          current.nextTablet,
-        );
-        for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
-        await writeNextTablet(db, changes.nextTablet);
-        for (const id of changes.deleteIndexes) {
-          await db.delete(INDEX_TABLE, id);
-        }
-        for (const x of changes.restageIndexes) await db.patch(INDEX_TABLE, x._id, indexStatePatch(x, {}));
-        for (const i of changes.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
-        await writeNextIndexId(db, changes.nextIndexId);
+        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
+        const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
         // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
         // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
         const key = schemaKey(schemaToJson(schema));
@@ -2331,13 +2291,10 @@ export class Engine {
           state = schemaStateOf(reused) as typeof state;
         } else
           schemaId = await db.insert(SCHEMAS_TABLE, { state: { state: "pending" }, schema: schemaJsonText(schema) });
-        const tableName = (tablet: number) =>
-          current.tables.find((t) => t.tablet === tablet)?.name ??
-          changes.insertTables.find((t) => t.tablet === tablet)?.name;
         const addedIndexes = changes.insertIndexes
           .filter((i) => !(i.name in SYSTEM_INDEXES))
-          .map((i) => `${tableName(i.tablet)}.${i.name}`);
-        const created = changes.insertTables.map((t) => t.tablet);
+          .map((i) => `${i.table}.${i.name}`);
+        const created = [...written.tables.values()].map((t) => t.tablet);
         return { schemaId, state, addedIndexes, created, after: await readCatalog(db) };
       },
       true,
@@ -2498,10 +2455,10 @@ export class Engine {
     for (const ix of source?.indexes.values() ?? []) if (!(ix.name in SYSTEM_INDEXES)) indexes[ix.name] = ix.fields; // as they are: the placeholder adds nothing
     const created = await this.runMutation(
       async (db) => {
-        const { tables, indexes: stored, nextTablet, nextIndexId } = await readCatalog(db);
+        const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
         if (source && stored.some((i) => i.tablet === source.id && i.state === "backfilling"))
           throw new ImportBackfillingError(opts.copyIndexesOf!);
-        // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
+        // A placeholder name: planCatalog then plans a new table (a fresh number) and its indexes.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
           [{ name: HIDDEN_TABLE_PLACEHOLDER, indexes, document: v.any() }],
@@ -2509,7 +2466,6 @@ export class Engine {
           stored,
           !name.startsWith("_"),
           nextIndexId,
-          nextTablet,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
@@ -2524,12 +2480,11 @@ export class Engine {
         }
         meta.name = name;
         meta.state = "hidden";
-        const metaId = await db.insert(TABLES_TABLE, tableRow(meta));
-        await writeNextTablet(db, plan.nextTablet);
-        for (const i of plan.insertIndexes) await db.insert(INDEX_TABLE, this.newIndexRow(db, i));
-        await writeNextIndexId(db, plan.nextIndexId);
+        for (const i of plan.insertIndexes) i.table = name;
+        const written = await writeCatalogChanges(db, plan, this.createdLowerBound(db));
+        const row = written.tables.get(name)!;
         const catalogIndexes = (state: "backfilling" | "enabled") =>
-          plan.insertIndexes.map((i) => ({
+          written.indexes.map((i) => ({
             name: i.name,
             fields: i.fields,
             id: i.indexId,
@@ -2537,10 +2492,10 @@ export class Engine {
           }));
         db.onCommitVisible = () => {
           const c = this.catalog.withTableStates({});
-          c.add(name, meta.tablet, meta.number, catalogIndexes("backfilling"), "hidden", metaId);
+          c.add(name, row.tablet, row.number, catalogIndexes("backfilling"), "hidden", row._id);
           this.catalog = c;
         };
-        return { meta, metaId, catalogIndexes };
+        return { meta: row, metaId: row._id, catalogIndexes };
       },
       true,
       "_system/create_hidden_table",
@@ -2585,15 +2540,15 @@ export class Engine {
    * invalidated. `body` runs in the same transaction (an import's last checks).
    */
   async activateTables(
-    tablets: number[],
+    tablets: TabletId[],
     deleteNames: string[] = [],
     body?: (db: Tx) => Promise<void>,
-  ): Promise<{ deleted: TableDef[]; ts: number }> {
+  ): Promise<{ deleted: TableDef[]; ts: bigint }> {
     let deleted: TableDef[] = [];
     const { ts } = await this.runMutation(
       async (db) => {
         const { tables } = await readCatalog(db);
-        const toDelete = new Set<number>();
+        const toDelete = new Set<TabletId>();
         for (const tablet of tablets) {
           const t = tables.find((x) => x.tablet === tablet);
           if (!t || t.state !== "hidden") throw new Error(`Table ${tablet} is not a hidden table.`);
@@ -2635,22 +2590,24 @@ export class Engine {
   async dropStaleHiddenTables(maxAgeMs: number, now = Date.now()): Promise<number> {
     const stale = (await this.query((db) =>
       db.asSystem(async () =>
-        ((await db.query(TABLES_TABLE).collect()) as unknown as (TableMeta & { _creationTime: number })[])
-          .filter((t) => t.state === "hidden" && now - t._creationTime > maxAgeMs)
+        (
+          await db.query(TABLES_TABLE).collect()
+        )
+          .filter((t) => t.state === "hidden" && now - (t._creationTime as number) > maxAgeMs)
           .slice(0, 1000)
-          .map((t) => t.tablet),
+          .map((t) => tableMeta(t).tablet),
       ),
-    )) as number[];
+    )) as TabletId[];
     if (stale.length) await this.dropHiddenTables(stale);
     return stale.length;
   }
 
   /** Drop hidden tables (a failed import's): invisible already, their documents removed in the background. */
-  async dropHiddenTables(tablets: number[]) {
+  async dropHiddenTables(tablets: TabletId[]) {
     await this.runMutation(
       async (db) => {
         const { tables } = await readCatalog(db);
-        const gone: number[] = [];
+        const gone: TabletId[] = [];
         for (const tablet of tablets) {
           const t = tables.find((x) => x.tablet === tablet);
           if (!t || t.state !== "hidden") continue;
@@ -2697,7 +2654,7 @@ export class Engine {
    * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction.
    */
   async replaceWithEmptyTables(names: string[], body?: (db: Tx) => Promise<void>) {
-    const tablets: number[] = [];
+    const tablets: TabletId[] = [];
     try {
       for (const name of names) {
         const { number } = this.catalog.table(name);
@@ -2767,7 +2724,7 @@ export class Engine {
    * read an index that is gone and will never be invalidated by a write again. Runs under way are not
    * stored either (`cacheEpoch`).
    */
-  private installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: number) {
+  private installIndexChanges(changes: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, ts: bigint) {
     this.catalog = this.catalog.withIndexChanges(changes, ts);
     this.cache.clear();
     this.cacheEpoch++;
@@ -2783,10 +2740,10 @@ export class Engine {
         return engine.catalog;
       },
       system: <T>(body: (db: Tx) => Promise<T>, source: string) => this.runMutation(body, true, source),
-      installIndexChanges: (c: { enable: number[]; disable: number[]; drop: number[] }, ts: number) =>
+      installIndexChanges: (c: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, ts: bigint) =>
         this.installIndexChanges(c, ts),
       finishSchema: () => this.finishSchema(),
-      tableCount: (tablet: number) => {
+      tableCount: (tablet: TabletId) => {
         try {
           return this.tableSummaries.count(tablet);
         } catch {
@@ -2801,16 +2758,16 @@ export class Engine {
    * start and every `_creationTime` it has handed out (several documents of one transaction in the same ms
    * would otherwise sort after the next transaction's first).
    */
-  private transactionStart(snapshotUs: number): number {
+  private transactionStart(snapshot: bigint): number {
     const last = this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart;
-    this.lastStart = transactionStart(snapshotUs, preciseClock(), last);
+    this.lastStart = transactionStart(snapshot, preciseClock(), last);
     return this.lastStart;
   }
 
   /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
   private async execute<T>(
     kind: ExecutionKind,
-    snapshot: number,
+    snapshot: bigint,
     body: TxBody<T>,
     system = false,
     caller: Caller = ANONYMOUS,
@@ -2852,7 +2809,7 @@ export class Engine {
     cacheKey?: string,
     companion?: CacheCompanion,
     caller?: Caller,
-    at?: number,
+    at?: bigint,
   ): Promise<T> {
     const r = await this.cachedQuery(body, cacheKey, companion, caller, at);
     return "value" in r ? r.value : (parseValue(r.json) as T);
@@ -2867,7 +2824,7 @@ export class Engine {
     cacheKey?: string,
     companion?: CacheCompanion,
     caller?: Caller,
-    at?: number,
+    at?: bigint,
   ): Promise<string> {
     const r = await this.cachedQuery(body, cacheKey, companion, caller, at);
     return "value" in r ? (r.json ?? stringifyValue(r.value)) : r.json;
@@ -2889,10 +2846,10 @@ export class Engine {
     cacheKey: string | undefined,
     companion: CacheCompanion | undefined,
     caller: Caller = ANONYMOUS,
-    at?: number,
+    at?: bigint,
   ): Promise<{ json: string } | { value: T; json?: string }> {
     const visible = this.committer.visibleTs;
-    const ts = at === undefined ? visible : Math.min(at, visible);
+    const ts = at === undefined || at > visible ? visible : at;
     if (cacheKey === undefined) return { value: (await this.execute("query", ts, body, false, caller)).value };
     const keys = [`${cacheKey}${ID_SEP}${caller.key}`, `${cacheKey}${ID_SEP}*`] as const;
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
@@ -2933,7 +2890,7 @@ export class Engine {
    */
   private async runCached<T>(
     body: TxBody<T>,
-    ts: number,
+    ts: bigint,
     keys: readonly [precise: string, shared: string],
     key: string,
     coordinate: boolean,
@@ -2988,7 +2945,7 @@ export class Engine {
    * checked and counts as changed), and a result that read the clock is not older than MAX_CACHE_AGE_MS.
    * An invalid result is dropped; a valid one is now known valid up to `ts`.
    */
-  private stillValid(key: string, r: CachedResult, ts: number): MissReason | undefined {
+  private stillValid(key: string, r: CachedResult, ts: bigint): MissReason | undefined {
     if (ts < r.originalTs) return "snapshot";
     let why: MissReason | undefined = this.committer.changedBetween(r.reads, r.tokenTs, ts) ? "invalidated" : undefined;
     if (
@@ -3014,12 +2971,12 @@ export class Engine {
     body: TxBody<T>,
     journal: QueryJournal = {},
     /** Run at this snapshot (≤ visibleTs) instead of the latest: a sync transition runs all at one ts. */
-    at?: number,
+    at?: bigint,
     caller: Caller = ANONYMOUS,
   ): Promise<
     ({ ok: true; value: T } | { ok: false; error: unknown }) & {
       reads: Interval[];
-      ts: number;
+      ts: bigint;
       journal: QueryJournal;
       /** Whether the run read the identity: its result is then the caller's alone. */
       identityObserved: boolean;
@@ -3028,7 +2985,8 @@ export class Engine {
       bytesRead: number;
     }
   > {
-    const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
+    const visible = this.committer.visibleTs;
+    const snapshot = at === undefined || at > visible ? visible : at;
     const now = this.transactionStart(snapshot); // as in execute(): the first _creationTime; Date.now() is its floor
     const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
     this.lastTx = tx;
@@ -3082,7 +3040,7 @@ export class Engine {
     source?: string,
     caller?: Caller,
     opts?: MutationOptions,
-  ): Promise<{ value: T; ts: number }> {
+  ): Promise<{ value: T; ts: bigint }> {
     return this.runMutation(body, false, source, true, caller, opts?.throttled);
   }
 
@@ -3101,7 +3059,7 @@ export class Engine {
     outcome: (value: T) => SessionRequestOutcome,
     caller?: Caller,
     opts?: MutationOptions,
-  ): Promise<{ ts: number } & ({ value: T } | { replayed: SessionRequestOutcome })> {
+  ): Promise<{ ts: bigint } & ({ value: T } | { replayed: SessionRequestOutcome })> {
     const r = await this.runMutation(
       async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
         const prior = await findSessionRequest(db, request);
@@ -3139,7 +3097,7 @@ export class Engine {
     withTs: true,
     caller?: Caller,
     throttled?: boolean,
-  ): Promise<{ value: T; ts: number }>;
+  ): Promise<{ value: T; ts: bigint }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
   private async runMutation<T>(
     body: TxBody<T>,
@@ -3166,7 +3124,7 @@ export class Engine {
       }
       const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
-      const resolved = (ts: number) => (hasCommitTs(raw) ? resolveCommitTs(raw, BigInt(ts) * 1000n) : raw);
+      const resolved = (ts: bigint) => (hasCommitTs(raw) ? resolveCommitTs(raw, ts) : raw);
       if (!tx.hasWrites) {
         const value = resolved(tx.snapshot);
         return withTs ? { value, ts: tx.snapshot } : value;
@@ -3183,8 +3141,8 @@ export class Engine {
           ...this.searchCommit(tx, this.withPendingCheck(tx)),
           ...(tx.hasCommitTs
             ? {
-                atTs: (ts: number) => {
-                  tx.resolveCommitTs(BigInt(ts) * 1000n);
+                atTs: (ts: bigint) => {
+                  tx.resolveCommitTs(ts);
                   return tx.toWrites();
                 },
               }
@@ -3202,9 +3160,9 @@ export class Engine {
           if (!this.catalog.tables.has(name))
             this.catalog.add(
               name,
-              c.meta.tablet,
-              c.meta.number,
-              c.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+              c.def.id,
+              c.def.number,
+              [...c.def.indexes.values()].map((i) => ({ name: i.name, fields: i.fields, id: i.id })),
               "active",
               c.def.metaId,
             );
@@ -3251,14 +3209,14 @@ export class Engine {
 /**
  * A transaction's first `_creationTime` (ms), as Convex's `CreationTime::for_transaction`
  * (crates/common/src/document.rs): the clock, but never below the snapshot's timestamp rounded up to the
- * millisecond. Commit timestamps are wall-clock microseconds resumed from the store (STUDY-06 D9), so after a
+ * millisecond. Commit timestamps are wall-clock nanoseconds resumed from the store (STUDY-06 D9), so after a
  * restart with the clock behind, the snapshot is ahead of the clock: without the floor a new document would
  * sort before ones it read, and `Date.now()` (floored from this) would go back. Unlike Convex, two
  * transactions of an engine never share a start (`last`, the engine's previous one): bunvex's sub-ms creation
  * times keep same-ms transactions in commit order (parity B5).
  */
-export function transactionStart(snapshotUs: number, clockMs: number, last: number): number {
-  const t = Math.max(clockMs, Math.ceil(snapshotUs / 1000));
+export function transactionStart(snapshot: bigint, clockMs: number, last: number): number {
+  const t = Math.max(clockMs, Number((snapshot + 999_999n) / 1_000_000n));
   return t > last ? t : nextUp(last);
 }
 
@@ -3306,7 +3264,6 @@ async function readCatalog(db: Tx) {
   return {
     tables: (await db.query(TABLES_TABLE).collect()).map(tableMeta),
     indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
-    nextTablet: await readNextTablet(db),
     nextIndexId: await readNextIndexId(db),
   };
 }
@@ -3322,11 +3279,15 @@ export async function readInstanceRecord(persistence: Persistence): Promise<Reco
 
 /** Every row of a system table, read at the store's latest commit without the lease or a write. */
 export async function readSystemRows(persistence: Persistence, table: string): Promise<Record<string, unknown>[]> {
-  const ts = (await persistence.maxTs?.()) ?? 0;
-  const read = (catalog: Catalog) => new Tx(catalog, persistence, ts, false, wallClock(), true);
-  const { tables, indexes } = await readCatalog(read(bootstrapCatalog()));
-  if (!tables.some((t) => t.name === table)) return [];
-  return (await read(buildCatalog(tables, indexes)).query(table).collect()) as Record<string, unknown>[];
+  // A store never started has no catalog yet, so no rows.
+  if ((await persistence.getGlobal(BOOTSTRAP_GLOBALS.tablesById)) === null) return [];
+  const ts = (await persistence.maxTs?.()) ?? 0n;
+  const catalog = await loadCatalog(persistence, ts);
+  if (!catalog.tables.has(table)) return [];
+  return (await new Tx(catalog, persistence, ts, false, wallClock(), true).query(table).collect()) as Record<
+    string,
+    unknown
+  >[];
 }
 
 /**
@@ -3334,10 +3295,9 @@ export async function readSystemRows(persistence: Persistence, table: string): P
  * (tests and tools, STUDY-111).
  */
 export async function readSearchIndexStates(persistence: Persistence): Promise<{ indexes: IndexSegmentsState[] }> {
-  const ts = (await persistence.maxTs?.()) ?? 0;
-  const tx = new Tx(bootstrapCatalog(), persistence, ts, false, wallClock(), true);
-  const rows = (await tx.query(INDEX_TABLE).collect()) as Record<string, unknown>[];
-  return { indexes: rows.filter(isSearchIndexRow).flatMap((r) => rowToState(r) ?? []) };
+  const ts = (await persistence.maxTs?.()) ?? 0n;
+  const { indexRows } = await loadCatalogRows(persistence, await readBootstrapIds(persistence), ts);
+  return { indexes: indexRows.filter(isSearchIndexRow).flatMap((r) => rowToState(r) ?? []) };
 }
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */

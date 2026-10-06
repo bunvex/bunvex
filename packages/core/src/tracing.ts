@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { monotonicNow, realRandomBytes } from "./determinism.ts";
 
-export type AttributeValue = string | number | boolean;
+export type AttributeValue = string | number | bigint | boolean;
 
 /** OTLP's `Span.SpanKind` values. */
 export const SPAN_KIND = { internal: 1, server: 2, client: 3, producer: 4, consumer: 5 } as const;
@@ -319,7 +319,7 @@ export class CommitSpans {
   ) {}
 
   /** The commit was answered: its ts, or the error it was refused with. */
-  settle(ts: number | null, error?: unknown) {
+  settle(ts: bigint | null, error?: unknown) {
     const end = monotonicNow();
     const c = this.parent.child("commit", SPAN_KIND.internal, this.enqueued);
     c.set("bunvex.commit.documents", this.documents).set("bunvex.commit.index_entries", this.indexEntries);

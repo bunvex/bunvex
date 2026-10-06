@@ -195,7 +195,7 @@ describe("sync protocol v1", () => {
     expect((await closed).code).toBe(1011);
   });
 
-  test("timestamps travel as Convex's: wall-clock nanoseconds (bunvex's microseconds × 1000)", async () => {
+  test("timestamps travel as Convex's: wall-clock nanoseconds, the engine's own", async () => {
     const { url, engine } = await setup();
     const c = await client(url);
     const before = BigInt(Date.now()) * 1_000_000n;
@@ -203,7 +203,7 @@ describe("sync protocol v1", () => {
     const r = (await c.until(() => c.got.find((m) => m.type === "MutationResponse"))) as v1.MutationResponse;
     expect(r.success).toBe(true);
     if (!r.success) return;
-    expect(r.ts).toBe(BigInt(engine.committer.visibleTs) * 1000n);
+    expect(r.ts).toBe(engine.committer.visibleTs);
     expect(r.ts >= before && r.ts <= BigInt(Date.now() + 1) * 1_000_000n).toBe(true);
   });
 
