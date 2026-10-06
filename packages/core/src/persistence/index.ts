@@ -106,8 +106,13 @@ export type LeaseAcquire = { epoch: number } | { heldBy: string; expiresInMs: nu
  * Optional per driver; the engine uses it when the driver has it.
  */
 export interface Lease {
-  /** "process": an OS lock that lives exactly as long as the holding process (no TTL, no renewal). */
-  readonly leaseScope?: "ttl" | "process";
+  /**
+   * "process": an OS lock that lives exactly as long as the holding process (no TTL, no renewal).
+   * "newest": Convex's lease (DV-413): a start takes it at once from whoever holds it (the newest process
+   * wins), there is no TTL, renewing only checks it is still ours, and the previous holder fails its next
+   * write with `LeaseLostError`. "ttl" (default): taken only when free, released or expired.
+   */
+  readonly leaseScope?: "ttl" | "process" | "newest";
   acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire>;
   /** Extend the lease by its TTL; throws `LeaseLostError` if another holder has taken it. */
   renewLease(): Promise<void>;
@@ -213,7 +218,9 @@ export interface RetentionStore {
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
   typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
+export { wallClockNs } from "../determinism.ts";
 export { opaqueToInspect } from "../inspect.ts";
+export { internalIdBytes, internalIdString } from "../internal-id.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export { decodeGlobal, encodeGlobal } from "./global-json.ts";
 export {
@@ -230,5 +237,12 @@ export {
 
 export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type LiveEntry, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
-export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
+export {
+  keySha256,
+  MAX_KEY_PREFIX_LEN,
+  type SplitRow,
+  type SplitSource,
+  splitKey,
+  splitPages,
+} from "./split.ts";
 export { DatabaseTimeoutError, renewTimeoutMs, withTimeout } from "./timeout.ts";

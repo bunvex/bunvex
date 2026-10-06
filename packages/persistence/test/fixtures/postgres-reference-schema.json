@@ -1,0 +1,171 @@
+{
+  "columns": [
+    {
+      "table": "documents",
+      "column": "id",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "documents",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "documents",
+      "column": "table_id",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "documents",
+      "column": "json_value",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "documents",
+      "column": "deleted",
+      "type": "boolean",
+      "nullable": "YES",
+      "default": "false"
+    },
+    {
+      "table": "documents",
+      "column": "prev_ts",
+      "type": "bigint",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "index_id",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_prefix",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_suffix",
+      "type": "bytea",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_sha256",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "deleted",
+      "type": "boolean",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "table_id",
+      "type": "bytea",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "indexes",
+      "column": "document_id",
+      "type": "bytea",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "leases",
+      "column": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "leases",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "persistence_globals",
+      "column": "key",
+      "type": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "persistence_globals",
+      "column": "json_value",
+      "type": "bytea",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "read_only",
+      "column": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "documents_by_table_and_id",
+      "def": "CREATE INDEX documents_by_table_and_id ON public.documents USING btree (table_id, id, ts)"
+    },
+    {
+      "name": "documents_by_table_ts_and_id",
+      "def": "CREATE INDEX documents_by_table_ts_and_id ON public.documents USING btree (table_id, ts, id)"
+    },
+    {
+      "name": "documents_pkey",
+      "def": "CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (ts, table_id, id)"
+    },
+    {
+      "name": "indexes_by_index_id_key_prefix_key_sha256",
+      "def": "CREATE INDEX indexes_by_index_id_key_prefix_key_sha256 ON public.indexes USING btree (index_id, key_prefix, key_sha256)"
+    },
+    {
+      "name": "indexes_pkey",
+      "def": "CREATE UNIQUE INDEX indexes_pkey ON public.indexes USING btree (index_id, key_sha256, ts)"
+    },
+    {
+      "name": "leases_pkey",
+      "def": "CREATE UNIQUE INDEX leases_pkey ON public.leases USING btree (id)"
+    },
+    {
+      "name": "persistence_globals_pkey",
+      "def": "CREATE UNIQUE INDEX persistence_globals_pkey ON public.persistence_globals USING btree (key)"
+    },
+    {
+      "name": "read_only_pkey",
+      "def": "CREATE UNIQUE INDEX read_only_pkey ON public.read_only USING btree (id)"
+    }
+  ]
+}

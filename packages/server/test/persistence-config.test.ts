@@ -1,13 +1,19 @@
 // Database selection from the environment: bunvex's names, Convex's as aliases (DV-88) with Convex's
-// precedence (run_backend.sh:17-32), DO_NOT_REQUIRE_SSL as Convex reads it, and the URL naming the database
-// (DV-110). STUDY-25 L8. And the remote drivers' call timeouts (STUDY-25 L3) under Convex's names.
+// precedence (run_backend.sh:17-32), DO_NOT_REQUIRE_SSL as Convex reads it, and the database: the URL's, else the
+// instance's (DV-417). STUDY-25 L8. And the remote drivers' call timeouts (STUDY-25 L3) under Convex's names.
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { v } from "@bunvex/values";
-import { openPersistence, persistenceConfigFromEnv, urlDatabase } from "../src/persistence.ts";
+import {
+  instanceDatabase,
+  openPersistence,
+  persistenceConfigFromEnv,
+  urlDatabase,
+  withDatabase,
+} from "../src/persistence.ts";
 
 const PG = "postgres://u@db.example:5432/app";
 const MY = "mysql://u@db.example:3306/app";
@@ -81,7 +87,7 @@ describe("DO_NOT_REQUIRE_SSL and the CA files", () => {
   });
 });
 
-describe("the URL names the database (DV-110)", () => {
+describe("the database: the URL's, else the instance's (DV-417, as Convex)", () => {
   test("urlDatabase reads the path", () => {
     expect(urlDatabase("postgres://u:p@h:5432/app?sslmode=require")).toBe("app");
     expect(urlDatabase("postgres://u@h1:5432,h2:5432/app")).toBe("app");
@@ -92,25 +98,98 @@ describe("the URL names the database (DV-110)", () => {
     expect(urlDatabase("mysql://u@h:3306/?ssl=true")).toBeUndefined();
   });
 
-  test("a URL without a database is refused, naming the variable it came from", async () => {
-    // Convex's style: POSTGRES_URL / MYSQL_URL without a database. Refused before any connection is tried.
-    await expect(openPersistence(cfg({ POSTGRES_URL: "postgres://u@127.0.0.1:1" }))).rejects.toThrow(
-      /^POSTGRES_URL names no database: bunvex uses the database the URL names/,
-    );
-    await expect(openPersistence(cfg({ MYSQL_URL: "mysql://u@127.0.0.1:1/" }))).rejects.toThrow(
-      /^MYSQL_URL names no database/,
-    );
-    await expect(
-      openPersistence(cfg({ PERSISTENCE: "postgres", PERSISTENCE_URL: "postgres://u@127.0.0.1:1" })),
-    ).rejects.toThrow(/^PERSISTENCE_URL names no database/);
+  test("withDatabase sets the path after the authority, before a query or fragment", () => {
+    expect(withDatabase("postgres://u:p@h:5432", "app")).toBe("postgres://u:p@h:5432/app");
+    expect(withDatabase("postgres://u:p@h:5432/", "app")).toBe("postgres://u:p@h:5432/app");
+    expect(withDatabase("postgres://u@h:5432?sslmode=require", "app")).toBe("postgres://u@h:5432/app?sslmode=require");
+    expect(withDatabase("mysql://u@h:3306/?ssl=true", "app")).toBe("mysql://u@h:3306/app?ssl=true");
+    expect(withDatabase("postgres://u@h:5432#x", "app")).toBe("postgres://u@h:5432/app#x");
+    expect(withDatabase("postgres://u@h1:5432,h2:5432", "app")).toBe("postgres://u@h1:5432,h2:5432/app");
+    expect(withDatabase("postgres://u@h:5432", "my db")).toBe("postgres://u@h:5432/my%20db");
+    // What urlDatabase reads back is the name that was set.
+    expect(urlDatabase(withDatabase("postgres://u@h:5432?sslmode=require", "my db"))).toBe("my db");
+  });
+
+  test("instanceDatabase is the instance name with - replaced by _ (Convex's)", () => {
+    expect(instanceDatabase("bunvex-self-hosted")).toBe("bunvex_self_hosted");
+    expect(instanceDatabase("a-b-c")).toBe("a_b_c");
+    expect(instanceDatabase("plain")).toBe("plain");
+  });
+
+  test("INSTANCE_NAME from the environment is the config's instance name", () => {
+    expect(cfg({ POSTGRES_URL: PG, INSTANCE_NAME: "my-app" }).instanceName).toBe("my-app");
+    expect(cfg({ POSTGRES_URL: PG, INSTANCE_NAME: "" }).instanceName).toBeUndefined();
+    expect(cfg({ POSTGRES_URL: PG }).instanceName).toBeUndefined();
+  });
+
+  test("a URL without a database connects to the instance's (no refusal before connecting)", async () => {
+    // Nothing listens on port 1: the open fails for the connection, never for a missing database.
+    for (const c of [
+      { ...cfg({ POSTGRES_URL: "postgres://u@127.0.0.1:1", DO_NOT_REQUIRE_SSL: "1" }), timeoutMs: 2000 },
+      { ...cfg({ MYSQL_URL: "mysql://u@127.0.0.1:1/", DO_NOT_REQUIRE_SSL: "1" }), timeoutMs: 2000 },
+    ]) {
+      let err: unknown;
+      try {
+        await (await openPersistence(c)).close();
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect(String(err)).not.toMatch(/names no database/);
+    }
   });
 
   test("no URL at all names both variables", async () => {
-    await expect(openPersistence(cfg({ PERSISTENCE: "postgres" }))).rejects.toThrow(
-      "PERSISTENCE=postgres needs PERSISTENCE_URL (or POSTGRES_URL)",
-    );
+    let err: unknown;
+    try {
+      await openPersistence(cfg({ PERSISTENCE: "postgres" }));
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err)).toContain("PERSISTENCE=postgres needs PERSISTENCE_URL (or POSTGRES_URL)");
   });
 });
+
+// Against a real Postgres (PG_URL, any database on the server; DO_NOT_REQUIRE_SSL for a server without TLS):
+// a URL without a database opens the instance's.
+const PG_URL = process.env.PG_URL;
+describe.if(!!PG_URL)("DV-417 on a real Postgres (PG_URL)", () => {
+  test("the instance name's database, with - replaced by _", async () => {
+    // The server package does not depend on the native driver: the admin statements go through a store's pool.
+    const adminStore = await openPersistence({
+      kind: "postgres",
+      url: PG_URL,
+      requireSsl: !process.env.DO_NOT_REQUIRE_SSL,
+      pool: 1,
+    });
+    const admin = (adminStore as unknown as { sql: { unsafe(q: string): Promise<unknown> } }).sql;
+    const name = "k-dv417-test";
+    const db = instanceDatabase(name);
+    try {
+      await admin.unsafe(`drop database if exists ${db}`);
+      await admin.unsafe(`create database ${db}`);
+      const server = PG_URL!.replace(/^([a-z]+:\/\/[^/?#]*)\/[^?#]*/i, "$1");
+      const store = await openPersistence({
+        kind: "postgres",
+        url: server,
+        requireSsl: !process.env.DO_NOT_REQUIRE_SSL,
+        pool: 2,
+        instanceName: name,
+      });
+      try {
+        const sql = (store as unknown as { sql: { unsafe(q: string): Promise<Record<string, unknown>[]> } }).sql;
+        const [r] = await sql.unsafe(`select current_database() as d, to_regclass('documents') is not null as t`);
+        expect(r).toEqual({ d: db, t: true });
+      } finally {
+        await store.close();
+      }
+    } finally {
+      await admin.unsafe(`drop database if exists ${db} with (force)`).catch(() => {});
+      await adminStore.close();
+    }
+  });
+});
+if (!PG_URL) console.log("persistence-config: set PG_URL (and DO_NOT_REQUIRE_SSL) to run the DV-417 Postgres test");
 
 describe("call timeouts (STUDY-25 L3)", () => {
   test("each remote driver reads its call timeout from its own variable, in seconds", () => {

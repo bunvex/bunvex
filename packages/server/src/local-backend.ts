@@ -5,7 +5,7 @@
 //   bunvex-local-backend keygen admin-key --instance-name <name> --instance-secret <hex>
 //
 // - `db_spec`: a SQLite file (default `bunvex_local_backend.sqlite3`) or, with `--db postgres|mysql|mongodb`,
-//   the database's URL (it names the database, DV-110);
+//   the database's URL (without a database, the instance name's, as Convex: DV-417);
 // - `--port` 3210 and `--site-proxy-port` 3211 on `--interface` (0.0.0.0); `--cloud-origin` / `--site-origin`
 //   (a pair; Convex's `--convex-origin` / `--convex-site`) are the public URLs;
 // - `--instance-name` (default bunvex-self-hosted) and `--instance-secret` (required; 32 hex bytes): the
@@ -199,7 +199,14 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
   if (f.db === "sqlite") {
     const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
     persistence = new SqlitePersistence(resolve(io.cwd, f.dbSpec), { durable: true });
-  } else persistence = await openPersistence({ kind: f.db, url: f.dbSpec, requireSsl: !f.doNotRequireSsl, pool: 16 });
+  } else
+    persistence = await openPersistence({
+      kind: f.db,
+      url: f.dbSpec,
+      requireSsl: !f.doNotRequireSsl,
+      pool: 16,
+      instanceName: f.instanceName,
+    });
   // The engine is read when a store first writes to S3 (its prefix is an instance setting), after it exists.
   const storage = (useCase: "files" | "modules" | "exports" | "snapshot_imports" | "search") => {
     // With --s3-storage, each use case whose bucket is set is in S3, the others stay local (STUDY-38 K4).

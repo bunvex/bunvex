@@ -126,7 +126,9 @@ describe("bunvex-local-backend", () => {
     const r = io();
     const args = ["--instance-secret", SECRET, "--db", "postgres", "postgres://u@127.0.0.1:1"];
     expect(await localBackendMain(args, r.it, "v1")).toBe(1);
-    expect(r.err).toEqual([expect.stringMatching(/^error: PERSISTENCE_URL names no database/)]);
+    // The URL names no database: the instance's is used (DV-417), and the start fails on the connection.
+    expect(r.err).toEqual([expect.stringMatching(/^error: /)]);
+    expect(r.err.join("\n")).not.toMatch(/names no database/);
   });
 
   test("runs until SIGTERM: announces its URLs, serves, then stops", async () => {

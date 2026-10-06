@@ -80,6 +80,11 @@ export type DriverModule = {
   makeForeign?(): Promise<void>;
   /** K22: whether that foreign store is exactly as `makeForeign` left it (a refused open wrote nothing). */
   foreignIntact?(): Promise<boolean>;
+  /** K22, reference layout: the store's schema as the driver's catalog describes it (tables, columns, indexes),
+   *  in a form `referenceSchema` uses too; compared as JSON. */
+  schema?(): Promise<unknown>;
+  /** K22, reference layout: the same description of a store the reference system created (a fixture). */
+  referenceSchema?(): Promise<unknown>;
   tearTail?(nextTs: bigint): void | Promise<void>;
   /** Lease drivers (K14): whether some writer is inside a flush right now, holding the fence. Lets K13
    *  pause its stale writer exactly there, instead of wherever a random SIGSTOP lands. */
@@ -627,8 +632,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     // A process-scoped lease (an OS lock: the embedded stores) lives exactly as long as its process: there
     // is no TTL to expire and no paused holder to replace, so K11–K14 do not apply; K19 covers the rest.
+    // A "newest" lease (Convex's, DV-413) is taken at once by every new start: K10, K11, K17, K18 and K19 check
+    // that instead of exclusivity and expiry.
     const probe = await mod.open(false);
-    const processScoped = (probe as { leaseScope?: string }).leaseScope === "process";
+    const scope = (probe as { leaseScope?: string }).leaseScope;
+    const processScoped = scope === "process";
+    const newest = scope === "newest";
     await probe.close();
     const raw = async (fresh: boolean) => {
       const s = await mod.open(fresh);
@@ -643,8 +652,55 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         [{ index: INDEX, key: encodeKey([id]), table: TABLE, id: did(id) }],
       ] as const;
 
+    // K10 (newest) — a second start takes the lease at once; the first holder's next flush is refused and lands
+    // nothing; through the engine, a second engine opens and the first one stops at its next mutation.
+    if (newest) {
+      const a = await raw(true);
+      const b = await raw(false);
+      const ra = await a.acquireLease({ holder: "k10-a", ttlMs: 30_000 });
+      const M0 = await a.maxTs!();
+      const [d1, i1] = row(M0 + 1n, "k10-a1");
+      a.apply(M0 + 1n, [...d1], [...i1]);
+      await a.flush();
+      const rb = await b.acquireLease({ holder: "k10-b", ttlMs: 30_000 });
+      const [d2, i2] = row(M0 + 2n, "k10-a2");
+      a.apply(M0 + 2n, [...d2], [...i2]);
+      const err = await Promise.resolve(a.flush()).then(
+        () => null,
+        (e) => e,
+      );
+      const seen = idsOf(await b.scan(TABLE, INDEX, FULL_LO, FULL_HI, MAX_TS, 100, false));
+      await a.close();
+      await b.close();
+      const e1 = await newEngine(await mod.open(true)); // a fresh store: the rows above have no catalog
+      await e1.mutation(insertItem("k10"));
+      const e2 = await newEngine(await mod.open(false)).catch((e: Error) => e);
+      const stale = await e1.mutation(insertItem("k10")).then(
+        () => null,
+        (e: Error) => e,
+      );
+      const stopped = e1.committer.stopped;
+      let fresh = false;
+      if (!(e2 instanceof Error)) {
+        await e2.mutation(insertItem("k10"));
+        fresh = true;
+        await e2.close();
+      }
+      await e1.close().catch(() => {});
+      check(
+        "epoch" in ra &&
+          "epoch" in rb &&
+          err instanceof LeaseLostError &&
+          JSON.stringify(seen) === JSON.stringify([did("k10-a1")]) &&
+          fresh &&
+          stale !== null &&
+          stopped?.cause instanceof LeaseLostError,
+        `K10 a newer start takes the lease at once: the old holder's flush throws LeaseLostError and lands nothing (${err?.constructor?.name ?? "no error"}; visible ${JSON.stringify(seen.map(didName))}); a second engine opens (${e2 instanceof Error ? e2.message : "ok"}) and the first stops at its next mutation (${stopped?.cause?.constructor?.name ?? "still running"})`,
+      );
+    }
+
     // K10 — exclusive, at the driver and through the engine.
-    {
+    if (!newest) {
       const a = await raw(true);
       const b = await raw(false);
       const ra = await a.acquireLease({ holder: "k10-a", ttlMs: 30_000 });
@@ -665,8 +721,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
     }
 
-    // K11 — a holder that stops renewing is replaced within TTL + ε, with a greater epoch.
-    if (!processScoped) {
+    // K11 — a holder that stops renewing is replaced within TTL + ε, with a greater epoch. A "newest" lease has no
+    // TTL: K10 covers its takeover.
+    if (newest) log("  K11 does not apply to a newest-wins lease (no TTL; K10 checks the takeover)");
+    if (!processScoped && !newest) {
       const a = await raw(false);
       const b = await raw(false);
       const ttl = 400;
@@ -758,13 +816,44 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const e2 = await newEngine(await mod.open(false)).catch((e) => e);
       if (!(e2 instanceof Error)) await (e2 as Engine).close();
       check(
-        "epoch" in ra && "epoch" in rb && rb.epoch > ra.epoch && !(e2 instanceof Error),
+        "epoch" in ra && "epoch" in rb && (newest || rb.epoch > ra.epoch) && !(e2 instanceof Error),
         "K18 a released lease (releaseLease, Engine.close) is taken at once",
       );
     }
 
+    // K17 (newest) — two engines opened at once on an empty store: either may open, but at the end exactly one
+    // still writes; one catalog, one secret.
+    if (newest) {
+      await mod.open(true).then((s) => s.close());
+      const opened = await Promise.allSettled([newEngine(await mod.open(false)), newEngine(await mod.open(false))]);
+      const engines = opened.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const writers: Engine[] = [];
+      for (const e of engines)
+        if (
+          await e.mutation(insertItem("k17")).then(
+            () => true,
+            () => false,
+          )
+        )
+          writers.push(e);
+      let catalogOk = false;
+      if (writers.length === 1) {
+        const e = writers[0];
+        const at = e.committer.visibleTs;
+        const tables = Number(await e.persistence.auditLiveDocs?.(e.catalog.table("_tables").id, at));
+        const secrets = Number(await e.persistence.auditLiveDocs?.(e.catalog.table("_instance").id, at));
+        catalogOk = secrets === 1 && tables === e.catalog.tables.size;
+      }
+      for (const r of opened) if (r.status === "rejected") log(`  K17: an engine failed to open: ${r.reason}`);
+      for (const e of engines) await e.close().catch(() => {});
+      check(
+        writers.length === 1 && catalogOk,
+        `K17 concurrent first boot (newest wins): exactly one engine still writes (${writers.length} of ${engines.length} opened); one catalog, one secret`,
+      );
+    }
+
     // K17 — two engines opened at once on an empty store: exactly one wins; one catalog, one secret.
-    {
+    if (!newest) {
       await mod.open(true).then((s) => s.close());
       const opened = await Promise.allSettled([newEngine(await mod.open(false)), newEngine(await mod.open(false))]);
       const won = opened.filter((r) => r.status === "fulfilled") as PromiseFulfilledResult<Engine>[];
@@ -789,8 +878,44 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
     }
 
+    // K19 (newest) — another PROCESS holds the store: an engine here takes it over at once, and the child stops
+    // with a lost lease (exit 3) at its next write or lease check.
+    if (newest) {
+      await mod.open(true).then((s) => s.close());
+      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
+      const child = spawn(process.execPath, [childPath, opts.driverModule], {
+        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      let started = false;
+      child.stdout.on("data", (d) => {
+        if (String(d).includes("start")) started = true;
+      });
+      const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+      while (!started) await sleep(20);
+      await sleep(200);
+      const t0 = Date.now();
+      const e = await newEngine(await mod.open(false)).catch((err: Error) => err);
+      const took = Date.now() - t0;
+      const code = await Promise.race([exited, sleep(10_000).then(() => "timeout" as const)]);
+      if (code === "timeout") {
+        child.kill("SIGKILL");
+        await exited;
+      }
+      let wrote = false;
+      if (!(e instanceof Error)) {
+        await e.mutation(insertItem("k19"));
+        wrote = true;
+        await e.close();
+      }
+      check(
+        wrote && code === 3 && took <= IDLE_TX_BOUND_MS + 2000,
+        `K19 a store another process holds is taken over at once (${e instanceof Error ? e.message : `${took} ms`}); the child stops with a lost lease (exit ${code})`,
+      );
+    }
+
     // K19 — another PROCESS holds the store: an engine refuses to open, and takes over once it is gone.
-    {
+    if (!newest) {
       await mod.open(true).then((s) => s.close());
       const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
       const child = spawn(process.execPath, [childPath, opts.driverModule], {
@@ -1018,6 +1143,12 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       record === null && reopened === 5,
       `K22 a new store keeps no layout_version record (found ${JSON.stringify(record)}) and reopens with its data (${reopened}/5 items)`,
     );
+    if (mod.schema && mod.referenceSchema) {
+      const have = JSON.stringify(await mod.schema());
+      const want = JSON.stringify(await mod.referenceSchema());
+      if (have !== want) log(`  K22 schema: ${have}\n  K22 reference: ${want}`);
+      check(have === want, "K22 a fresh store's schema equals the reference system's (tables, columns, indexes)");
+    }
 
     await mod.makeReferenceStore!();
     const ref = await mod
@@ -1264,7 +1395,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   //   - L5: a read whose connection is lost runs once more on a fresh one; a read that fails twice surfaces.
   //   - L4: a connection lost in the middle of a flush is retried (on Postgres too: DV-123), and the commit is
   //     acknowledged once, its rows stored once.
-  //   - L4: a retry of a group whose first attempt did commit finds it through the lease record and
+  //   - L4: a retry of a group whose first attempt did commit finds it through the lease record (a newest-wins
+  //     lease: through the group's rows at its top ts, the lease still ours) and
   //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
   //     key on its rows: the lease record is what tells).
   async function k21() {
@@ -1293,8 +1425,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         [{ index: tid(971), key: encodeKey(["k21read"]), table: tid(970), id: did("k21read") }],
       );
       await st.flush();
-      // The read's statement carries the id (as text until the server drivers bind bytes).
-      const k21read = new RegExp(did("k21read"));
+      // The read's statement carries the id: as its string form, or its bytes (raw, or hex in a text parameter).
+      const k21read = new RegExp(`${did("k21read")}|k21read|${Buffer.from("k21read").toString("hex")}`);
       proxy.resetOn(k21read, 1);
       const once = await settle(Promise.resolve(st.get(tid(970), did("k21read"), 10n)));
       check(
