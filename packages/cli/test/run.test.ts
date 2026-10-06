@@ -129,7 +129,16 @@ describe("bunvex run", () => {
     expect(badArgs.code).toBe(1);
     expect(badArgs.err[0]).toStartWith('Failed to parse arguments as JSON: "{ n: "');
     expect((await run(dir, url, "api.items")).err).toEqual(['Function name has too few parts: "api.items"']);
-    expect((await run(dir, url)).code).toBe(2);
+    // No function: Convex's message (STUDY-119), exit 1.
+    expect(await run(dir, url)).toMatchObject({
+      code: 1,
+      err: ["`bunvex run` requires either <functionName> or `--inline-query`."],
+    });
+    const many = await run(dir, url, "a:b", "{}", "extra");
+    expect([many.code, many.err[0]]).toEqual([
+      1,
+      "error: too many arguments for 'run'. Expected 2 arguments but got 3.",
+    ]);
   });
 
   test("--watch: the result, then each change, until stopped; a missing function fails", async () => {

@@ -14,6 +14,10 @@ const CLOSE_GOING_AWAY = 1001;
 const CLOSE_NO_STATUS = 1005;
 /** "Not found" during a push; retried (Convex's CLOSE_NOT_FOUND). */
 const CLOSE_NOT_FOUND = 4040;
+/** A transition frame longer than this is logged for everyone (Convex's 20_000_000, in string length). */
+const LARGE_TRANSITION_LENGTH = 20_000_000;
+/** A transition that took longer than this to arrive is logged for everyone (Convex's 20 s). */
+const SLOW_TRANSITION_MS = 20_000;
 
 type Socket =
   | { state: "disconnected" }
@@ -195,7 +199,8 @@ export class WebSocketManager {
     };
     ws.onmessage = (message) => {
       this.resetServerInactivityTimeout();
-      let serverMessage = v1.parseServerMessage(String(message.data));
+      const frame = String(message.data);
+      let serverMessage = v1.parseServerMessage(frame);
       // A Ping only resets the inactivity timer.
       if (serverMessage.type === "Ping") return;
       if (serverMessage.type === "TransitionChunk") {
@@ -207,6 +212,8 @@ export class WebSocketManager {
         this.transitionChunkBuffer = null;
         this.logger.log(`Received unexpected ${serverMessage.type} while buffering TransitionChunks`);
       }
+      // Measured on this frame, as Convex: for a chunked transition, the last chunk.
+      if (serverMessage.type === "Transition") this.reportLargeTransition(serverMessage, frame.length);
       const response = this.callbacks.onMessage(serverMessage);
       if (response.hasSyncedPastLastReconnect) {
         this.retries = 0;
@@ -229,6 +236,27 @@ export class WebSocketManager {
       }
       this.scheduleReconnect(classifyDisconnectError(event.reason));
     };
+  }
+
+  /**
+   * As Convex's `reportLargeTransition`: a transition's transit time, from the server's clock when it sent it
+   * (`serverTs`, ns) and the clock skew the server measured at Connect, logged verbosely; then, for everyone, a
+   * frame over 20 MB, else a transit over 20 s. Nothing without both fields. Convex's debug `Event` is not sent
+   * (DV-91), and its "more that 20MB" reads "more than" (DV-349).
+   */
+  private reportLargeTransition(transition: v1.Transition, frameLength: number) {
+    if (transition.clientClockSkew === undefined || transition.serverTs === undefined) return;
+    const transitMs = monotonicMillis() - transition.clientClockSkew - transition.serverTs / 1_000_000;
+    const size = `${Math.round(frameLength / 10_000) / 100}MB`;
+    const transit = `${Math.round(transitMs)}ms`;
+    const rate = `${Math.round(frameLength / (transitMs / 1000) / 10_000) / 100}MB per second`;
+    this.logger.logVerbose(`received ${size} transition in ${transit} at ${rate}`);
+    if (frameLength > LARGE_TRANSITION_LENGTH)
+      this.logger.log(
+        `received query results totaling more than 20MB (${size}) which will take a long time to download on slower connections`,
+      );
+    else if (transitMs > SLOW_TRANSITION_MS)
+      this.logger.log(`received query results totaling ${size} which took more than 20s to arrive (${transit})`);
   }
 
   socketState(): string {

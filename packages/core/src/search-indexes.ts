@@ -1,9 +1,9 @@
-// The engine's search indexes (STUDY-45 PR 2): one in-memory `TextIndex` per search index of an active table
-// (S1), built by a backfill (the index answers `IndexBackfillingError` meanwhile) and kept up to date by every
-// commit as it becomes visible. A transaction searches the index as it was at its snapshot — the commits
+// The engine's search indexes (STUDY-45 PR 2): one index per search index of an active table — segments plus a
+// memory part (`SegmentedTextIndex`, STUDY-111) — built by a backfill (the index answers `IndexBackfillingError`
+// meanwhile) and kept up to date by every commit as it becomes visible. A transaction searches the index as it was at its snapshot — the commits
 // after it undone from a short log — with its own pending writes on top, as Convex's memory index and
 // transaction overlay do.
-import { type IndexedDoc, type TextHit, TextIndex, type TextQuery, tokenize } from "@bunvex/search";
+import { type IndexedDoc, SegmentedTextIndex, type TextHit, type TextQuery, tokenize } from "@bunvex/search";
 import { keyBytesLength, type Value } from "@bunvex/values";
 import { OutOfRetentionError, type SearchDoc } from "./committer.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
@@ -56,7 +56,8 @@ export type SearchIndexEntry = {
    * `SearchIndexesUnavailable`, not a new index's `IndexBackfillingError`.
    */
   bootstrapping: boolean;
-  index: TextIndex;
+  /** The index: its segments and memory part (STUDY-111). */
+  index: SegmentedTextIndex;
   /** Changes applied after the backfill began, oldest first: what each document was before. */
   log: { ts: number; id: string; before: IndexedDoc | null }[];
   /** Commits at or before this ts can no longer be undone from `log`. */
@@ -153,7 +154,7 @@ export class SearchIndexes {
         staged: w.staged,
         ready: false,
         bootstrapping,
-        index: new TextIndex(),
+        index: new SegmentedTextIndex(w.def.filterFields),
         log: [],
         retainedFrom: visibleTs,
         touched: new Set(),
@@ -184,7 +185,7 @@ export class SearchIndexes {
       for (const e of this.forTablet(w.table.id)) {
         if (e.staged) continue;
         e.log.push({ ts, id: w.id, before: e.index.get(w.id) });
-        e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null);
+        e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null, ts);
         e.touched?.add(w.id);
       }
     // Keep the log to the retention window.

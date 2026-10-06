@@ -7,6 +7,7 @@ import { TestRuntime } from "@bunvex/core/test-runtime";
 import { BunvexError, v } from "@bunvex/values";
 import { ActionPermits } from "../src/action-permits.ts";
 import { Functions, internalAction, internalMutation, query } from "../src/functions.ts";
+import { SERVER_VERSION } from "../src/health.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
 import { startIssuer } from "./issuer.ts";
@@ -221,7 +222,7 @@ describe("both ways in", () => {
     expect(forwarded.url).toBe(`https://${new URL(site).host}/hello`);
     expect(forwarded.requestId).toBe("mine");
     expect(await (await fetch(`${site}/files/a/b.txt`)).text()).toBe("/files/a/b.txt");
-    expect(await (await fetch(`${site}/version`)).text()).toBe("bunvex");
+    expect(await (await fetch(`${site}/version`)).text()).toBe(SERVER_VERSION);
   });
 
   test("unknown routes, methods and no router: Convex's answers", async () => {

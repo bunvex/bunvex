@@ -61,7 +61,8 @@ describe("_system/frontend/fileStorageV2", () => {
     expect(all.isDone).toBe(true);
     expect(all.page.map((d) => d._id)).toEqual([...ids].reverse());
     const first = all.page[0]!;
-    expect(Object.keys(first)).toEqual(["url", "_id", "_creationTime", "sha256", "size", "contentType"]);
+    // The virtual `_storage` document's keys in Convex's order (STUDY-125), the url first.
+    expect(Object.keys(first)).toEqual(["url", "_creationTime", "_id", "contentType", "sha256", "size"]);
     expect(first).toMatchObject({ size: 5, contentType: "text/plain" });
     expect(first.url).toMatch(new RegExp(`^${api}/api/storage/[0-9a-f-]{36}$`));
     expect(await (await fetch(first.url as string)).text()).toBe("three");
@@ -100,14 +101,17 @@ describe("_system/frontend/fileStorageV2", () => {
     ).toStartWith("ArgumentValidationError:");
   });
 
-  test("getFile: the document with its url; null for another table's id; db.get's error for a malformed id", async () => {
+  test("getFile: the document with its url; a user table's id refused; db.get's error for a malformed id", async () => {
     const { query, store, functions } = await setup();
     const id = await store("hello");
     const f = (await query("getFile", { storageId: id })) as Record<string, unknown>;
     expect(f).toMatchObject({ _id: id, size: 5, contentType: "text/plain" });
     expect(Object.keys(f)[0]).toBe("url");
     const other = (await functions.runMutation("m:otherId", {})) as string;
-    expect(await query("getFile", { storageId: other })).toBeNull();
+    // As Convex's `db.system.get` (`system_table_guard`, STUDY-125).
+    expect(await msg(query("getFile", { storageId: other }))).toContain(
+      "User tables cannot be accessed with db.system.",
+    );
     expect(await msg(query("getFile", { storageId: "no-such-file" }))).toContain("Invalid argument `id`");
   });
 

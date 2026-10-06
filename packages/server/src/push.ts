@@ -14,9 +14,10 @@
 //
 // The pushed version waits in memory between start_push and finish_push (Convex echoes start_push's answer
 // back; a restart in between makes finish_push answer RaceDetected and the CLI push again).
-import { parseAuthConfig } from "@bunvex/auth";
+import { type AuthInfo, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
+  documentTypeError,
   type Engine,
   indexReferenceError,
   insertAuditLogEvents,
@@ -25,10 +26,12 @@ import {
   SchemaPushError,
   SYSTEM_ACTOR,
   schemaToJson,
+  stagedDocumentError,
   TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import { auditEvents } from "./audit-log.ts";
+import { putAuthInfo } from "./auth-info.ts";
 import {
   AUTH_CONFIG_MODULE,
   readPackage,
@@ -38,17 +41,62 @@ import {
   writeCodeRows,
   writePackage,
 } from "./code-store.ts";
-import { type AnalyzedModule, CodeVersion, InvalidModulesError, type ModuleSource } from "./code-version.ts";
+import {
+  type AnalyzedModule,
+  CodeVersion,
+  FunctionExportError,
+  InvalidModulesError,
+  type ModuleSource,
+} from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
-import { authAuditDiff, indexAuditDiff, indexDiffJson } from "./push-audit.ts";
+import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
 /**
  * Convex's `check_index_references`, after the schema evaluates (`_evaluate_schema`): an index naming a field
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
+/** Convex's `invalid_schema_export_error`, without Convex's name or docs link (DV-356). */
+const invalidSchemaExport = () =>
+  new PushError(
+    "InvalidSchemaExport",
+    "Hit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+  );
+
+/**
+ * The schema module's default export, as Convex's `run_evaluate_schema` takes it (crates/isolate/src/environment/
+ * schema.rs): none, `null` or `undefined` is `MissingSchemaExportError`; anything that is not a schema (made by
+ * `defineSchema`) is `InvalidSchemaExport`. Convex's messages without its docs link (DV-356).
+ */
+function schemaExport(value: unknown): SchemaDefinition {
+  if (value === undefined || value === null)
+    throw new PushError(
+      "MissingSchemaExportError",
+      "Hit an error while evaluating your schema:\nSchema file missing default export.",
+    );
+  if (!((value as SchemaDefinition).tables instanceof Map)) throw invalidSchemaExport();
+  return value as SchemaDefinition;
+}
+
 function checkIndexReferences(schema: SchemaDefinition) {
+  // First Convex exports the schema (`schemaToJson` here). An error there, such as a document or staged
+  // validator whose JSON is not an object, is answered with `invalid_schema_export_error`, its own message
+  // dropped (STUDY-14 §6, STUDY-106).
+  try {
+    schemaToJson(schema);
+  } catch {
+    throw invalidSchemaExport();
+  }
+  // Then Convex parses it: a document validator a table cannot have (STUDY-14 §6).
+  const document = documentTypeError(schema);
+  if (document)
+    throw new PushError("InvalidTopLevelTypeInSchemaError", `Hit an error while evaluating your schema:\n${document}`);
+  // Then Convex's parse of the schema's JSON refuses a staged validator a table could not have
+  // (`InvalidTopLevelTypeInSchemaError`, STUDY-106).
+  const staged = stagedDocumentError(schema);
+  if (staged)
+    throw new PushError("InvalidTopLevelTypeInSchemaError", `Hit an error while evaluating your schema:\n${staged}`);
   const error = indexReferenceError(schema);
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
@@ -93,11 +141,9 @@ export type PushDeps = {
   modulesStore: BlobStore;
   cronExecutor: CronJobExecutor;
   /** Make a committed version live: functions, router, verifier, subscriptions. */
-  install: (version: CodeVersion, auth: unknown[] | null, authModule: ModuleSource | null) => Promise<unknown>;
+  install: (version: CodeVersion, auth: AuthInfo[], authModule: ModuleSource | null) => Promise<unknown>;
   /** The deployment's variables and the built-ins, as `auth.config` sees them (STUDY-37). */
   deploymentEnv: () => Promise<Record<string, string>>;
-  /** The auth providers in force, for the push's audit-log event. */
-  currentAuth?: () => unknown[] | null;
 };
 
 /** The variables, canonically, to tell whether they changed during a push. */
@@ -215,12 +261,7 @@ export class PushService {
     let schema = emptySchema;
     const schemaModule = req.appDefinition?.schema;
     if (schemaModule) {
-      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
-      if (!(s?.tables instanceof Map))
-        throw new PushError(
-          "InvalidSchema",
-          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
-        );
+      const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
       checkIndexReferences(s);
       schema = s;
     }
@@ -250,17 +291,13 @@ export class PushService {
       version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
     } catch (e) {
       if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
+      if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
       throw e;
     }
     let schema = emptySchema;
     const schemaModule = req.appDefinition?.schema;
     if (schemaModule) {
-      const s = (await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema")) as SchemaDefinition;
-      if (!(s?.tables instanceof Map))
-        throw new PushError(
-          "InvalidSchema",
-          "Hit an error while evaluating your schema:\nThe default export is not a schema (defineSchema(...))",
-        );
+      const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
       checkIndexReferences(s);
       schema = s;
     }
@@ -380,16 +417,19 @@ export class PushService {
     const activeSchema = this.deps.engine.schema;
     // Convex's index diff of the push: in its audit event, and in the answer (as `SerializedIndexDiff`).
     const indexDiff = indexAuditDiff(activeSchema, p.schema);
-    const authDiff = authAuditDiff(this.deps.currentAuth?.() ?? null, p.auth);
+    // The providers the push stores in `_auth` (none without an auth.config, as Convex's `app_auth`).
+    const auth = p.auth === null ? [] : parseAuthConfig({ providers: p.auth } as never);
     const pkg = await writePackage(this.deps.modulesStore, p.authModule ? [...p.modules, p.authModule] : p.modules);
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
-      value: { unused: SourcePackage[]; crons: CronDiff };
+      value: { unused: SourcePackage[]; crons: CronDiff; authDiff: { added: string[]; removed: string[] } };
     };
     try {
       // Analysis checked the targets (Convex's `validate_cron_jobs`) and kept the specs.
       const specs = new Map(Object.entries(p.version.analysis["crons.js"]?.cronSpecs ?? {}));
       committed = (await this.deps.engine.commitSchemaPush(p.schemaId, async (db) => {
         const unused = await writeCodeRows(db, pkg, p.version);
+        // Convex's `AuthInfoModel::put`, in the push's commit: its diff is the push's `authDiff`.
+        const authDiff = await putAuthInfo(db, auth);
         const crons = (await this.deps.cronExecutor.applyIn(db, specs)) as CronDiff;
         // Convex's `push_config_with_components`, in the push's commit.
         await insertAuditLogEvents(
@@ -408,7 +448,7 @@ export class PushService {
           ],
           actor,
         );
-        return { unused, crons };
+        return { unused, crons, authDiff };
       })) as typeof committed;
     } catch (e) {
       await this.deps.modulesStore.delete(pkg.storageKey).catch(() => {});
@@ -421,19 +461,20 @@ export class PushService {
     }
     this.pending.delete(p.schemaId);
     for (const id of this.pending.keys()) if (id !== p.schemaId) this.pending.delete(id);
-    await this.deps.install(p.version, p.auth, p.authModule);
+    await this.deps.install(p.version, auth, p.authModule);
     this.deps.cronExecutor.refresh();
     for (const old of committed.value.unused) await this.deps.modulesStore.delete(old.storageKey).catch(() => {});
-    return this.diff(moduleDiff, indexDiffJson(indexDiff), committed.value.crons);
+    return this.diff(moduleDiff, indexDiffJson(indexDiff), committed.value.crons, committed.value.authDiff);
   }
 
   private diff(
     moduleDiff: { added: string[]; removed: string[] } | [],
     indexDiff: ReturnType<typeof indexDiffJson>,
     crons: CronDiff,
+    authDiff: { added: string[]; removed: string[] } = { added: [], removed: [] },
   ) {
     return {
-      authDiff: { added: [], removed: [] },
+      authDiff,
       definitionDiffs: {},
       componentDiffs: {
         "": {

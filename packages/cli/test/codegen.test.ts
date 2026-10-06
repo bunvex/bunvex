@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -187,11 +188,16 @@ export const worse = action({ args: {}, handler: (ctx) => ctx.runMutation(api.me
     });
     const bad = io(app);
     expect(await main(["codegen"], bad.it)).toBe(1);
-    const output = bad.err.join("\n");
-    expect(output).toContain(`bunvex/bad.ts(3,`);
+    // As Convex's (STUDY-124): the failure and the hint on stderr, the compiler's errors on stdout, run with
+    // `--pretty true` as Convex runs the compiler (STUDY-117): colored, `file:line:column`.
+    expect(bad.err).toEqual([
+      "✖ TypeScript typecheck via `tsc` failed.",
+      "To ignore failing typecheck, use `--typecheck=disable`.",
+    ]);
+    const output = bad.out.join("\n");
+    expect(Bun.stripANSI(output)).toContain(`bunvex/bad.ts:3:`);
     expect(output).toContain(`'"nope"'`);
-    expect(output).toContain(`bunvex/bad.ts(4,`);
-    expect(output).toContain("To ignore failing typecheck, use `--typecheck=disable`.");
+    expect(Bun.stripANSI(output)).toContain(`bunvex/bad.ts:4:`);
     expect(await main(["codegen", "--typecheck=disable"], io(app).it)).toBe(0);
   }, 120_000);
 
@@ -241,8 +247,8 @@ console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("'
     write(app, { "bunvex/typo.ts": `import { v } from "./_generated/server";\nexport const bad = v.id("mesages");` });
     const strict = io(app);
     expect(await main(["codegen"], strict.it)).toBe(1);
-    expect(strict.err.join("\n")).toContain(`bunvex/typo.ts(2,`);
-    expect(strict.err.join("\n")).toContain(`'"mesages"'`);
+    expect(Bun.stripANSI(strict.out.join("\n"))).toContain(`bunvex/typo.ts:2:`);
+    expect(strict.out.join("\n")).toContain(`'"mesages"'`);
     // A loose schema: any table name.
     write(app, {
       "bunvex/schema.ts": TYPED_APP["bunvex/schema.ts"].replace(/\}\);$/, "}, { strictTableNameTypes: false });"),
@@ -265,7 +271,162 @@ export const byId = query({ args: { id: v.id("anything"), file: v.id("_storage")
     expect(await main(["codegen"], r.it)).toBe(0);
     expect(r.err.join("\n")).toContain("Found no bunvex/tsconfig.json");
     expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(1);
-    expect(await main(["codegen", "--typecheck", "sometimes"], io(app).it)).toBe(2);
+    const sometimes = io(app);
+    expect(await main(["codegen", "--typecheck", "sometimes"], sometimes.it)).toBe(1);
+    // `codegen` shows no help after an argument error, as Convex's.
+    expect(sometimes.err).toEqual([
+      "error: option '--typecheck <mode>' argument 'sometimes' is invalid. Allowed choices are enable, try, disable.",
+    ]);
+    // With `enable` and nothing to typecheck with: the reason, then the hint.
+    const enable = io(app);
+    expect(await main(["codegen", "--typecheck", "enable"], enable.it)).toBe(1);
+    expect(enable.err).toEqual([
+      "Found no bunvex/tsconfig.json to typecheck the functions with, so skipping typecheck. Run `bunvex codegen --init` to create one.",
+      "To ignore failing typecheck, use `--typecheck=disable`.",
+    ]);
+  });
+});
+
+// STUDY-116: Convex's other codegen flags. `--dry-run` and `--debug` print what Convex's `writeFormattedFile`
+// prints (lib/codegen.ts), `--commonjs` adds `api_cjs`, the deployment's flags are ignored (DV-384), the
+// components' refused (DV-385) and `--system-udfs` is not an option (DV-386).
+describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STUDY-116)", () => {
+  const ALL = ["dataModel.d.ts", "server.js", "server.d.ts", "api.js", "api.d.ts"];
+  /** Every file under `dir`, with its content: what a run must leave alone. */
+  const snapshot = (dir: string): Record<string, string> => {
+    const files: Record<string, string> = {};
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const path = join(d, e.name);
+        if (e.isDirectory()) walk(path);
+        else files[path.slice(dir.length)] = readFileSync(path, "utf8");
+      }
+    };
+    walk(dir);
+    return files;
+  };
+
+  test("--dry-run writes nothing and prints each file that would change, then each stale entry", async () => {
+    const app = tmp();
+    write(app, { "bunvex/messages.ts": "export const x = 1;", "bunvex/_generated/old/stale.js": "// old" });
+    const before = snapshot(app);
+    const r = io(app);
+    expect(await main(["codegen", "--dry-run", "--typecheck", "disable"], r.it)).toBe(0);
+    expect(r.out).toEqual([
+      ...ALL.map((f) => `Command would write file: bunvex/_generated/${f}`),
+      "Command would delete file: bunvex/_generated/old/stale.js",
+      "Command would delete directory: bunvex/_generated/old",
+    ]);
+    expect(r.err).toEqual([]);
+    expect(snapshot(app)).toEqual(before);
+    // After a real run nothing would change; then only what a new module changes.
+    expect(await main(["codegen", "--typecheck", "disable"], io(app).it)).toBe(0);
+    const same = io(app);
+    expect(await main(["codegen", "--dry-run", "--typecheck", "disable"], same.it)).toBe(0);
+    expect(same.out).toEqual([]);
+    write(app, { "bunvex/more.ts": "export const y = 1;" });
+    const after = snapshot(app);
+    const changed = io(app);
+    expect(await main(["codegen", "--dry-run", "--typecheck", "disable"], changed.it)).toBe(0);
+    expect(changed.out).toEqual(["Command would write file: bunvex/_generated/api.d.ts"]);
+    expect(snapshot(app)).toEqual(after);
+  });
+
+  test("--init --dry-run lists README.md and tsconfig.json without writing them", async () => {
+    const app = tmp();
+    const r = io(app);
+    expect(await main(["codegen", "--init", "--dry-run", "--typecheck", "disable"], r.it)).toBe(0);
+    expect(r.out.slice(0, 2)).toEqual([
+      "Command would write file: bunvex/README.md",
+      "Command would write file: bunvex/tsconfig.json",
+    ]);
+    expect(existsSync(join(app, "bunvex/README.md"))).toBe(false);
+    expect(existsSync(join(app, "bunvex/tsconfig.json"))).toBe(false);
+  });
+
+  test("--debug prints every file as `# <absolute path>` and its contents, and writes or removes nothing", async () => {
+    const app = tmp();
+    write(app, { "bunvex/messages.ts": "export const x = 1;", "bunvex/_generated/stale.js": "// old" });
+    expect(await main(["codegen", "--typecheck", "disable"], io(app).it)).toBe(0);
+    write(app, { "bunvex/_generated/stale.js": "// old", "bunvex/more.ts": "export const y = 1;" });
+    const before = snapshot(app);
+    const r = io(app);
+    expect(await main(["codegen", "--debug", "--typecheck", "disable"], r.it)).toBe(0);
+    const files = generatedFiles(["messages.ts", "more.ts"], { hasSchema: false, fileType: "js/dts" });
+    const contents: Record<string, string> = { ...files.dataModel, ...files.server, ...files.api };
+    // Unchanged files too: the debug output is the whole of `_generated/`.
+    expect(r.out).toEqual(ALL.flatMap((f) => [`# ${join(app, "bunvex/_generated", f)}`, contents[f]!]));
+    expect(snapshot(app)).toEqual(before);
+  });
+
+  test("--url and --admin-key are accepted and change nothing", async () => {
+    const app = tmp();
+    write(app, { "bunvex/messages.ts": "export const x = 1;" });
+    const r = io(app);
+    expect(
+      await main(["codegen", "--url", "http://127.0.0.1:1", "--admin-key=nope", "--typecheck", "disable"], r.it),
+    ).toBe(0);
+    expect(r.out).toEqual([`✔ Generated bunvex/_generated (${ALL.join(", ")})`]);
+    const missing = io(app);
+    expect(await main(["codegen", "--url"], missing.it)).toBe(1);
+    expect(missing.err).toEqual(["error: option '--url <url>' argument missing"]);
+  });
+
+  test("--component-dir and --live-component-sources are refused; --system-udfs is not an option", async () => {
+    const app = tmp();
+    for (const args of [["--component-dir", "x"], ["--component-dir=x"], ["--live-component-sources"]]) {
+      const r = io(app);
+      expect(await main(["codegen", ...args], r.it)).toBe(2);
+      const flag = args[0]!.split("=")[0];
+      expect(r.err).toEqual([`bunvex codegen: ${flag}: bunvex does not have components yet.`]);
+    }
+    const udfs = io(app);
+    expect(await main(["codegen", "--system-udfs"], udfs.it)).toBe(1);
+    expect(udfs.err[0]).toStartWith("error: unknown option '--system-udfs'");
+    expect(existsSync(join(app, "bunvex"))).toBe(false);
+  });
+
+  test("--commonjs (or generateCommonJSApi) writes api_cjs.cjs, which loads with require()", async () => {
+    const app = appWithPackages({ "bunvex/messages.ts": "export const list = 1;" });
+    const r = io(app);
+    expect(await main(["codegen", "--commonjs", "--typecheck", "disable"], r.it)).toBe(0);
+    expect(r.out).toEqual([`✔ Generated bunvex/_generated (${ALL.join(", ")}, api_cjs.cjs, api_cjs.d.cts)`]);
+    const gen = join(app, "bunvex/_generated");
+    expect(readFileSync(join(gen, "api_cjs.d.cts"), "utf8")).toBe(readFileSync(join(gen, "api.d.ts"), "utf8"));
+    expect(readFileSync(join(gen, "api_cjs.cjs"), "utf8")).toContain(`require(${JSON.stringify(SERVER)})`);
+    const probe = Bun.spawnSync(
+      [
+        "bun",
+        "-e",
+        `const { api, internal } = require("./bunvex/_generated/api_cjs.cjs");
+const { getFunctionName } = require(${JSON.stringify(SERVER)});
+console.log(JSON.stringify([getFunctionName(api.messages.list), getFunctionName(internal.a.b)]));`,
+      ],
+      { cwd: app },
+    );
+    expect(probe.stderr.toString()).toBe("");
+    expect(JSON.parse(probe.stdout.toString())).toEqual(["messages:list", "a:b"]);
+    // Without the flag, a run removes them again; bunvex.json's generateCommonJSApi writes them, in both passes.
+    expect(await main(["codegen", "--typecheck", "disable"], io(app).it)).toBe(0);
+    expect(existsSync(join(gen, "api_cjs.cjs"))).toBe(false);
+    write(app, { "bunvex.json": '{"generateCommonJSApi":true}' });
+    expect(codegenConfig(app).commonjs).toBe(true);
+    expect(runCodegen(join(app, "bunvex"), codegenConfig(app), { initial: true }).written.sort()).toEqual([
+      "api_cjs.cjs",
+      "api_cjs.d.cts",
+    ]);
+    expect(readFileSync(join(gen, "api_cjs.d.cts"), "utf8")).toContain("AnyApi");
+    expect(await main(["codegen", "--typecheck", "disable"], io(app).it)).toBe(0);
+    expect(readFileSync(join(gen, "api_cjs.d.cts"), "utf8")).toContain("typeof messages");
+    // The initial pass always rewrites api_cjs.cjs (as api.js), and keeps the typed declarations.
+    write(app, { "bunvex/_generated/api_cjs.cjs": "// stale" });
+    expect(runCodegen(join(app, "bunvex"), codegenConfig(app), { initial: true }).written).toEqual(["api_cjs.cjs"]);
+    expect(readFileSync(join(gen, "api_cjs.cjs"), "utf8")).toContain("module.exports");
+    // With fileType ts the flag writes nothing more, as Convex's.
+    write(app, { "bunvex.json": '{"codegen":{"fileType":"ts"}}' });
+    const ts = io(app);
+    expect(await main(["codegen", "--commonjs", "--typecheck", "disable"], ts.it)).toBe(0);
+    expect(readdirSync(gen).sort()).toEqual(["api.ts", "dataModel.ts", "server.ts"]);
   });
 });
 
@@ -288,6 +449,11 @@ describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
     ],
     ['{"codegen":{"fileType":5}}', "`codegen.fileType` in `bunvex.json`: Expected 'ts' | 'js/dts', received number"],
     ['{"codegen":{"fileType":null}}', "`codegen.fileType` in `bunvex.json`: Expected 'ts' | 'js/dts', received null"],
+    ['{"generateCommonJSApi":"yes"}', "`generateCommonJSApi` in `bunvex.json`: Expected boolean, received string"],
+    [
+      '{"generateCommonJSApi":true,"codegen":{"fileType":"ts"}}',
+      '`generateCommonJSApi` in `bunvex.json`: Cannot use `generateCommonJSApi: true` with `codegen.fileType: "ts"`. CommonJS modules require JavaScript generation. Either set `codegen.fileType: "js/dts"` or remove `generateCommonJSApi`.',
+    ],
     // The first issue, in the schema's order.
     ['{"functions":1,"codegen":{"fileType":"x"}}', "`functions` in `bunvex.json`: Expected string, received number"],
   ];

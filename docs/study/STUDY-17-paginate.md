@@ -27,9 +27,13 @@
   (`prev_journal.end_cursor`). That keeps page boundaries stable while documents are inserted or
   deleted.
 - **`maximumRowsRead` / `maximumBytesRead`:**
-  - reaching either stops the page, with `pageStatus: "SplitRequired"`;
-  - going past 3/4 of either, or past 6144 documents, gives `"SplitRecommended"`;
-  - `splitCursor` then points at the middle of the page.
+  - reaching either stops the page, with `pageStatus: "SplitRequired"`, except on a page pinned by an end
+    cursor, which is read to its end;
+  - going past 3/4 of either (of the transaction's read limits when they are not set), or past 6144
+    documents, gives `"SplitRecommended"`;
+  - `splitCursor` points at the middle document read, on any page that read more than two (STUDY-108).
+- **A transaction read limit** hit while reading ends the page with `"SplitRequired"` instead of the error
+  (STUDY-108).
 - **Errors:**
   - "Must request at least 1 document while paginating";
   - "Requested too many items: N" (more than 32 000);
