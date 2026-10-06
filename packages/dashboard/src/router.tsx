@@ -136,6 +136,19 @@ export const validateHistorySearch = (input: Record<string, unknown>): HistorySe
   event: str(input.event),
 });
 
+/**
+ * The Subscriptions screen (STUDY-131 AD-25): a function path filter, the cache tab, the open live query
+ * (`<session>:<queryId>`) or cache entry.
+ */
+export type SubscriptionsSearch = { path?: string; tab?: "cache"; query?: string; entry?: string };
+export const validateSubscriptionsSearch = (input: Record<string, unknown>): SubscriptionsSearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  path: str(input.path),
+  tab: input.tab === "cache" ? "cache" : undefined,
+  query: str(input.query),
+  entry: str(input.entry),
+});
+
 /** Cron jobs: the job whose details are open. */
 export type CronsSearch = { cron?: string };
 export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch => ({ cron: str(input.cron) });
@@ -156,6 +169,7 @@ const ScheduledFunctionsScreen = lazyRouteComponent(() => import("./schedules/sc
 const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx"), "CronJobsScreen");
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
+const SubscriptionsScreen = lazyRouteComponent(() => import("./subscriptions/screen.tsx"), "SubscriptionsScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
 const AppsSettingsScreen = lazyRouteComponent(() => import("./settings/apps.tsx"), "AppsSettingsScreen");
 const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
@@ -259,6 +273,13 @@ export const historyRoute = createRoute({
   path: "history",
   validateSearch: validateHistorySearch,
   component: HistoryScreen,
+});
+
+export const subscriptionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "subscriptions",
+  validateSearch: validateSubscriptionsSearch,
+  component: SubscriptionsScreen,
 });
 
 /** `/settings` opens General, its first page, as Convex's (UI-01 §17.1). */
@@ -416,6 +437,7 @@ const builtInRoutes = [
   scheduledRoute,
   cronsRoute,
   historyRoute,
+  subscriptionsRoute,
   settingsRoute,
   generalSettingsRoute,
   envVarsRoute,

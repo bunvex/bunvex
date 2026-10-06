@@ -16,7 +16,7 @@ export {
 export { BunvexError, isBunvexError } from "./errors.ts";
 export { formatExportFloat, fromExportJson, toExportJson } from "./export-json.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
-export { keyBytesLength, valuesToKey } from "./sorting.ts";
+export { keyBytesLength, keyToValues, valuesToKey } from "./sorting.ts";
 export {
   type GenericId,
   type GenericValidator,
@@ -53,8 +53,11 @@ export {
   isSimpleObject,
   isSpecialFloat,
   type JSONValue,
+  MAX_VALUE_NESTING,
+  measureRawValue,
   rawValueSize,
   stringifyValueForError,
+  TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
   validateObjectField,

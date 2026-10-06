@@ -44,12 +44,12 @@ function reference(n: number): string {
   if (k >= 0 && kk <= 16) out = `${digits}${"0".repeat(k)}.0`;
   else if (kk > 0 && kk <= 16) out = `${digits.slice(0, kk)}.${digits.slice(kk)}`;
   else if (kk > -5 && kk <= 0) out = `0.${"0".repeat(-kk)}${digits}`;
-  else if (length === 1) out = `${digits}e${kk - 1}`;
-  else out = `${digits[0]}.${digits.slice(1)}e${kk - 1}`;
+  else if (length === 1) out = `${digits}e${kk > 0 ? "+" : ""}${kk - 1}`;
+  else out = `${digits[0]}.${digits.slice(1)}e${kk > 0 ? "+" : ""}${kk - 1}`;
   return sign + out;
 }
 
-test("formatExportFloat is ryu's layout for every finite double", () => {
+test("formatExportFloat is serde_json's layout for every finite double", () => {
   const edges = [
     1e-5, 9.999999999999999e-6, 1e16, 9999999999999998, 1e15, 0.1, 123, -0.5, 5e-324, 1.7976931348623157e308,
   ];

@@ -1,0 +1,24 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_source_packages",
+  "rows": [
+    {
+      "_creationTime": 1791234000229.0667,
+      "_id": "hg2egag5rcz0gvheb1p89rsgh98fpz4x",
+      "externalPackageId": null,
+      "nodeVersion": null,
+      "packageSize": {
+        "unzippedSizeBytes": {
+          "$integer": "6lEGAAAAAAA="
+        },
+        "zippedSizeBytes": {
+          "$integer": "bKMBAAAAAAA="
+        }
+      },
+      "sha256": {
+        "$bytes": "wkFEj4nCH9FXB5ynaT7i/YYDUfWaqcskQZPBIniSr2c="
+      },
+      "storageKey": "3e5110bb-97d9-4414-881f-c0231544a49f"
+    }
+  ]
+}

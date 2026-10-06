@@ -172,7 +172,7 @@ describe("a push's schema change", () => {
     // Still the old schema: no validators (v1 wants a number), and the push not active.
     expect(
       await e.query((db) => db.asSystem(async () => (await db.query(SCHEMAS_TABLE).collect()).map((r) => r.state))),
-    ).toEqual(["validated"]);
+    ).toEqual([{ state: "validated" }]);
     await e.commitSchemaPush(p.schemaId, async () => {});
     await expect(e.mutation((db) => db.insert("items", { n: "now validated" }))).rejects.toThrow();
     expect((await e.query((db) => db.query("items").collect())).length).toBe(0);
@@ -249,7 +249,7 @@ describe("a push's schema change", () => {
     await a.commitSchemaPush(p.schemaId, async () => {});
     await a.mutation((db) => db.insert("items", { n: 7 }));
     const rows = await a.query((db) => db.asSystem(() => db.query(SCHEMAS_TABLE).collect()));
-    expect(rows.map((r) => r.state)).toEqual(["active"]);
+    expect(rows.map((r) => r.state)).toEqual([{ state: "active" }]);
     await a.close();
     engines.splice(engines.indexOf(a), 1);
     const b = await open(path); // constructed with an empty schema
@@ -315,12 +315,70 @@ describe("a push's schema change", () => {
       { schemaValidation: false },
     );
     const j = schemaToJson(s);
+    // Each index ends with the `_creationTime` Convex appends; `v.any()` is Convex's `{type: "any"}`.
     expect(j.tables[0]).toMatchObject({
       tableName: "items",
-      indexes: [{ indexDescriptor: "by_n", fields: ["n"] }],
-      stagedDbIndexes: [{ indexDescriptor: "staged_one", fields: ["kind"] }],
+      indexes: [{ indexDescriptor: "by_n", fields: ["n", "_creationTime"] }],
+      stagedDbIndexes: [{ indexDescriptor: "staged_one", fields: ["kind", "_creationTime"] }],
+      stagedDocumentType: null,
     });
-    expect(j.tables[1]!.documentType).toBeNull();
+    expect(j.tables[1]!.documentType).toEqual({ type: "any" });
+    expect(schemaFromJson(j).tables.get("items")!.indexes).toEqual({ by_n: ["n"], staged_one: ["kind"] });
     expect(schemaToJson(schemaFromJson(JSON.parse(JSON.stringify(j))))).toEqual(j);
+  });
+});
+
+describe("a push of a schema already there (Convex's submit_pending, STUDY-35 §7)", () => {
+  const rows = (e: Engine) =>
+    e.query((db) => db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as Promise<
+      { _id: string; state: { state: string } }[]
+    >;
+  const complete = async (e: Engine, id: string) => {
+    await until(async () => (await e.schemaPushStatus(id)).type !== "inProgress");
+    return e.schemaPushStatus(id);
+  };
+
+  test("equal to the active schema: the active schema's id, complete at once, and its commit changes nothing", async () => {
+    const e = await open(tmp());
+    const p = await e.startSchemaPush(v1);
+    await complete(e, p.schemaId);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    // The same schema, declared again with its fields in another order: the active one.
+    const same = defineSchema({
+      items: defineTable({ tag: v.optional(v.string()), n: v.number() }).index("by_n", ["n"]),
+    });
+    const again = await e.startSchemaPush(same);
+    expect(again.schemaId).toBe(p.schemaId);
+    expect(await e.schemaPushStatus(again.schemaId)).toEqual({ type: "complete" });
+    const committed = await e.commitSchemaPush(again.schemaId, async () => "body ran");
+    expect(committed.value).toBe("body ran");
+    expect((await rows(e)).map((r) => [r._id, r.state.state])).toEqual([[p.schemaId, "active"]]);
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+  });
+
+  test("equal to the pending schema: that one, not overwritten; a different one: a new pending schema", async () => {
+    const e = await open(tmp());
+    const a = await e.startSchemaPush(v1);
+    const b = await e.startSchemaPush(v1);
+    expect(b.schemaId).toBe(a.schemaId);
+    expect(await complete(e, a.schemaId)).toEqual({ type: "complete" });
+    const c = await e.startSchemaPush(v2);
+    expect(c.schemaId).not.toBe(a.schemaId);
+    expect(await e.schemaPushStatus(a.schemaId)).toEqual({ type: "raceDetected" });
+  });
+
+  test("a pending push, then the active schema again: the pending one is overwritten", async () => {
+    const e = await open(tmp());
+    const p = await e.startSchemaPush(v1);
+    await complete(e, p.schemaId);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    const pending = await e.startSchemaPush(v2);
+    const back = await e.startSchemaPush(v1);
+    expect(back.schemaId).toBe(p.schemaId);
+    expect(await e.schemaPushStatus(pending.schemaId)).toEqual({ type: "raceDetected" });
+    await e.commitSchemaPush(back.schemaId, async () => {});
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    expect((await byIndex(e, "by_n", "n", 1)).length).toBe(1);
+    expect((await rows(e)).find((r) => r.state.state === "active")!._id).toBe(p.schemaId);
   });
 });

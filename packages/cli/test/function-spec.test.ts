@@ -74,7 +74,7 @@ test("bunvex function-spec: the URL, the functions with their validators, the HT
       functionType: "Mutation",
       visibility: { kind: "internal" },
       args: { type: "any" },
-      returns: { type: "any" },
+      returns: null,
     },
     { functionType: "HttpAction", method: "POST", path: "/hook" },
     { functionType: "HttpAction", method: "GET", path: "/files/*" },
@@ -82,5 +82,5 @@ test("bunvex function-spec: the URL, the functions with their validators, the HT
   const toFile = await run("--file");
   expect(toFile.out).toBe("Wrote function spec to function_spec_1234.json");
   expect(JSON.parse(readFileSync(join(dir, "function_spec_1234.json"), "utf8"))).toEqual(spec);
-  expect((await run("--bogus")).code).toBe(2);
+  expect((await run("--bogus")).code).toBe(1);
 });

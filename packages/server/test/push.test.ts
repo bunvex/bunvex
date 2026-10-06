@@ -2,16 +2,17 @@
 // wait_for_schema, finish_push — with the Deploy operation, diff pushes, Convex's errors, the schema and
 // auth.config from the push, crons in the same commit, and a restart on the pushed code and schema.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, Engine } from "@bunvex/core";
+import { defineSchema, Engine, MODULES_TABLE, SOURCE_PACKAGES_TABLE } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 import { startIssuer } from "./issuer.ts";
 
 const SECRET = "ab".repeat(32);
@@ -86,7 +87,7 @@ async function deployment(dir: string, o: { deployable?: boolean; store?: Memory
           schema,
           changedModules,
           unchangedModuleHashes,
-          udfServerVersion: "1",
+          udfServerVersion: "1.46.0",
         },
         componentDefinitions: [],
         nodeDependencies: [],
@@ -228,7 +229,7 @@ describe("deploy2 over HTTP", () => {
     const c = first!.metadata.component_diffs[0];
     expect(c.component_path).toBeNull();
     expect(c.component_diff.diffType).toEqual({ type: "create" });
-    expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js"], removed: [] });
+    expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js", "schema.js"], removed: [] });
     expect(c.component_diff.indexDiff.added_indexes).toEqual([
       { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
     ]);
@@ -296,10 +297,16 @@ describe("deploy2 over HTTP", () => {
     });
     expect(r.wait).toEqual({ type: "complete" });
     expect(r.finish!.status).toBe(200);
-    expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({ added: ["messages.js", "other.js"], removed: [] });
+    expect(r.finish!.body.componentDiffs[""].moduleDiff).toEqual({
+      added: ["messages.js", "other.js", "schema.js"],
+      removed: [],
+    });
     expect(r.finish!.body.componentDiffs[""].indexDiff).toEqual(r.start.body.schemaChange.indexDiffs[""]);
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["hi v1"]);
+    // `_udf_config.serverVersion` is the version the push sent (Convex: the CLI's package version).
+    const [config] = await d.engine.query((db) => db.asSystem(() => db.query("_udf_config").collect()));
+    expect(config!.serverVersion).toBe("1.46.0");
     // The schema's validator holds.
     expect((await d.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
   });
@@ -345,12 +352,32 @@ describe("deploy2 over HTTP", () => {
     }
   }, 120_000);
 
+  test("a function's broken exportArgs: InvalidModules with Convex's message; one that throws, Convex's `Error` (STUDY-105)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const fn = (patch: string) =>
+      mod("m.js", `import { query } from "@bunvex/server"; export const q = query(async () => 1); ${patch}`);
+    const broken = await d.push([fn("q.exportArgs = 5;")]);
+    expect(broken.start.status).toBe(400);
+    expect(broken.start.body).toEqual({
+      code: "InvalidModules",
+      message:
+        "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nm.js:q.exportArgs is not a function or `undefined`.",
+    });
+    const throws = await d.push([fn(`q.exportReturns = () => { throw new Error("boom"); };`)]);
+    expect(throws.start.status).toBe(400);
+    expect(throws.start.body.code).toBe("Error");
+    expect(throws.start.body.message).toStartWith("Hit an error while pushing:\nUncaught Error: boom");
+    // Nothing was deployed.
+    expect((await d.call("query", "m:q")).status).toBe("error");
+  }, 60_000);
+
   test("a second push sends only what changed; a wrong hash is a 409", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
     await d.push([messages(1), mod("other.js", `export const x = 1;`)], schema);
     const hashes = (await d.post("/api/get_config_hashes", {})).body.moduleHashes;
-    expect(hashes.map((h: { path: string }) => h.path).sort()).toEqual(["messages.js", "other.js"]);
+    expect(hashes.map((h: { path: string }) => h.path).sort()).toEqual(["messages.js", "other.js", "schema.js"]);
     const r = await d.push([messages(2), mod("other.js", `export const x = 1;`)], schema);
     expect(r.changedModules.map((m) => m.path)).toEqual(["messages.js"]);
     expect(r.finish!.status).toBe(200);
@@ -376,8 +403,37 @@ describe("deploy2 over HTTP", () => {
     expect(broken.start.body.message).toStartWith(
       "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught Error: broken at import",
     );
-    const badSchema = await d.push([messages(1)], mod("schema.js", `export default 42;`));
-    expect([badSchema.start.status, badSchema.start.body.code]).toEqual([400, "InvalidSchema"]);
+    // A module that does not compile: the error alone, none of the server's frames (STUDY-95 §7).
+    const syntax = await d.push([mod("messages.js", "export const x = (1;")], schema);
+    expect(syntax.start.body.code).toBe("InvalidModules");
+    expect(syntax.start.body.message).toStartWith(
+      "Hit an error while pushing:\nLoading the pushed modules encountered the following error:\nFailed to analyze messages.js: Uncaught SyntaxError: ",
+    );
+    expect(syntax.start.body.message).not.toMatch(/\bat |node:vm|code-version\.ts/);
+    // A default export that is not a schema, or none: Convex's InvalidSchemaExport and MissingSchemaExportError.
+    const EVAL = "Hit an error while pushing:\nHit an error while evaluating your schema:\n";
+    for (const source of [`export default 42;`, `export default { tables: {} };`, `export default "schema";`]) {
+      const bad = await d.push([messages(1)], mod("schema.js", source));
+      expect([bad.start.status, bad.start.body.code, bad.start.body.message]).toEqual([
+        400,
+        "InvalidSchemaExport",
+        `${EVAL}Default export from schema file isn't a bunvex schema.`,
+      ]);
+    }
+    for (const source of [`export const x = 1;`, `export default null;`, `export default undefined;`]) {
+      const missing = await d.push([messages(1)], mod("schema.js", source));
+      expect([missing.start.status, missing.start.body.code, missing.start.body.message]).toEqual([
+        400,
+        "MissingSchemaExportError",
+        `${EVAL}Schema file missing default export.`,
+      ]);
+    }
+    // evaluate_schema answers the same.
+    const evaluated = await d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: { schema: mod("schema.js", `export default 42;`) },
+      componentDefinitions: [],
+    });
+    expect([evaluated.status, evaluated.body.code]).toEqual([400, "InvalidSchemaExport"]);
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
@@ -396,6 +452,86 @@ describe("deploy2 over HTTP", () => {
     const bad = await d.push([messages(1)], many);
     expect([bad.start.status, bad.start.body.code]).toEqual([400, "TooManyTables"]);
     expect(bad.start.body.message).toBe("Hit an error while pushing:\nNumber of tables cannot exceed 10000.");
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+  });
+
+  test("a document validator a table cannot have: Convex's errors at push, nothing pushed (STUDY-14 §6)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    const withDocument = (validator: string) =>
+      mod(
+        "schema.js",
+        `import { defineSchema, defineTable } from "@bunvex/server";
+         import { v } from "@bunvex/values";
+         export default defineSchema({ messages: defineTable({ author: v.string(), body: v.string() }).index("by_author", ["author"]), other: defineTable(${validator}) });`,
+      );
+    const top = await d.push([messages(1)], withDocument("v.union(v.object({ a: v.string() }), v.string())"));
+    expect([top.start.status, top.start.body.code]).toEqual([400, "InvalidTopLevelTypeInSchemaError"]);
+    expect(top.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nThe document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    const notObject = await d.push([messages(1)], withDocument('{ isValidator: true, kind: "object", json: "nope" }'));
+    expect([notObject.start.status, notObject.start.body.code]).toEqual([400, "InvalidSchemaExport"]);
+    expect(notObject.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
+    expect((await d.call("query", "messages:list")).status).toBe("success");
+  });
+
+  test("a staged validator (STUDY-106): a change to it alone is a schema change; Convex's errors at push", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const withStaged = (staged: string) =>
+      mod("schema.js", schema.source.replace('.index("by_author", ["author"])', `$&${staged}`));
+    const schemaDiffs = async () =>
+      (
+        (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+          action: string;
+          metadata: Record<string, any>;
+        }[]
+      )
+        .filter((e) => e.action === "push_config_with_components")
+        .map((e) => e.metadata.component_diffs[0].component_diff.schemaDiff);
+    await d.push([messages(1)], schema);
+    // The same push with only `.staged()` added: the schema changes, and the next schema carries it.
+    const staged = await d.push(
+      [messages(1)],
+      withStaged(".staged({ author: v.array(v.string()), body: v.string() })"),
+    );
+    expect(staged.finish!.status).toBe(200);
+    const diff = (await schemaDiffs())[1];
+    expect(diff).not.toBeNull();
+    expect(JSON.parse(diff.previous_schema).tables[0].stagedDocumentType).toBeNull();
+    expect(JSON.parse(diff.next_schema).tables[0].stagedDocumentType).toEqual({
+      type: "object",
+      value: {
+        author: { fieldType: { type: "array", value: { type: "string" } }, optional: false },
+        body: { fieldType: { type: "string" }, optional: false },
+      },
+    });
+    // It is not enforced: writes still follow `defineTable`'s validator.
+    expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
+    // A staged validator a table could not have: Convex's InvalidTopLevelTypeInSchemaError.
+    const bad = await d.push([messages(1)], withStaged(".staged(v.string())"));
+    expect([bad.start.status, bad.start.body.code]).toEqual([400, "InvalidTopLevelTypeInSchemaError"]);
+    expect(bad.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nThe document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    // Two staged validators: the schema does not evaluate.
+    const twice = await d.push([messages(1)], withStaged(".staged({ a: v.string() }).staged({ b: v.string() })"));
+    expect([twice.start.status, twice.start.body.code]).toEqual([400, "InvalidSchema"]);
+    expect(twice.start.body.message).toContain("Table cannot have more than one staged validator.");
+    // A staged validator whose JSON is not an object: the export fails, answered as Convex's
+    // InvalidSchemaExport, its own message dropped.
+    const notObject = await d.push(
+      [messages(1)],
+      withStaged('.staged({ isValidator: true, kind: "object", json: "nope" })'),
+    );
+    expect([notObject.start.status, notObject.start.body.code]).toEqual([400, "InvalidSchemaExport"]);
+    expect(notObject.start.body.message).toBe(
+      "Hit an error while pushing:\nHit an error while evaluating your schema:\nDefault export from schema file isn't a bunvex schema.",
+    );
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
@@ -439,6 +575,15 @@ describe("deploy2 over HTTP", () => {
     expect(r.wait!.error).toMatch(/^Document with ID ".+" in table "messages" does not match the schema: /);
     expect(r.finish!.body.code).toBe("SchemaNotReady");
     expect((await d.call("query", "messages:list")).value).toEqual(["ok v1"]);
+    // The dashboard's progress (STUDY-127): no schema pending any more, and the failed one's attempts are gone.
+    const progress = await d.call(
+      "query",
+      "_system/frontend/getSchemas:schemaValidationProgress",
+      { componentId: null },
+      `Bunvex ${KEY}`,
+    );
+    expect(progress).toMatchObject({ status: "success", value: null });
+    expect(await d.engine.query((db) => db.asSystem(() => db.query("_schema_validations").collect()))).toEqual([]);
   });
 
   test("the Deploy operation: no key, a read-only key, an embedded server", async () => {
@@ -457,15 +602,35 @@ describe("deploy2 over HTTP", () => {
     expect((await e.post("/api/get_config_hashes", {})).body.code).toBe("NotDeployable");
   });
 
+  test("a push of the schema already active: start_push answers the active schema's id (STUDY-35 §7)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const first = await d.push([messages(1)], schema);
+    const second = await d.push([messages(2)], schema);
+    expect(second.finish!.status).toBe(200);
+    expect(second.start.body.schemaChange.schemaIds[""]).toBe(first.start.body.schemaChange.schemaIds[""]);
+    const states = (await d.engine.query((db) => db.asSystem(() => db.query("_schemas").collect()))) as unknown as {
+      state: { state: string };
+    }[];
+    expect(states.map((r) => r.state.state)).toEqual(["active"]);
+    expect((await d.call("query", "messages:list")).value).toEqual([]);
+  });
+
   test("two pushes racing: the older one's finish is RaceDetected", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
-    const body = (n: number) => ({
-      appDefinition: { schema, changedModules: [messages(n)], unchangedModuleHashes: [] },
+    // Two different schemas: the second overwrites the first (a push of the same schema would share it, as
+    // Convex's `submit_pending`).
+    const other = mod(
+      "schema.js",
+      schema.source.replace('.index("by_author", ["author"])', '.index("by_body", ["body"])'),
+    );
+    const body = (n: number, s: ModuleSource) => ({
+      appDefinition: { schema: s, changedModules: [messages(n)], unchangedModuleHashes: [] },
       componentDefinitions: [],
     });
-    const a = await d.post("/api/deploy2/start_push", body(1));
-    const b = await d.post("/api/deploy2/start_push", body(2));
+    const a = await d.post("/api/deploy2/start_push", body(1, schema));
+    const b = await d.post("/api/deploy2/start_push", body(2, other));
     expect((await d.post("/api/deploy2/wait_for_schema", { schemaChange: a.body.schemaChange })).body).toEqual({
       type: "raceDetected",
     });
@@ -511,7 +676,7 @@ describe("deploy2 over HTTP", () => {
     const r = await d.push([who, auth]);
     expect(r.start.body.appAuth).toEqual([{ domain: issuer.url, applicationID: "app" }]);
     expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
-    // A restart re-evaluates the stored auth config.
+    // A restart checks tokens against the providers stored in `_auth` (STUDY-129).
     await d.s.shutdown();
     await d.engine.close();
     const again = await deployment(dir, { store });
@@ -601,6 +766,107 @@ describe("deploy2 over HTTP", () => {
     await b.s.codeReady;
     expect((await b.call("query", "messages:list")).value).toEqual(["kept v1"]);
     expect((await b.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
+  });
+});
+
+describe("`_auth`, the stored auth providers (STUDY-129)", () => {
+  const who = mod(
+    "who.js",
+    `import { query } from "@bunvex/server"; export const me = query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null);`,
+  );
+  const jwt = {
+    type: "customJwt",
+    issuer: "https://jwt.example",
+    jwks: "https://jwt.example/jwks",
+    algorithm: "RS256",
+  };
+  const authConfig = (providers: string) => mod("auth.config.js", `export default { providers: ${providers} };`);
+  type Row = Record<string, unknown> & { _id: string };
+  const rows = async (d: Awaited<ReturnType<typeof deployment>>) =>
+    ((await d.engine.query((db) => db.asSystem(() => db.query("_auth").collect()))) as unknown as Row[]).map(
+      ({ _creationTime, ...r }) => r,
+    );
+  const strip = (r: Row[]) => r.map(({ _id, ...rest }) => rest);
+
+  test("a push stores its providers as Convex's documents; its authDiff; listAuthProviders", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const r = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "app" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(r.finish!.status).toBe(200);
+    const stored = await rows(d);
+    expect(strip(stored)).toEqual([
+      { applicationID: "app", domain: "https://oidc.example" },
+      {
+        type: "customJwt",
+        applicationID: null,
+        issuer: "https://jwt.example",
+        jwks: "https://jwt.example/jwks",
+        algorithm: '"RS256"',
+      },
+    ]);
+    const oidcJson = '{"applicationID":"app","domain":"https://oidc.example"}';
+    const jwtJson =
+      '{"algorithm":"\\"RS256\\"","applicationID":null,"issuer":"https://jwt.example","jwks":"https://jwt.example/jwks","type":"customJwt"}';
+    expect(r.finish!.body.authDiff).toEqual({ added: [oidcJson, jwtJson], removed: [] });
+    const audit = (await d.engine.query((db) =>
+      db.asSystem(() => db.query("_deployment_audit_log").collect()),
+    )) as unknown as { action: string; metadata: Record<string, any> }[];
+    expect(audit.find((e) => e.action === "push_config_with_components")!.metadata.auth_diff).toEqual({
+      added: [oidcJson, jwtJson],
+      removed: [],
+    });
+    const listed = await d.call("query", "_system/frontend/listAuthProviders", {}, `Bunvex ${KEY}`);
+    expect((listed.value as Row[]).map(({ _creationTime, ...x }) => x)).toEqual(stored);
+    // The same providers again: the documents stay, nothing in the diff.
+    const same = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "app" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(same.finish!.body.authDiff).toEqual({ added: [], removed: [] });
+    expect(await rows(d)).toEqual(stored);
+    // One provider changed: only its document is replaced.
+    const changed = await d.push([
+      who,
+      authConfig(`[{ domain: "https://oidc.example", applicationID: "other" }, ${JSON.stringify(jwt)}]`),
+    ]);
+    expect(changed.finish!.body.authDiff).toEqual({
+      added: ['{"applicationID":"other","domain":"https://oidc.example"}'],
+      removed: [oidcJson],
+    });
+    const after = await rows(d);
+    expect(after.find((x) => x.type === "customJwt")!._id).toBe(stored[1]!._id);
+    // No auth.config: no providers.
+    const none = await d.push([who]);
+    expect(none.finish!.body.authDiff.removed).toHaveLength(2);
+    expect(await rows(d)).toEqual([]);
+  });
+
+  test("a variable change re-evaluates auth.config and stores its providers; a start reads `_auth`", async () => {
+    const issuer = await startIssuer();
+    stops.push(issuer.stop);
+    const dir = tmp();
+    const store = new MemoryBlobStore();
+    const d = await deployment(dir, { store });
+    await d.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: "https://a.example" }] });
+    await d.push([who, authConfig(`[{ domain: process.env.ISSUER, applicationID: "app" }]`)]);
+    expect(strip(await rows(d))).toEqual([{ applicationID: "app", domain: "https://a.example" }]);
+    await d.post("/api/update_environment_variables", { changes: [{ name: "ISSUER", value: issuer.url }] });
+    expect(strip(await rows(d))).toEqual([{ applicationID: "app", domain: issuer.url }]);
+    expect((await d.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).value).toBe("user-1");
+    // A start checks tokens against `_auth`, not a fresh evaluation: with the documents gone, none is accepted.
+    await d.engine.mutation(async (db) => {
+      for (const r of await db.asSystem(() => db.query("_auth").collect()))
+        await db.asSystem(() => db.delete("_auth", r._id as string));
+    });
+    await d.s.shutdown();
+    await d.engine.close();
+    const again = await deployment(dir, { store });
+    stops.push(() => again.s.shutdown());
+    await again.s.codeReady;
+    expect((await again.call("query", "who:me", {}, `Bearer ${await issuer.sign()}`)).status).not.toBe("success");
   });
 });
 
@@ -823,5 +1089,75 @@ describe("environment variables (STUDY-37)", () => {
       status: 400,
       body: { code: "RaceDetected", message: "Environment variables have changed during push" },
     });
+  });
+});
+
+describe("the code's system rows", () => {
+  test("_modules and _source_packages rows have Convex's shapes (STUDY-134, DV-424)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    // A module bundled as the CLI bundles it (an external source map), so its functions have positions.
+    const dir = tmp();
+    writeFileSync(
+      join(dir, "fns.ts"),
+      `import { mutation, query } from ${JSON.stringify(["@bunvex", "server"].join("/"))};
+export const seed = mutation(async ({ db }) => {
+  return null;
+});
+export const list = query({
+  args: {},
+  handler: async ({ db }) => {
+    return [];
+  },
+});
+`,
+    );
+    const built = await Bun.build({
+      entrypoints: [join(dir, "fns.ts")],
+      format: "esm",
+      target: "browser",
+      sourcemap: "external",
+      external: ["@bunvex/*"],
+    });
+    const map = built.outputs.find((o) => o.kind === "sourcemap")!;
+    const fns: ModuleSource = {
+      path: "fns.js",
+      source: await built.outputs.find((o) => o.kind !== "sourcemap")!.text(),
+      sourceMap: await map.text(),
+      environment: "isolate",
+    };
+    const auth = mod("auth.config.js", "export default { providers: [] };");
+    const r = await d.push([fns, mod("_deps/AB12CD34.js", "export const shared = 1;"), auth], schema);
+    expect(r.finish!.status).toBe(200);
+    const rows = (await d.engine.query((db) => db.asSystem(() => db.query(MODULES_TABLE).collect()))).map(stored) as {
+      path: string;
+    }[];
+    const byPath = new Map(rows.map((row) => [row.path, row]));
+    expect([...byPath.keys()].sort()).toEqual(["_deps/AB12CD34.js", "auth.config.js", "fns.js", "schema.js"]);
+    const convex = new Map(convexRows("_modules").map((row) => [row.path as string, row]));
+    // A module of functions (each with its int64 position), a dependency chunk (no analysis), the schema; the auth
+    // config is a module like the schema (Convex analyzes both to nothing).
+    expect(shapeDiff(byPath.get("fns.js"), convex.get("fns.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("_deps/AB12CD34.js"), convex.get("_deps/DA6PZB4T.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("schema.js"), convex.get("schema.js"))).toEqual([]);
+    expect(shapeDiff(byPath.get("auth.config.js"), convex.get("schema.js"))).toEqual([]);
+    // The hash: Convex's base64 of sha256(source + source map); the push's wire keeps the hex.
+    expect((byPath.get("fns.js") as unknown as { sha256: string }).sha256).toBe(
+      Buffer.from(sha(fns), "hex").toString("base64"),
+    );
+    const hashes = (await d.post("/api/get_config_hashes", {})).body.moduleHashes as { path: string; hash: string }[];
+    expect(hashes.find((h) => h.path === "fns.js")!.hash).toBe(sha(fns));
+    const [pkg] = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).collect()))).map(
+      stored,
+    ) as Record<string, unknown>[];
+    expect(shapeDiff(pkg, convexRows("_source_packages")[0])).toEqual([]);
+    const sizes = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).first())))!
+      .packageSize as { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
+    expect(sizes.zippedSizeBytes).toBeGreaterThan(0n);
+    expect(sizes.unzippedSizeBytes).toBeGreaterThan(sizes.zippedSizeBytes);
+    // A second push of the same code sends nothing but hashes, and the schema and auth config still load.
+    const again = await d.push([fns, mod("_deps/AB12CD34.js", "export const shared = 1;"), auth], schema);
+    expect(again.changedModules).toEqual([]);
+    expect(again.finish!.status).toBe(200);
   });
 });

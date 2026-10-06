@@ -16,6 +16,7 @@ import {
   Menu,
   Network,
   Play,
+  Radio,
   ScrollText,
   Search,
   Settings,
@@ -248,6 +249,9 @@ export function Shell() {
               </NavItem>
               <NavItem link={{ to: "/history" }} icon={History}>
                 History
+              </NavItem>
+              <NavItem link={{ to: "/subscriptions" }} icon={Radio}>
+                Subscriptions
               </NavItem>
               <ExtensionNavItems group="observe" />
             </NavGroup>

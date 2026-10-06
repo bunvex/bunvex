@@ -8,6 +8,7 @@ import { OutOfRetentionError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
+import { tsGlobal } from "../src/persistence-globals.ts";
 import { RETENTION_GLOBALS, Retention, type RetentionOptions } from "../src/retention.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 
@@ -204,8 +205,8 @@ describe("retention", () => {
     expect(r.minIndexTs).toBe(was);
     p.setGlobal = set;
     await r.advance();
-    expect(p.getGlobal(RETENTION_GLOBALS.minIndexTs)).toBe(r.minIndexTs);
-    expect(p.getGlobal(RETENTION_GLOBALS.minDocumentTs)).toBe(r.minDocumentTs);
+    expect(p.getGlobal(RETENTION_GLOBALS.minIndexTs)).toEqual(tsGlobal(r.minIndexTs));
+    expect(p.getGlobal(RETENTION_GLOBALS.minDocumentTs)).toEqual(tsGlobal(r.minDocumentTs));
   });
 
   test("the windows and cursors are reloaded on restart", async () => {
