@@ -90,6 +90,27 @@ export type OccInfo = {
   retryCount: number | null;
 };
 
+/**
+ * Why a sync query ran, as the subscriptions inspector names it (STUDY-131 AD-25): an invalidation, or a run
+ * no invalidation caused.
+ */
+export type WhyRan = "invalidation" | "newSubscriber" | "identityChange" | "codeChange" | "retry";
+
+/**
+ * Where to look for why an execution ran (STUDY-131 AD-27, a bunvex addition; Convex's log has nothing like
+ * it): a sync query's entry in the subscriptions inspector (its path is the completion's; its arguments'
+ * digest, the reason, and the invalidation it answers by its feed number and commit ts), and the run's span
+ * when it was traced (AD-26). Only the dashboard is sent these (`partJson`'s `links`).
+ */
+export type ExecutionLinks = {
+  subscription?: {
+    argsDigest: string;
+    reason: WhyRan;
+    invalidation: { seq: number; commitTs: number } | null;
+  };
+  trace?: { traceId: string; spanId: string };
+};
+
 /** One execution, as Convex's `FunctionExecution` (times in seconds, as its JSON has them). */
 export type Completion = {
   kind: "Completion";
@@ -117,6 +138,8 @@ export type Completion = {
   identityType: IdentityType;
   /** `node` for a `"use node"` action. */
   environment: "isolate" | "node";
+  /** Not Convex's: why it ran and its trace, for the dashboard (STUDY-131 AD-27). */
+  links?: ExecutionLinks;
 };
 
 /** Lines an action or HTTP action printed while running (Convex's `FunctionExecutionProgress`). */
@@ -158,6 +181,8 @@ export class Running implements LogOwner {
   mutationQueueLength: number | null = null;
   /** A mutation's failed attempts so far, shared by the runs of one scheduled or cron job's loop. */
   retries = { n: 0 };
+  /** Why it ran and its trace (STUDY-131 AD-27). */
+  links: ExecutionLinks | null = null;
   /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
   timer: unknown = null;
   /**
@@ -276,9 +301,11 @@ const lineJson = (l: LogLine, structured: boolean) =>
 
 /**
  * A part as Convex's `FunctionExecutionJson`. `parts`: for `stream_function_logs`, where an action's lines
- * went out as Progress events and its Completion carries none.
+ * went out as Progress events and its Completion carries none. `links`: a Completion also carries its
+ * `links` (STUDY-131 AD-27), for the dashboard only: the CLI's `logs --jsonl` prints the entries as they come,
+ * so its output stays Convex's.
  */
-export function partJson(p: Part, opts: { structured: boolean; parts: boolean }) {
+export function partJson(p: Part, opts: { structured: boolean; parts: boolean; links?: boolean }) {
   const lines = (ls: LogLine[]) => ls.map((l) => lineJson(l, opts.structured));
   if (p.kind === "Progress")
     return {
@@ -315,6 +342,7 @@ export function partJson(p: Part, opts: { structured: boolean; parts: boolean })
     executionTimestamp: p.executionTimestamp,
     identityType: p.identityType,
     environment: p.environment,
+    ...(opts.links && p.links && { links: p.links }),
   };
 }
 
@@ -322,6 +350,10 @@ export function partJson(p: Part, opts: { structured: boolean; parts: boolean })
 export function wsRequestId(sessionId: string, counter: number): string {
   return new Bun.CryptoHasher("sha256").update(`${sessionId}|${counter}`).digest("hex").slice(0, 16);
 }
+
+/** Whether a client is the dashboard, by its client header: it alone gets an execution's `links`. */
+export const isDashboardClient = (clientHeader: string | null) =>
+  clientHeader !== null && clientHeader.startsWith("dashboard-");
 
 /** Whether a client gets structured lines: the CLI and the dashboard, by their client header. */
 export const wantsStructuredLines = (clientHeader: string | null) =>

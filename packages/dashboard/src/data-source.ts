@@ -297,7 +297,34 @@ export type LogEntry = {
     usage?: ExecutionUsage;
     /** Who started the request it belongs to. */
     identity?: ExecutionIdentity;
+    /** Why it ran and where its trace is (STUDY-131 AD-27, a bunvex addition), when the source knows. */
+    links?: ExecutionLinks;
   };
+};
+
+/**
+ * Why an execution ran, as the subscriptions inspector names it (AD-25): an invalidation (a commit wrote into
+ * what it read), or a run no invalidation caused.
+ */
+export type ExecutionRunReason = "invalidation" | "newSubscriber" | "identityChange" | "codeChange" | "retry";
+
+/**
+ * Where to look for why an execution ran (STUDY-131 AD-27, a bunvex addition). A server source maps these from
+ * a Completion's `links` in `/api/stream_function_logs`, which the server sends only to the dashboard.
+ */
+export type ExecutionLinks = {
+  /**
+   * A live query's run: its entry in the subscriptions inspector (the line's function, these arguments), why
+   * it ran, and the invalidation it answers, by its `seq` (the follow stream's) and commit ts. `invalidation`
+   * is null for a run no invalidation caused, or when the inspector records none.
+   */
+  subscription?: {
+    argsDigest: string;
+    reason: ExecutionRunReason;
+    invalidation: { seq: number; commitTs: number } | null;
+  };
+  /** The run's span, when it was traced (AD-26): ids as W3C Trace Context writes them, lowercase hex. */
+  trace?: { traceId: string; spanId: string };
 };
 
 /** An execution's resources, as Convex's usage stats (each absent when not measured). */

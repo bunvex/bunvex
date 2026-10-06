@@ -11,4 +11,9 @@ interface ImportMetaEnv {
    * sign-in is off. Convex has no such list (STUDY-12 LG3).
    */
   readonly VITE_BUNVEX_EMBED_ORIGINS?: string;
+  /**
+   * Where the Logs screen links a traced execution (STUDY-131 AD-27): a trace UI's URL template, e.g.
+   * `http://localhost:16686/trace/{traceId}`. Unset: trace ids are shown with no link.
+   */
+  readonly VITE_BUNVEX_TRACE_URL?: string;
 }

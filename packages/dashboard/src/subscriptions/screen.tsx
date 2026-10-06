@@ -2,7 +2,9 @@
 // live, per session; what each one read (its index ranges, read back to values); why it ran again (its last
 // invalidations — the commit, the mutation, the key it wrote — or the reason it ran without one). A second tab
 // shows the query cache. "Follow" lists new invalidations as they land while the screen is open. Everything
-// that says what is shown lives in the URL: the path filter, the tab, the open query or cache entry.
+// that says what is shown lives in the URL: the path filter, the tab, the open query or cache entry. A log
+// entry's "why it ran" link (STUDY-131 AD-27) opens a query by its function and arguments' digest, with the
+// invalidation that caused the run marked in its history.
 import { Button } from "@bunvex/ui/components/button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { Input } from "@bunvex/ui/components/input";
@@ -108,7 +110,14 @@ function Subscriptions() {
     live.data?.sessions.flatMap((s, i) =>
       s.queries.map((q) => ({ ...q, id: `${i}:${q.queryId}`, session: i + 1, identity: s.identity })),
     ) ?? [];
-  const open = search.query === undefined ? undefined : (rows.find((r) => r.id === search.query) ?? null);
+  // by its row, or (from a log entry's link) by function and arguments: the session that ran it first
+  const byArgs = (r: Row) => r.path === search.path && r.argsDigest === search.args;
+  const open =
+    search.query !== undefined
+      ? (rows.find((r) => r.id === search.query) ?? null)
+      : search.args !== undefined
+        ? (rows.find((r) => byArgs(r) && !r.cached) ?? rows.find(byArgs) ?? null)
+        : undefined;
   const cacheRows = (cache.data?.biggest ?? []).map((e, i) => ({ ...e, id: String(i) }));
   const openEntry = search.entry === undefined ? undefined : (cacheRows.find((r) => r.id === search.entry) ?? null);
 
@@ -203,7 +212,16 @@ function Subscriptions() {
                 placeholder="Filter by function path"
                 defaultValue={search.path ?? ""}
                 onChange={(e) =>
-                  setSearch({ path: e.target.value || undefined, query: undefined, entry: undefined }, true)
+                  setSearch(
+                    {
+                      path: e.target.value || undefined,
+                      query: undefined,
+                      entry: undefined,
+                      args: undefined,
+                      seq: undefined,
+                    },
+                    true,
+                  )
                 }
               />
               <fieldset className="flex gap-1" aria-label="View">
@@ -220,7 +238,7 @@ function Subscriptions() {
                     variant="ghost"
                     size="sm"
                     aria-pressed={cacheTab}
-                    onClick={() => setSearch({ tab: "cache", query: undefined })}
+                    onClick={() => setSearch({ tab: "cache", query: undefined, args: undefined, seq: undefined })}
                   >
                     Query cache
                   </Button>
@@ -278,7 +296,10 @@ function Subscriptions() {
                 data={rows}
                 getRowId={(r) => r.id}
                 defaultColumnWidth={(id) => ({ path: 200, last: 240 })[id] ?? 110}
-                grid={{ activateOnClick: true, onCellActivate: (r) => setSearch({ query: r.id }) }}
+                grid={{
+                  activateOnClick: true,
+                  onCellActivate: (r) => setSearch({ query: r.id, args: undefined, seq: undefined }),
+                }}
                 empty={
                   live.isPending
                     ? "Loading…"
@@ -296,12 +317,14 @@ function Subscriptions() {
           kind="subscription"
           title="Live query"
           focusOnOpen={false}
-          onClose={() => setSearch({ query: undefined })}
+          onClose={() => setSearch({ query: undefined, args: undefined, seq: undefined })}
         >
           {open === null ? (
-            <p className="text-sm text-muted-foreground">This query is no longer live.</p>
+            <p className="text-sm text-muted-foreground">
+              {live.isPending ? "Loading…" : "This query is no longer live."}
+            </p>
           ) : (
-            <QueryDetails q={open} />
+            <QueryDetails q={open} mark={search.query === undefined ? search.seq : undefined} />
           )}
         </Panel>
       )}
@@ -382,7 +405,9 @@ function ReadSet({ ranges }: { ranges: ReadRange[] }) {
   );
 }
 
-function QueryDetails({ q }: { q: Row }) {
+/** `mark`: the invalidation (by `seq`) a log entry's link came for, marked in the history. */
+function QueryDetails({ q, mark }: { q: Row; mark?: number }) {
+  const marked = mark !== undefined && q.history.some((h) => h.kind === "invalidation" && h.seq === mark);
   return (
     <div className="flex flex-col gap-4 text-sm">
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
@@ -406,16 +431,28 @@ function QueryDetails({ q }: { q: Row }) {
       <ReadSet ranges={q.readSet} />
       <section aria-label="Why it ran">
         <h3 className="mb-1 font-medium">Why it ran</h3>
+        {mark !== undefined && !marked && (
+          <p className="mb-2 text-xs text-muted-foreground">
+            The invalidation the log entry names (#{mark}) is no longer in this query's history.
+          </p>
+        )}
         {q.history.length === 0 ? (
           <p className="text-muted-foreground">Nothing recorded.</p>
         ) : (
           <ol className="flex flex-col gap-2">
             {q.history.map((h, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: entries are listed newest first and never reordered
-              <li key={i} className="border p-2 text-xs">
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: entries are listed newest first and never reordered
+                key={i}
+                aria-current={(h.kind === "invalidation" && h.seq !== undefined && h.seq === mark) || undefined}
+                className="border p-2 text-xs aria-[current=true]:border-primary aria-[current=true]:bg-muted"
+              >
                 <time className="text-muted-foreground" dateTime={new Date(h.at).toISOString()}>
                   {formatTime(h.at)}
                 </time>
+                {h.kind === "invalidation" && h.seq !== undefined && h.seq === mark && (
+                  <p className="font-medium">The run the log entry is for</p>
+                )}
                 {h.kind === "rerun" ? (
                   <p>{REASONS[h.reason]}</p>
                 ) : (

@@ -159,8 +159,10 @@ describe("large-transition warnings, as the official client", () => {
       // DV-349: Convex's "more that" reads "more than" in bunvex.
       expect(ours.logs).toEqual(theirs.logs.map((l) => l.replace("more that 20MB", "more than 20MB")));
       expect(ours.verbose).toEqual(theirs.verbose);
-      // 30 s plus the time to send and parse the frames (wide: a loaded machine parses 25 MB slowly).
-      for (const ms of [...ours.transitMs, ...theirs.transitMs]) expect(ms).toBeWithin(30_000, 35_000);
+      // 30 s plus the time to send and parse the frames (wide: a loaded machine parses 25 MB slowly). The
+      // clients measure with `performance.timeOrigin + performance.now()`, this server with `Date.now()`: the
+      // two clocks drift apart by a few milliseconds, so 30 s can read 29 999 ms.
+      for (const ms of [...ours.transitMs, ...theirs.transitMs]) expect(ms).toBeWithin(29_900, 35_000);
       if (name.startsWith("a transition sent")) {
         expect(ours.logs).toEqual(["received query results totaling 0MB which took more than 20s to arrive (Nms)"]);
       } else if (name.startsWith("a frame over")) {

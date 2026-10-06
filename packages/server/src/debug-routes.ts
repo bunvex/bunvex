@@ -24,7 +24,7 @@ import {
 import { type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import type { Functions } from "./functions.ts";
 import type { Execution, SyncHub } from "./sync.ts";
-import type { FeedRecord, HistoryRecord } from "./sync-inspector.ts";
+import { argsDigest, type FeedRecord, type HistoryRecord } from "./sync-inspector.ts";
 
 export const DEBUG_ROUTE = /^\/api\/debug\/(subscriptions|query_cache|invalidations)$/;
 /** The longest a follow request waits for an invalidation, as the log streams' long poll. */
@@ -35,10 +35,7 @@ type Ctx = { engine: Engine; functions: Functions; sync: SyncHub };
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** A short, stable digest of a query's canonical arguments: who reads it can tell two calls apart. */
-export function argsDigest(argsJson: string): string {
-  return new Bun.CryptoHasher("sha256").update(argsJson).digest("hex").slice(0, 12);
-}
+export { argsDigest };
 
 const keyValueJson = (v: KeyValue): JSONValue => (v === undefined ? null : toJsonValue(v as Value));
 
@@ -78,6 +75,7 @@ function historyJson(ctx: Ctx, h: HistoryRecord) {
   if (h.kind === "rerun") return { kind: "rerun", reason: h.reason, at: h.at };
   return {
     kind: "invalidation",
+    seq: h.seq,
     at: h.at,
     commitTs: Number(h.commitTs),
     source: h.source,
@@ -195,7 +193,7 @@ async function invalidations(ctx: Ctx, url: URL, req: Request): Promise<Response
   const shown = entries
     .map((e: FeedRecord) => ({ e, ...splitExecKey(e.execKey) }))
     .filter((x) => matches(x.path, filter))
-    .map(({ e, path, args }) => ({ seq: e.seq, path, argsDigest: argsDigest(args), ...historyJson(ctx, e.record) }));
+    .map(({ e, path, args }) => ({ path, argsDigest: argsDigest(args), ...historyJson(ctx, e.record) }));
   return jsonResponse({ entries: shown, newCursor });
 }
 
