@@ -13,6 +13,7 @@ import {
   commitTsPlaceholder,
   copyValue,
   decodeId,
+  displayValue,
   encodeId,
   fromJsonValue,
   type GenericValidator,
@@ -140,9 +141,10 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   let upper: { v: KeyValue; incl: boolean } | null = null;
   for (const e of exprs) {
     if (e.op === "eq") {
+      // Convex's `BTreeMap::insert` hands back the value already there: the message names it, not the new one.
       if (eqs.has(e.field))
         throw new Error(
-          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${JSON.stringify(e.value)}.`,
+          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${displayValue(eqs.get(e.field) as Value)}.`,
         );
       eqs.set(e.field, e.value);
       continue;
@@ -150,7 +152,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     const isUpper = e.op === "lt" || e.op === "lte";
     if ((isUpper ? upper : lower) !== null)
       throw new Error(
-        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${JSON.stringify(e.value)}.`,
+        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${displayValue(e.value as Value)}.`,
       );
     if (ineqField !== null && ineqField !== e.field)
       throw new Error(
@@ -161,6 +163,11 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     if (isUpper) upper = bound;
     else lower = bound;
   }
+  // A bound on a field an equality already fixes: Convex's "inequality" error, naming the equality's value.
+  if (ineqField !== null && eqs.has(ineqField))
+    throw new Error(
+      `Already defined inequality bound in index range. Can't add ${quoted(ineqField)} == ${displayValue(eqs.get(ineqField) as Value)}.`,
+    );
   const rank = new Map(withId.map((f, i) => [f, i]));
   for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
     if (!rank.has(f))
