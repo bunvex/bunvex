@@ -132,7 +132,7 @@ test("the snapshot cache follows commits, and an older snapshot reads its own va
   const e = await engine();
   await update(e, [{ name: "X", value: "old" }]);
   const before = e.committer.visibleTs;
-  const at = (ts?: number) =>
+  const at = (ts?: bigint) =>
     e.query(async (db) => (await e.environment.snapshot(db)).get("X") ?? null, undefined, undefined, undefined, ts);
   expect(await at()).toBe("old");
   await update(e, [{ name: "X", value: "new" }]);

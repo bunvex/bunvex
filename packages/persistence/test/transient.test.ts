@@ -79,13 +79,13 @@ describe("MongoDB (no Convex counterpart: as the MySQL list)", () => {
 
 describe("a retried group that landed (DV-124: one rule on every store)", () => {
   test("our epoch with max_ts at or above the group's top: landed", () => {
-    expect(retriedGroupLanded({ epoch: 3, maxTs: 100 }, 3, 100)).toBe(true);
-    expect(retriedGroupLanded({ epoch: 3, maxTs: 120 }, 3, 100)).toBe(true);
-    expect(retriedGroupLanded({ epoch: 3, maxTs: 99 }, 3, 100)).toBe(false);
+    expect(retriedGroupLanded({ epoch: 3, maxTs: 100n }, 3, 100n)).toBe(true);
+    expect(retriedGroupLanded({ epoch: 3, maxTs: 120n }, 3, 100n)).toBe(true);
+    expect(retriedGroupLanded({ epoch: 3, maxTs: 99n }, 3, 100n)).toBe(false);
   });
   test("another epoch, or no lease record: the lease is lost", () => {
-    expect(() => retriedGroupLanded({ epoch: 4, maxTs: 100 }, 3, 100)).toThrow(LeaseLostError);
-    expect(() => retriedGroupLanded({ epoch: 2, maxTs: 50 }, 3, 100)).toThrow(LeaseLostError);
-    expect(() => retriedGroupLanded(null, 3, 100)).toThrow(LeaseLostError);
+    expect(() => retriedGroupLanded({ epoch: 4, maxTs: 100n }, 3, 100n)).toThrow(LeaseLostError);
+    expect(() => retriedGroupLanded({ epoch: 2, maxTs: 50n }, 3, 100n)).toThrow(LeaseLostError);
+    expect(() => retriedGroupLanded(null, 3, 100n)).toThrow(LeaseLostError);
   });
 });

@@ -104,7 +104,7 @@ export class ServerMetrics {
     r.gauge(
       "bunvex_database_visible_ts_seconds",
       "The timestamp new transactions read at, in seconds since the epoch",
-      () => (committer()?.visibleTs ?? 0) / 1e6,
+      () => Number(committer()?.visibleTs ?? 0n) / 1e9,
     );
     r.collectedCounter(
       "bunvex_query_cache_hits_total",

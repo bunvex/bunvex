@@ -75,14 +75,13 @@ test("the listing comes from the catalog: every system table it has, private one
   expect(names).toEqual([...names].sort());
   expect(names.every((n) => n.startsWith("_"))).toBe(true);
   expect(names).not.toContain("notes");
-  // the catalog's own tables: `_tables` and `_index` (fixed, no row of their own), then every system row
+  // every system table's `_tables` row, `_tables` and `_index` included (STUDY-133: rows of their own)
   const catalog = (await t.engine.query((db) => db.asSystem(() => db.query("_tables").collect()))) as any[];
   expect(names).toEqual(
-    [
-      "_index",
-      "_tables",
-      ...catalog.filter((x) => x.name.startsWith("_") && (x.state ?? "active") === "active").map((x) => x.name),
-    ].sort(),
+    catalog
+      .filter((x) => x.name.startsWith("_") && (x.state ?? "active") === "active")
+      .map((x) => x.name)
+      .sort(),
   );
   const tables = rows.find((x) => x.name === "_tables")!;
   expect(tables.description).toBe(SYSTEM_TABLE_DESCRIPTIONS._tables!);

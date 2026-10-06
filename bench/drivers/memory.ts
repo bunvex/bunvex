@@ -11,8 +11,8 @@ export async function open(fresh: boolean, opts: OpenOptions = {}) {
   return MemoryPersistence.open(log, { durable: true, ...opts });
 }
 /** K7: half a record at the end of the log, no newline. */
-export function tearTail(nextTs: number) {
-  appendFileSync(log, `{"ts":${nextTs},"docs":[{"table":1,"id":"torn","json":"{\\"a`);
+export function tearTail(nextTs: bigint) {
+  appendFileSync(log, `{"ts":"${nextTs}","docs":[{"table":1,"id":"torn","json":"{\\"a`);
 }
 
 // K22: the layout header is a log record `{"layout":N}` (the first line, or appended to an older log).

@@ -5,6 +5,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { encodeKey, hasLease, type Persistence } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
+import { tid } from "./ids.ts";
 
 const DIR = process.env.DIR ?? `${import.meta.dir}/../.data/doc-log-index`;
 const COMMITS = Number(process.env.COMMITS ?? 20_000);
@@ -17,15 +18,15 @@ async function trial(open: () => Promise<Persistence>, drop: (p: Persistence) =>
   const t0 = performance.now();
   for (let c = 1; c <= COMMITS; c++) {
     const docs = Array.from({ length: 10 }, (_, i) => ({
-      table: 1,
+      table: tid(1),
       id: `d${(c * 10 + i) % 50_000}`,
       json: `{"c":${c}}`,
     }));
     const idx = docs.flatMap((d) => [
-      { index: 1, key: encodeKey([d.id]), id: d.id },
-      { index: 2, key: encodeKey([c % 997, d.id]), id: d.id },
+      { index: tid(1), key: encodeKey([d.id]), id: d.id },
+      { index: tid(2), key: encodeKey([c % 997, d.id]), id: d.id },
     ]);
-    p.apply(c, docs, idx);
+    p.apply(BigInt(c), docs, idx);
     if (c % 50 === 0) await p.flush();
   }
   await p.flush();

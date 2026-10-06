@@ -86,7 +86,14 @@ import { MockAuthAdmin } from "./auth-admin.ts";
 import { MockClients } from "./clients.ts";
 import { MockEnvironmentVariables } from "./env-vars.ts";
 import { MockFiles } from "./files.ts";
-import { createFixture, type FixtureOptions, type FixtureTable, makeExecution, SYSTEM_INDEXES } from "./fixture.ts";
+import {
+  createFixture,
+  type FixtureOptions,
+  type FixtureTable,
+  logId,
+  makeExecution,
+  SYSTEM_INDEXES,
+} from "./fixture.ts";
 import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
@@ -199,6 +206,9 @@ export class MockDataSource implements DashboardDataSource {
   private stats: DeploymentStats;
   private readonly logWatchers = new Set<{ filter: LogFilter; deliver: (e: LogEntry[]) => void }>();
   private logTimer: ReturnType<typeof setInterval> | null = null;
+  private logTicks = 0;
+  /** The re-runs' own stream (STUDY-131 AD-27), so the rest of the mock's data stays what it was. */
+  private readonly rerunRnd: Random;
   private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
   private liveTimer: ReturnType<typeof setInterval> | null = null;
   /** UI-01 §17.2: a paused deployment refuses new calls; its scheduler waits and skips crons. */
@@ -314,6 +324,7 @@ export class MockDataSource implements DashboardDataSource {
     });
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.subscriptions = new MockSubscriptions(this.rnd, () => this.scheduler.now(), docs * 3);
+    this.rerunRnd = createRandom((opts.seed ?? 1) ^ 0x7ace);
     this.stats = {
       at: opts.now ?? Date.now(),
       commitTs: docs * 3,
@@ -749,7 +760,11 @@ export class MockDataSource implements DashboardDataSource {
   ): Unsubscribe {
     const watcher = { filter, deliver: onEntries };
     this.logWatchers.add(watcher);
-    this.logTimer ??= setInterval(() => this.logSomething(), this.opts.logIntervalMs ?? 1000);
+    // every fourth tick a commit also invalidates live queries, which run again (STUDY-131 AD-27)
+    this.logTimer ??= setInterval(() => {
+      this.logSomething();
+      if (++this.logTicks % 4 === 0) this.invalidateSomething();
+    }, this.opts.logIntervalMs ?? 1000);
     return () => {
       this.logWatchers.delete(watcher);
       if (this.logWatchers.size === 0 && this.logTimer !== null) {
@@ -766,6 +781,50 @@ export class MockDataSource implements DashboardDataSource {
       fresh.push(...makeExecution(this.rnd, this.logs.length + fresh.length + 1, this.now()));
     this.log(fresh);
     return fresh;
+  }
+
+  /**
+   * Not part of the contract: a commit writes into live queries' ranges (the subscriptions' history and follow
+   * stream get it), and each query it invalidated runs again, logged with its links (STUDY-131 AD-27): its
+   * entry in the inspector, the invalidation, and a trace.
+   */
+  invalidateSomething(): { events: InvalidationEvent[]; logged: LogEntry[] } {
+    const events = this.subscriptions.step();
+    const logged = events.map((e, i) => this.rerunEntry(e, this.logs.length + i + 1));
+    this.log(logged);
+    return { events, logged };
+  }
+
+  private rerunEntry(e: InvalidationEvent, n: number): LogEntry {
+    const r = this.rerunRnd;
+    const hex = (chars: number) =>
+      Array.from({ length: chars }, () => "0123456789abcdef"[r.int(0, 15)])
+        .join("")
+        .replace(/^0/, "1");
+    const durationMs = r.int(1, 30);
+    return {
+      id: logId(n),
+      time: this.now(),
+      level: "info",
+      message: "query ran",
+      function: { path: e.path, kind: "query" },
+      requestId: hex(16),
+      executionId: hex(16),
+      execution: {
+        status: "success",
+        durationMs,
+        usage: { memoryMb: 16, databaseReadBytes: 512 + r.int(0, 8_000), databaseWriteBytes: 0 },
+        identity: "user",
+        links: {
+          subscription: {
+            argsDigest: e.argsDigest,
+            reason: "invalidation",
+            invalidation: { seq: e.seq, commitTs: e.commitTs },
+          },
+          trace: { traceId: hex(32), spanId: hex(16) },
+        },
+      },
+    };
   }
 
   private log(fresh: LogEntry[]) {
@@ -1260,7 +1319,7 @@ export class MockDataSource implements DashboardDataSource {
       if (!live) return;
       try {
         this.canInspect();
-        const events = this.subscriptions.step().filter((e) => !filter.path || e.path.includes(filter.path));
+        const events = this.invalidateSomething().events.filter((e) => !filter.path || e.path.includes(filter.path));
         if (events.length) onEvents(events);
       } catch (e) {
         onError(toDataSourceError(e));

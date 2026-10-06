@@ -20,7 +20,7 @@ test("written and returned, it resolves to the commit's timestamp in nanoseconds
     const back = (await db.get(id))!;
     return { id, at: db.vars!.commitTs, sameObject: back.at === db.vars!.commitTs, nested: back.nested };
   });
-  const ns = BigInt(ts) * 1000n;
+  const ns = ts;
   expect(value.at as unknown).toBe(ns);
   expect(value.sameObject).toBe(true);
   expect(value.nested).toEqual({ list: [1n, ns] });
@@ -61,7 +61,7 @@ test("a patch keeps a placeholder it does not touch; replace and overwrite drop 
     return id;
   });
   const d = (await e.query((db) => db.get(id)))!;
-  expect(d.at).toBe(BigInt(ts) * 1000n);
+  expect(d.at).toBe(ts);
   expect(d.other).toBe(1n);
 });
 
@@ -101,7 +101,7 @@ test("a session request's recorded result resolves on replay to the original com
   const first = await run();
   const again = await run();
   const at = (first as unknown as { value: { at: bigint } }).value.at;
-  expect(at).toBe(BigInt(first.ts) * 1000n);
+  expect(at).toBe(first.ts);
   const replayed = (again as { replayed: { result: string } }).replayed.result;
   expect(replayed).toBe(stringifyValue({ at }));
 });
@@ -115,7 +115,7 @@ test("a commit timestamp in a search filter field is indexed as resolved (with S
   ).init();
   await e.searchReady();
   const { ts } = await e.mutationWithTs((db) => db.insert("messages", { body: "hello world", at: db.vars!.commitTs }));
-  const ns = BigInt(ts) * 1000n;
+  const ns = ts;
   const hits = await e.query((db) =>
     db
       .query("messages")
@@ -129,7 +129,7 @@ test("after the commit, the index holds the resolved timestamp: eq on it finds t
   const e = await engine();
   await e.mutation((db) => db.insert("events", { tag: "real", at: 5n }));
   const { ts } = await e.mutationWithTs((db) => db.insert("events", { tag: "committed", at: db.vars!.commitTs }));
-  const ns = BigInt(ts) * 1000n;
+  const ns = ts;
   const found = await e.query((db) =>
     db
       .query("events")

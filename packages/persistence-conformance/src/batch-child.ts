@@ -9,12 +9,12 @@ import { insertPadded, newEngine } from "./workload.ts";
 
 const mod = (await import(process.argv[2])) as DriverModule;
 const inner = await mod.open(false);
-let applied: number[] = [];
+let applied: bigint[] = [];
 const say = (line: string) => writeSync(1, `${line}\n`);
 const p = new Proxy(inner, {
   get(t, k) {
     if (k === "apply")
-      return (ts: number, docs: never, idx: never) => {
+      return (ts: bigint, docs: never, idx: never) => {
         applied.push(ts);
         return t.apply(ts, docs, idx);
       };

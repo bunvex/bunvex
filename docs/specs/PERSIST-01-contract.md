@@ -22,14 +22,17 @@
 
 Two logical collections, Convex's shape:
 
-- **documents**: `(table_id, id, ts) → json | deleted`. Every version of every document, never updated
+- **documents**: `(table_id, id, ts) → json | deleted`. `table_id` is the table's tablet and `index_id` (below)
+  the index's id, Convex's: the internal ids of their `_tables` and `_index` rows (STUDY-133 §5.2), passed as
+  22-character base64url strings. Every version of every document, never updated
   in place.
 - **indexes**: `(index_id, key, ts) → document_id | deleted`. Every version of every index entry.
 
 `key` is an opaque byte string produced by `src/keyenc.ts`. `ts` is the commit timestamp assigned by the
-committer: a strictly increasing integer, the wall clock in microseconds as Convex's `next_commit_ts`
-does it in nanoseconds (`max(last + 1, clock)`; STUDY-06 D9). Timestamps are therefore **sparse**: a
-driver must not assume that `ts + 1` is the next commit.
+committer: a strictly increasing integer, the wall clock in **nanoseconds** as Convex's `next_commit_ts`
+(`max(last + 1, clock)`; STUDY-06 D9, STUDY-133 §5.3), passed as a `bigint` (it is above 2^53) and stored
+as a 64-bit integer, exactly. Timestamps are therefore **sparse**: a driver must not assume that `ts + 1`
+is the next commit.
 
 ## C2 — ordering
 
@@ -302,10 +305,13 @@ log; a driver that keeps its log apart from its rows (memory) may forget the log
 `getGlobal(key)` returns a JSON value or null; `setGlobal(key, value)` stores one, durable when it returns,
 and only for the lease holder (`LeaseLostError` otherwise). They are Convex's `persistence_globals`: SQL
 stores keep them in that table (with `layout_version`), MongoDB in a `persistence_globals` collection, the
-memory driver as records of its log. Retention keeps its windows and cursors there.
+memory driver as records of its log. Retention keeps its windows and cursors there, and every store keeps
+Convex's four bootstrap globals (`tables_table_id`, `index_table_id`, `tables_by_id`, `index_by_id`: JSON
+strings), from which a start finds the catalog (STUDY-133 §5.2).
 
-C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
-required of the first-party drivers, which all implement them. Conformance K27–K29.
+C14 is required of every driver (the bootstrap needs it). C12–C13 are optional in the interface
+(`hasRetention`; without them the engine keeps every version); required of the first-party drivers, which all
+implement them. Conformance K27–K29.
 
 ## C15 — index references
 
@@ -365,6 +371,7 @@ Optional in the interface; required of the first-party drivers. Conformance K32.
 | K30 | index references (C15) | an index entry whose document was never written and one whose document was deleted while the entry stayed, among live ones: `scan` returns every entry (asc and desc), `get` is null for both (and the deleted one reads below its delete); `scanDocs` over the whole index (both directions), over each broken entry alone and below the delete rejects with `DanglingReferenceError` carrying the right `deleted` flag, and reads ranges with no broken entry. From Convex's `query_dangling_reference` and `query_reference_deleted_doc` |
 | K31 | one id in two tables (C15) | the same id written in two tables in one commit (different documents, one index each), then replaced in one and deleted in the other: `get`, `scan` and `scanDocs` answer each table's own document at every snapshot. From Convex's `same_internal_id_multiple_tables` |
 | K32 | document versions (C16) | a random history of 200 commits over two tables with the same ids (inserts, rewrites, deletes, re-inserts), flushed in random groups: `getVersions` at 120 random snapshots, with unknown and repeated ids, equals the reference model (version and ts, null when missing or deleted) and agrees with `get`; no ids give `[]` |
+| K33 | nanosecond timestamps (C1) | two commits one nanosecond apart at a real ns ts above 2^53 (2026-10-06, with a sub-µs part), then a reopen: `maxTs`, `get` (at T1, T1 + 1 ns, T1 − 1 ns), `getVersions`, `scan`, `readLog` (`prevTs` too) and `readDocumentLog` return the exact values. STUDY-133 PR 1 |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit
@@ -397,5 +404,8 @@ Notes from validating the suite (each check was sabotaged and had to go red):
 - K30 went red on Postgres, MySQL and MongoDB before C15 (their `scanDocs` dropped the broken entries and
   returned the rest); K31 was sabotaged with a Postgres `get` that ignores the table (red: table B read
   table A's document).
+- K33 was sabotaged four ways (STUDY-133 PR 1): SQLite reading `ts` without safe integers (red: `getVersions`),
+  MySQL without `supportBigNumbers` (red: `maxTs`, `getVersions`, both logs), Postgres parsing `ts` through a
+  JS number (red: `getVersions`), the memory log writing `ts` through a JS number (red: all six).
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.

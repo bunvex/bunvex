@@ -61,7 +61,7 @@ async function seed(path: string, n: number) {
  * The index `items.by_n` at snapshot `ts`, checked against the table straight from persistence: every live
  * document has exactly one entry, at its key, and there is no other entry.
  */
-async function audit(e: Engine, ts: number) {
+async function audit(e: Engine, ts: bigint) {
   const t = e.catalog.table("items");
   const ix = t.indexes.get("by_n") ?? t.pending.find((p) => p.name === "by_n")!;
   const lo = new Uint8Array(0);
@@ -288,6 +288,6 @@ async function readState(e: Engine) {
     async (db: { query(t: string): { collect(): Promise<unknown> } }) => db.query(INDEX_TABLE).collect(),
     true,
   )) as Record<string, unknown>[];
-  const row = rows.find((r) => r.name === "by_n");
+  const row = rows.find((r) => r.descriptor === "by_n");
   return row && indexMeta(row).state;
 }

@@ -74,7 +74,7 @@ test("countTable counts the transaction's own inserts and deletes", async () => 
 
 test("built on start from the documents already there; unavailable until then", async () => {
   const s = new TableSummaries();
-  expect(() => s.get(1)).toThrow(TableSummariesUnavailableError);
+  expect(() => s.get("t1")).toThrow(TableSummariesUnavailableError);
   const p = await MemoryPersistence.open(null, { durable: false });
   const first = await engine(p);
   await first.mutation(async (db) => {
@@ -86,9 +86,9 @@ test("built on start from the documents already there; unavailable until then", 
 
 test("commits that land while the summaries are being built are counted once", () => {
   const s = new TableSummaries();
-  s.apply(5, [{ tablet: 7, old: null, next: { _id: "a", _creationTime: 1, x: 1n } }]); // in the scan (ts ≤ 5)
-  s.apply(9, [{ tablet: 7, old: null, next: { _id: "b", _creationTime: 2, x: 2n } }]); // after it
-  s.build(5, 7, [{ _id: "a", _creationTime: 1, x: 1n }]);
+  s.apply(5n, [{ tablet: "t7", old: null, next: { _id: "a", _creationTime: 1, x: 1n } }]); // in the scan (ts ≤ 5)
+  s.apply(9n, [{ tablet: "t7", old: null, next: { _id: "b", _creationTime: 2, x: 2n } }]); // after it
+  s.build(5n, "t7", [{ _id: "a", _creationTime: 1, x: 1n }]);
   s.finish();
-  expect(s.get(7).count).toBe(2);
+  expect(s.get("t7").count).toBe(2);
 });
