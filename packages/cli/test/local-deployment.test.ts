@@ -150,7 +150,7 @@ describe("bunvex dev with a local deployment", () => {
       `Requested port ${running.config.ports.cloud} is not available`,
     );
     const selfHosted = io(dir, { BUNVEX_SELF_HOSTED_URL: "http://127.0.0.1:1", BUNVEX_SELF_HOSTED_ADMIN_KEY: "k" });
-    expect(await devCommand(["--once", "--local-cloud-port", "4000"], selfHosted.it)).toBe(2);
+    expect(await devCommand(["--once", "--local-cloud-port", "4000"], selfHosted.it)).toBe(1);
     expect(selfHosted.err[0]).toBe("bunvex dev: the --local-* options are only for a local deployment");
   }, 60_000);
 });
