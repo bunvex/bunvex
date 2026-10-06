@@ -568,6 +568,15 @@ describe("deploy2 over HTTP", () => {
     expect(r.wait!.error).toMatch(/^Document with ID ".+" in table "messages" does not match the schema: /);
     expect(r.finish!.body.code).toBe("SchemaNotReady");
     expect((await d.call("query", "messages:list")).value).toEqual(["ok v1"]);
+    // The dashboard's progress (STUDY-127): no schema pending any more, and the failed one's attempts are gone.
+    const progress = await d.call(
+      "query",
+      "_system/frontend/getSchemas:schemaValidationProgress",
+      { componentId: null },
+      `Bunvex ${KEY}`,
+    );
+    expect(progress).toMatchObject({ status: "success", value: null });
+    expect(await d.engine.query((db) => db.asSystem(() => db.query("_schema_validations").collect()))).toEqual([]);
   });
 
   test("the Deploy operation: no key, a read-only key, an embedded server", async () => {

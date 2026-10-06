@@ -583,7 +583,26 @@ export function initFunctionsDir(functionsDir: string, mode?: WriteMode): string
 }
 
 export type TypecheckMode = "enable" | "try" | "disable";
-export type TypecheckResult = { ok: true; skipped?: string; warning?: string } | { ok: false; output: string };
+/**
+ * A typecheck's outcome. A failure is `failed` (the compiler's errors, in `output`) or `cantTypecheck` (`enable`
+ * with no tsconfig or compiler: the reason, in `output`); `compiler` names the compiler that ran.
+ */
+export type TypecheckResult =
+  | { ok: true; skipped?: string; warning?: string }
+  | { ok: false; reason: "failed" | "cantTypecheck"; output: string; compiler: string };
+
+/**
+ * Convex's failed typecheck in deploy, dev and codegen (`typeCheckFunctionsInMode`, cli/lib/typecheck.ts): the
+ * reason on stderr — "✖ TypeScript typecheck via `<compiler>` failed." (Convex always says `tsc`, DV-388) or
+ * why it could not run — then the hint, then the compiler's errors on stdout (Convex reruns it with stdio
+ * inherited).
+ */
+export function printTypecheckFailure(io: { out: (l: string) => void; err: (l: string) => void }, r: TypecheckResult) {
+  if (r.ok) return;
+  io.err(r.reason === "failed" ? `✖ TypeScript typecheck via \`${r.compiler}\` failed.` : r.output);
+  io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+  if (r.reason === "failed" && r.output) io.out(r.output);
+}
 /** Convex's `TypescriptCompiler`: `tsc`, or `tsgo` from `@typescript/native-preview` (STUDY-117). */
 export type TypescriptCompiler = "tsc" | "tsgo";
 
@@ -672,6 +691,10 @@ export async function typecheck(
   if (mode === "disable") return { ok: true, skipped: "disabled" };
   const run = await runTypecheck(functionsDir, cwd, compiler);
   if (run.kind === "cantTypecheck")
-    return mode === "enable" ? { ok: false, output: run.why } : { ok: true, skipped: run.why };
-  return run.kind === "success" ? { ok: true, warning: run.warning } : { ok: false, output: run.output };
+    return mode === "enable"
+      ? { ok: false, reason: "cantTypecheck", output: run.why, compiler }
+      : { ok: true, skipped: run.why };
+  return run.kind === "success"
+    ? { ok: true, warning: run.warning }
+    : { ok: false, reason: "failed", output: run.output, compiler };
 }

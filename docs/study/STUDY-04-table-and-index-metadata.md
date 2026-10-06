@@ -111,3 +111,47 @@
 - Invalid names and user names starting with `_` are rejected.
 - Sabotage: assigning ids by declaration order again makes the reorder test fail.
 - PERSIST-01 conformance on all drivers.
+
+## 7. Tablet ids are never reused (2026-10-05)
+
+**Convex.** A table's persistence id, its `TabletId`, is the internal id of its `_tables` document
+(`crates/database/src/bootstrap_model/table.rs` `_insert_table_metadata`: `TabletId(table_doc_id.internal_id())`).
+That is 16 random bytes, so a new table never gets the id of an earlier one, purged or not. The deletion worker
+removes a deleted table's documents, then its `_index` and `_tables` documents; the id is simply never generated
+again.
+
+**bunvex before.** Tablets are integers, the `table_id` key of every persistence driver (`int` in MySQL). They were
+`max(tablet of the _tables documents) + 1`. Once a deleted table was purged, its `_tables` document was gone, so
+when it had been the newest table its tablet went to the next table created. Retention might not have removed the
+old table's document revisions yet, and they would be read under the new table.
+
+**bunvex now** (owner, 2026-10-05: never reused, as Convex's):
+
+- A counter in bunvex's own system table `_next_tablet_id` (number 9997, `{nextId}`, an int64), written in the
+  transaction that creates tables. This covers every path: a start, a push, a write to a new table, an import's
+  hidden table, `replaceWithEmptyTables`.
+- It never goes down. The first start writes it after the commit that creates its table, as the index id counter
+  does (STUDY-128).
+- The start reads the stored catalog before reconciling, so that transaction sees the counter.
+
+Random ids as Convex's would change every driver's `table_id` column; a counter gives the same guarantee for
+integers.
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| T1 (DV-408) | Tablets are integers from a persisted counter (`_next_tablet_id`, bunvex's own table), not random UUIDs; never reused either way | persistence keys tables by integer; random 31-bit values could collide | owner, 2026-10-05: never reused, as Convex |
+
+Tests (`packages/core/test/tablet-ids.test.ts`):
+
+- a fresh store's counter;
+- the newest table purged, then a write's new table and, after a restart, an import's hidden table get new tablets;
+- a table the schema declares at a start, after a purge, gets a new tablet.
+
+Sabotage (each applied alone, then restored):
+
+| Change | Result |
+|---|---|
+| `planCatalog` ignores the counter (max + 1) | 2 tests fail |
+| the counter is never raised | 2 fail |
+| a write's new table does not advance the counter | 2 fail |
+| the start reconciles on the bootstrap catalog | 1 fails |

@@ -137,8 +137,9 @@ test("refused without an admin key, without ViewData, and from function code", a
   const t = await setup();
   for (const path of ["_system/debug/systemTables", "_system/debug/systemTable"]) {
     const anon = await t.call("query", path, path.endsWith("s") ? {} : page("_tables"), null);
+    // A client that is not an admin is refused before the function is looked up, as Convex's runner (#471).
     expect(anon.status).toBe("error");
-    expect(anon.errorMessage).toContain("Could not find public function");
+    expect(anon.errorMessage).toContain("Operation query not permitted");
   }
   // a read-only key may view data
   expect((await t.call("query", "_system/debug/systemTables", {}, READ_ONLY)).status).toBe("success");
@@ -153,5 +154,6 @@ test("refused without an admin key, without ViewData, and from function code", a
   // an action run by the admin still cannot reach it through runQuery
   const peek = await t.call("action", "m:peek");
   expect(peek.value).toStartWith("refused: ");
-  expect(peek.value).toContain("Could not find public function");
+  // As Convex's `TaskExecutor::resolve`, which never resolves a system function for function code (#471).
+  expect(peek.value).toContain("Couldn't resolve api._system.debug.systemTable");
 });
