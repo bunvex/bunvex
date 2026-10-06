@@ -18,7 +18,7 @@ export function groupLog(rows: LogRow[], prevTs: bigint): LogCommit[] {
       cur = { ts: r.ts, prevTs, writes: [] };
       out.push(cur);
     }
-    cur.writes.push({ index: r.index, key: r.key, id: r.id });
+    cur.writes.push({ index: r.index, key: r.key, table: r.table, id: r.id });
   }
   return out;
 }

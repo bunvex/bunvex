@@ -73,7 +73,7 @@ export function splitPages(src: SplitSource, desc: boolean): (p: PageRequest) =>
     for (let i = 0; i < raw.length; i++) {
       const r = raw[i];
       if (r.prefix.length < MAX_KEY_PREFIX_LEN) {
-        rows.push({ key: r.prefix, deleted: r.deleted, id: r.id });
+        rows.push({ key: r.prefix, ts: r.ts, deleted: r.deleted, id: r.id });
         continue;
       }
       // A full-length prefix: read its whole group, sort by the full key (then newest first), and skip the
@@ -88,7 +88,7 @@ export function splitPages(src: SplitSource, desc: boolean): (p: PageRequest) =>
         (a, b) =>
           (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)) || (b.ts > a.ts ? 1 : b.ts < a.ts ? -1 : 0),
       );
-      for (const g of group) rows.push({ key: g.key, deleted: g.deleted, id: g.id });
+      for (const g of group) rows.push({ key: g.key, ts: g.ts, deleted: g.deleted, id: g.id });
     }
     // Prefix bounds are exact when both bounds fit in a prefix (a key compares to a short bound as its
     // prefix does). Longer bounds are coarse: apply the exact ones.

@@ -25,6 +25,12 @@ import type { WriteThroughputLimiter } from "./write-throughput.ts";
 
 export type Interval = { index: IndexId; lo: Uint8Array; hi: Uint8Array };
 /**
+ * An index write as the committer takes it: the persistence entry, and the document's id as apps know it
+ * (`docId`, persistence keys documents by their internal id), for the write log and its conflict reports.
+ * Drivers store only the persistence fields.
+ */
+export type LoggedIndexWrite = IndexWrite & { docId?: string | null };
+/**
  * One commit in the write log: its index-key writes (`id` is the document whose entry it is, null for a
  * removed entry) and its write source (the mutation's name, when the caller gave one).
  */
@@ -260,7 +266,7 @@ type PendingCommit = {
   snapshot: bigint;
   reads: Interval[];
   docs: DocWrite[];
-  idx: IndexWrite[];
+  idx: LoggedIndexWrite[];
   /** The write source recorded in the log, for other transactions' conflict errors. */
   source?: string;
   /**
@@ -273,7 +279,7 @@ type PendingCommit = {
    * Called with the ts as soon as it is assigned, before anything is logged or written: the commit's final
    * documents and index entries (a commit timestamp resolved in them, STUDY-53).
    */
-  atTs?: (ts: bigint) => { docs: DocWrite[]; idx: IndexWrite[] };
+  atTs?: (ts: bigint) => { docs: DocWrite[]; idx: LoggedIndexWrite[] };
   /** Called with the ts once the commit is visible, before the commit listeners (a catalog change). */
   onVisible?: (ts: bigint) => void;
   /**
@@ -604,7 +610,8 @@ export class Committer {
         const ts = now > next ? now : next;
         this.appliedTs = ts;
         if (p.atTs) ({ docs: p.docs, idx: p.idx } = p.atTs(ts));
-        const writes = p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.id }));
+        const writes =
+          p.logWrites === false ? [] : p.idx.map((w) => ({ index: w.index, key: w.key, id: w.docId ?? w.id }));
         if (p.logExtra) writes.push(...p.logExtra);
         const entry: LogEntry = p.source === undefined ? { ts, writes } : { ts, writes, source: p.source };
         if (p.searchDocs?.length) entry.searchDocs = p.searchDocs;

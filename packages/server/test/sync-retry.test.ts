@@ -35,11 +35,12 @@ async function setup() {
   const p = await MemoryPersistence.open(null, { durable: false });
   const engine = await new Engine(defineSchema({ counters: defineTable(v.any()) }), p).init();
   await engine.mutation((db) => db.insert("counters", { n: 1 }));
-  // The store fails the next `fail.reads` reads with `fail.error()`.
-  const fail = { reads: 0, error: (): Error => new TransientError("connection reset") };
+  // The store fails the next `fail.reads` reads with `fail.error()`, after letting `fail.skip` more through.
+  const fail = { reads: 0, skip: 0, error: (): Error => new TransientError("connection reset") };
   const failable = <F extends (...a: never[]) => unknown>(f: F) =>
     ((...a: Parameters<F>) => {
-      if (fail.reads > 0) {
+      if (fail.skip > 0) fail.skip--;
+      else if (fail.reads > 0) {
         fail.reads--;
         throw fail.error();
       }
@@ -124,9 +125,11 @@ test("a rerun after a commit is retried the same way", async () => {
   const c = await v1Client(url);
   c.modify([add(1, "m:read")]);
   await c.transition(0);
-  await functions.runMutation("m:bump", {});
+  // The mutation's own two reads (its query's range, its patch's get) come first, then the rerun's: they fail.
+  // Armed before the mutation: the rerun can run before the mutation's call returns.
+  fail.skip = 2;
   fail.reads = 2;
-  // The mutation's own reads come first: the next failing reads are the rerun's.
+  await functions.runMutation("m:bump", {});
   await c.until(() => history(c.transitions(), 1).at(-1) === 2);
   expect(history(c.transitions(), 1)).toEqual([1, 2]);
   expect(sync.stats.retries).toBeGreaterThan(0);

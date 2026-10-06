@@ -11,6 +11,8 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
+import { encodeId } from "@bunvex/values";
+import { internalIdBytes } from "./internal-id.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { readTsGlobal } from "./persistence-globals.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
@@ -659,6 +661,8 @@ export class SegmentReplay {
     private decode: (json: string) => Doc,
     /** The oldest ts each table's indexes start from (the log is read once from there). */
     private oldest: Map<TabletId, bigint>,
+    /** A table's number, for its documents' ids. */
+    private numberOf: (tablet: TabletId) => number,
   ) {}
 
   /** Each document of `tablet` the log changed in `(since, at]`, at its state as of `at`. */
@@ -677,7 +681,7 @@ export class SegmentReplay {
   }
 
   private read(tablet: TabletId, since: bigint) {
-    return changedSince(this.store, tablet, since, this.at, this.decode);
+    return changedSince(this.store, tablet, this.numberOf(tablet), since, this.at, this.decode);
   }
 }
 
@@ -688,25 +692,33 @@ export class SegmentReplay {
 export async function changedSince(
   store: Store,
   tablet: TabletId,
+  /** The table's number: the log keys documents by internal id, the indexes by document id. */
+  tableNumber: number,
   since: bigint,
   at: bigint,
   decode: (json: string) => Doc,
   keep: (id: string) => boolean = () => true,
 ): Promise<Map<string, { ts: bigint; doc: Doc | null }>> {
-  const last = new Map<string, bigint>();
+  // By internal id: the document's id and the ts of its last change.
+  const last = new Map<string, { id: string; ts: bigint }>();
   for (let cursor = since; cursor < at; ) {
     const rows: DocLogRow[] = await store.readDocumentLog(cursor, at, LOG_PAGE);
     if (!rows.length) break;
-    for (const r of rows) if (r.table === tablet && keep(r.id)) last.set(r.id, r.ts);
+    for (const r of rows) {
+      if (r.table !== tablet) continue;
+      const id = encodeId(tableNumber, internalIdBytes(r.id));
+      if (keep(id)) last.set(r.id, { id, ts: r.ts });
+    }
     cursor = rows[rows.length - 1]!.ts;
   }
   const out = new Map<string, { ts: bigint; doc: Doc | null }>();
-  const ids = [...last.keys()];
-  for (let i = 0; i < ids.length; i += VERSIONS_PAGE) {
-    const page = ids.slice(i, i + VERSIONS_PAGE);
+  const internals = [...last.keys()];
+  for (let i = 0; i < internals.length; i += VERSIONS_PAGE) {
+    const page = internals.slice(i, i + VERSIONS_PAGE);
     const versions = await store.getVersions!(tablet, page, at);
-    page.forEach((id, k) => {
-      out.set(id, { ts: last.get(id)!, doc: versions[k] ? decode(versions[k]!.json) : null });
+    page.forEach((internal, k) => {
+      const l = last.get(internal)!;
+      out.set(l.id, { ts: l.ts, doc: versions[k] ? decode(versions[k]!.json) : null });
     });
   }
   return out;

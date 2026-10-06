@@ -6,6 +6,7 @@ import {
   Committer,
   compareKeys,
   encodeKey,
+  type IndexedDoc,
   type IndexWrite,
   type KeyValue,
   type Persistence,
@@ -78,10 +79,10 @@ function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
   const idx: IndexWrite[] = [
-    { index: I_BY_TENANT_CREATED, key: encodeKey([tenant, createdAt, id]), id },
-    { index: I_BY_CREATION, key: encodeKey([createdAt, id]), id },
+    { index: I_BY_TENANT_CREATED, key: encodeKey([tenant, createdAt, id]), table: T_ITEMS, id },
+    { index: I_BY_CREATION, key: encodeKey([createdAt, id]), table: T_ITEMS, id },
   ];
-  return { docs: [{ table: T_ITEMS, id, json }], idx };
+  return { docs: [{ table: T_ITEMS, id, json, prevTs: null }], idx };
 }
 
 async function makeStorage(kind: string, durable: boolean): Promise<Persistence> {
@@ -157,10 +158,11 @@ async function m3() {
       const tenant = `t${Math.floor(Math.random() * 1000)}`;
       const t0 = performance.now();
       const prefix = encodeKey([tenant]); // the prefix of every key of this tenant
-      // M3 only runs the embedded drivers, which answer synchronously: no await inside the timed loop.
-      const ids = st.scan(I_BY_TENANT_CREATED, prefix, prefixEnd(prefix), ts, 20, true) as string[];
+      // M3 only runs the embedded drivers, which answer synchronously: no await inside the timed loop. The
+      // scan returns each entry's document (the exact-ts join).
+      const ids = st.scan(T_ITEMS, I_BY_TENANT_CREATED, prefix, prefixEnd(prefix), ts, 20, true) as IndexedDoc[];
       let bytes = 0;
-      for (const id of ids) bytes += (st.get(T_ITEMS, id, ts) as string | null)?.length ?? 0;
+      for (const d of ids) bytes += d.json.length;
       lat.push(performance.now() - t0);
       if (ids.length !== 20 || bytes === 0) throw new Error(`bad read: ${ids.length}`);
       n++;

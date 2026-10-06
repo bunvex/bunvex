@@ -20,8 +20,48 @@ export function internalIdBytes(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, "base64url"));
 }
 
-/** The internal id (string form) of a document id. */
-export const internalIdOf = (documentId: string): string => internalIdString(decodeId(documentId).internalId);
+const B32 = "0123456789abcdefghjkmnpqrstvwxyz";
+const B32_DECODE = new Int8Array(128).fill(-1);
+for (let i = 0; i < 32; i++) B32_DECODE[B32.charCodeAt(i)] = i;
+const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const bytes = new Uint8Array(24);
+
+/**
+ * The internal id (string form) of a document id: on every read and write, so it decodes the base32 straight
+ * into the 16 bytes after the table number and prints them, without the id's other checks (an id reaching
+ * persistence was checked when it entered the transaction). A string that is not an id falls back to
+ * `decodeId`, which throws its error.
+ */
+export function internalIdOf(documentId: string): string {
+  const len = documentId.length;
+  if (len < 31 || len > 37) return internalIdString(decodeId(documentId).internalId);
+  let acc = 0;
+  let bits = 0;
+  let n = 0;
+  for (let i = 0; i < len; i++) {
+    const c = documentId.charCodeAt(i);
+    const v = c < 128 ? B32_DECODE[c]! : -1;
+    if (v < 0) return internalIdString(decodeId(documentId).internalId);
+    acc = ((acc << 5) | v) & 0xfff;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes[n++] = (acc >> bits) & 0xff;
+    }
+  }
+  // VInt(table number) ++ 16 bytes ++ 2-byte footer.
+  let p = 0;
+  while (p < 5 && bytes[p]! & 0x80) p++;
+  p++;
+  if (n !== p + 18) return internalIdString(decodeId(documentId).internalId);
+  let out = "";
+  for (let i = 0; i < 15; i += 3) {
+    const x = (bytes[p + i]! << 16) | (bytes[p + i + 1]! << 8) | bytes[p + i + 2]!;
+    out += B64URL[x >> 18]! + B64URL[(x >> 12) & 63]! + B64URL[(x >> 6) & 63]! + B64URL[x & 63]!;
+  }
+  const last = bytes[p + 15]!;
+  return out + B64URL[last >> 2]! + B64URL[(last & 3) << 4]!;
+}
 
 /** A table's tablet: the internal id of its `_tables` document. */
 export const tabletOf = (tablesDocumentId: string): TabletId => internalIdOf(tablesDocumentId);

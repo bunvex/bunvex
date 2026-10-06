@@ -2,7 +2,15 @@
 // exactly the durable commits in (afterTs, min(upToTs, maxTs)], in ts order, whole, each with its index
 // write set and the ts of the commit before it (`prevTs`), so a reader can detect a gap even though
 // timestamps are sparse.
-import { Engine, encodeKey, hasLease, type IndexWrite, type LogCommit, type Persistence } from "@bunvex/core";
+import {
+  Engine,
+  encodeKey,
+  hasLease,
+  type IndexWrite,
+  internalIdOf,
+  type LogCommit,
+  type Persistence,
+} from "@bunvex/core";
 import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 import { insertItem, newEngine, schemaWithAmount } from "./workload.ts";
@@ -17,6 +25,12 @@ const cmp = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** A commit's write set in a canonical order (C11 leaves the order inside a commit unspecified). */
 const canon = (ws: IndexWrite[]) =>
+  ws
+    .map((w) => `${w.index}:${hex(w.key)}:${w.table ?? "-"}:${w.id ?? "-"}`)
+    .sort()
+    .join(",");
+/** The same without the document's table (the committer's write log does not carry it). */
+const canonNoTable = (ws: { index: string; key: Uint8Array; id: string | null }[]) =>
   ws
     .map((w) => `${w.index}:${hex(w.key)}:${w.id ?? "-"}`)
     .sort()
@@ -89,12 +103,18 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
         used.add(u);
         const del = Math.random() < 0.25;
         if (del) deletes++;
-        writes.push({ index, key, id: del ? null : `doc${c}-${w}` }); // one document per write: no duplicate version
+        // one document per write: no duplicate version
+        writes.push({ index, key, table: del ? null : tid(960), id: del ? null : `doc${c}-${w}` });
       }
       const docsToo = Math.random() < 0.7;
       if (!docsToo) indexOnly++;
       const docs = docsToo
-        ? writes.map((w, i) => ({ table: tid(960), id: w.id ?? `gone${c}-${i}`, json: w.id ? `{"c":${c}}` : null }))
+        ? writes.map((w, i) => ({
+            table: tid(960),
+            id: w.id ?? `gone${c}-${i}`,
+            json: w.id ? `{"c":${c}}` : null,
+            prevTs: null,
+          }))
         : [];
       st.apply(ts, docs, writes);
       model.push({ ts, writes });
@@ -166,8 +186,8 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     let t = last;
     for (let i = 0; i < 3; i++) {
       t += 10n;
-      const writes = [{ index: tid(960), key: encodeKey([`pending${i}`]), id: `p${i}` }];
-      st.apply(t, [{ table: tid(960), id: `p${i}`, json: "{}" }], writes);
+      const writes = [{ index: tid(960), key: encodeKey([`pending${i}`]), table: tid(960), id: `p${i}` }];
+      st.apply(t, [{ table: tid(960), id: `p${i}`, json: "{}", prevTs: null }], writes);
       pending.push({ ts: t, writes });
     }
     const before = await read(st, last, MAX, 100);
@@ -231,9 +251,11 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       occMaxBackoffMs: 20,
     });
     const from = e.committer.visibleTs;
-    const seen: ModelCommit[] = [];
+    // The committer's write log names documents by id; the store's log by internal id.
+    const seen: { ts: bigint; writes: { index: string; key: Uint8Array; id: string | null }[] }[] = [];
     e.committer.onCommit((entries) => {
-      for (const x of entries) seen.push({ ts: x.ts, writes: x.writes });
+      for (const x of entries)
+        seen.push({ ts: x.ts, writes: x.writes.map((w) => ({ ...w, id: w.id === null ? null : internalIdOf(w.id) })) });
     });
     const ids = await Promise.all(Array.from({ length: 64 }, (_, i) => e.mutation(insertItem(`t${i % 4}`))));
     await Promise.all(
@@ -252,16 +274,18 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     const want = seen.map((c, i) => ({
       ts: String(c.ts),
       prevTs: String(i ? seen[i - 1].ts : from),
-      writes: canon(c.writes),
+      writes: canonNoTable(c.writes),
     }));
+    const gotShape = got.map((c) => ({ ts: String(c.ts), prevTs: String(c.prevTs), writes: canonNoTable(c.writes) }));
     check(
-      seen.length === 80 && same(shape(got), want),
+      seen.length === 80 && same(gotShape, want),
       `K25 through the engine: the log between two snapshots is exactly the committer's commits and write sets (${got.length}/${seen.length})`,
     );
   }
 
-  // A background index backfill (STUDY-29, K24) commits chunks that write index entries only: they are
-  // commits like any other, so the log has them, and their entries cover every document.
+  // A background index backfill (STUDY-29, K24) writes its entries at each document's own ts (PERSIST-01
+  // C17, Convex's `write_index_backfill`): not commits, so not in the log; yet the index covers every document,
+  // each entry at the ts of the version it indexes.
   {
     let e: Engine = await newEngine(await mod.open(true));
     const ids = new Set<string>();
@@ -275,22 +299,23 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       indexBackfill: { chunkSize: 100, chunkRate: 1000, readSize: 100 },
     }).init();
     await e.indexesReady();
-    const ix = e.catalog.table("items").indexes.get("by_amount")!.id;
-    const got = await read(e.persistence, from, e.committer.visibleTs, 1_000_000);
+    const t = e.catalog.table("items");
+    const ix = t.indexes.get("by_amount")!.id;
+    const at = e.committer.visibleTs;
+    const got = await read(e.persistence, from, at, 1_000_000);
+    const inLog = got.some((c) => c.writes.some((w) => w.index === ix));
+    const versions = new Map(
+      (await e.persistence.scan(t.id, t.byId.id, new Uint8Array(0), Uint8Array.of(0xff, 0xff), at, 1e9, false)).map(
+        (d) => [d.id, d.ts],
+      ),
+    );
+    const entries = await e.persistence.scan(t.id, ix, new Uint8Array(0), Uint8Array.of(0xff, 0xff), at, 1e9, false);
     await e.close();
-    const backfilled = new Set<string>();
-    let chunks = 0;
-    let chain = true;
-    let prev = from;
-    for (const c of got) {
-      if (c.prevTs !== prev) chain = false;
-      prev = c.ts;
-      if (c.writes.length && c.writes.every((w) => w.index === ix)) chunks++;
-      for (const w of c.writes) if (w.index === ix && w.id) backfilled.add(w.id);
-    }
+    const internal = new Set([...ids].map(internalIdOf));
+    const ownTs = entries.every((d) => versions.get(d.id) === d.ts);
     check(
-      chunks >= 6 && chain && backfilled.size === ids.size && [...ids].every((id) => backfilled.has(id)),
-      `K25 a background index backfill's index-only chunks are in the log (${chunks} chunk commits, ${backfilled.size}/${ids.size} documents, prevTs chain ${chain ? "unbroken" : "broken"})`,
+      !inLog && entries.length === internal.size && entries.every((d) => internal.has(d.id)) && ownTs,
+      `K25 a background index backfill's entries (C17) are not in the log, cover every document (${entries.length}/${internal.size}) and sit at each document version's own ts (${ownTs})`,
     );
   }
 }
