@@ -165,6 +165,8 @@ async function setup(opts: { disableMetricsEndpoint?: boolean } = {}) {
   http.route({ path: "/metrics", method: "GET", handler: httpAction(async () => new Response("the app's")) });
   const srv = createServer({ engine, functions, http, port: 0, ...opts });
   stops.push(srv.stop);
+  // The server's own start-up commit (the function handles) first, or it could land between two scrapes.
+  await srv.codeReady;
   const api = `http://127.0.0.1:${srv.server.port}`;
   const site = `http://127.0.0.1:${srv.site!.port}`;
   const scrape = async (origin = api) => {
