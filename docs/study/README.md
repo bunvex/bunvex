@@ -39,6 +39,7 @@ to a spec.
 
 | Study | Topic | Status |
 |---|---|---|
+| [STUDY-133](STUDY-133-persistence-layout-identical.md) | A persisted layout identical to Convex's on SQLite, Postgres and MySQL (16-byte ids, tablets as `_tables` rows, ns, `prev_ts`, bootstrap globals, system tables and document shapes), so a store cross-opens; the MongoDB analogue; the PR series | accepted (owner, 2026-10-05): DV-411–DV-420 decided; the PR series is being built |
 | [STUDY-01](STUDY-01-document-ids.md) | Document IDs (`_id`) and table numbers | accepted (C: as Convex) |
 | [STUDY-02](STUDY-02-read-own-writes.md) | Read-your-own-writes inside a transaction | implemented (#3), retroactive |
 | [STUDY-03](STUDY-03-deterministic-execution.md) | Deterministic queries and mutations | implemented (#4), retroactive |
@@ -134,11 +135,16 @@ to a spec.
 | [STUDY-120](STUDY-120-dev-wait-table.md) | `dev` waits on the table a schema validation failed on (`_system/cli/queryTable`), and Convex's failure message | implemented, no divergence |
 | [STUDY-119](STUDY-119-run-inline-query.md) | `run --inline-query` and the function tester (`POST /api/run_test_function`): Convex's wrapping rules, a module analyzed alone, its query run uncached as `Tester` | implemented; DV-390, DV-391 (owner, 2026-10-05) |
 | [STUDY-100](STUDY-100-typed-validators.md) | Table names in `v.id`: system tables suggested everywhere, the app's tables typed through codegen (a bunvex addition, beyond Convex) | accepted: T1 and T2 (owner, 2026-10-04); T3 later |
-| [STUDY-131](STUDY-131-debugging-and-observability.md) | Seeing inside a deployment: system tables, the subscriptions and invalidation inspector, OpenTelemetry traces, a deterministic test runtime | accepted (owner, 2026-10-05): AD-24–AD-27, T1 |
+| [STUDY-131](STUDY-131-debugging-and-observability.md) | Seeing inside a deployment: system tables, the subscriptions and invalidation inspector, OpenTelemetry traces, a deterministic test runtime | accepted (owner, 2026-10-05): AD-24–AD-27, T1; AD-26 (OTLP traces) implemented (§7) |
 | [STUDY-98](STUDY-98-filter-api.md) | `filterApi` from `bunvex/server`: the api, filtered by type | implemented |
 | [STUDY-97](STUDY-97-value-size-and-base64.md) | `getDocumentSize`, `Base64` and `getConvexSize` (`valueSize`) from `bunvex/values`, as Convex's | implemented; the `getConvexSize` name kept as `valueSize` (owner, 2026-10-04, DV-347) |
-| [STUDY-104](STUDY-104-ws-heartbeat.md) | The sync socket's WS heartbeat (a 5 s ping, a 120 s timeout closing with 1000 `ClientDisconnected`) and Convex's close frames (`close_frame`, the `FatalError` first, 1005 for no code) | implemented; DV-352–DV-354 (owner, 2026-10-05) |
 | [STUDY-96](STUDY-96-search-index-snapshots.md) | Search and vector indexes snapshotted at a clean shutdown, restored at start with the log since (STUDY-79 option D) | removed by STUDY-111 (persisted segments replace it) |
+| [STUDY-125](STUDY-125-virtual-system-tables.md) | Convex's physical system tables (`_file_storage`, `_scheduled_jobs`, `_scheduled_job_args`) behind the virtual `_storage` and `_scheduled_functions`: ids, indexes, `db.system`, the scheduler, snapshots | implemented (owner, 2026-10-05: match Convex's layout; DV-400 accepted; DV-401 matched, §7) |
+| [STUDY-104](STUDY-104-ws-heartbeat.md) | The sync socket's WS heartbeat (a 5 s ping, a 120 s timeout closing with 1000 `ClientDisconnected`) and Convex's close frames (`close_frame`, the `FatalError` first, 1005 for no code) | implemented; DV-352–DV-354 (owner, 2026-10-05) |
+| [STUDY-132](STUDY-132-deterministic-test-runtime.md) | A deterministic runtime for tests (STUDY-131 T1), as Convex's test runtime; why the flaky tests flaked: test servers shadowed on 127.0.0.1, real-time budgets, assumed orders | accepted (owner, 2026-10-05: module by module); PRs 1–3 implemented, the rest listed in §6 |
+| [STUDY-127](STUDY-127-schema-validation-tables.md) | `_schema_validations` and `_schema_validation_progress`: a pending schema's walk persisted as Convex's (attempts, flushed counters, deleted when the schema resolves, walked again after a restart); the dashboard's `getSchemas:schemaValidationProgress` | implemented (DV-404) |
+| [STUDY-124](STUDY-124-cli-output-like-convex.md) | The CLI's argument errors (commander's `error: …`, help after, suggestions, exit 1) and a failed typecheck's output, as Convex's | implemented; DV-388 decided (owner, 2026-10-05) |
+| [STUDY-114](STUDY-114-prometheus-metrics.md) | Prometheus `/metrics`: Convex's meta route on both ports, `DISABLE_METRICS_ENDPOINT`, bunvex's own series with `le` histograms, the sync argument sizes | implemented; DV-377 and DV-378 (owner, 2026-10-05) |
 | [STUDY-129](STUDY-129-auth-table.md) | `_auth`: the deployed auth providers stored as Convex's documents, written by a push and by variable and canonical URL changes, read at start and by `listAuthProviders`; `finish_push`'s `authDiff` | implemented (DV-406) |
 | [STUDY-128](STUDY-128-next-persistence-index-id.md) | `_next_persistence_index_id`: index ids from one counter, written with the indexes, never reused after a drop | implemented (DV-405) |
 | [STUDY-126](STUDY-126-db-globals.md) | `_db`, the database globals: the data version, the storage type pinned at the first start (local or S3, `<instance name>-<uuid>/`), Convex's refusal to switch | implemented (DV-403) |
@@ -154,6 +160,7 @@ to a spec.
 | [STUDY-109](STUDY-109-value-nesting-limit.md) | The value nesting limit (64): arguments (63, as `[args]`), results, written values; Convex's messages and order, any depth without a stack overflow | implemented; N1 decided by the owner (2026-10-05, DV-363) |
 | [STUDY-111](STUDY-111-search-segments.md) | Persisted search segments (STUDY-79 option E): text and vector segment formats, the memory part and merged queries, the flusher, the paged backfill, the compactor, fast-forward and retention | decided (owner, 2026-10-05: build E); implemented (PRs 1–7: formats, merged queries, flusher and start, backpressure, paged backfill, compactor, `_index` rows, fast-forward); querying from disk not built |
 | [STUDY-102](STUDY-102-query-options.md) | `QueryOptions` and `bunvexQueryOptions` (Convex's `convexQueryOptions`), and `prewarmQuery`'s required `args` | implemented; the name decided by the owner (2026-10-05, DV-348) |
+| [STUDY-130](STUDY-130-storage-deletions.md) | Deleting a file's blob: Convex never does (no queue, no sweep); bunvex's `_storage_deletions` and sweeps dropped to match (DV-150 withdrawn) | implemented (owner, 2026-10-05: A; DV-407) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

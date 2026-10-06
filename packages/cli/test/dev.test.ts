@@ -2,7 +2,7 @@
 // the next change, an unreachable deployment backs off), `--once`, `--until-success`, `--run`, `--start`,
 // (local deployments: local-deployment.test.ts).
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
@@ -150,7 +150,13 @@ describe("bunvex dev", () => {
     const s = dev(app, d.url, "--start", "exit 3");
     expect(await s.done).toBe(1);
     expect(s.err).toContain("Command `exit 3` exited with code 3");
-    expect(await dev(app, d.url, "--run", "a:b", "--start", "true").done).toBe(2);
+    // Both: `--run` wins and `--start` is not run, as Convex's (its conflict check never fires, STUDY-124).
+    const both = dev(app, d.url, "--run", "hello:hi", "--start", "echo started > started.txt");
+    await both.until(() => both.out.includes('"ran"'));
+    await Bun.sleep(500);
+    expect(existsSync(join(app, "started.txt"))).toBe(false);
+    both.stop();
+    expect(await both.done).toBe(0);
   });
 
   test("the deployment's function logs on stderr (pause-on-deploy by default); --tail-logs disable", async () => {

@@ -7,7 +7,7 @@
 // Convex's names: APPLICATION_MAX_CONCURRENT_QUERIES and _MUTATIONS (16), _V8_ACTIONS and _NODE_ACTIONS (64);
 // APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT (ms, 5 000) and _ACTION_SEMAPHORE_TIMEOUT (ms, 10 000).
 
-import { outsideExecution } from "@bunvex/core";
+import { outsideExecution, type Runtime, realRuntime } from "@bunvex/core";
 
 export type LimitedKind = "query" | "mutation" | "action";
 
@@ -38,6 +38,8 @@ export class ConcurrencyLimiter {
     readonly waitMs: number,
     readonly kind: LimitedKind = "action",
     readonly knob = "APPLICATION_MAX_CONCURRENT_V8_ACTIONS",
+    /** Whose timers time a wait out (STUDY-132). */
+    private readonly runtime: Runtime = realRuntime,
   ) {}
 
   /** Run `fn` holding a permit. `wait`: no timeout (Convex's scheduled and cron runs). */
@@ -74,7 +76,7 @@ export class ConcurrencyLimiter {
       const timer = forever
         ? null
         : outsideExecution(() =>
-            setTimeout(() => {
+            this.runtime.setTimeout(() => {
               const i = this.waiting.indexOf(wake);
               if (i !== -1) this.waiting.splice(i, 1);
               this.stats.refused++;
@@ -82,7 +84,7 @@ export class ConcurrencyLimiter {
             }, this.waitMs),
           );
       const wake = () => {
-        if (timer) outsideExecution(() => clearTimeout(timer));
+        if (timer) outsideExecution(() => this.runtime.clearTimeout(timer));
         resolve();
       };
       this.waiting.push(wake);
@@ -92,14 +94,15 @@ export class ConcurrencyLimiter {
 
 /** The action limiter (STUDY-31): actions and HTTP actions share it, as in Convex. */
 export class ActionPermits extends ConcurrencyLimiter {
-  constructor(max: number, waitMs: number) {
-    super(max, waitMs, "action", "APPLICATION_MAX_CONCURRENT_V8_ACTIONS");
+  constructor(max: number, waitMs: number, runtime: Runtime = realRuntime) {
+    super(max, waitMs, "action", "APPLICATION_MAX_CONCURRENT_V8_ACTIONS", runtime);
   }
 
-  static fromEnv(env = process.env): ActionPermits {
+  static fromEnv(env = process.env, runtime: Runtime = realRuntime): ActionPermits {
     return new ActionPermits(
       knob(env, "APPLICATION_MAX_CONCURRENT_V8_ACTIONS", 64),
       knob(env, "APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000),
+      runtime,
     );
   }
 }
@@ -121,7 +124,12 @@ export type FunctionLimits = {
   nodeAction: ConcurrencyLimiter;
 };
 
-export function functionLimitsFromEnv(env = process.env, action: ConcurrencyLimiter = ActionPermits.fromEnv(env)) {
+export function functionLimitsFromEnv(
+  env = process.env,
+  action?: ConcurrencyLimiter,
+  /** Whose timers time the waits out (STUDY-132). */
+  runtime: Runtime = realRuntime,
+) {
   const wait = knob(env, "APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT", 5000);
   const actionWait = knob(env, "APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000);
   return {
@@ -130,19 +138,22 @@ export function functionLimitsFromEnv(env = process.env, action: ConcurrencyLimi
       wait,
       "query",
       "APPLICATION_MAX_CONCURRENT_QUERIES",
+      runtime,
     ),
     mutation: new ConcurrencyLimiter(
       knob(env, "APPLICATION_MAX_CONCURRENT_MUTATIONS", 16),
       wait,
       "mutation",
       "APPLICATION_MAX_CONCURRENT_MUTATIONS",
+      runtime,
     ),
-    action,
+    action: action ?? ActionPermits.fromEnv(env, runtime),
     nodeAction: new ConcurrencyLimiter(
       knob(env, "APPLICATION_MAX_CONCURRENT_NODE_ACTIONS", 64),
       actionWait,
       "action",
       "APPLICATION_MAX_CONCURRENT_NODE_ACTIONS",
+      runtime,
     ),
   } satisfies FunctionLimits;
 }

@@ -78,6 +78,9 @@ export class ValidatorError extends Error {
 
 export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof FunctionPathError || e instanceof ActionTimeoutError) return { message: `${e.message}\n` };
+  // a `_system/` function refused (admin-keys.ts `SystemIdentityRequiredError`): Convex's runner reports its
+  // `ErrorMetadata` message alone, raised in Rust before any code runs
+  if (isError(e) && (e as { code?: unknown }).code === "SystemIdentityRequired") return { message: `${e.message}\n` };
   if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);

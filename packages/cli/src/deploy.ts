@@ -9,8 +9,16 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
-import { type CodegenConfig, runCodegen, type TypecheckMode, type TypescriptCompiler, typecheck } from "./codegen.ts";
+import {
+  type CodegenConfig,
+  printTypecheckFailure,
+  runCodegen,
+  type TypecheckMode,
+  type TypescriptCompiler,
+  typecheck,
+} from "./codegen.ts";
 import {
   type CheckMode,
   checkLargeIndexBackfill,
@@ -209,23 +217,28 @@ function parseFlags(all: string[]): Flags | string {
     else if (name === "--allow-deleting-large-indexes") f.allowDeletingLargeIndexes = true;
     else if (name === "--message") {
       const v = inline ?? args[++i];
-      if (v === undefined) return "--message needs a value";
+      if (v === undefined) return missingArgument("--message <message>");
       f.message = v;
     } else if (name === "--cmd" || name === "--cmd-url-env-var-name") {
       const v = inline ?? args[++i];
-      if (v === undefined) return `${name} needs a value`;
+      if (v === undefined)
+        return missingArgument(name === "--cmd" ? "--cmd <command>" : "--cmd-url-env-var-name <name>");
       if (name === "--cmd") f.cmd = v;
       else f.cmdUrlEnvVarName = v;
     } else if (name === "--codegen" || name === "--typecheck") {
       const v = inline ?? args[++i];
+      const spec = `${name} <mode>`;
+      if (v === undefined) return missingArgument(spec);
       if (name === "--codegen") {
-        if (v !== "enable" && v !== "disable") return "--codegen must be enable or disable";
+        if (v !== "enable" && v !== "disable") return invalidChoice(spec, v, ["enable", "disable"]);
         f.codegen = v === "enable";
       } else {
-        if (v !== "enable" && v !== "try" && v !== "disable") return "--typecheck must be enable, try or disable";
+        if (v !== "enable" && v !== "try" && v !== "disable")
+          return invalidChoice(spec, v, ["enable", "try", "disable"]);
         f.typecheck = v;
       }
-    } else return `unknown option ${a}`;
+    } else if (a.startsWith("-")) return unknownOption(a, optionsIn(DEPLOY_USAGE));
+    else return tooManyArguments("deploy", 0, args.filter((x) => !x.startsWith("-")).length);
   }
   return f;
 }
@@ -236,10 +249,8 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     return 0;
   }
   const flags = parseFlags(args);
-  if (typeof flags === "string") {
-    io.err(`bunvex deploy: ${flags}\n\n${DEPLOY_USAGE}`);
-    return 2;
-  }
+  // Convex's `deploy` shows its help after an argument error.
+  if (typeof flags === "string") return argumentError(io, flags, DEPLOY_USAGE);
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
     acquired = await acquireTarget(flags, io);
@@ -463,8 +474,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     if (flags.codegen) runCodegen(dir, codegen);
     const checked = await typecheck(dir, io.cwd, flags.typecheck, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
-      io.err(checked.output);
-      io.err("To ignore failing typecheck, use `--typecheck=disable`.");
+      printTypecheckFailure(io, checked);
       return { code: 1 };
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);

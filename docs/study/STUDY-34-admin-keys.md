@@ -312,3 +312,35 @@ Not divergences, but recorded:
 - **The dashboard's HTTP data source** (`createHttpDataSource({ url, adminKey })`, UI-01 §5.7) is the UI
   session's. The endpoints above are what it needs first.
 - **Deploy-scoped, time-limited keys** for impersonation in built-in auth (STUDY-28) come with that phase.
+
+## 7. `_system/` functions: who reaches them (added 2026-10-05, checked against Convex's binary)
+
+**Convex.**
+- `application_function_runner/mod.rs` refuses a system path unless the identity is a deployment admin or the
+  system: `path.is_system() && !(identity.is_admin() || identity.is_system())` → `unauthorized_error`
+  (`crates/database/src/database.rs`), `SystemIdentityRequired`, "Operation <op> not permitted".
+- `ModuleModel::get_metadata` (`crates/model/src/modules/mod.rs`) refuses reading a `_system/` module the same
+  way (`get_module`). `/api/run` (`any_udf`) and scheduling (`validate_schedule_args`) read the module first.
+- An admin acting as a user is not an admin (`Identity::ActingUser`).
+
+**Checked against Convex's local backend** (`precompiled-2026-09-28-5c7cb5b`, a small app deployed with the
+`convex` CLI; the probes in the PR). bunvex now gives the same answers at every entry point, except the
+`bunvex dev` word (rule 5):
+
+| Entry point | Nobody / a user / an admin acting as a user | An admin or the system key |
+|---|---|---|
+| `/api/query`, `/api/mutation`, sync | the function's error, HTTP 200: `Server Error\nOperation query not permitted` (mutation likewise); a sync subscription gets `QueryFailed` with it, and the session goes on | runs. Missing: `Couldn't find system module '"no/such.js"'.` or `Couldn't find "nope" in module "_system/cli/tables.js".` |
+| `/api/action` | 403 `SystemIdentityRequired`, "Operation action not permitted" | 500 `InternalServerError` (there are no system actions) |
+| `/api/run/_system/…` | 403 `SystemIdentityRequired`, "Operation get_module not permitted" | "Could not find function for '…'. Did you forget to run `bunvex dev`?" |
+| `/api/function` | needs an admin (`BadDeployKey`) | the same "Could not find function", since system modules are not the deployment's |
+| an action's (or HTTP action's) `runQuery` / `runMutation` / `runAction` | `Couldn't resolve api._system.cli.tables.default` | the same: an action never resolves a system function |
+| a query's or mutation's nested `runQuery` / `runMutation` | `Could not find public function for '_system/cli/tables'.` | runs, in the caller's transaction |
+| `scheduler.runAfter` of a system function | "Operation get_module not permitted" | "Attempted to schedule function at nonexistent path: _system/cli/tables.js" |
+| crons, function handles | never point at one ("does not exist", "Cannot create function handle for system UDF") | the same |
+
+**Notes.**
+- The nested call's answer depends on who calls. bunvex marks such a run as identity-dependent, so the query
+  cache keeps it per caller.
+- `bunvex run` uses `/api/function` for the app's functions only, as Convex's CLI. The CLI's own system calls
+  (`apiSpec`, `tables`, …) go through `/api/query` with the admin key, which still works.
+- Tests: `packages/server/test/system-identity.test.ts`.
