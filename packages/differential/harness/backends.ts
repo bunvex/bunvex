@@ -41,7 +41,8 @@ async function run(cmd: string[], cwd: string, env: Record<string, string> = {})
   return out;
 }
 
-function freePorts(): [number, number] {
+/** Two free ports in a row (an API port and its site port), as far as a bind can tell right now. */
+export function freePorts(): [number, number] {
   const bindable = (port: number) => {
     try {
       Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } }).stop(true);
@@ -56,15 +57,70 @@ function freePorts(): [number, number] {
   }
 }
 
-async function waitFor(url: string, proc: ReturnType<typeof Bun.spawn>, what: string) {
-  for (let i = 0; ; i++) {
-    const ok = await fetch(url)
-      .then((r) => r.ok)
-      .catch(() => false);
-    if (ok) return;
-    if (proc.exitCode !== null || i > 300) throw new Error(`${what} did not start`);
+/** How a backend is started on two ports: its process, and what it wrote to stderr so far. */
+type Launched = { proc: ReturnType<typeof Bun.spawn>; stderr: () => string };
+
+function launch(cmd: string[], cwd: string, env: Record<string, string> = {}): Launched {
+  const proc = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "ignore", stderr: "pipe" });
+  let err = "";
+  (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of proc.stderr as ReadableStream<Uint8Array>)
+      err = (err + decoder.decode(chunk)).slice(-4000);
+  })().catch(() => {});
+  return { proc, stderr: () => err };
+}
+
+/** The backend did not come up on its ports (they were taken, or it failed): another pair may do. */
+class NotStarted extends Error {}
+
+/**
+ * Wait until the backend answers as itself: `/instance_name` is its own (unique) name while its process is
+ * alive. A port another process holds, answering anything, is never taken for it.
+ */
+async function waitUntilUp(url: string, name: string, l: Launched, what: string) {
+  for (let i = 0; i < 300; i++) {
+    if (l.proc.exitCode !== null) throw new NotStarted(`${what} exited at start:\n${l.stderr().trim()}`);
+    const answer = await fetch(`${url}/instance_name`)
+      .then((r) => (r.ok ? r.text() : null))
+      .catch(() => null);
+    if (answer === name && l.proc.exitCode === null) return;
     await Bun.sleep(100);
   }
+  throw new NotStarted(`${what} did not answer as ${name} within 30 s:\n${l.stderr().trim()}`);
+}
+
+export type StartOptions = {
+  /** The ports to try (tests): `freePorts` by default. */
+  pickPorts?: () => [number, number];
+};
+
+/**
+ * Start a backend on free ports, as itself: a pair taken between the check and the start, or held by another
+ * server, is given up for another, five times at most (the last failure says why).
+ */
+async function startOnFreePorts(
+  what: string,
+  opts: StartOptions,
+  start: (ports: [number, number], name: string) => Launched,
+): Promise<{ url: string; name: string; launched: Launched; ports: [number, number] }> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const ports = (opts.pickPorts ?? freePorts)();
+    const name = `differential-${randomBytes(4).toString("hex")}`;
+    const url = `http://127.0.0.1:${ports[0]}`;
+    const launched = start(ports, name);
+    try {
+      await waitUntilUp(url, name, launched, what);
+      return { url, name, launched, ports };
+    } catch (e) {
+      launched.proc.kill("SIGKILL");
+      await launched.proc.exited;
+      if (!(e instanceof NotStarted)) throw e;
+      last = e;
+    }
+  }
+  throw last;
 }
 
 function caller(url: string): Backend["call"] {
@@ -110,50 +166,53 @@ function project(state: string, dir: "convex" | "bunvex"): string {
 }
 
 /** Convex's local backend on SQLite, with the app deployed by Convex's CLI. Never without --disable-beacon. */
-export async function startConvex(): Promise<Backend> {
+export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
   if (!existsSync(ORACLE_BIN))
     throw new Error(
       `no Convex backend at ${ORACLE_BIN}: run scripts/download-convex-backend.sh or set CONVEX_BACKEND_BIN`,
     );
   const state = mkdtempSync(join(tmpdir(), "differential-convex-"));
-  const [port, sitePort] = freePorts();
-  const name = "differential";
   const secret = randomBytes(32).toString("hex");
-  const url = `http://127.0.0.1:${port}`;
-  const proc = Bun.spawn(
-    [
-      ORACLE_BIN,
-      join(state, "convex.sqlite3"),
-      "--instance-name",
-      name,
-      "--instance-secret",
-      secret,
-      "--port",
-      String(port),
-      "--site-proxy-port",
-      String(sitePort),
-      "--local-storage",
-      join(state, "storage"),
-      "--disable-beacon",
-    ],
-    { cwd: state, stdout: "ignore", stderr: "ignore", env: { ...process.env, RUST_LOG: "warn" } },
-  );
+  let proc: ReturnType<typeof Bun.spawn> | null = null;
   const stop = async () => {
-    proc.kill("SIGTERM");
-    await proc.exited;
+    proc?.kill("SIGTERM");
+    await proc?.exited;
     rmSync(state, { recursive: true, force: true });
   };
   try {
-    await waitFor(`${url}/version`, proc, "Convex's backend");
+    const up = await startOnFreePorts("Convex's backend", opts, ([port, sitePort], name) => {
+      // Each attempt on a store of its own: a failed one leaves nothing for the next.
+      const dir = mkdtempSync(join(state, "attempt-"));
+      return launch(
+        [
+          ORACLE_BIN,
+          join(dir, "convex.sqlite3"),
+          "--instance-name",
+          name,
+          "--instance-secret",
+          secret,
+          "--port",
+          String(port),
+          "--site-proxy-port",
+          String(sitePort),
+          "--local-storage",
+          join(dir, "storage"),
+          "--disable-beacon",
+        ],
+        state,
+        { RUST_LOG: "warn" },
+      );
+    });
+    proc = up.launched.proc;
     const adminKey = (
-      await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", name, "--instance-secret", secret], state)
+      await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", up.name, "--instance-secret", secret], state)
     ).trim();
     const proj = project(state, "convex");
     await run([join(proj, "node_modules/.bin/convex"), "deploy", "--yes", "--typecheck=disable"], proj, {
-      CONVEX_SELF_HOSTED_URL: url,
+      CONVEX_SELF_HOSTED_URL: up.url,
       CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
     });
-    return { name: "convex", url, call: caller(url), stop };
+    return { name: "convex", url: up.url, call: caller(up.url), stop };
   } catch (e) {
     await stop();
     throw e;
@@ -161,48 +220,59 @@ export async function startConvex(): Promise<Backend> {
 }
 
 /** bunvex's local backend, with the app deployed by bunvex's CLI. */
-export async function startBunvex(): Promise<Backend> {
+export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
   const state = mkdtempSync(join(tmpdir(), "differential-bunvex-"));
-  const [port, sitePort] = freePorts();
-  const name = "differential";
   const secret = randomBytes(32).toString("hex");
-  const url = `http://127.0.0.1:${port}`;
-  const proc = Bun.spawn(
-    [
-      process.execPath,
-      BUNVEX_BACKEND,
-      "--port",
-      String(port),
-      "--site-proxy-port",
-      String(sitePort),
-      "--instance-name",
-      name,
-      "--instance-secret",
-      secret,
-      "--local-storage",
-      join(state, "storage"),
-      join(state, "backend.sqlite3"),
-    ],
-    { cwd: state, stdout: "ignore", stderr: "ignore" },
-  );
+  let proc: ReturnType<typeof Bun.spawn> | null = null;
   const stop = async () => {
-    proc.kill("SIGTERM");
-    await proc.exited;
+    proc?.kill("SIGTERM");
+    await proc?.exited;
     rmSync(state, { recursive: true, force: true });
   };
   try {
-    await waitFor(`${url}/instance_name`, proc, "bunvex's backend");
+    const up = await startOnFreePorts("bunvex's backend", opts, ([port, sitePort], name) => {
+      // Each attempt on a store of its own: a failed one leaves nothing for the next.
+      const dir = mkdtempSync(join(state, "attempt-"));
+      return launch(
+        [
+          process.execPath,
+          BUNVEX_BACKEND,
+          "--port",
+          String(port),
+          "--site-proxy-port",
+          String(sitePort),
+          "--instance-name",
+          name,
+          "--instance-secret",
+          secret,
+          "--local-storage",
+          join(dir, "storage"),
+          join(dir, "backend.sqlite3"),
+        ],
+        state,
+      );
+    });
+    proc = up.launched.proc;
     const adminKey = (
       await run(
-        [process.execPath, BUNVEX_BACKEND, "keygen", "admin-key", "--instance-name", name, "--instance-secret", secret],
+        [
+          process.execPath,
+          BUNVEX_BACKEND,
+          "keygen",
+          "admin-key",
+          "--instance-name",
+          up.name,
+          "--instance-secret",
+          secret,
+        ],
         state,
       )
     ).trim();
     const proj = project(state, "bunvex");
     const envFile = join(state, "deployment.env");
-    writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
+    writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     await run([process.execPath, BUNVEX_CLI, "deploy", "--typecheck=disable", "--env-file", envFile], proj);
-    return { name: "bunvex", url, call: caller(url), stop };
+    return { name: "bunvex", url: up.url, call: caller(up.url), stop };
   } catch (e) {
     await stop();
     throw e;
