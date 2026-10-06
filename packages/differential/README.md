@@ -34,5 +34,25 @@ backend is always started with `--disable-beacon`.
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
   the test with its seed.
 
+## Every night
+
+`.github/workflows/differential-nightly.yml` runs `scripts/nightly.sh` against Convex's released backend,
+downloaded at run time:
+- the fixed programs;
+- then batches of `DIFF_RUNS` generated programs (200), each from a fresh seed, for `MINUTES` (20).
+
+Every seed is in the log. On a difference:
+- the run fails and uploads `.cache/failures/`;
+- it opens an issue, or comments on the open one, with the reproduce line and the shrunk program.
+
+Locally: `MINUTES=1 scripts/nightly.sh`. A pull request that changes the harness or the workflow runs it for
+one minute.
+
+## Triage
+
 A difference is a bug (fixed with a regression test in `core` or `server`) or a decided divergence (one
 rewrite in `compare.ts`, with its DV id). Never anything else.
+
+- **A bug:** add the shrunk program to `test/fixed.test.ts`, fix bunvex with a test of its own in `core` or
+  `server`, and close the issue with the fix.
+- **A decided divergence:** one rule in `compare.ts`, with its DV id.

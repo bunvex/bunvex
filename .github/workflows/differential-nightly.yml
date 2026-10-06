@@ -1,0 +1,71 @@
+name: Differential nightly
+
+# The differential tests against Convex's own backend (STUDY-122 phase 4, D2, the owner's call): every night,
+# the fixed programs, then generated programs from fresh seeds for a while. Convex's released binary is
+# downloaded at run time (never stored in the repo) and always started with --disable-beacon. A difference
+# opens (or comments on) a GitHub issue with the seed and the shrunk program; it is then triaged as a bug
+# (fixed, with the program as a regression test) or matched to a decided divergence (a rule in compare.ts,
+# with its DV id). A pull request that changes this file or the harness runs it briefly.
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutes of generated programs
+        default: "20"
+  pull_request:
+    paths:
+      - .github/workflows/differential-nightly.yml
+      - packages/differential/**
+
+concurrency:
+  group: differential-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  differential:
+    name: differential · Convex vs bunvex
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MINUTES: ${{ github.event_name == 'pull_request' && '1' || inputs.minutes || '20' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      # Convex's CLI deploys the app to its backend, as a user would; it runs on Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Convex's backend
+        run: packages/differential/scripts/download-convex-backend.sh
+      - name: Fixed programs, then generated ones for ${{ env.MINUTES }} minutes
+        id: runs
+        run: packages/differential/scripts/nightly.sh
+      - name: The shrunk program
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-failure
+          path: packages/differential/.cache/failures/
+          if-no-files-found: ignore
+      - name: Open or update an issue
+        if: failure() && steps.runs.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Differential nightly: bunvex answered differently from Convex"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          { echo "The nightly differential run found a difference ([run]($run_url), commit ${{ github.sha }}, Convex $(cat packages/differential/.cache/RELEASE))."
+            echo "Triage it: a bug is fixed with this program as a regression test; a decided divergence is a rule in \`harness/compare.ts\` with its DV id (STUDY-122 phase 4)."
+            echo; cat packages/differential/summary.md; } > body.md
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue comment "$existing" --body-file body.md
+          else gh issue create --title "$title" --body-file body.md; fi

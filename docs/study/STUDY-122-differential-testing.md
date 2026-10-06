@@ -5,7 +5,9 @@
   calls, actions, application errors, validators, limits): it found #492 (a caught nested error's message,
   in mutations and in actions), #493 (the write limits' messages) and #494 (a nested call's arguments, a
   sorted copy), and asked D3 (decided A: refuse a lone surrogate with Convex's message, after a short study of every path that
-  refuses it). 2 000 generated programs (seeds 1 and 2) then showed no difference.
+  refuses it). 2 000 generated programs (seeds 1 and 2) then showed no difference. Phase 4 built: `.github/workflows/differential-nightly.yml`
+  runs the fixed programs and about 20 minutes of generated ones every night (about 1 000 programs a minute),
+  and a difference opens an issue with its seed and shrunk program for the triage of §3.2.
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,
