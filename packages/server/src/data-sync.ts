@@ -15,6 +15,7 @@ import {
   hasRetention,
   insertAuditLogEvents,
   internalIdBytes,
+  internalIdOf,
   internalIdString,
   OutOfRetentionError,
   type TableDef,
@@ -382,7 +383,7 @@ async function byIdPage(
     undefined,
     c.syncedTs,
   )) as Record<string, Value>[];
-  const ids = docs.map((d) => d._id as string);
+  const ids = docs.map((d) => internalIdOf(d._id as string));
   const versions = engine.persistence.getVersions
     ? await engine.persistence.getVersions(cur.tablet, ids, c.syncedTs)
     : null;
@@ -398,7 +399,11 @@ async function byIdPage(
   const reachedEnd = docs.length < limits.pageSize && taken === docs.length;
   const numDocsSynced = c.numDocsSynced + taken;
   if (!reachedEnd)
-    return { ...c, numDocsSynced, current: { ...cur, currentId: ids[taken - 1]!, docsSynced: cur.docsSynced + taken } };
+    return {
+      ...c,
+      numDocsSynced,
+      current: { ...cur, currentId: docs[taken - 1]!._id as string, docsSynced: cur.docsSynced + taken },
+    };
   const synced = [...c.synced, { tablet: cur.tablet, component: cur.component, table: cur.table }];
   const done = new Set(synced.map((s) => s.tablet));
   const next = [...byTablet.values()].find((x) => !done.has(x.t.id));
@@ -446,23 +451,25 @@ async function tsPage(
         (rowsRead >= limits.maxRowsRead || values.length >= limits.pageSize || bytes >= limits.pageBytes)
       )
         break outer;
-      commit.sort((a, b) => compareInternalIds(a.table, b.table) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      // As Convex's log: by (table, id), bytewise.
+      commit.sort((a, b) => compareInternalIds(a.table, b.table) || compareInternalIds(a.id, b.id));
       const out: DataSyncValue[] = [];
       let commitBytes = 0;
+      // The log keys documents by internal id; apps know them by id.
+      const idOf = (r: (typeof commit)[number]) => {
+        const target = byTablet.get(r.table);
+        return target ? encodeId(target.t.number, internalIdBytes(r.id)) : null;
+      };
       const live = new Map<TabletId, string[]>();
-      for (const r of commit)
-        if (!r.deleted && captured(r.table, r.id) && byTablet.has(r.table))
-          live.set(r.table, [...(live.get(r.table) ?? []), r.id]);
+      for (const r of commit) {
+        const id = idOf(r);
+        if (!r.deleted && id !== null && captured(r.table, id)) live.set(r.table, [...(live.get(r.table) ?? []), r.id]);
+      }
       const docs = new Map<string, string>();
       for (const [tablet, ids] of live) {
         const vs = store.getVersions
           ? await store.getVersions(tablet, ids, ts)
-          : await Promise.all(
-              ids.map(async (id) => {
-                const json = await store.get(tablet, id, ts);
-                return json === null ? null : { json, ts };
-              }),
-            );
+          : await Promise.all(ids.map((id) => store.get(tablet, id, ts)));
         ids.forEach((id, i) => {
           const v = vs[i];
           if (v) docs.set(`${tablet}\u0000${id}`, v.json);
@@ -470,9 +477,10 @@ async function tsPage(
       }
       for (const r of commit) {
         const target = byTablet.get(r.table);
-        if (!target || !captured(r.table, r.id)) continue;
+        const id = idOf(r);
+        if (!target || id === null || !captured(r.table, id)) continue;
         const json = r.deleted
-          ? JSON.stringify({ _id: r.id })
+          ? JSON.stringify({ _id: id })
           : (() => {
               const raw = docs.get(`${r.table}\u0000${r.id}`);
               return raw === undefined ? null : docValue(raw, target.cols);

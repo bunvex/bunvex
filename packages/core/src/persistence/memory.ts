@@ -17,10 +17,14 @@ import { compareKeys } from "../keyenc.ts";
 import type {
   DocLogRow,
   DocPrune,
+  DocVersion,
   DocWrite,
+  IndexEntryAt,
+  IndexedDoc,
   IndexId,
   IndexPrune,
   IndexWrite,
+  InternalId,
   Lease,
   LeaseAcquire,
   LogCommit,
@@ -28,7 +32,7 @@ import type {
   RetentionStore,
   TabletId,
 } from "./index.ts";
-import { LeaseLostError } from "./index.ts";
+import { DanglingReferenceError, LeaseLostError } from "./index.ts";
 import {
   checkLayoutVersion,
   LAYOUT_VERSION,
@@ -252,10 +256,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       const line = text.slice(pos, nl);
       let rec: {
         ts: string;
-        docs: DocWrite[];
-        idx: [IndexId, string, string | null][];
+        docs: [TabletId, InternalId, string | null, string | null][];
+        idx: [IndexId, string, TabletId | null, InternalId | null][];
         layout?: unknown;
         global?: string;
+        entries?: [IndexId, string, TabletId | null, InternalId | null, string][];
         value?: unknown;
       };
       try {
@@ -277,10 +282,29 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         pos = nl + 1;
         continue;
       }
+      if (rec.entries !== undefined) {
+        this.entriesAt(
+          rec.entries.map(([index, key, table, id, ts]) => ({
+            index,
+            key: new Uint8Array(Buffer.from(key, "base64")),
+            table,
+            id,
+            ts: BigInt(ts),
+          })),
+        );
+        good += enc.encode(line).length + 1;
+        pos = nl + 1;
+        continue;
+      }
       this.applyMemory(
         BigInt(rec.ts),
-        rec.docs,
-        rec.idx.map(([index, key, id]) => ({ index, key: new Uint8Array(Buffer.from(key, "base64")), id })),
+        rec.docs.map(([table, id, json, prev]) => ({ table, id, json, prevTs: prev === null ? null : BigInt(prev) })),
+        rec.idx.map(([index, key, table, id]) => ({
+          index,
+          key: new Uint8Array(Buffer.from(key, "base64")),
+          table,
+          id,
+        })),
       );
       good += enc.encode(line).length + 1;
       pos = nl + 1;
@@ -329,7 +353,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       // prototype honest about bytes written; a real engine would use a binary frame with a checksum.
       this.pending.push(
         Buffer.from(
-          `${JSON.stringify({ ts: String(ts), docs, idx: idx.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.id]) })}\n`,
+          `${JSON.stringify({
+            ts: String(ts),
+            docs: docs.map((d) => [d.table, d.id, d.json, d.prevTs === null ? null : String(d.prevTs)]),
+            idx: idx.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.table, e.id]),
+          })}\n`,
         ),
       );
     }
@@ -339,7 +367,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lastTs = ts;
     const seq = this.tsOf.length;
     this.tsOf.push(ts);
-    if (idx.length) this.commits.push({ ts, writes: idx });
+    // Only the persistence fields: what `readLog` returns, as a store keeps them.
+    if (idx.length)
+      this.commits.push({ ts, writes: idx.map((e) => ({ index: e.index, key: e.key, table: e.table, id: e.id })) });
     if (docs.length) this.docCommits.push({ ts, docs });
     for (const d of docs) {
       const k = `${d.table}:${d.id}`;
@@ -412,7 +442,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       i < cs.length && cs[i].ts <= hi && n < limit;
       i++, n++
     )
-      for (const d of cs[i].docs) out.push({ ts: cs[i].ts, table: d.table, id: d.id, deleted: d.json === null });
+      for (const d of cs[i].docs)
+        out.push({ ts: cs[i].ts, table: d.table, id: d.id, deleted: d.json === null, prevTs: d.prevTs });
     return out;
   }
 
@@ -468,6 +499,38 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return v === undefined ? null : JSON.parse(v);
   }
 
+  /** PERSIST-01 C17: entries at past timestamps, a log record of their own, durable when this returns. */
+  async writeIndexEntries(entries: IndexEntryAt[]) {
+    this.assertWriter();
+    if (!entries.length) return;
+    this.entriesAt(entries);
+    while (this.writing) await this.writing.catch(() => {});
+    if (this.fh !== null) {
+      const rec = entries.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.table, e.id, String(e.ts)]);
+      writeSync(this.fh.fd, `${JSON.stringify({ entries: rec })}\n`);
+      if (this.durable) fdatasyncSync(this.fh.fd);
+    }
+  }
+
+  /** Each entry into its key's versions at its commit's place (replacing one there), by sequence number. */
+  private entriesAt(entries: IndexEntryAt[]) {
+    for (const e of entries) {
+      const seq = this.seqAt(e.ts);
+      if (seq < 0 || this.tsOf[seq] !== e.ts) throw new Error(`no commit at ${e.ts} for an index entry at it`);
+      const t = this.tree(e.index);
+      const vs = t.get(e.key);
+      const v = { seq, v: e.id };
+      if (!vs) {
+        t.set(e.key, [v]);
+        continue;
+      }
+      let i = vs.length;
+      while (i > 0 && vs[i - 1].seq > seq) i--;
+      if (i > 0 && vs[i - 1].seq === seq) vs[i - 1] = v;
+      else vs.splice(i, 0, v);
+    }
+  }
+
   async setGlobal(key: string, value: unknown) {
     this.assertWriter();
     this.globals.set(key, JSON.stringify(value));
@@ -479,31 +542,42 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
   }
 
-  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  scan(table: TabletId, index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const t = this.indexes.get(index);
-    const out: string[] = [];
+    const out: IndexedDoc[] = [];
     if (!t || limit <= 0) return out;
     const seq = this.seqAt(ts);
+    // The entry's document at the entry's own commit (Convex's exact-ts join).
+    const join = (v: Version<string | null>) => {
+      const id = v.v!;
+      const vs = this.docs.get(`${table}:${id}`);
+      let doc: Version<string | null> | undefined;
+      if (vs) for (let i = vs.length - 1; i >= 0 && vs[i].seq >= v.seq; i--) if (vs[i].seq === v.seq) doc = vs[i];
+      const at = this.tsOf[v.seq];
+      if (!doc || doc.v === null) throw new DanglingReferenceError(index, id, at, !!doc);
+      out.push({ id, ts: at, json: doc.v });
+    };
     if (desc) {
       for (const [k, vs] of t.entriesReversed(hi)) {
         if (compareKeys(k, hi) >= 0) continue; // entriesReversed(hi) starts AT hi (inclusive)
         if (compareKeys(k, lo) < 0) break;
         const v = visible(vs, seq);
-        if (v && v.v !== null) out.push(v.v);
+        if (v && v.v !== null) join(v);
         if (out.length >= limit) break;
       }
     } else {
       t.forRange(lo, hi, false, (_k, vs) => {
         const v = visible(vs, seq);
-        if (v && v.v !== null) out.push(v.v);
+        if (v && v.v !== null) join(v);
         if (out.length >= limit) return { break: true };
       });
     }
     return out;
   }
 
-  get(table: TabletId, id: string, ts: bigint) {
-    return visible(this.docs.get(`${table}:${id}`), this.seqAt(ts))?.v ?? null;
+  get(table: TabletId, id: InternalId, ts: bigint): DocVersion {
+    const v = visible(this.docs.get(`${table}:${id}`), this.seqAt(ts));
+    return v && v.v !== null ? { json: v.v, ts: this.tsOf[v.seq] } : null;
   }
 
   getVersions(table: TabletId, ids: string[], ts: bigint) {

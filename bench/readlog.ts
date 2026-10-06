@@ -159,11 +159,11 @@ async function catchup(name: string) {
     const id = `d${c}`;
     st.apply(
       ts,
-      [{ table: tid(1), id, json: `{"c":${c},"title":"an item","amount":42}` }],
+      [{ table: tid(1), id, json: `{"c":${c},"title":"an item","amount":42}`, prevTs: null }],
       [
-        { index: tid(1), key: encodeKey([id]), id },
-        { index: tid(2), key: encodeKey([ts, id]), id },
-        { index: tid(3), key: encodeKey([`t${c % 16}`, ts, id]), id },
+        { index: tid(1), key: encodeKey([id]), table: tid(1), id },
+        { index: tid(2), key: encodeKey([ts, id]), table: tid(1), id },
+        { index: tid(3), key: encodeKey([`t${c % 16}`, ts, id]), table: tid(1), id },
       ],
     );
     if (c % 200 === 199) await st.flush();

@@ -35,7 +35,7 @@ const BACKFILL = tid(972);
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 
-type DocRow = { ts: bigint; id: string; deleted: boolean };
+type DocRow = { ts: bigint; id: string; deleted: boolean; prevTs: bigint | null };
 type IdxRow = { ts: bigint; index: string; key: Uint8Array; deleted: boolean };
 
 /** What retention deletes for the rows of the log at or below the window: a live row supersedes the
@@ -86,16 +86,24 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const ids = Array.from({ length: 40 }, (_, i) => `d${i}`);
   const kId = (id: string) => encodeKey([id]);
   const kVal = (v: number, id: string) => encodeKey([v, id]);
+  // Each document's newest version's ts: the next version's `prevTs`.
+  const lastTs = new Map<string, bigint>();
   let ts = 5000n;
   const commitTs: bigint[] = [];
   for (let c = 0; c < 400; ) {
     const group = 1 + rnd(6);
     for (let g = 0; g < group && c < 400; g++, c++) {
       ts += BigInt(1 + (Math.random() < 0.3 ? 0 : rnd(3000)));
-      const docs: { table: string; id: string; json: string | null }[] = [];
+      const docs: { table: string; id: string; json: string | null; prevTs: bigint | null }[] = [];
       const idx: IndexWrite[] = [];
+      const doc = (id: string, json: string | null) =>
+        docs.push({ table: TABLE, id, json, prevTs: lastTs.get(id) ?? null });
+      const entry = (index: string, key: Uint8Array, id: string | null) =>
+        idx.push({ index, key, table: id === null ? null : TABLE, id });
       if (Math.random() < 0.1) {
-        for (const id of ids.filter(() => Math.random() < 0.2)) idx.push({ index: BACKFILL, key: kId(id), id });
+        // Index-only commits (log and pruning only: these entries have no document at their ts, so no check
+        // scans this index).
+        for (const id of ids.filter(() => Math.random() < 0.2)) entry(BACKFILL, kId(id), id);
       } else {
         const touched = new Set<string>();
         for (let w = 0; w < 1 + rnd(4); w++) {
@@ -105,32 +113,35 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
           const cur = live.get(id);
           if (cur === undefined) {
             if (Math.random() < 0.1) {
-              docs.push({ table: TABLE, id, json: null });
-              idx.push({ index: BY_ID, key: kId(id), id: null });
+              doc(id, null);
+              entry(BY_ID, kId(id), null);
               continue;
             }
             const v = rnd(10);
             live.set(id, v);
-            docs.push({ table: TABLE, id, json: `{"v":${v}}` });
-            idx.push({ index: BY_ID, key: kId(id), id }, { index: BY_VAL, key: kVal(v, id), id });
+            doc(id, `{"v":${v}}`);
+            entry(BY_ID, kId(id), id);
+            entry(BY_VAL, kVal(v, id), id);
           } else if (Math.random() < 0.25) {
             live.delete(id);
-            docs.push({ table: TABLE, id, json: null });
-            idx.push({ index: BY_ID, key: kId(id), id: null }, { index: BY_VAL, key: kVal(cur, id), id: null });
+            doc(id, null);
+            entry(BY_ID, kId(id), null);
+            entry(BY_VAL, kVal(cur, id), null);
           } else {
             const v = Math.random() < 0.5 ? cur : rnd(10);
             live.set(id, v);
-            docs.push({ table: TABLE, id, json: `{"v":${v},"c":${c}}` });
-            idx.push({ index: BY_ID, key: kId(id), id });
-            if (v !== cur) idx.push({ index: BY_VAL, key: kVal(cur, id), id: null });
-            idx.push({ index: BY_VAL, key: kVal(v, id), id });
+            doc(id, `{"v":${v},"c":${c}}`);
+            entry(BY_ID, kId(id), id);
+            if (v !== cur) entry(BY_VAL, kVal(cur, id), null);
+            entry(BY_VAL, kVal(v, id), id);
           }
         }
       }
       if (!docs.length && !idx.length) continue;
       st.apply(ts, docs, idx);
       commitTs.push(ts);
-      const drs = docs.map((d) => ({ ts, id: d.id, deleted: d.json === null }));
+      const drs = docs.map((d) => ({ ts, id: d.id, deleted: d.json === null, prevTs: d.prevTs }));
+      for (const d of docs) lastTs.set(d.id, ts);
       docRows.push(...drs);
       if (drs.length) docCommits.push({ ts, rows: drs });
       for (const e of idx) idxRows.push({ ts, index: e.index, key: e.key, deleted: e.id === null });
@@ -141,21 +152,27 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
 
   // K27: the document log, whole and in random windows.
   const docLog = async (s: Store, a: bigint, b: bigint, n: number) =>
-    (await s.readDocumentLog(a, b, n)).map((r) => ({ ts: r.ts, id: r.id, deleted: r.deleted, t: r.table }));
+    (await s.readDocumentLog(a, b, n)).map((r) => ({
+      ts: r.ts,
+      id: r.id,
+      deleted: r.deleted,
+      t: r.table,
+      prevTs: r.prevTs,
+    }));
   const expectDocLog = (a: bigint, b: bigint, n: number) => {
-    const out: { ts: bigint; id: string; deleted: boolean; t: string }[] = [];
+    const out: { ts: bigint; id: string; deleted: boolean; t: string; prevTs: bigint | null }[] = [];
     if (n <= 0) return out;
     let k = 0;
     for (const c of docCommits) {
       if (c.ts <= a) continue;
       if (c.ts > b || k >= n) break;
       k++;
-      for (const r of c.rows) out.push({ ts: r.ts, id: r.id, deleted: r.deleted, t: TABLE });
+      for (const r of c.rows) out.push({ ts: r.ts, id: r.id, deleted: r.deleted, t: TABLE, prevTs: r.prevTs });
     }
     return out;
   };
-  const canon = (rows: { ts: bigint; id: string; deleted: boolean; t: string }[]) =>
-    rows.map((r) => `${r.ts}:${r.t}:${r.id}:${r.deleted ? 1 : 0}`).sort();
+  const canon = (rows: { ts: bigint; id: string; deleted: boolean; t: string; prevTs: bigint | null }[]) =>
+    rows.map((r) => `${r.ts}:${r.t}:${r.id}:${r.deleted ? 1 : 0}:${r.prevTs ?? "-"}`).sort();
   {
     let bad = 0;
     const all = await docLog(st, 0n, MAX, 1_000_000);
@@ -179,7 +196,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     }
     check(
       bad === 0,
-      `K27 readDocumentLog returns the document versions of whole commits in ts order (${all.length} rows; 200 random windows)`,
+      `K27 readDocumentLog returns the document versions of whole commits in ts order, each with its prevTs (${all.length} rows; 200 random windows)`,
     );
   }
 
@@ -187,13 +204,13 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const snapshotAnswers = async (s: Store, at: bigint[]) => {
     const out: unknown[] = [];
     for (const t of at) {
-      for (const index of [BY_ID, BY_VAL, BACKFILL])
+      for (const index of [BY_ID, BY_VAL])
         for (const [limit, desc] of [
           [100_000, false],
           [100_000, true],
           [3, false],
         ] as const)
-          out.push(await s.scan(index, FULL_LO, FULL_HI, t, limit, desc));
+          out.push(await s.scan(TABLE, index, FULL_LO, FULL_HI, t, limit, desc));
       for (const id of ids) out.push(await s.get(TABLE, id, t));
     }
     return out;
@@ -270,11 +287,15 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   // A write after pruning lands and reads back (the store is still a store).
   {
     const t = last + 10n;
-    st.apply(t, [{ table: TABLE, id: "after", json: `{"v":1}` }], [{ index: BY_ID, key: kId("after"), id: "after" }]);
+    st.apply(
+      t,
+      [{ table: TABLE, id: "after", json: `{"v":1}`, prevTs: null }],
+      [{ index: BY_ID, key: kId("after"), table: TABLE, id: "after" }],
+    );
     await st.flush();
     check(
-      (await st.get(TABLE, "after", t)) === `{"v":1}` &&
-        (await st.scan(BY_ID, FULL_LO, FULL_HI, t, 100_000, false)).includes("after"),
+      (await st.get(TABLE, "after", t))?.json === `{"v":1}` &&
+        (await st.scan(TABLE, BY_ID, FULL_LO, FULL_HI, t, 100_000, false)).some((d) => d.id === "after"),
       `K28 a commit after pruning reads back`,
     );
   }
@@ -306,7 +327,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
       }
     };
     const untouched = async (s: Store) =>
-      (await s.get(TABLE, "after", MAX)) === `{"v":1}` && (await s.getGlobal("k29")) === 42;
+      (await s.get(TABLE, "after", MAX))?.json === `{"v":1}` && (await s.getGlobal("k29")) === 42;
     await st.releaseLease();
     const r1 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId("after"), ts: MAX }], MAX));
     const r2 = await refused(() => st.pruneDocuments([{ table: TABLE, id: "after", ts: MAX }], MAX));

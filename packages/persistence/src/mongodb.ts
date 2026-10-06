@@ -44,11 +44,15 @@ import {
   DatabaseTimeoutError,
   type DocLogRow,
   type DocPrune,
+  type DocVersion,
   type DocWrite,
   groupLog,
+  type IndexEntryAt,
+  type IndexedDoc,
   type IndexId,
   type IndexPrune,
   type IndexWrite,
+  type InternalId,
   LAYOUT_VERSION,
   type Lease,
   type LeaseAcquire,
@@ -64,7 +68,6 @@ import {
   renewTimeoutMs,
   retriedGroupLanded,
   retryOnce,
-  type ScanDocs,
   scanLatest,
   type TabletId,
   UnsureCommitError,
@@ -74,8 +77,9 @@ import type { Collection, Db, MongoClient } from "mongodb";
 import { loadPeer } from "./peer.ts";
 
 // Timestamps are int64s (nanoseconds, above 2^53): the client decodes them as `bigint` (`useBigInt64`).
-type DocRow = { t: TabletId; i: string; ts: bigint; j: string | null };
-type IdxRow = { x: IndexId; k: string; ts: bigint; d: string | null };
+// A document version (`p`: its prev_ts) and an index entry version (`tb`: its document's table).
+type DocRow = { t: TabletId; i: string; ts: bigint; j: string | null; p: bigint | null };
+type IdxRow = { x: IndexId; k: string; ts: bigint; tb: TabletId | null; d: string | null };
 const maxTs = (a: bigint, b: bigint) => (a > b ? a : b);
 
 const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
@@ -83,8 +87,8 @@ const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
 const STORE = "this MongoDB database";
 /** bunvex's fields: how an unversioned store is recognised (a sample of each collection). */
 const FIELDS = {
-  documents: ["_id", "t", "i", "ts", "j"],
-  indexes: ["_id", "x", "k", "ts", "d"],
+  documents: ["_id", "t", "i", "ts", "j", "p"],
+  indexes: ["_id", "x", "k", "ts", "tb", "d"],
 };
 
 type LeaseDoc = {
@@ -136,7 +140,7 @@ export function operational(e: unknown): boolean {
   return false;
 }
 
-export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyFlag, RetentionStore {
+export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   private docsBuf: DocRow[] = [];
   private idxBuf: IdxRow[] = [];
   /** Our lease's epoch, 0 when we hold none. */
@@ -425,8 +429,8 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   }
 
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
-    for (const d of docs) this.docsBuf.push({ t: d.table, i: d.id, ts, j: d.json });
-    for (const e of idx) this.idxBuf.push({ x: e.index, k: hex(e.key), ts, d: e.id });
+    for (const d of docs) this.docsBuf.push({ t: d.table, i: d.id, ts, j: d.json, p: d.prevTs });
+    for (const e of idx) this.idxBuf.push({ x: e.index, k: hex(e.key), ts, tb: e.table, d: e.id });
   }
 
   async flush() {
@@ -525,7 +529,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
           this.idx
             .find(
               { x: index, k: { $gte: hex(p.lo), $lt: hex(p.hi) }, ts: { $lte: ts } },
-              { projection: { _id: 0, k: 1, d: 1 } },
+              { projection: { _id: 0, k: 1, ts: 1, d: 1 } },
             )
             .sort(desc ? { k: -1, ts: -1 } : { k: 1, ts: -1 })
             .limit(p.n)
@@ -533,6 +537,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
         );
         return rows.map((r) => ({
           key: Buffer.from(r.k as string, "hex"),
+          ts: r.ts as bigint,
           deleted: r.d === null,
           id: r.d as string | null,
         }));
@@ -544,15 +549,42 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     );
   }
 
-  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
-    return this.latest(index, lo, hi, ts, limit, desc);
+  /**
+   * The range's newest entry per key at `ts`, then every entry's document at the entry's own ts in one round
+   * trip (Convex's exact-ts join, DV-67 reversed). A missing one rejects (PERSIST-01 C15).
+   */
+  async scan(
+    table: TabletId,
+    index: IndexId,
+    lo: Uint8Array,
+    hi: Uint8Array,
+    ts: bigint,
+    limit: number,
+    desc: boolean,
+  ) {
+    const entries = await this.latest(index, lo, hi, ts, limit, desc);
+    if (!entries.length) return [];
+    const rows = await this.read(() =>
+      this.docs
+        .find(
+          { t: table, $or: entries.map((e) => ({ i: e.id, ts: e.ts })) },
+          { projection: { _id: 0, i: 1, ts: 1, j: 1 } },
+        )
+        .toArray(),
+    );
+    const byKey = new Map(rows.map((r) => [`${r.i}\u0000${r.ts}`, r]));
+    return entries.map((e): IndexedDoc => {
+      const r = byKey.get(`${e.id}\u0000${e.ts}`);
+      if (!r || r.j === null) throw new DanglingReferenceError(index, e.id, e.ts, !!r);
+      return { id: e.id, ts: e.ts, json: r.j };
+    });
   }
 
-  async get(table: TabletId, id: string, ts: bigint) {
+  async get(table: TabletId, id: InternalId, ts: bigint): Promise<DocVersion> {
     const r = await this.read(() =>
-      this.docs.findOne({ t: table, i: id, ts: { $lte: ts } }, { sort: { ts: -1 }, projection: { j: 1 } }),
+      this.docs.findOne({ t: table, i: id, ts: { $lte: ts } }, { sort: { ts: -1 }, projection: { j: 1, ts: 1 } }),
     );
-    return r ? r.j : null;
+    return r && r.j !== null ? { json: r.j, ts: BigInt(r.ts) } : null;
   }
 
   async getVersions(table: TabletId, ids: string[], ts: bigint) {
@@ -571,38 +603,6 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       for (const r of rows) found.set(r._id, { json: r.j, ts: BigInt(r.ts) });
     }
     return versionsInOrder(ids, found);
-  }
-
-  async scanDocs(
-    table: TabletId,
-    index: IndexId,
-    lo: Uint8Array,
-    hi: Uint8Array,
-    ts: bigint,
-    limit: number,
-    desc: boolean,
-  ) {
-    const ids = await this.latest(index, lo, hi, ts, limit, desc);
-    if (!ids.length) return [];
-    // One round trip for every document: newest version <= ts of each id.
-    const rows = await this.read(() =>
-      this.docs
-        .aggregate<{ _id: string; j: string | null }>([
-          { $match: { t: table, i: { $in: ids }, ts: { $lte: ts } } },
-          { $sort: { i: 1, ts: -1 } },
-          { $group: { _id: "$i", j: { $first: "$j" } } },
-        ])
-        .toArray(),
-    );
-    const byId = new Map(rows.map((r) => [r._id, r.j]));
-    const out: string[] = [];
-    for (const id of ids) {
-      const j = byId.get(id);
-      // An entry without a live document is a corrupt store: raised, never skipped (PERSIST-01 C15).
-      if (!j) throw new DanglingReferenceError(index, id, ts, byId.has(id));
-      out.push(j);
-    }
-    return out;
   }
 
   /**
@@ -625,7 +625,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       let commits = 0;
       let lastTs = -1n;
       const cursor = this.idxMajority
-        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, x: 1, k: 1, ts: 1, d: 1 } })
+        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, x: 1, k: 1, ts: 1, tb: 1, d: 1 } })
         .sort({ ts: 1 })
         // Batches sized to the request: the driver's default getMore takes up to 16 MB, i.e. the whole rest
         // of the log, for the one row that tells us commit `limit` is complete.
@@ -638,7 +638,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             commits++;
             lastTs = r.ts;
           }
-          rows.push({ ts: r.ts, index: r.x, key: Buffer.from(r.k, "hex"), id: r.d });
+          rows.push({ ts: r.ts, index: r.x, key: Buffer.from(r.k, "hex"), table: r.tb, id: r.d });
         }
       } finally {
         await cursor.close();
@@ -667,7 +667,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       let commits = 0;
       let lastTs = -1n;
       const cursor = this.docsMajority
-        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, t: 1, i: 1, ts: 1, j: 1 } })
+        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, t: 1, i: 1, ts: 1, j: 1, p: 1 } })
         .sort({ ts: 1 })
         .batchSize(Math.min(Math.max(limit * 4 + 1, 101), 10_000));
       try {
@@ -678,7 +678,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             commits++;
             lastTs = r.ts;
           }
-          out.push({ ts: r.ts, table: r.t, id: r.i, deleted: r.j === null });
+          out.push({ ts: r.ts, table: r.t, id: r.i, deleted: r.j === null, prevTs: r.p });
         }
       } finally {
         await cursor.close();
@@ -691,6 +691,21 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   private async assertEpoch() {
     const lease = await this.read(() => this.meta.findOne({ _id: "lease" }));
     if (!this.epoch || lease === null || Number(lease.epoch) !== this.epoch) throw new LeaseLostError();
+  }
+
+  /** PERSIST-01 C17: index rows at their own ts, each replacing a row of the same key and ts (an upsert). */
+  async writeIndexEntries(entries: IndexEntryAt[]) {
+    if (!entries.length) return;
+    await this.assertEpoch();
+    await this.call(() =>
+      this.idx.bulkWrite(
+        entries.map((e) => {
+          const row: IdxRow = { x: e.index, k: hex(e.key), ts: e.ts, tb: e.table, d: e.id };
+          return { replaceOne: { filter: { x: row.x, k: row.k, ts: row.ts }, replacement: row, upsert: true } };
+        }),
+        { ordered: false, writeConcern: { w: "majority" } },
+      ),
+    );
   }
 
   /** PERSIST-01 C13. */

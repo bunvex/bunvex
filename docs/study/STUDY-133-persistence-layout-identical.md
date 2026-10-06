@@ -751,3 +751,30 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   patch 35 416 → 36 336 → 35 888, get 318 202 → 320 672 → 307 194, index range 6 696 → 6 880 → 6 544; SQLite
   insert 7 648 → 7 737 → 7 232, patch 5 632 → 5 528 → 5 240, get 108 237 → 106 472 → 104 949, index range
   792 → 808 → 834. SQLite writes lose ~6 % to text keys in place of integers; PR 3 replaces them with 16 bytes.
+
+### PR 3 — the persistence interface as Convex's (with PR 11's backfill)
+
+- `DocWrite {table, id, json, prevTs}` and `IndexWrite {index, key, table, id}`, as Convex's `DocumentLogEntry`
+  and `PersistenceIndexEntry`: `id` is the document's internal id (`internalIdOf`, a direct base32 → base64url
+  decode: 140 ns, against 820 ns through `decodeId`); `prevTs` is the ts of the version the transaction read,
+  set when the transaction is turned into writes; the write log keeps the documents' own ids for conflict
+  reports (`LoggedIndexWrite.docId`).
+- `scan(table, index, …)` returns each live entry's document at the entry's own ts (the exact-ts join, DV-67
+  reversed), with its ts; `scanDocs` is gone. `get` returns the version and its ts. The document log returns
+  `prevTs` (DV-66 built).
+- **The exact-ts join needs the backfill at each document's own ts** (an entry written by a chunk commit at a
+  new ts has no document version at that ts), so PR 11 (DV-127 reversed) is built here: `writeIndexEntries`
+  (PERSIST-01 C17) writes entries at past timestamps, outside any commit; the worker reads at the checkpoint's
+  snapshot and resumes there (it starts over at a new snapshot once retention has passed it). A mutation that
+  began before an index change and commits after it would leave the new index without its entries (Convex's
+  committer computes index writes with the latest registry; bunvex's transactions use the catalog they began
+  with): the commit that changes a table's `_index` rows logs a key on that table's `_tables` row, which every
+  mutation that used the table read, so such a mutation conflicts and runs again with the new catalog, which
+  is installed when that commit becomes visible.
+- Drivers keep their DDL with the new columns (`documents.prev_ts`, `indexes.table_id`) and text ids; PRs 4–7
+  give them Convex's. `LAYOUT_VERSION` is 4.
+- Tests: conformance K34 (`prev_ts`), K35 (the exact-ts join), K36 (`writeIndexEntries`), K30/K31 rewritten;
+  `persistence-interface.test.ts` (the `prev_ts` chain, the join, the backfill at each document's ts, the
+  conflict of a mutation older than an index). Sabotage: `prevTs: null` (red), the SQLite join by `ts >=` (red),
+  backfill entries at the snapshot (red), no catalog touches (red), memory log without `prevTs` (K34 red),
+  `insert or ignore` for entries (K36 red), Postgres entries without the fence (K36 red).

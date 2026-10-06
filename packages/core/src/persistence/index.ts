@@ -3,18 +3,31 @@
 // SQLite, and the external ones in @bunvex/persistence) implements exactly this, and must pass
 // @bunvex/persistence-conformance.
 
-/** One document version. `json === null` is a delete. */
 /**
  * A table's persistence id (Convex's `TabletId`): the internal id of its `_tables` document, as Convex prints it
  * (base64url without padding, 22 characters). An index's (`IndexId`) is its `_index` document's (STUDY-133 §5.1).
+ * A document's (`InternalId`) is the 16 bytes inside its id, printed the same way: persistence keys a
+ * document by (tablet, internal id), as Convex's `InternalDocumentId`; its `_id` is in its JSON.
  */
 export type TabletId = string;
 export type IndexId = string;
-export type DocWrite = { table: TabletId; id: string; json: string | null };
-/** A document version as `getVersions` returns it (PERSIST-01 C16): its JSON and the ts it was written at. */
+export type InternalId = string;
+/**
+ * One document version, as Convex's `DocumentLogEntry`: `json === null` is a delete; `prevTs` is the ts of the
+ * version it replaces (null for a new document), set by the committer.
+ */
+export type DocWrite = { table: TabletId; id: InternalId; json: string | null; prevTs: bigint | null };
+/** A document version as `get` and `getVersions` return it (PERSIST-01 C16): its JSON and the ts it was written at. */
 export type DocVersion = { json: string; ts: bigint } | null;
-/** One index entry version. `id === null` means the entry was removed. `key` is opaque (keyenc bytes). */
-export type IndexWrite = { index: IndexId; key: Uint8Array; id: string | null };
+/**
+ * One index entry version, as Convex's `PersistenceIndexEntry`: `id` (and `table`) null means the entry was
+ * removed. `key` is opaque (keyenc bytes).
+ */
+export type IndexWrite = { index: IndexId; key: Uint8Array; table: TabletId | null; id: InternalId | null };
+/** A live index entry and its document at the entry's own ts (PERSIST-01 C2/C6): what `scan` returns. */
+export type IndexedDoc = { id: InternalId; ts: bigint; json: string };
+/** An index entry at a past ts: an index backfill's, at its document version's own ts (PERSIST-01 C17). */
+export type IndexEntryAt = IndexWrite & { ts: bigint };
 /**
  * One commit of the store's log (PERSIST-01 C11): its ts, its index write set (as `apply` received it; the
  * order inside a commit is unspecified), and `prevTs`, the ts of the commit just before it in the log (0 if
@@ -27,25 +40,38 @@ export interface Persistence {
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]): void;
   /** Make every applied commit durable (one fsync for the whole group). May be async. */
   flush(): void | Promise<void>;
-  /** Index range [lo, hi) as of `ts`: live document ids, in byte order of the key (reversed if `desc`),
-   *  up to `limit`. Embedded drivers answer synchronously; remote ones return a promise. */
+  /**
+   * PERSIST-01 C17, an index backfill's write (Convex's `write_index_backfill`, `ConflictStrategy::Overwrite`):
+   * each entry at its own (past) ts, the ts of the document version it indexes, replacing an entry of the same
+   * index, key and ts. Not a commit: it is in no commit's log, and moves no durable prefix. Durable when it
+   * returns; only the lease holder writes (`LeaseLostError` otherwise).
+   */
+  writeIndexEntries(entries: IndexEntryAt[]): void | Promise<void>;
+  /**
+   * Index range [lo, hi) of `table`'s index as of `ts` (PERSIST-01 C2, C6): the newest entry of each key at or
+   * below `ts`, removed ones left out, in byte order of the key (reversed if `desc`), up to `limit`, each with
+   * its document at the entry's own ts, as Convex's `index_scan` (DV-67 reversed): an entry whose document is
+   * missing or deleted there rejects with `DanglingReferenceError` (C15). Embedded drivers answer
+   * synchronously; remote ones return a promise.
+   */
   scan(
+    table: TabletId,
     index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,
     limit: number,
     desc: boolean,
-  ): string[] | Promise<string[]>;
-  /** The document version visible at `ts` (JSON), or null. */
-  get(table: TabletId, id: string, ts: bigint): string | null | Promise<string | null>;
+  ): IndexedDoc[] | Promise<IndexedDoc[]>;
+  /** The document version visible at `ts` and its ts, or null (missing, or deleted at `ts`). */
+  get(table: TabletId, id: InternalId, ts: bigint): DocVersion | Promise<DocVersion>;
   /**
    * PERSIST-01 C16, document versions: for each id, the version of `(table, id)` visible at `ts` and the ts
    * it was written at, or null (missing, or deleted at `ts`); one answer per id, in order, duplicates
    * included. One round trip on a remote store. Optional for third-party drivers; every first-party driver
    * has it (streaming export's per-document timestamps, STUDY-69).
    */
-  getVersions?(table: TabletId, ids: string[], ts: bigint): DocVersion[] | Promise<DocVersion[]>;
+  getVersions?(table: TabletId, ids: InternalId[], ts: bigint): DocVersion[] | Promise<DocVersion[]>;
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): bigint | Promise<bigint>;
   /**
@@ -104,23 +130,23 @@ export const hasLease = (p: Persistence): p is Persistence & Lease =>
   typeof (p as Partial<Lease>).acquireLease === "function";
 
 /**
- * An index entry whose document does not exist at the snapshot read (PERSIST-01 C15): never written
- * (`deleted` false) or deleted while the entry stayed (`deleted` true). The engine writes an entry and its
- * document in the same commit, so this means a corrupt store; a read raises it instead of returning fewer
- * documents than the range holds, as Convex does ("Dangling index reference", "Index reference to
- * deleted document", crates/postgres/src/lib.rs).
+ * An index entry whose document is not there at the entry's ts (PERSIST-01 C15): no version of the document
+ * at that ts (`deleted` false) or a delete there (`deleted` true). The engine writes an entry and its document
+ * in the same commit, so this means a corrupt store; a read raises it instead of returning fewer documents than
+ * the range holds, as Convex does ("Dangling index reference", "Index reference to deleted document",
+ * crates/sqlite/src/lib.rs `index_scan_inner`).
  */
 export class DanglingReferenceError extends Error {
   constructor(
     readonly index: IndexId,
-    readonly id: string,
+    readonly id: InternalId,
     readonly ts: bigint,
     readonly deleted: boolean,
   ) {
     super(
       deleted
-        ? `Index reference to deleted document: index ${index} points to ${id}, deleted at snapshot ${ts}`
-        : `Dangling index reference: index ${index} points to ${id}, which does not exist at snapshot ${ts}`,
+        ? `Index reference to deleted document: index ${index} points to ${id}, deleted at ${ts}`
+        : `Dangling index reference: index ${index} points to ${id}, which has no version at ${ts}`,
     );
     this.name = "DanglingReferenceError";
   }
@@ -167,12 +193,12 @@ export class LeaseHeldError extends Error {
   }
 }
 
-/** One stored document version, as the document log returns it (PERSIST-01 C12). */
-export type DocLogRow = { ts: bigint; table: TabletId; id: string; deleted: boolean };
+/** One stored document version, as the document log returns it (PERSIST-01 C12): Convex's `DocumentLogEntry`. */
+export type DocLogRow = { ts: bigint; table: TabletId; id: InternalId; deleted: boolean; prevTs: bigint | null };
 /** A retention delete (PERSIST-01 C13): every stored version of one index key at or below `ts`. */
 export type IndexPrune = { index: IndexId; key: Uint8Array; ts: bigint };
 /** A retention delete (PERSIST-01 C13): every stored version of one document at or below `ts`. */
-export type DocPrune = { table: TabletId; id: string; ts: bigint };
+export type DocPrune = { table: TabletId; id: InternalId; ts: bigint };
 
 /**
  * What retention needs from a store (STUDY-33, Convex's `retention.rs`). Optional per driver: without it
@@ -198,20 +224,6 @@ export interface RetentionStore {
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
   typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
-/** Optional fast path: the documents for what `scan` would return, in one round trip (PERSIST-01 C6). An
- *  entry whose document does not exist at `ts` rejects with `DanglingReferenceError` (C15), never skipped. */
-export interface ScanDocs {
-  scanDocs(
-    table: TabletId,
-    index: IndexId,
-    lo: Uint8Array,
-    hi: Uint8Array,
-    ts: bigint,
-    limit: number,
-    desc: boolean,
-  ): Promise<string[]>;
-}
-
 export { opaqueToInspect } from "../inspect.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export {
@@ -226,6 +238,6 @@ export {
 } from "./layout.ts";
 export { groupLog, type LogRow } from "./log.ts";
 export { retryOnce, UnsureCommitError } from "./retry.ts";
-export { type IndexRow, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
+export { type IndexRow, type LiveEntry, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";
 export { DatabaseTimeoutError, renewTimeoutMs, withTimeout } from "./timeout.ts";

@@ -90,6 +90,6 @@ export async function hasLogIndex() {
 /** K25: an index row above the durable prefix, written behind the driver's back. */
 export async function strayLogRow(ts: bigint) {
   const sql = postgres(process.env.PG_URL!, { max: 1, onnotice: () => {} });
-  await sql`insert into indexes values (960, '\\xff'::bytea, null, ''::bytea, ${String(ts)}::bigint, false, 'stray')`;
+  await sql`insert into indexes values ('960', '\\xff'::bytea, null, ''::bytea, ${String(ts)}::bigint, false, null, 'stray')`;
   await sql.end();
 }

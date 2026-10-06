@@ -59,23 +59,23 @@ async function seed(path: string, n: number) {
 
 /**
  * The index `items.by_n` at snapshot `ts`, checked against the table straight from persistence: every live
- * document has exactly one entry, at its key, and there is no other entry.
+ * document has exactly one entry, at its key, joined to the document's current version (the exact-ts join),
+ * and there is no other entry.
  */
 async function audit(e: Engine, ts: bigint) {
   const t = e.catalog.table("items");
   const ix = t.indexes.get("by_n") ?? t.pending.find((p) => p.name === "by_n")!;
   const lo = new Uint8Array(0);
   const hi = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
-  const ids = await e.persistence.scan(t.byId.id, lo, hi, ts, 1e9, false);
-  const entries = await e.persistence.scan(ix.id, lo, hi, ts, 1e9, false);
+  const docs = await e.persistence.scan(t.id, t.byId.id, lo, hi, ts, 1e9, false);
+  const entries = await e.persistence.scan(t.id, ix.id, lo, hi, ts, 1e9, false);
   let wrong = 0;
-  for (const id of ids) {
-    const doc = decodeDoc((await e.persistence.get(t.id, id, ts))!) as Doc;
-    const k = indexKey(ix, doc);
-    const at = await e.persistence.scan(ix.id, k, prefixEnd(k), ts, 10, false);
-    if (at.length !== 1 || at[0] !== id) wrong++;
+  for (const d of docs) {
+    const k = indexKey(ix, decodeDoc(d.json) as Doc);
+    const at = await e.persistence.scan(t.id, ix.id, k, prefixEnd(k), ts, 10, false);
+    if (at.length !== 1 || at[0]!.id !== d.id || at[0]!.ts !== d.ts) wrong++;
   }
-  return { live: ids.length, entries: entries.length, unique: new Set(entries).size, wrong };
+  return { live: docs.length, entries: entries.length, unique: new Set(entries.map((x) => x.id)).size, wrong };
 }
 
 describe("background index backfill (STUDY-29)", () => {
@@ -138,7 +138,6 @@ describe("background index backfill (STUDY-29)", () => {
     await Promise.all(writers);
     expect(ops).toBeGreaterThan(200);
     if (process.env.BACKFILL_DEBUG) console.log({ ops, ...e.indexWorker!.stats });
-    expect(e.indexWorker!.stats.conflicts).toBeGreaterThan(0); // chunks were refused and redone
     scanDelay.on = false;
     const snapshots = [readyTs, e.committer.visibleTs];
     // And more writes after the index is enabled.

@@ -62,7 +62,7 @@ export async function hasLogIndex() {
 }
 /** K25: an index row above the durable prefix, written behind the driver's back. */
 export async function strayLogRow(ts: bigint) {
-  await raw((db) => db.collection("indexes").insertOne({ x: 960, k: "ff", ts, d: "stray" }));
+  await raw((db) => db.collection("indexes").insertOne({ x: "960", k: "ff", ts, tb: null, d: "stray" }));
 }
 
 // K22: the version record is the `meta` document {_id: "layout"}, read and written here behind the driver's back.

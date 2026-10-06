@@ -19,8 +19,16 @@ const T2 = T1 + 1n;
 export async function nanosecondChecks(mod: DriverModule, check: Check) {
   const write = (await mod.open(true)) as Persistence;
   if (hasLease(write)) await write.acquireLease({ holder: "k33", ttlMs: 60_000 });
-  write.apply(T1, [{ table: TABLE, id: "a", json: `{"v":1}` }], [{ index: INDEX, key: encodeKey(["a"]), id: "a" }]);
-  write.apply(T2, [{ table: TABLE, id: "a", json: `{"v":2}` }], [{ index: INDEX, key: encodeKey(["b"]), id: "a" }]);
+  write.apply(
+    T1,
+    [{ table: TABLE, id: "a", json: `{"v":1}`, prevTs: null }],
+    [{ index: INDEX, key: encodeKey(["a"]), table: TABLE, id: "a" }],
+  );
+  write.apply(
+    T2,
+    [{ table: TABLE, id: "a", json: `{"v":2}`, prevTs: T1 }],
+    [{ index: INDEX, key: encodeKey(["b"]), table: TABLE, id: "a" }],
+  );
   await write.flush();
   if (hasLease(write)) await write.releaseLease();
   await write.close();
@@ -29,8 +37,9 @@ export async function nanosecondChecks(mod: DriverModule, check: Check) {
   try {
     check((await st.maxTs?.()) === T2, `K33 maxTs is the last commit's exact ns (${T2})`);
     check(
-      (await st.get(TABLE, "a", T1)) === `{"v":1}` &&
-        (await st.get(TABLE, "a", T2)) === `{"v":2}` &&
+      (await st.get(TABLE, "a", T1))?.json === `{"v":1}` &&
+        (await st.get(TABLE, "a", T2))?.json === `{"v":2}` &&
+        (await st.get(TABLE, "a", T2))?.ts === T2 &&
         (await st.get(TABLE, "a", T1 - 1n)) === null,
       "K33 get at T1, T1 + 1ns and T1 - 1ns sees three different states",
     );
@@ -39,9 +48,18 @@ export async function nanosecondChecks(mod: DriverModule, check: Check) {
       const [v2] = await st.getVersions(TABLE, ["a"], T2);
       check(v1?.ts === T1 && v2?.ts === T2, "K33 getVersions returns each version's exact ns");
     }
-    const at1 = await st.scan(INDEX, FULL_LO, FULL_HI, T1, 10, false);
-    const at2 = await st.scan(INDEX, FULL_LO, FULL_HI, T2, 10, false);
-    check(at1.length === 1 && at2.length === 2, "K33 scan at T1 and T1 + 1ns sees one and two entries");
+    const at1 = await st.scan(TABLE, INDEX, FULL_LO, FULL_HI, T1, 10, false);
+    const at2 = await st.scan(TABLE, INDEX, FULL_LO, FULL_HI, T2, 10, false);
+    // The exact-ts join: entry `a` (written at T1) joins the version at T1, entry `b` the version at T2.
+    check(
+      at1.length === 1 &&
+        at2.length === 2 &&
+        at2[0]!.ts === T1 &&
+        at2[0]!.json === `{"v":1}` &&
+        at2[1]!.ts === T2 &&
+        at2[1]!.json === `{"v":2}`,
+      "K33 scan at T1 and T1 + 1ns sees one and two entries, each joined at its own exact ns",
+    );
     if (st.readLog) {
       const log = await st.readLog(T1 - 1n, T2, 10);
       check(

@@ -45,7 +45,7 @@ async function tsZeroRows(p: MemoryPersistence) {
   const out: { table: string; row: Row }[] = [];
   for (const r of p.readDocumentLog(-1n, 0n, 10)) {
     expect(r.ts).toBe(0n);
-    out.push({ table: r.table, row: decodeDoc((await p.get(r.table, r.id, 0n))!) as Row });
+    out.push({ table: r.table, row: decodeDoc((await p.get(r.table, r.id, 0n))!.json) as Row });
   }
   return out.sort((a, b) => a.row._creationTime - b.row._creationTime);
 }

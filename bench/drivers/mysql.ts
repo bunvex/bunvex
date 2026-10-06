@@ -102,6 +102,6 @@ export async function hasLogIndex() {
 /** K25: an index row above the durable prefix, written behind the driver's back. */
 export async function strayLogRow(ts: bigint) {
   const c = await mysql.createConnection(process.env.MYSQL_URL!);
-  await c.query(`insert into indexes values (960, x'ff', null, x'', ?, false, 'stray')`, [ts]);
+  await c.query(`insert into indexes values ('960', x'ff', null, x'', ?, false, null, 'stray')`, [ts]);
   await c.end();
 }

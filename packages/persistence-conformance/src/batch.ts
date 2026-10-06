@@ -87,7 +87,7 @@ function recording(inner: Persistence, inject: (n: number) => "before" | "after"
 async function itemsAt(e: Engine, ts: bigint) {
   const items = e.catalog.table("items");
   const ix = [...items.indexes.values()][0].id;
-  return (await e.persistence.scan(ix, FULL_LO, FULL_HI, ts, 10_000_000, false)).length;
+  return (await e.persistence.scan(items.id, ix, FULL_LO, FULL_HI, ts, 10_000_000, false)).length;
 }
 
 export async function batchChecks(
@@ -218,7 +218,7 @@ export async function batchChecks(
     const items = e.catalog.table("items");
     const counts: number[] = [];
     for (const ix of items.indexes.values())
-      counts.push((await st.scan(ix.id, FULL_LO, FULL_HI, M, 10_000_000, false)).length);
+      counts.push((await st.scan(items.id, ix.id, FULL_LO, FULL_HI, M, 10_000_000, false)).length);
     const live = st.auditLiveDocs ? Number(await st.auditLiveDocs(items.id, M)) : counts[0];
     if (new Set([...counts, live]).size !== 1) {
       log(`  K26 kill ${k}: live docs ${live}, index entries ${JSON.stringify(counts)} (torn commit)`);

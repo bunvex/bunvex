@@ -21,10 +21,11 @@ async function trial(open: () => Promise<Persistence>, drop: (p: Persistence) =>
       table: tid(1),
       id: `d${(c * 10 + i) % 50_000}`,
       json: `{"c":${c}}`,
+      prevTs: null,
     }));
     const idx = docs.flatMap((d) => [
-      { index: tid(1), key: encodeKey([d.id]), id: d.id },
-      { index: tid(2), key: encodeKey([c % 997, d.id]), id: d.id },
+      { index: tid(1), key: encodeKey([d.id]), table: tid(1), id: d.id },
+      { index: tid(2), key: encodeKey([c % 997, d.id]), table: tid(1), id: d.id },
     ]);
     p.apply(BigInt(c), docs, idx);
     if (c % 50 === 0) await p.flush();

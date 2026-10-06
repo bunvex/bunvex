@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { OutOfRetentionError } from "../src/committer.ts";
 import { Engine } from "../src/engine.ts";
+import { internalIdOf } from "../src/internal-id.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { tsGlobal } from "../src/persistence-globals.ts";
@@ -159,7 +160,7 @@ describe("retention", () => {
     const get = p.get.bind(p);
     let held = false;
     p.get = ((table: string, docId: string, ts: bigint) => {
-      if (docId !== id || held) return get(table, docId, ts);
+      if (docId !== internalIdOf(id) || held) return get(table, docId, ts); // the store keys documents by internal id
       held = true;
       entered();
       return gate.then(() => get(table, docId, ts));
