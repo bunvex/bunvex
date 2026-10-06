@@ -85,7 +85,7 @@ The series (31 families, all prefixed `bunvex_`):
 | Committer | `database_commits_total`, `database_commit_conflicts_total`, `database_commit_groups_total`, `database_write_batch_commits` (histogram, as Convex's), `database_commit_persistence_write_seconds` (histogram, as Convex's: one flush, retries included), `database_visible_ts_seconds`, `query_cache_hits_total`, `query_cache_misses_total` |
 | Sync | `sync_sessions`, `sync_subscriptions`, `sync_subscription_invalidations_total`, `sync_transitions_total`, `sync_query_executions_total`, `sync_query_reused_total`, and Convex's four histograms: `sync_query_modification_args_bytes`, `sync_mutation_args_bytes`, `sync_action_args_bytes`, `sync_transition_message_size_bytes` |
 | Scheduler | `scheduled_job_running_jobs`, `scheduled_job_backlog_seconds` (Convex's name: the age of the oldest runnable job), `scheduled_job_result_total{result}` |
-| Search | `search_indexes{kind,state}` (text/vector × ready/backfilling/bootstrapping), `search_indexes_restored_total` (restored from their persisted segments at start, STUDY-111) |
+| Search | `search_indexes{kind,state}` (text/vector × ready/backfilling/bootstrapping), `search_indexes_restored_total` |
 | Process | `process_resident_memory_bytes`, `process_heap_bytes`, `process_event_loop_lag_seconds` (an unref'd 500 ms probe; Bun's `monitorEventLoopDelay` misses blocked loops), `process_start_time_seconds` |
 
 The argument sizes are the arguments' JSON bytes (`Buffer.byteLength(JSON.stringify(args))`), recorded when
