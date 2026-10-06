@@ -10,6 +10,7 @@ import {
   isStopped,
   OccError,
   readBackendState,
+  SPAN_KIND,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -228,7 +229,16 @@ export class CronJobExecutor {
     return now !== null && stringifyValue(now as never) === stringifyValue(job as never);
   }
 
-  private async execute(job: CronJob) {
+  /** Traced (STUDY-131 AD-26), each run is a `cron/run` trace of its own, its function's execution under it. */
+  private execute(job: CronJob): Promise<void> {
+    const tracer = this.engine.tracer;
+    if (!tracer.on) return this.executeJob(job);
+    const span = tracer.root("cron/run", SPAN_KIND.consumer);
+    span?.set("bunvex.cron.name", job.name).set("bunvex.function.path", job.cronSpec.udfPath);
+    return tracer.within(span, () => this.executeJob(job)).finally(() => span?.finish());
+  }
+
+  private async executeJob(job: CronJob) {
     for (let failures = 0; ; failures++) {
       try {
         if (job.state.type === "inProgress") return await this.finishCutShort(job);

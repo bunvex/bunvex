@@ -1,0 +1,17 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a schema (one table, an index, a search index), a daily cron, two scheduled functions, one file and an environment variable",
+  "table": "_udf_config",
+  "rows": [
+    {
+      "_creationTime": 1791234000229.0664,
+      "_id": "gr2fsxgxwcacwngrqn1hdx66018fqsxd",
+      "importPhaseRngSeed": {
+        "$bytes": "G6DnU5V40KFBl16Ja21vfzfBJQE5syFgCCtX7lPgjJI="
+      },
+      "importPhaseUnixTimestamp": {
+        "$integer": "0GEHMNW92xg="
+      },
+      "serverVersion": "1.46.0"
+    }
+  ]
+}

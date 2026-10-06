@@ -39,7 +39,7 @@ import { ThemeProvider } from "@bunvex/ui/theme";
 - **A new data source** implements `DashboardDataSource` (`@bunvex/dashboard/data-source`) and should pass
   `describeDataSourceContract` from `@bunvex/dashboard/contract` in its tests. Only the core methods are
   required; every other area (writes, the runner, deployment, state, metrics, snapshots, auth, auth admin,
-  topology, system tables) is optional, detected with `typeof`, and a screen or action without its method says so or
+  topology, subscriptions, system tables) is optional, detected with `typeof`, and a screen or action without its method says so or
   hides itself (UI-01 §0).
 
 ## Extensions

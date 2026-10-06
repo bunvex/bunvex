@@ -85,16 +85,28 @@ describe("bunvex admin-key", () => {
     expect(await main(["admin-key"], none.it)).toBe(1);
     expect(none.err[0]).toMatch(/no instance secret/);
     const bad = io({});
-    expect(await main(["admin-key", "--nope"], bad.it)).toBe(2);
-    expect(bad.err[0]).toMatch(/unknown option --nope/);
+    // Argument errors as Convex's commander prints them (STUDY-124): `error: …`, exit 1.
+    expect(await main(["admin-key", "--sytem"], bad.it)).toBe(1);
+    expect(bad.err).toEqual(["error: unknown option '--sytem'\n(Did you mean --system?)"]);
     const missing = io({});
-    expect(await main(["admin-key", "--instance-name"], missing.it)).toBe(2);
-    expect(missing.err[0]).toMatch(/--instance-name needs a value/);
+    expect(await main(["admin-key", "--instance-name"], missing.it)).toBe(1);
+    expect(missing.err).toEqual(["error: option '--instance-name <name>' argument missing"]);
     const both = io({});
-    expect(await main(["admin-key", "--read-only", "--system"], both.it)).toBe(2);
+    expect(await main(["admin-key", "--read-only", "--system"], both.it)).toBe(1);
+    expect(both.err).toEqual(["error: option '--system' cannot be used with option '--read-only'"]);
+    // An unknown command: the program's help after it, as Convex's (`showHelpAfterError`).
     const unknown = io({});
-    expect(await main(["nope"], unknown.it)).toBe(2);
-    expect(unknown.err[0]).toMatch(/unknown command nope/);
+    expect(await main(["nope"], unknown.it)).toBe(1);
+    expect(unknown.err[0]).toBe("error: unknown command 'nope'");
+    expect(unknown.err[1]).toBe("");
+    expect(unknown.err[2]).toStartWith("Usage: bunvex <command> [options]");
+    const typo = io({});
+    expect(await main(["deplyo"], typo.it)).toBe(1);
+    expect(typo.err[0]).toBe("error: unknown command 'deplyo'\n(Did you mean deploy?)");
+    const nothing = io({});
+    expect(await main([], nothing.it)).toBe(1);
+    expect(nothing.out).toEqual([]);
+    expect(nothing.err[0]).toStartWith("Usage: bunvex <command> [options]");
     const help = io({});
     expect(await main(["admin-key", "--help"], help.it)).toBe(0);
     expect(help.out[0]).toMatch(/^Usage: bunvex admin-key/);

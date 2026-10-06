@@ -154,14 +154,25 @@ test("vector indexes in the schema JSON: staged apart, filter fields sorted, rou
   const json = schemaToJson(schema);
   expect(json.tables[0]).toMatchObject({
     vectorIndexes: [
-      { indexDescriptor: "by_embedding", vectorField: "embedding", dimensions: 3, filterFields: ["kind", "lang"] },
+      {
+        indexDescriptor: "by_embedding",
+        vectorField: "embedding",
+        dimensions: 3,
+        dimension: null,
+        filterFields: ["kind", "lang"],
+      },
     ],
-    stagedVectorIndexes: [{ indexDescriptor: "staged", vectorField: "other", dimensions: 2, filterFields: [] }],
+    stagedVectorIndexes: [
+      { indexDescriptor: "staged", vectorField: "other", dimensions: 2, dimension: null, filterFields: [] },
+    ],
   });
   const back = schemaFromJson(json);
   expect(back.tables.get("docs")!.stagedVector).toEqual(["staged"]);
   expect(back.tables.get("docs")!.vectorIndexes!.by_embedding!.dimensions).toBe(3);
   expect(schemaToJson(back)).toEqual(json);
-  // A table without vector indexes has no such keys, as Convex's optional fields.
-  expect("vectorIndexes" in schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]!).toBe(false);
+  // A table without vector indexes has empty lists, as Convex's export writes them.
+  expect(schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]).toMatchObject({
+    vectorIndexes: [],
+    stagedVectorIndexes: [],
+  });
 });

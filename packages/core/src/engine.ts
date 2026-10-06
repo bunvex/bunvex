@@ -13,7 +13,7 @@ import {
   type Value,
   v,
 } from "@bunvex/values";
-import { BackendStateCache } from "./backend-state.ts";
+import { BackendStateCache, initializeBackendState } from "./backend-state.ts";
 import {
   AUTH_TABLE,
   activeTables,
@@ -33,8 +33,10 @@ import {
   databaseIndexRows,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   finishCatalog,
+  HIDDEN_TABLE_PLACEHOLDER,
   hasChanges,
   hasFinishChanges,
   INDEX_BACKFILLS_INDEX,
@@ -53,16 +55,20 @@ import {
   LOG_SINKS_TABLE,
   MODULES_TABLE,
   NEXT_PERSISTENCE_INDEX_ID_TABLE,
+  NEXT_TABLET_ID_TABLE,
   planCatalog,
-  SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
+  SCHEMA_VALIDATION_PROGRESS_TABLE,
+  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SESSION_REQUESTS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
-  STORAGE_DELETIONS_TABLE,
-  STORAGE_TABLE,
   TABLES_TABLE,
   type TableMeta,
+  tableMeta,
+  tableRow,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
   vectorIndexesUnavailable,
@@ -108,9 +114,16 @@ import {
   LeaseLostError,
   type Persistence,
 } from "./persistence/index.ts";
-import { type CachedResult, MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+import {
+  type CachedResult,
+  MAX_CACHE_AGE_MS,
+  type MissReason,
+  QUERY_CACHE_MAX_BYTES,
+  QueryCache,
+} from "./query-cache.ts";
 import { Retention, type RetentionOptions } from "./retention.ts";
-import { SCHEDULED_FUNCTIONS_INDEXES } from "./scheduled-jobs.ts";
+import { type Runtime, realRuntime } from "./runtime.ts";
+import { SCHEDULED_JOBS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
   type Doc,
@@ -121,7 +134,23 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
-import { type SchemaJson, schemaFromJson, schemaKey, schemaToJson } from "./schema-json.ts";
+import {
+  type SchemaJson,
+  schemaFailureOf,
+  schemaFromJson,
+  schemaJsonText,
+  schemaKey,
+  schemaStateOf,
+  schemaToJson,
+} from "./schema-json.ts";
+import {
+  deleteValidationsForSchema,
+  markValidationValid,
+  progressThreshold,
+  recordValidationProgress,
+  resetSchemaValidations,
+  startTableValidation,
+} from "./schema-validations.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
   canPersistSegments,
@@ -135,6 +164,7 @@ import {
   type SearchSegmentStore,
   SearchSegmentsState,
   type SearchWorkerOptions,
+  SegmentFiles,
   SegmentReplay,
   sameSpec,
   searchCompactionFromEnv,
@@ -160,6 +190,8 @@ import {
   SummaryCheckpointer,
   type SummaryCheckpointOptions,
 } from "./table-summary-checkpoint.ts";
+import { readNextTablet, writeNextTablet } from "./tablet-ids.ts";
+import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
 import { decodeDoc, Tx } from "./tx.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
@@ -250,7 +282,11 @@ export type CallRequest = {
   /** The scheduled function this execution belongs to, if any. */
   scheduledFunctionId: string | null;
 };
-export type Caller = { identity: unknown; key: string; request?: CallRequest };
+/**
+ * Who runs a transaction. `systemIdentity`: an admin or the system acting as itself, not as a user (Convex's
+ * `identity.is_admin() || identity.is_system()`): only it reaches the `_system/` functions.
+ */
+export type Caller = { identity: unknown; key: string; request?: CallRequest; systemIdentity?: boolean };
 const ANONYMOUS: Caller = { identity: null, key: "" };
 /** Separates a cache key from its identity part; `*` is the identity-free entry. */
 const ID_SEP = "\u0001";
@@ -310,12 +346,38 @@ export class Engine {
    * `log_mutation_occ_error` with `will_retry` (STUDY-47).
    */
   onOccRetry: ((error: OccError, failures: number) => void) | null = null;
+  /** The clock and timers (STUDY-132): `opts.runtime`, else the process's. */
+  readonly runtime: Runtime;
+
+  private tracerOf: Tracer = NO_TRACER;
+  /**
+   * Where spans go (STUDY-131 AD-26): `NO_TRACER` unless the server configured an exporter. A traced
+   * transaction reports its index reads under the current span, and a traced mutation its commit.
+   */
+  get tracer(): Tracer {
+    return this.tracerOf;
+  }
+  set tracer(t: Tracer) {
+    this.tracerOf = t;
+    this.committer.traced = t.on;
+  }
+
+  /** The index reads of a transaction run under the current span, if one is current. */
+  private indexSpansOf(tx: Tx) {
+    const parent = this.tracerOf.current();
+    if (parent) tx.indexSpans = new IndexReadSpans(parent);
+  }
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
     public schema: SchemaDefinition,
     readonly persistence: Persistence,
     private opts: {
+      /**
+       * The clock and timers the engine and the server on it use (STUDY-132): the process's own by default; a
+       * test passes a `TestRuntime` (`@bunvex/core/test-runtime`) to move the time itself.
+       */
+      runtime?: Runtime;
       /** The query cache's byte budget (default: UDF_CACHE_MAX_SIZE from the environment, else 100 MiB). */
       cacheMaxBytes?: number;
       /** The wall clock (ms) the query cache ages results that read the clock by; tests move it. */
@@ -357,6 +419,11 @@ export class Engine {
        * indexes are in memory only, read from their tables at every start.
        */
       searchStorage?: SearchSegmentStore;
+      /**
+       * Where segments are cached as local files to be read from disk (memory-mapped) when the store does not
+       * keep them as local files itself (S3). With neither, segments are held in memory (STUDY-111 PR 9).
+       */
+      searchCacheDir?: string;
       /** The memory parts' flush thresholds (default: SEARCH_INDEX_SIZE_SOFT_LIMIT / VECTOR_INDEX_SIZE_SOFT_LIMIT). */
       searchSegmentLimits?: Partial<SearchSegmentLimits>;
       /** The compactor's thresholds (default: Convex's, from MIN_COMPACTION_SEGMENTS and the others). */
@@ -381,6 +448,7 @@ export class Engine {
       writeThroughput?: WriteThroughputOptions;
     } = {},
   ) {
+    this.runtime = opts.runtime ?? realRuntime;
     installDeterminism();
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
@@ -423,7 +491,7 @@ export class Engine {
     // A deployable deployment's schema is the last one pushed (STUDY-35): read before reconciling, or the
     // constructor's (empty) schema would drop every index.
     if (this.opts.storedSchema) {
-      const active = (await readSystemRows(this.persistence, SCHEMAS_TABLE)).find((r) => r.state === "active");
+      const active = (await readSystemRows(this.persistence, SCHEMAS_TABLE)).find((r) => schemaStateOf(r) === "active");
       if (active) {
         this.schema = schemaFromJson(JSON.parse(active.schema as string) as SchemaJson);
         this.installValidators(this.schema);
@@ -441,9 +509,12 @@ export class Engine {
     void Promise.allSettled([...this.searchBackfills]).then(() => {
       this.segmentReplay = null;
     });
+    // The run state's one document, as Convex writes it with the table at the store's first start (`running`).
+    await this.runMutation((db) => initializeBackendState(db), true);
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     await this.loadDatabaseGlobals();
+    if (this.opts.storedSchema) await this.resumePendingSchema();
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -650,20 +721,26 @@ export class Engine {
   private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       { name: INSTANCE_TABLE, indexes: {}, document: v.any() },
+      { name: NEXT_TABLET_ID_TABLE, indexes: {}, document: v.any() },
       { name: DATABASE_GLOBALS_TABLE, indexes: {}, document: v.any() },
       {
         name: SESSION_REQUESTS_TABLE,
         indexes: { [SESSION_REQUESTS_INDEX]: ["sessionId", "requestId"] },
         document: v.any(),
       },
-      { name: INDEX_BACKFILLS_TABLE, indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId"] }, document: v.any() },
+      {
+        name: INDEX_BACKFILLS_TABLE,
+        indexes: { [INDEX_BACKFILLS_INDEX]: ["indexId", "_creationTime"] },
+        document: v.any(),
+      },
+      { name: SCHEDULED_JOBS_TABLE, indexes: SCHEDULED_JOBS_INDEXES, document: v.any() },
+      { name: SCHEDULED_JOB_ARGS_TABLE, indexes: {}, document: v.any() },
       {
         name: INDEX_WORKER_METADATA_TABLE,
         indexes: { [INDEX_WORKER_METADATA_INDEX]: ["index_id"] },
         document: v.any(),
       },
       { name: NEXT_PERSISTENCE_INDEX_ID_TABLE, indexes: {}, document: v.any() },
-      { name: SCHEDULED_FUNCTIONS_TABLE, indexes: SCHEDULED_FUNCTIONS_INDEXES, document: v.any() },
       { name: CRON_JOBS_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       {
         name: CRON_NEXT_RUN_TABLE,
@@ -671,12 +748,21 @@ export class Engine {
         document: v.any(),
       },
       { name: CRON_JOB_LOGS_TABLE, indexes: { by_name_and_ts: ["name", "ts"] }, document: v.any() },
-      { name: STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
-      { name: STORAGE_DELETIONS_TABLE, indexes: {}, document: v.any() },
+      { name: FILE_STORAGE_TABLE, indexes: { by_storage_id: ["storageId"] }, document: v.any() },
       { name: MODULES_TABLE, indexes: { by_path: ["path"] }, document: v.any() },
       { name: SOURCE_PACKAGES_TABLE, indexes: {}, document: v.any() },
       { name: UDF_CONFIG_TABLE, indexes: {}, document: v.any() },
       { name: SCHEMAS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: SCHEMA_VALIDATIONS_TABLE,
+        indexes: { by_schema_id_and_table_name: ["schemaId", "tableName", "_creationTime"] },
+        document: v.any(),
+      },
+      {
+        name: SCHEMA_VALIDATION_PROGRESS_TABLE,
+        indexes: { by_validation_id: ["validationId", "_creationTime"] },
+        document: v.any(),
+      },
       { name: ENVIRONMENT_VARIABLES_TABLE, indexes: { by_name: ["name"] }, document: v.any() },
       { name: AUTH_TABLE, indexes: {}, document: v.any() },
       {
@@ -717,16 +803,25 @@ export class Engine {
    * backfill, finish it at once; otherwise the worker does once it is. Whether anything is backfilling.
    */
   private async reconcileCatalog(): Promise<boolean> {
-    // The stored catalog first, so the change below sees the system tables it reads (the index id allocator).
+    // The stored catalog first, so the change below sees the system tables it reads (the tablet and index id
+    // allocators).
     const stored = await this.runMutation((db) => readCatalog(db), true);
     this.catalog = buildCatalog(stored.tables, stored.indexes);
     let created: number[] = [];
     let { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
+      const changes = planCatalog(
+        this.declaredTables(),
+        current.tables,
+        current.indexes,
+        true,
+        current.nextIndexId,
+        current.nextTablet,
+      );
       created = changes.insertTables.map((t) => t.tablet);
       if (!hasChanges(changes)) return current;
-      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+      for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
+      await writeNextTablet(db, changes.nextTablet);
       for (const id of changes.deleteIndexes) {
         await db.delete(INDEX_TABLE, id);
       }
@@ -737,8 +832,10 @@ export class Engine {
     }, true);
     this.catalog = buildCatalog(tables, indexes);
     // The store's first start created the allocator's table in that commit: its counter is written now, with
-    // the ids that commit took (Convex writes it in its bootstrap).
+    // the tablets and the index ids that commit took (Convex writes its index id allocator in its bootstrap).
     await this.runMutation(async (db) => {
+      if ((await readNextTablet(db)) === undefined)
+        await writeNextTablet(db, Math.max(0, ...tables.map((t) => t.tablet)) + 1);
       if ((await readNextIndexId(db)) === undefined)
         await writeNextIndexId(db, Math.max(0, ...indexes.map((i) => i.indexId)) + 1);
     }, true);
@@ -936,6 +1033,10 @@ export class Engine {
     const store = canPersistSegments(p) ? p : null;
     const blobs = store ? (this.opts.searchStorage ?? null) : null;
     const state = new SearchSegmentsState(store, blobs, (writes) => this.writeIndexRows(writes));
+    if (blobs) {
+      const files = new SegmentFiles(blobs, this.opts.searchCacheDir ?? null);
+      if (files.enabled) state.files = files;
+    }
     state.load(
       await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
     );
@@ -1000,7 +1101,7 @@ export class Engine {
     // TooOld: a memory part with writes older than the checkpoint age is flushed.
     for (const [kind, e] of all) {
       const s = state.get(kind, e.tablet, e.name);
-      if (!e.ready || e.staged || !s || !e.index.changed.size) continue;
+      if (!e.ready || !s || !e.index.changed.size) continue;
       if (now - state.currentTs(s) >= w.maxCheckpointAgeMs * 1000) this.scheduleFlush(kind, e);
     }
     // Fast-forward, debounced.
@@ -1017,7 +1118,6 @@ export class Engine {
         const s = state.get(kind, e.tablet, e.name);
         return (
           e.ready &&
-          !e.staged &&
           s &&
           !s.backfill &&
           !e.index.changed.size &&
@@ -1080,6 +1180,17 @@ export class Engine {
     };
   }
 
+  /** Segments mapped from local files since the start (STUDY-111 PR 9; tests and measurements). */
+  get searchSegmentsMapped(): number {
+    return this.searchSegments?.files?.mapped ?? 0;
+  }
+
+  /** A segment just written, mapped from its local file when segments are read from disk (else null). */
+  private async mapSegment(key: string, bytes: Uint8Array): Promise<Uint8Array | null> {
+    const files = this.searchSegments?.files;
+    return files ? files.map(key, bytes) : null;
+  }
+
   /** The bytes a segment counts for (Convex's `size_bytes_total`, or vectors × dimensions × 4). */
   private segmentSize(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
     const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
@@ -1140,12 +1251,12 @@ export class Engine {
     const limits = this.segmentLimits;
     for (const t of tx.writtenTables()) {
       for (const e of this.searchIndexes.forTablet(t.id))
-        if (e.ready && !e.staged && e.index.memoryBytes >= limits.textHardLimitBytes) {
+        if (e.ready && e.index.memoryBytes >= limits.textHardLimitBytes) {
           this.scheduleFlush("text", e);
           throw indexTooLarge("text", `${e.table}.${e.name}`);
         }
       for (const e of this.vectorIndexes.forTablet(t.id))
-        if (e.ready && !e.staged && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
+        if (e.ready && e.index.memoryBytes >= limits.vectorHardLimitBytes) {
           this.scheduleFlush("vector", e);
           throw indexTooLarge("vector", `${e.table}.${e.name}`);
         }
@@ -1213,7 +1324,7 @@ export class Engine {
 
   private async flushLocked(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
     const state = this.searchSegments;
-    if (!state || e.staged || !this.isCurrent(kind, e)) return;
+    if (!state || !this.isCurrent(kind, e)) return;
     const ts = this.committer.visibleTs;
     // Prepared at once: the memory part and the deletes as of `ts`.
     const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
@@ -1222,6 +1333,8 @@ export class Engine {
     // Nothing to write: the ts moves by a fast-forward instead (`searchWorkersTick`), as Convex's.
     if (!f.segment && !f.deletes.length && before && !before.backfill) return;
     const added = f.segment ? await this.storeSegment(kind, e, f.segment) : null;
+    // Read from its file from now on, when segments are read from disk.
+    const mapped = added && f.segment ? await this.mapSegment(added.keys.segment, f.segment) : null;
     const deletes = await Promise.all(f.deletes.map((d) => state.blobs!.put(d.bytes)));
     const stored = await state.update(
       (states) => {
@@ -1238,7 +1351,7 @@ export class Engine {
           def: e.def,
           ts,
           segments: refs,
-          staged: false,
+          staged: e.staged,
         };
         states.set(stateKey(kind, e.tablet, e.name), s);
         return true;
@@ -1247,6 +1360,7 @@ export class Engine {
         f.deletes.forEach((d, i) => {
           d.part.keys = { segment: d.part.keys!.segment, deletes: deletes[i]! };
         });
+        if (mapped) f.segment = mapped;
         index.commitFlush(f, added?.keys);
       },
     );
@@ -1283,12 +1397,12 @@ export class Engine {
    * Convex's compactor for one index (STUDY-111 PR 5, `search_compactor.rs`): the segments
    * `segmentsToCompact` picks are merged into one of their live documents, built outside the index's lock; then,
    * under it, the deletes they got meanwhile (flushes' included) are carried into it and stored with it
-   * (Convex's writer `merge_deletes`), the state names it in their place, and their blobs are deleted. True when
+   * (Convex's writer `merge_deletes`), the state names it in their place; their blobs are kept (DV-370). True when
    * it compacted.
    */
   private async compactIndex(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): Promise<boolean> {
     const state = this.searchSegments;
-    if (!state || e.staged || !this.isCurrent(kind, e)) return false;
+    if (!state || !this.isCurrent(kind, e)) return false;
     const index = e.index as SearchIndexEntry["index"] & VectorIndexEntry["index"];
     const dims = kind === "vector" ? (e.def as { dimensions: number }).dimensions : 0;
     const candidates = index.segments.map((p) => ({
@@ -1307,6 +1421,8 @@ export class Engine {
       if (this.closed) throw new Error("the engine closed");
     });
     const segment = c.segment ? await state.blobs!.put(c.segment) : null;
+    const mapped = segment && c.segment ? await this.mapSegment(segment, c.segment) : null;
+    if (mapped) c.segment = mapped;
     await this.opts.beforeSearchCompactionCommit?.();
     return this.withIndexLock(e, async () => {
       if (this.closed || !this.isCurrent(kind, e) || chosen.some((p) => !index.segments.includes(p))) return false;
@@ -1454,6 +1570,7 @@ export class Engine {
         const bytes = index.buildSegment(docs);
         const deletes = index.changedDeletes();
         const added = bytes ? await this.storeSegment(kind, e, bytes) : null;
+        const mapped = added && bytes ? await this.mapSegment(added.keys.segment, bytes) : null;
         const deleteKeys = await Promise.all(deletes.map((d) => state.blobs!.put(d.bytes)));
         const stored = await state.update(
           (states) => {
@@ -1470,7 +1587,7 @@ export class Engine {
               def: e.def,
               ts,
               segments: refs,
-              staged: false,
+              staged: e.staged,
               ...(end ? {} : { backfill: { cursor: next } }),
             };
             states.set(stateKey(kind, e.tablet, e.name), s);
@@ -1481,7 +1598,7 @@ export class Engine {
               const part = d.part as { keys?: { segment: string; deletes: string | null } };
               part.keys = { segment: part.keys!.segment, deletes: deleteKeys[i]! };
             });
-            index.commitBackfill(bytes, deletes, ts, added?.keys);
+            index.commitBackfill(mapped ?? bytes, deletes, ts, added?.keys);
           },
         );
         // Not stored (the index was dropped meanwhile): what was written stays, as every search blob (DV-370).
@@ -1559,7 +1676,7 @@ export class Engine {
       ...this.vectorIndexes.all().map((e) => ["vector", e] as const),
     ];
     for (const [kind, e] of all) {
-      if (!e.ready || e.staged) continue;
+      if (!e.ready) continue;
       try {
         await this.flushIndex(kind, e);
       } catch (err) {
@@ -1599,7 +1716,7 @@ export class Engine {
         let changed = false;
         for (const [k, s] of states) {
           const w = wanted.get(k);
-          if (w && sameSpec(w[1].def, s.def) && !(w[1].staged && s.segments.length)) {
+          if (w && sameSpec(w[1].def, s.def)) {
             if (s.staged !== w[1].staged) {
               s.staged = w[1].staged;
               changed = true;
@@ -1645,7 +1762,7 @@ export class Engine {
         // since, are still this index.
         const before = states.get(k);
         if (before?.segments.length) return false;
-        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: false });
+        states.set(k, { kind, tablet: e.tablet, name: e.name, def: e.def, ts: 0, segments: [], staged: e.staged });
         return true;
       })
       .catch(() => {});
@@ -2021,52 +2138,142 @@ export class Engine {
     await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row && (row.state === "pending" || row.state === "validated"))
-          await db.patch(SCHEMAS_TABLE, schemaId, { state: "failed", error, tableName });
+        const state = schemaStateOf(row);
+        if (state === "pending" || state === "validated")
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "failed", error, table_name: tableName } });
+        await deleteValidationsForSchema(db, schemaId);
       },
       true,
       "schema_worker",
     );
   }
 
+  /** Check the stored documents against a pending schema in the background (`validateExisting`). */
+  private startValidation(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
+    this.validation = this.validateExisting(schemaId, schema, active).catch((e) =>
+      this.failSchemaPush(schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
+        () => {},
+      ),
+    );
+  }
+
+  /**
+   * At a start, as Convex's `reset_for_compatibility` then its `SchemaWorker` (STUDY-127): every validation
+   * attempt is deleted; a schema still `pending` is checked again from the beginning with new attempts, and
+   * writes are checked against a `pending` or `validated` schema meanwhile, as before the restart.
+   */
+  private async resumePendingSchema() {
+    const row = await this.runMutation(
+      async (db) => {
+        await resetSchemaValidations(db);
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        return (
+          rows.find((r) => {
+            const s = schemaStateOf(r);
+            return s === "pending" || s === "validated";
+          }) ?? null
+        );
+      },
+      true,
+      "init_app_system_tables",
+    );
+    if (!row) return;
+    const schema = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
+    this.pendingPush = { id: row._id as string, schema };
+    this.pendingValidators = validatorsOf(schema);
+    if (schemaStateOf(row) === "pending") this.startValidation(row._id as string, schema, this.schema);
+  }
+
+  /** A table's document count for a validation's progress, or null while the table summaries are built. */
+  private totalDocs(table: string): number | null {
+    if (!this.tableSummaries.ready) return null;
+    const t = this.catalog.tables.get(table);
+    return t ? this.tableSummaries.count(t.id) : 0;
+  }
+
   /**
    * Convex's `SchemaWorker`: walk every table whose validator the pushed schema changes (or adds) and check
    * each existing document; the first that does not match fails the schema
    * (`Document with ID "…" in table "…" does not match the schema: …`), else it becomes `validated`. Writes
-   * made meanwhile are checked as they commit (`pendingValidators`).
+   * made meanwhile are checked as they commit (`pendingValidators`). Each table walked has an attempt in
+   * `_schema_validations` and its counters in `_schema_validation_progress` (STUDY-127), flushed every 5 % of
+   * the table or 500 documents and when the table is done; an attempt gone (the schema failed or was
+   * overwritten) stops the walk.
    */
   private async validateExisting(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
     const stillPending = () => this.pendingPush?.id === schemaId;
+    const walk: { name: string; validator: GenericValidator }[] = [];
     if (schema.schemaValidation)
       for (const t of schema.tables.values()) {
         const validator = documentValidator(t.name, t.document);
         if (!validator) continue;
         const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
         if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
-        let cursor: string | null = null;
-        for (;;) {
-          if (!stillPending()) return;
-          const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
-          for (const doc of page.page) {
-            const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.byNumber(n)?.name);
-            if (msg) {
-              await this.failSchemaPush(
-                schemaId,
-                `Document with ID "${doc._id as string}" in table "${t.name}" does not match the schema: ${msg}`,
-                t.name,
-              );
-              return;
-            }
-          }
-          if (page.isDone) break;
-          cursor = page.continueCursor;
-        }
+        walk.push({ name: t.name, validator });
       }
+    if (!stillPending()) return;
+    // Convex's `SchemaValidationProgressTracker::new`: every attempt first, in one commit.
+    const attempts = await this.runMutation(
+      async (db) => {
+        const ids: string[] = [];
+        for (const t of walk) ids.push(await startTableValidation(db, schemaId, t.name, this.totalDocs(t.name)));
+        return ids;
+      },
+      true,
+      "schema_validation_tracker_initialized",
+    );
+    for (const [k, t] of walk.entries()) {
+      const attempt = attempts[k]!;
+      const threshold = progressThreshold(this.totalDocs(t.name));
+      let unflushed = 0;
+      // One flush at a time runs while the walk goes on; the next one waits for it, and stops the walk when it
+      // found the attempt gone (the walk was canceled).
+      let inFlight: Promise<boolean> = Promise.resolve(true);
+      /** Write the counted documents; false once the attempt is gone. */
+      const flush = async () => {
+        if (!(await inFlight)) return false;
+        const count = unflushed;
+        unflushed = 0;
+        inFlight = this.runMutation(
+          (db) => recordValidationProgress(db, attempt, count, this.totalDocs(t.name)),
+          true,
+          "schema_validation_progress_updated",
+        );
+        return true;
+      };
+      let cursor: string | null = null;
+      for (;;) {
+        if (!stillPending()) return;
+        const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
+        for (const doc of page.page) {
+          const msg = checkValue(t.validator, doc as unknown as Value, (n) => this.catalog.publicNameOf(n));
+          if (msg) {
+            await this.failSchemaPush(
+              schemaId,
+              `Document with ID "${doc._id as string}" in table "${t.name}" does not match the schema: ${msg}`,
+              t.name,
+            );
+            return;
+          }
+          if (++unflushed % threshold === 0 && !(await flush())) return;
+        }
+        if (page.isDone) break;
+        cursor = page.continueCursor;
+      }
+      if (!(await flush()) || !(await inFlight)) return;
+      const marked = await this.runMutation(
+        (db) => markValidationValid(db, attempt),
+        true,
+        "schema_validation_progress_finished",
+      );
+      if (!marked) return;
+    }
     if (!stillPending()) return;
     await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row?.state === "pending") await db.patch(SCHEMAS_TABLE, schemaId, { state: "validated" });
+        if (schemaStateOf(row) === "pending")
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "validated" } });
       },
       true,
       "schema_worker",
@@ -2085,8 +2292,16 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
-        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
-        for (const t of changes.insertTables) await db.insert(TABLES_TABLE, t);
+        const changes = planCatalog(
+          declared,
+          current.tables,
+          current.indexes,
+          true,
+          current.nextIndexId,
+          current.nextTablet,
+        );
+        for (const t of changes.insertTables) await db.insert(TABLES_TABLE, tableRow(t));
+        await writeNextTablet(db, changes.nextTablet);
         for (const id of changes.deleteIndexes) {
           await db.delete(INDEX_TABLE, id);
         }
@@ -2095,21 +2310,27 @@ export class Engine {
         await writeNextIndexId(db, changes.nextIndexId);
         // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
         // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
-        const json = schemaToJson(schema);
-        const key = schemaKey(json);
+        const key = schemaKey(schemaToJson(schema));
         const rows = await db.query(SCHEMAS_TABLE).collect();
         const same = (row: Record<string, unknown>) => schemaKey(JSON.parse(row.schema as string)) === key;
-        const active = rows.find((row) => row.state === "active");
-        const unfinished = rows.filter((row) => row.state === "pending" || row.state === "validated");
+        const active = rows.find((row) => schemaStateOf(row) === "active");
+        const unfinished = rows.filter((row) => {
+          const s = schemaStateOf(row);
+          return s === "pending" || s === "validated";
+        });
         let schemaId: string;
         let state = "pending" as "active" | "pending" | "validated";
         const reused = active && same(active) ? active : unfinished.find(same);
         for (const row of unfinished)
-          if (row !== reused) await db.patch(SCHEMAS_TABLE, row._id as string, { state: "overwritten" });
+          if (row !== reused) {
+            await db.patch(SCHEMAS_TABLE, row._id as string, { state: { state: "overwritten" } });
+            await deleteValidationsForSchema(db, row._id as string);
+          }
         if (reused) {
           schemaId = reused._id as string;
-          state = reused.state as typeof state;
-        } else schemaId = await db.insert(SCHEMAS_TABLE, { state: "pending", schema: JSON.stringify(json) });
+          state = schemaStateOf(reused) as typeof state;
+        } else
+          schemaId = await db.insert(SCHEMAS_TABLE, { state: { state: "pending" }, schema: schemaJsonText(schema) });
         const tableName = (tablet: number) =>
           current.tables.find((t) => t.tablet === tablet)?.name ??
           changes.insertTables.find((t) => t.tablet === tablet)?.name;
@@ -2132,11 +2353,7 @@ export class Engine {
     } else if (this.pendingPush?.id !== r.schemaId) {
       this.pendingPush = { id: r.schemaId, schema };
       this.pendingValidators = validatorsOf(schema);
-      this.validation = this.validateExisting(r.schemaId, schema, active).catch((e) =>
-        this.failSchemaPush(r.schemaId, `Schema validation failed: ${e instanceof Error ? e.message : e}`, null).catch(
-          () => {},
-        ),
-      );
+      this.startValidation(r.schemaId, schema, active);
     }
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
@@ -2157,13 +2374,14 @@ export class Engine {
     return this.query((db) =>
       db.asSystem(async () => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (!row || row.state === "overwritten") return { type: "raceDetected" as const };
-        if (row.state === "failed")
-          return { type: "failed" as const, error: row.error as string, tableName: (row.tableName as string) ?? null };
-        if (row.state === "active") return { type: "complete" as const };
-        const validated = row.state === "validated";
+        const state = schemaStateOf(row);
+        if (!row || state === "overwritten") return { type: "raceDetected" as const };
+        const failed = schemaFailureOf(row);
+        if (failed) return { type: "failed" as const, ...failed };
+        if (state === "active") return { type: "complete" as const };
+        const validated = state === "validated";
         const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
-        const tables = (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[];
+        const tables = (await db.query(TABLES_TABLE).collect()).map(tableMeta);
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
         // changes is there twice, the enabled one and the new one backfilling), staged ones skipped; complete
         // once not backfilling.
@@ -2208,11 +2426,12 @@ export class Engine {
     const r = await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-        if (row?.state === "failed")
-          throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${row.error as string}`);
-        if (!row || (row.state !== "pending" && row.state !== "validated" && row.state !== "active"))
+        const state = schemaStateOf(row);
+        const failed = schemaFailureOf(row);
+        if (failed) throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${failed.error}`);
+        if (!row || (state !== "pending" && state !== "validated" && state !== "active"))
           throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-        if (row.state === "pending")
+        if (state === "pending")
           throw new SchemaPushError(
             "SchemaNotReady",
             "The existing documents are still being checked against the schema.",
@@ -2227,10 +2446,11 @@ export class Engine {
         for (const i of f.disable)
           await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "backfilled", staged: true }));
         // Already active (a push of the same schema): Convex's `mark_active` does nothing.
-        if (row.state !== "active") {
+        if (state !== "active") {
           for (const old of await db.query(SCHEMAS_TABLE).collect())
-            if (old.state === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
-          await db.patch(SCHEMAS_TABLE, schemaId, { state: "active" });
+            if (schemaStateOf(old) === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
+          await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
+          await deleteValidationsForSchema(db, schemaId);
         }
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
@@ -2272,20 +2492,20 @@ export class Engine {
     const source = opts.copyIndexesOf ? this.catalog.tables.get(opts.copyIndexesOf) : undefined;
     const indexes: Record<string, string[]> = {};
     for (const ix of [...(source?.indexes.values() ?? []), ...(source?.pending ?? [])])
-      if (!(ix.name in SYSTEM_INDEXES))
-        indexes[ix.name] = ix.fields[ix.fields.length - 1] === "_creationTime" ? ix.fields.slice(0, -1) : ix.fields;
+      if (!(ix.name in SYSTEM_INDEXES)) indexes[ix.name] = ix.fields; // as they are: the placeholder adds nothing
     let def: TableDef | undefined;
     await this.runMutation(
       async (db) => {
-        const { tables, indexes: stored, nextIndexId } = await readCatalog(db);
+        const { tables, indexes: stored, nextTablet, nextIndexId } = await readCatalog(db);
         // A placeholder name: planCatalog then allocates a fresh tablet, number and index ids.
         // A system table's import (`_storage`) is not a user table (Convex checks the cap for user names only).
         const plan = planCatalog(
-          [{ name: `\u0000hidden`, indexes, document: v.any() }],
+          [{ name: HIDDEN_TABLE_PLACEHOLDER, indexes, document: v.any() }],
           tables,
           stored,
           !name.startsWith("_"),
           nextIndexId,
+          nextTablet,
         );
         const meta = plan.insertTables[0]!;
         if (opts.number !== undefined) {
@@ -2300,7 +2520,8 @@ export class Engine {
         }
         meta.name = name;
         meta.state = "hidden";
-        const metaId = await db.insert(TABLES_TABLE, meta);
+        const metaId = await db.insert(TABLES_TABLE, tableRow(meta));
+        await writeNextTablet(db, plan.nextTablet);
         for (const i of plan.insertIndexes)
           await db.insert(INDEX_TABLE, indexRow({ ...i, state: "enabled", staged: undefined }));
         await writeNextIndexId(db, plan.nextIndexId);
@@ -2565,6 +2786,7 @@ export class Engine {
     this.lastTx = tx;
     tx.retention = this.retention;
     tx.identity = caller.identity;
+    tx.systemIdentity = caller.systemIdentity === true;
     tx.request = caller.request ?? null;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
@@ -2574,6 +2796,7 @@ export class Engine {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
     }
+    if (this.tracerOf.on) this.indexSpansOf(tx);
     const observed: Observed = { time: false };
     // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
     const unpin = this.tableSummaries.pin(snapshot);
@@ -2581,6 +2804,7 @@ export class Engine {
       const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
       return { tx, value, observed, now };
     } finally {
+      tx.indexSpans?.finish();
       unpin();
     }
   }
@@ -2640,6 +2864,8 @@ export class Engine {
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
     // and found invalid is recomputed under the shared key, so callers of other identities wait for it.
     let hint: string | undefined;
+    // Why the result found was not served, for the miss's reason (STUDY-131 AD-25).
+    let dropped: MissReason | undefined;
     for (;;) {
       const found = this.cache.find(keys);
       const key = found?.key ?? hint ?? keys[0];
@@ -2655,8 +2881,12 @@ export class Engine {
           continue;
         }
         r = waited;
-      } else return this.runCached(body, ts, keys, key, e === undefined, companion, caller);
-      if (!this.stillValid(key, r, ts)) continue;
+      } else {
+        this.cache.noteMiss(keys, e === undefined ? dropped : "snapshot");
+        return this.runCached(body, ts, keys, key, e === undefined, companion, caller);
+      }
+      dropped = this.stillValid(key, r, ts);
+      if (dropped !== undefined) continue;
       this.stats.cacheHits++;
       companion?.replay(r.extra);
       return { json: r.json };
@@ -2724,16 +2954,21 @@ export class Engine {
    * checked and counts as changed), and a result that read the clock is not older than MAX_CACHE_AGE_MS.
    * An invalid result is dropped; a valid one is now known valid up to `ts`.
    */
-  private stillValid(key: string, r: CachedResult, ts: number): boolean {
-    if (ts < r.originalTs) return false;
-    let valid = !this.committer.changedBetween(r.reads, r.tokenTs, ts);
-    if (valid && r.observedTime) valid = Math.abs((this.opts.cacheClock ?? wallClock)() - r.unixMs) <= MAX_CACHE_AGE_MS;
-    if (!valid) this.cache.removeReady(key, r.originalTs);
+  private stillValid(key: string, r: CachedResult, ts: number): MissReason | undefined {
+    if (ts < r.originalTs) return "snapshot";
+    let why: MissReason | undefined = this.committer.changedBetween(r.reads, r.tokenTs, ts) ? "invalidated" : undefined;
+    if (
+      why === undefined &&
+      r.observedTime &&
+      Math.abs((this.opts.cacheClock ?? wallClock)() - r.unixMs) > MAX_CACHE_AGE_MS
+    )
+      why = "expired";
+    if (why !== undefined) this.cache.removeReady(key, r.originalTs);
     // A hit moves the entry's token to `ts`, so the next check only walks the commits after it: what
     // Convex's step 4 says a hit does ("this will bump the cache result's token"), though its guard only
     // writes back a fresh run's result (STUDY-08 §1.1). Not observable: the result is the same.
     else if (r.tokenTs < ts) r.tokenTs = ts;
-    return valid;
+    return why;
   }
 
   /**
@@ -2754,6 +2989,9 @@ export class Engine {
       journal: QueryJournal;
       /** Whether the run read the identity: its result is then the caller's alone. */
       identityObserved: boolean;
+      /** What it read (STUDY-131 AD-25). */
+      documentsRead: number;
+      bytesRead: number;
     }
   > {
     const snapshot = at === undefined ? this.committer.visibleTs : Math.min(at, this.committer.visibleTs);
@@ -2763,6 +3001,7 @@ export class Engine {
     tx.retention = this.retention;
     tx.cursorCodec = this.cursorCodecOf;
     tx.identity = caller.identity;
+    tx.systemIdentity = caller.systemIdentity === true;
     tx.searchIndexes = this.searchIndexes;
     tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
@@ -2774,7 +3013,10 @@ export class Engine {
       ts: snapshot,
       journal: { endCursor: tx.nextEndCursor },
       identityObserved: tx.identityObserved,
+      documentsRead: tx.usage.documentsRead,
+      bytesRead: tx.usage.bytesRead,
     });
+    if (this.tracerOf.on) this.indexSpansOf(tx);
     const unpin = this.tableSummaries.pin(snapshot); // as in execute()
     try {
       const observed: Observed = { time: false };
@@ -2783,6 +3025,7 @@ export class Engine {
     } catch (error) {
       return { ok: false, error, ...out() };
     } finally {
+      tx.indexSpans?.finish();
       unpin();
     }
   }
@@ -2897,7 +3140,7 @@ export class Engine {
       this.checkMemoryIndexSizes(tx);
       const { docs, idx } = tx.toWrites();
       try {
-        const ts = await this.committer.commit({
+        const pending: Parameters<Committer["commit"]>[0] = {
           snapshot: tx.snapshot,
           reads: tx.reads,
           docs,
@@ -2912,7 +3155,12 @@ export class Engine {
                 },
               }
             : {}),
-        });
+        };
+        if (this.tracerOf.on) {
+          const parent = this.tracerOf.current();
+          if (parent) pending.trace = new CommitSpans(parent, docs.length, idx.length);
+        }
+        const ts = await this.committer.commit(pending);
         const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
@@ -3022,8 +3270,9 @@ function deletionRefusal(schema: SchemaDefinition, table: string): string | null
 
 async function readCatalog(db: Tx) {
   return {
-    tables: (await db.query(TABLES_TABLE).collect()) as unknown as TableMeta[],
+    tables: (await db.query(TABLES_TABLE).collect()).map(tableMeta),
     indexes: databaseIndexRows(await db.query(INDEX_TABLE).collect()),
+    nextTablet: await readNextTablet(db),
     nextIndexId: await readNextIndexId(db),
   };
 }
