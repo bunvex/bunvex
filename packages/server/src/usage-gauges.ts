@@ -3,7 +3,7 @@
 // one and a half of it, the deployment's storage totals go to the log streams as a `current_storage_usage`
 // event, once the table summaries are built. Its usage events go nowhere in Convex's open-source backend;
 // the file storage total it keeps limits exports that include storage (1 TiB).
-import { type Engine, isReservedIndex, SCHEDULED_FUNCTIONS_TABLE, STORAGE_TABLE } from "@bunvex/core";
+import { type Engine, FILE_STORAGE_TABLE, isReservedIndex, SYSTEM_TO_VIRTUAL_TABLE } from "@bunvex/core";
 import type { LogEvent, StorageUsage } from "./log-events.ts";
 
 /** The deployment's storage, as Convex's `get_gauge_metrics` and `compute_totals` sum it. */
@@ -15,7 +15,10 @@ export async function storageUsage(engine: Engine): Promise<StorageUsage> {
   const system = { _storage: 0, _scheduled_functions: 0 };
   for (const t of engine.catalog.tables.values()) {
     const size = engine.tableSummaries.get(t.id).size;
-    if (t.name === STORAGE_TABLE || t.name === SCHEDULED_FUNCTIONS_TABLE) system[t.name] = size;
+    // A virtual table's documents are its system tables' (Convex's `virtual_tables` usage): `_storage` is
+    // `_file_storage`, `_scheduled_functions` is `_scheduled_jobs` and `_scheduled_job_args`.
+    const virtual = SYSTEM_TO_VIRTUAL_TABLE[t.name] as keyof typeof system | undefined;
+    if (virtual !== undefined) system[virtual] += size;
     if (t.name.startsWith("_")) continue;
     documentBytes += size;
     // Convex's approximation: each enabled (or backfilled staged) index of a user table costs the table's
@@ -40,14 +43,14 @@ export async function storageUsage(engine: Engine): Promise<StorageUsage> {
 
 /** Every stored file's size (Convex's `FileStorageSizeTracker`), at one snapshot, page by page. */
 async function fileStorageBytes(engine: Engine): Promise<number> {
-  if (!engine.catalog.tables.has(STORAGE_TABLE)) return 0;
+  if (!engine.catalog.tables.has(FILE_STORAGE_TABLE)) return 0;
   let total = 0;
   let cursor: string | null = null;
   for (;;) {
     const page = (await engine.query((db) =>
-      db.asSystem(() => db.query(STORAGE_TABLE).paginate({ numItems: 1000, cursor })),
+      db.asSystem(() => db.query(FILE_STORAGE_TABLE).paginate({ numItems: 1000, cursor })),
     )) as { page: { size?: unknown }[]; isDone: boolean; continueCursor: string };
-    for (const f of page.page) if (typeof f.size === "number") total += f.size;
+    for (const f of page.page) if (typeof f.size === "bigint") total += Number(f.size);
     if (page.isDone) return total;
     cursor = page.continueCursor;
   }

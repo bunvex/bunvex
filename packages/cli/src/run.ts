@@ -9,6 +9,15 @@ import { join, relative, sep } from "node:path";
 import { BunvexClient, type Logger } from "@bunvex/client";
 import { makeFunctionReference } from "@bunvex/protocol";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import {
+  argumentError,
+  conflictingOptions,
+  invalidChoice,
+  missingArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import { deployCommand, functionsDir } from "./deploy.ts";
 import { INLINE_QUERY_HELP, inlineQuerySource, runTestQuery, TestQueryRequestError } from "./inline-query.ts";
 import type { Io } from "./io.ts";
@@ -206,10 +215,8 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex run: ${taken}`);
-    return 2;
-  }
+  // Convex's `run` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, RUN_USAGE);
   let identity: string | undefined;
   let push = false;
   let watch = false;
@@ -225,10 +232,16 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     else if (name === "--no-push") push = false;
     else if (name === "--identity" || name === "--typecheck" || name === "--codegen" || name === "--inline-query") {
       const v = inline ?? r[++i];
-      if (v === undefined) {
-        io.err(`bunvex run: ${name} needs a value`);
-        return 2;
-      }
+      const spec =
+        name === "--identity"
+          ? "--identity <identity>"
+          : name === "--inline-query"
+            ? "--inline-query <query>"
+            : `${name} <mode>`;
+      if (v === undefined) return argumentError(io, missingArgument(spec), RUN_USAGE);
+      const choices = name === "--typecheck" ? ["enable", "try", "disable"] : ["enable", "disable"];
+      if ((name === "--typecheck" || name === "--codegen") && !choices.includes(v))
+        return argumentError(io, invalidChoice(spec, v, choices), RUN_USAGE);
       if (name === "--identity") identity = v;
       else if (name === "--inline-query") inlineQuery = v;
       else pushFlags.push(`${name}=${v}`);
@@ -237,21 +250,14 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
       // DV-391: no components yet.
       io.err(`bunvex run: ${name}: bunvex does not have components yet.`);
       return 2;
-    } else if (a.startsWith("-") && a !== "-") {
-      io.err(`bunvex run: unknown option ${a}\n\n${RUN_USAGE}`);
-      return 2;
-    } else positional.push(a);
+    } else if (a.startsWith("-") && a !== "-")
+      return argumentError(io, unknownOption(a, optionsIn(RUN_USAGE)), RUN_USAGE);
+    else positional.push(a);
   }
-  // Convex declares `--inline-query` in conflict with `--watch`: its parser (commander) refuses the pair first,
-  // with its own words and exit code.
-  if (inlineQuery !== undefined && watch) {
-    io.err("error: option '--inline-query <query>' cannot be used with option '-w, --watch'");
-    return 1;
-  }
-  if (positional.length > 2) {
-    io.err(`bunvex run: expected <functionName> [args]\n\n${RUN_USAGE}`);
-    return 2;
-  }
+  // Convex declares `--inline-query` in conflict with `--watch`: its parser (commander) refuses the pair first.
+  if (inlineQuery !== undefined && watch)
+    return argumentError(io, conflictingOptions("--inline-query <query>", "-w, --watch"), RUN_USAGE);
+  if (positional.length > 2) return argumentError(io, tooManyArguments("run", 2, positional.length), RUN_USAGE);
   // Convex's `resolveRunTarget`, in its order.
   const trimmed = inlineQuery?.trim();
   const refuse = (message: string) => {

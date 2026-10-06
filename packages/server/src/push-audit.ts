@@ -69,19 +69,6 @@ export function indexAuditDiff(before: SchemaDefinition, after: SchemaDefinition
   return diff;
 }
 
-/** A provider as Convex's persisted `AuthInfo` JSON string (its keys in order). */
-const providerJson = (p: unknown) =>
-  JSON.stringify(
-    Object.fromEntries(Object.entries((p ?? {}) as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : 1))),
-  );
-
-/** The auth providers a push adds and removes (Convex's `AuthDiff`). */
-export function authAuditDiff(before: unknown[] | null, after: unknown[] | null) {
-  const a = new Set((before ?? []).map(providerJson));
-  const b = new Set((after ?? []).map(providerJson));
-  return { added: [...b].filter((x) => !a.has(x)).sort(), removed: [...a].filter((x) => !b.has(x)).sort() };
-}
-
 /**
  * The same diff as a push answers it (`start_push`'s `schemaChange.indexDiffs` and `finish_push`'s
  * `componentDiffs[""].indexDiff`, Convex's `SerializedIndexDiff`): each index a

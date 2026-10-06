@@ -29,7 +29,7 @@ describe("the main sidebar", () => {
     expect(group("Data")).toEqual(["Database", "Schema", "Files"]);
     // extensions join their group after the built-in entries (UI-01 §26): the mock offers Workflows and Analytics
     expect(group("Functions")).toEqual(["Functions", "Schedules", "Workflows"]);
-    expect(group("Observe")).toEqual(["Logs", "History", "Analytics"]);
+    expect(group("Observe")).toEqual(["Logs", "History", "Subscriptions", "Analytics"]);
     expect(within(nav).getAllByRole("link").at(-1)?.textContent).toBe("Settings");
   });
 });

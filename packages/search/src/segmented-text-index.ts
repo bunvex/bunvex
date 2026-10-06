@@ -51,13 +51,8 @@ export class SegmentedTextIndex extends SegmentedIndex<TextSegment, TextSegmentD
     for (const id of this.memory.ids()) docs.push([id, this.memory.stored(id)!]);
     return docs.length ? TextSegment.buildCounted(docs, this.filterFields) : null;
   }
-  /** From the segments' forward indexes. */
-  protected override buildLive(parts: TextSegmentPart[]) {
-    const docs: [string, CountedDoc][] = [];
-    for (const p of parts)
-      for (let d = 0; d < p.segment.numDocs; d++)
-        if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.counted(d)]);
-    return docs.length ? TextSegment.buildCounted(docs, this.filterFields) : null;
+  protected merge(parts: TextSegmentPart[], pause: () => Promise<void>) {
+    return TextSegment.merge(parts, this.filterFields, pause);
   }
   protected memorySet(id: string, doc: IndexedDoc | null) {
     this.memory.set(id, doc);

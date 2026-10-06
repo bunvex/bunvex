@@ -101,7 +101,10 @@ export class VectorIndexes {
     for (const w of wanted) {
       const k = VectorIndexes.key(w.table.id, w.name);
       const old = this.entries.get(k);
-      if (old && JSON.stringify(old.def) === JSON.stringify(w.def) && old.staged === w.staged) {
+      // The same definition keeps its index, staged or not: un-staging a built index enables it at once, as
+      // Convex's `Backfilled { staged }` (STUDY-111 PR 8).
+      if (old && JSON.stringify(old.def) === JSON.stringify(w.def)) {
+        old.staged = w.staged;
         next.set(k, old);
         continue;
       }
@@ -117,7 +120,8 @@ export class VectorIndexes {
         touched: new Set(),
       };
       next.set(k, e);
-      if (!w.staged) added.push(e);
+      // A staged index is built too (Convex's `Backfilling { staged }`, then `Backfilled { staged }`).
+      added.push(e);
     }
     this.entries = next;
     this.byTablet = new Map();
@@ -130,11 +134,10 @@ export class VectorIndexes {
   }
 
   /** A commit, as it becomes visible: each written document of an indexed table, in its new state. */
-  apply(writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
+  apply(ts: number, writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
-        if (e.staged) continue;
-        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null);
+        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null, ts);
         e.touched?.add(w.id);
       }
   }
