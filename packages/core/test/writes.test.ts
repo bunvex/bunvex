@@ -60,6 +60,71 @@ describe("writes: replace, nonexistent documents, Convex's limits", () => {
     );
   });
 
+  // Found by the differential tests (STUDY-122 phase 3). A written value is parsed in Convex's syscall under
+  // `with_argument_error` (an array or object past its size is "Invalid argument `value` for `db.<method>`"),
+  // then the document is checked by `ResolvedDocument::must_validate`: its display, then every violation.
+  describe("the limits' messages, exactly as Convex's", () => {
+    const message = async (p: Promise<unknown>) => {
+      try {
+        await p;
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("did not fail");
+    };
+    const nest = (n: number): unknown => (n === 0 ? 1 : { d: nest(n - 1) });
+    /** The start of Convex's message: the document's display, its system fields first (`<ct>`, `<id>`). */
+    const docStart = (fields: string) =>
+      new RegExp(
+        `^Document\\(value: \\{${fields
+          .replace("<ct>", "_creationTime: \\d+\\.\\d+")
+          .replace("<id>", '_id: "[0-9a-z]+"')}`,
+      );
+    const UNDERSCORE = (f: string) =>
+      `Field '${f}' starts with an underscore, which is only allowed for system fields like '_id'`;
+
+    test("a value past an array's or an object's size: the argument's message, for each method", async () => {
+      const e = await engine();
+      const id = await e.mutation((db) => db.insert("items", {}));
+      const list = new Array(8193).fill(0);
+      const wide = Object.fromEntries(Array.from({ length: 1025 }, (_, i) => [`f${i}`, 0]));
+      const LONG = "Array length is too long (8193 > maximum length 8192)";
+      const WIDE = "Object has too many fields (1025 > maximum number 1024)";
+      expect(await message(e.mutation((db) => db.insert("items", { list })))).toBe(
+        `Invalid argument \`value\` for \`db.insert\`: ${LONG}`,
+      );
+      expect(await message(e.mutation((db) => db.patch("items", id, { list })))).toBe(
+        `Invalid argument \`value\` for \`db.patch\`: ${LONG}`,
+      );
+      expect(await message(e.mutation((db) => db.replace("items", id, { wide })))).toBe(
+        `Invalid argument \`value\` for \`db.replace\`: ${WIDE}`,
+      );
+      expect(await message(e.mutation((db) => db.insert("items", wide)))).toBe(
+        `Invalid argument \`value\` for \`db.insert\`: ${WIDE}`,
+      );
+    });
+
+    test("a document too nested or with an underscore field: its display, then each violation", async () => {
+      const e = await engine();
+      const id = await e.mutation((db) => db.insert("items", { k: "a" }));
+      const nested = await message(e.mutation((db) => db.insert("items", { deep: nest(17) })));
+      expect(nested).toMatch(docStart("<ct>, <id>, deep: \\{d: \\{d: "));
+      expect(nested).toEndWith(
+        "1.0}}}}}}}}}}}}}}}}}}) isn't a valid document: Document is too nested (nested 18 levels deep > maximum nesting 16)",
+      );
+      const under = await message(e.mutation((db) => db.patch("items", id, { _bad: 1 })));
+      // Fields in byte order, as a Convex object's: `_bad` sorts before `_creationTime`.
+      expect(under).toMatch(docStart('_bad: 1\\.0, <ct>, <id>, k: "a"\\}\\) '));
+      expect(under).toEndWith(`isn't a valid document: ${UNDERSCORE("_bad")}`);
+      // Every violation, nesting first, then the system fields in field order, joined as Convex joins them.
+      const both = await message(e.mutation((db) => db.replace("items", id, { _z: 1, _a: nest(17) })));
+      expect(both).toEndWith(
+        `isn't a valid document: Document is too nested (nested 18 levels deep > maximum nesting 16)\n ${UNDERSCORE("_a")}\n ${UNDERSCORE("_z")}`,
+      );
+      expect(await e.query((db) => db.query("items").collect())).toHaveLength(1);
+    });
+  });
+
   test("a mutation may write at most 16000 documents and 16 MiB", async () => {
     const e = await engine();
     await expect(
