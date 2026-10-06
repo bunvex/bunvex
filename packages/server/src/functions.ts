@@ -112,6 +112,7 @@ import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles
 import {
   type CallerName,
   type Completion,
+  type ExecutionLinks,
   type FunctionLog,
   type IdentityType,
   NO_USAGE,
@@ -572,6 +573,8 @@ export type SourcedCaller = Caller & {
   retries?: { n: number };
   /** Its caller runs it again when it loses an OCC conflict (the scheduler's and crons' loops): `willRetry`. */
   retriesOcc?: boolean;
+  /** A sync query's place in the subscriptions inspector, for its log entry's links (STUDY-131 AD-27). */
+  subscription?: ExecutionLinks["subscription"];
 };
 
 /** Convex's `function_args_bytes`: the length of the arguments' JSON array, as the client sent it. */
@@ -795,6 +798,12 @@ export class Functions {
     r.runReason = sourced?.runReason ?? null;
     r.mutationQueueLength = sourced?.mutationQueueLength ?? null;
     r.retries = sourced?.retries ?? { n: 0 };
+    // Why it ran and its trace, for the dashboard (STUDY-131 AD-27).
+    if (sourced?.subscription || span)
+      r.links = {
+        ...(sourced?.subscription && { subscription: sourced.subscription }),
+        ...(span && { trace: { traceId: span.traceId, spanId: span.spanId } }),
+      };
     r.send = r.environment === "isolate" ? this.isolateSender : nodeSender;
     if (sourced?.source === "Scheduler") r.schedulerJobId = caller?.request?.scheduledFunctionId ?? null;
     if (udfType !== "HttpAction") {
@@ -1054,6 +1063,7 @@ export class Functions {
       executionTimestamp: r.start / 1000,
       identityType: r.identityType,
       environment: r.environment,
+      ...(r.links && { links: r.links }),
     };
   }
 

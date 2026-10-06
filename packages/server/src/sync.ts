@@ -52,7 +52,7 @@ import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
 import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
-import { invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
+import { argsDigest, invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
 
 /**
  * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
@@ -358,6 +358,8 @@ export type SessionQuery = {
   lastRunAt?: number;
   /** Why its next run happens when no invalidation causes it: new code, or a retry. */
   rerunBecause?: "codeChange" | "retry";
+  /** Its arguments' digest, as the inspector shows it: computed once, for its log entries' links (AD-27). */
+  argsDigest?: string;
 };
 
 /**
@@ -667,7 +669,7 @@ export class SyncHub {
       functions.logged(
         "Query",
         q.udfPath,
-        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        this.syncCaller(q, caller),
         async () => {
           cachedQueryLogs.replay(lines, error === undefined);
           if (error !== undefined) throw error;
@@ -678,6 +680,33 @@ export class SyncHub {
         args,
       ),
     );
+  }
+
+  /**
+   * The caller a sync query's run is logged with: the sync worker, its run reason, and its place in the
+   * inspector (STUDY-131 AD-27): its arguments' digest, why it ran, and the invalidation it answers, if any.
+   */
+  private syncCaller(q: SessionQuery, caller: Caller): SourcedCaller {
+    const runReason = q.runReason ?? "initialSubscription";
+    const reason =
+      q.rerunBecause ??
+      (runReason === "initialSubscription"
+        ? "newSubscriber"
+        : runReason === "identityChange"
+          ? "identityChange"
+          : "invalidation");
+    const pending = reason === "invalidation" ? this.inspector.pending(q.key) : null;
+    q.argsDigest ??= argsDigest(q.argsJson);
+    return {
+      ...caller,
+      source: "SyncWorker",
+      runReason,
+      subscription: {
+        argsDigest: q.argsDigest,
+        reason,
+        invalidation: pending && { seq: pending.seq, commitTs: pending.commitTs },
+      },
+    } as SourcedCaller;
   }
 
   /** A run of `q` at `ts` for the key `at`, joined by every caller that asks for the same one meanwhile. */
@@ -767,7 +796,7 @@ export class SyncHub {
       functions.logged(
         "Query",
         q.udfPath,
-        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        this.syncCaller(q, caller),
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
           const kept = cachedQueryLogs.wrap(functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller));
