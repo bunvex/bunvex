@@ -4,9 +4,18 @@
 // formats, ordering and messages: tables and JSON on stdout, the rest on stderr. A limit is named by its
 // (metric, window, type); `set` creates it or updates the one there. Convex's other `deployment` commands
 // (create, select, token, …) are for its cloud.
+import {
+  argumentError,
+  invalidChoice,
+  missingArgument,
+  requiredOption,
+  tooManyArguments,
+  unknownCommand,
+  unknownOption,
+} from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
-import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
+import { NO_DEPLOYMENT, TARGET_OPTIONS, TARGET_SPECS, type Target, takeTargetFlags } from "./target.ts";
 
 /** Convex's `--metric` choices, in its order, with the isolate actions' metric renamed (DV-308). */
 export const USAGE_LIMIT_METRICS = [
@@ -243,34 +252,60 @@ export async function deploymentCommand(args: string[], io: Io): Promise<number>
     return args.length === 0 ? 1 : 0;
   }
   const taken = takeTargetFlags(args);
-  const fail = (message: string) => {
-    io.err(`bunvex deployment: ${message}`);
-    return 2;
-  };
+  // Argument errors as Convex's commander prints them (STUDY-124): `error: …`, exit 1, no help after them.
+  const fail = (message: string) => argumentError(io, message);
   if (typeof taken === "string") return fail(taken);
   const words: string[] = [];
   const values: Partial<Record<(typeof VALUE_FLAGS)[number], string>> = {};
   const flags = new Set<string>();
+  const unknown: string[] = [];
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
     const name = a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if ((VALUE_FLAGS as readonly string[]).includes(name)) {
       const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : r[++i];
-      if (v === undefined) return fail(`option '${name} <${name.slice(2)}>' argument missing`);
+      if (v === undefined) return fail(missingArgument(`${name} <${name.slice(2)}>`));
       values[name as (typeof VALUE_FLAGS)[number]] = v;
     } else if ((BOOLEAN_FLAGS as readonly string[]).includes(a)) flags.add(a);
-    else if (a.startsWith("-")) return fail(`unknown option ${a}\n\n${DEPLOYMENT_USAGE}`);
+    else if (a.startsWith("-")) unknown.push(a);
     else words.push(a);
   }
+  // Commander dispatches on the words first; an option is unknown only to the command that gets it.
   const [group, sub, ...extra] = words;
-  const command =
-    group === "usage" && sub === undefined
-      ? "usage"
-      : group === "usage-limits" && sub !== undefined && extra.length === 0
-        ? ({ list: "list", set: "set", remove: "remove", rm: "remove", delete: "remove" } as const)[sub]
-        : undefined;
-  if (command === undefined) return fail(`unknown command ${words.join(" ")}\n\n${DEPLOYMENT_USAGE}`);
+  if (group === undefined) {
+    // Only options: the first is unknown to `deployment` itself, which takes none.
+    const first = args.find((a) => a.startsWith("-"));
+    if (first === undefined) {
+      io.err(DEPLOYMENT_USAGE);
+      return 1;
+    }
+    return fail(unknownOption(first.split("=")[0]!, ["--help"]));
+  }
+  if (group !== "usage" && group !== "usage-limits")
+    return fail(unknownCommand(group, ["usage", "usage-limits", "help"]));
+  let command: "usage" | "list" | "set" | "remove";
+  let surplus: string[];
+  if (group === "usage") {
+    command = "usage";
+    surplus = words.slice(1);
+  } else {
+    if (sub === undefined) {
+      io.err(DEPLOYMENT_USAGE);
+      return 1;
+    }
+    const subcommands: Record<string, typeof command | undefined> = {
+      list: "list",
+      set: "set",
+      remove: "remove",
+      rm: "remove",
+      delete: "remove",
+    };
+    const found = Object.hasOwn(subcommands, sub) ? subcommands[sub] : undefined;
+    if (found === undefined) return fail(unknownCommand(sub, ["list", "set", "remove", "rm", "delete", "help"]));
+    command = found;
+    surplus = extra;
+  }
   // Each command's own options, as Convex's: anything else is an unknown option.
   const allowed: Record<typeof command, string[]> = {
     usage: ["--json"],
@@ -278,29 +313,27 @@ export async function deploymentCommand(args: string[], io: Io): Promise<number>
     set: ["--metric", "--window", "--type", "--limit", "--active", "--inactive"],
     remove: ["--metric", "--window", "--type"],
   };
-  for (const f of [...flags, ...Object.keys(values)])
-    if (!allowed[command].includes(f)) return fail(`unknown option ${f}\n\n${DEPLOYMENT_USAGE}`);
-  // `set` and `remove` need the (metric, window, type), each one of its choices.
-  const choice = (flag: "--metric" | "--window" | "--type", choices: readonly string[]) => {
-    const v = values[flag];
-    const spec = `${flag} <${flag.slice(2)}>`;
-    if (v === undefined) return `required option '${spec}' not specified`;
-    if (!choices.includes(v))
-      return `option '${spec}' argument '${v}' is invalid. Allowed choices are ${choices.join(", ")}.`;
-    return null;
-  };
+  for (const f of [...flags, ...Object.keys(values)]) if (!allowed[command].includes(f)) unknown.push(f);
+  // `set` and `remove` need the (metric, window, type), each one of its choices: commander checks the
+  // choices while it parses, then the required options, then unknown options, then the arguments' count.
   let key: Key | undefined;
   if (command === "set" || command === "remove") {
-    for (const [flag, choices] of [
+    const keyFlags: ["--metric" | "--window" | "--type", readonly string[]][] = [
       ["--metric", USAGE_LIMIT_METRICS],
       ["--window", WINDOWS],
       ["--type", TYPES],
-    ] as const) {
-      const problem = choice(flag, choices);
-      if (problem) return fail(problem);
+    ];
+    for (const [flag, choices] of keyFlags) {
+      const v = values[flag];
+      if (v !== undefined && !choices.includes(v)) return fail(invalidChoice(`${flag} <${flag.slice(2)}>`, v, choices));
     }
+    for (const [flag] of keyFlags)
+      if (values[flag] === undefined) return fail(requiredOption(`${flag} <${flag.slice(2)}>`));
     key = { metric: values["--metric"]!, window: values["--window"]!, limitType: values["--type"]! };
   }
+  if (unknown.length)
+    return fail(unknownOption(unknown[0]!, [...allowed[command], ...Object.keys(TARGET_SPECS), "--help"]));
+  if (surplus.length) return fail(tooManyArguments(command, 0, surplus.length));
   // Convex's checks before it talks to the deployment.
   let limit: number | undefined;
   if (command === "set") {

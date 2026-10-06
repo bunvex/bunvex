@@ -193,24 +193,41 @@ describe("bunvex deployment usage-limits", () => {
       "✖ error: Pass at most one of --active and --inactive.",
     ]);
     expect(await err(...SET, "--window", "day", "--type", "disable", "--limit", "1")).toEqual([
-      2,
-      "bunvex deployment: required option '--metric <metric>' not specified",
+      1,
+      "error: required option '--metric <metric>' not specified",
     ]);
     // DV-308: the isolate actions' metric is bunvex's name.
     expect(await err(...SET, "--metric", "actionComputeConvexGbHours", "--window", "day", "--type", "disable")).toEqual(
       [
-        2,
-        "bunvex deployment: option '--metric <metric>' argument 'actionComputeConvexGbHours' is invalid. Allowed choices are functionCalls, queryMutationComputeGbHours, actionComputeIsolateGbHours, actionComputeNodeJsGbHours, actionComputeCpuGbHours, databaseIoGb, searchQueryGb, dataEgressGb.",
+        1,
+        "error: option '--metric <metric>' argument 'actionComputeConvexGbHours' is invalid. Allowed choices are functionCalls, queryMutationComputeGbHours, actionComputeIsolateGbHours, actionComputeNodeJsGbHours, actionComputeCpuGbHours, databaseIoGb, searchQueryGb, dataEgressGb.",
       ],
     );
     expect(await err(...SET, ...FN_DAY_DISABLE.slice(0, 4), "--type", "stop")).toEqual([
-      2,
-      "bunvex deployment: option '--type <type>' argument 'stop' is invalid. Allowed choices are warning, disable.",
+      1,
+      "error: option '--type <type>' argument 'stop' is invalid. Allowed choices are warning, disable.",
     ]);
-    expect((await err("usage-limits", "remove", ...FN_DAY_DISABLE, "--limit", "1"))[0]).toBe(2);
-    expect((await err("usage-limits", "list", "--metric", "functionCalls"))[0]).toBe(2);
-    expect((await err("usage-limits", "frob"))[0]).toBe(2);
-    expect((await err("create"))[0]).toBe(2);
+    // Argument errors as Convex's commander prints them (STUDY-124): exit 1, no help after them.
+    expect(await err("usage-limits", "remove", ...FN_DAY_DISABLE, "--limit", "1")).toEqual([
+      1,
+      "error: unknown option '--limit'",
+    ]);
+    expect(await err("usage-limits", "list", "--metric", "functionCalls")).toEqual([
+      1,
+      "error: unknown option '--metric'",
+    ]);
+    expect(await err("usage-limits", "lst")).toEqual([1, "error: unknown command 'lst'\n(Did you mean list?)"]);
+    expect(await err("usage-limits", "set", ...FN_DAY_DISABLE, "--limit", "1", "extra")).toEqual([
+      1,
+      "error: too many arguments for 'set'. Expected 0 arguments but got 1.",
+    ]);
+    expect(await err("usage", "extra")).toEqual([
+      1,
+      "error: too many arguments for 'usage'. Expected 0 arguments but got 1.",
+    ]);
+    expect(await err("usage", "--jsn")).toEqual([1, "error: unknown option '--jsn'\n(Did you mean --json?)"]);
+    expect(await err("--json")).toEqual([1, "error: unknown option '--json'"]);
+    expect(await err("create")).toEqual([1, "error: unknown command 'create'"]);
     expect((await run("usage-limits", "list")).err).toEqual(["No usage limits configured."]);
   });
 

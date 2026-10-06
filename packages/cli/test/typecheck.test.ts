@@ -112,10 +112,26 @@ describe("bunvex typecheck, when it cannot run", () => {
 
   test("a bad --typescript-compiler or bunvex.json typescriptCompiler", async () => {
     const d = app({ "bunvex/tsconfig.json": TSCONFIG });
-    const bad = await run(d, "--typescript-compiler", "swc");
-    expect(bad.code).toBe(2);
-    expect(bad.err[0]).toStartWith("bunvex typecheck: --typescript-compiler must be tsc or tsgo");
-    expect((await run(d, "--watch")).code).toBe(2);
+    // Argument errors as Convex's commander prints them (STUDY-124): `typecheck` shows no help after them.
+    expect(await run(d, "--typescript-compiler", "swc")).toMatchObject({
+      code: 1,
+      err: [
+        "error: option '--typescript-compiler <compiler>' argument 'swc' is invalid. Allowed choices are tsc, tsgo.",
+      ],
+    });
+    expect(await run(d, "--typescript-compiler")).toMatchObject({
+      code: 1,
+      err: ["error: option '--typescript-compiler <compiler>' argument missing"],
+    });
+    expect(await run(d, "--watch")).toMatchObject({ code: 1, err: ["error: unknown option '--watch'"] });
+    expect(await run(d, "--typescript-compilr", "tsc")).toMatchObject({
+      code: 1,
+      err: ["error: unknown option '--typescript-compilr'\n(Did you mean --typescript-compiler?)"],
+    });
+    expect(await run(d, "extra")).toMatchObject({
+      code: 1,
+      err: ["error: too many arguments for 'typecheck'. Expected 0 arguments but got 1."],
+    });
     write(d, { "bunvex.json": '{"typescriptCompiler":"swc"}' });
     expect(await run(d)).toEqual({
       code: 1,
