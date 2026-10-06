@@ -87,6 +87,7 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  ActionTimeoutError,
   actionTimeoutError,
   checkActionAlive,
   cutOffWithAction,
@@ -160,9 +161,33 @@ const registryKey = (name: string) => {
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
  */
 const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
-const unavailableAsError = <T>(p: Promise<T>): Promise<T> =>
+
+/**
+ * A callee's error as the action that called it catches it (Convex's `actions_impl.ts` through
+ * `performAsyncSyscall`): a new `Error` whose message is the callee's uncaught message (its line and frames),
+ * or with data a `BunvexError` carrying it, as for a nested call in a mutation. A system error stays as it is.
+ */
+function toActionCallerError(e: unknown): unknown {
+  if (e instanceof IndexesUnavailableError) return unavailableToAction(e);
+  if (isSystemError(e)) return e;
+  // Refused before the callee ran (its path, its arguments, a `_system/` identity, a timeout): Convex's
+  // syscall error is that message alone, which these errors already are.
+  if (
+    e instanceof FunctionPathError ||
+    e instanceof ValidatorError ||
+    e instanceof ActionTimeoutError ||
+    (e as { code?: unknown } | null)?.code === "SystemIdentityRequired"
+  )
+    return e;
+  const message = describeUncaught(e).message;
+  if (!isBunvexError(e)) return new Error(message);
+  const err = new BunvexError<Value>(message);
+  err.data = e.data;
+  return err;
+}
+const asActionCaller = <T>(p: Promise<T>): Promise<T> =>
   p.catch((e) => {
-    throw unavailableToAction(e);
+    throw toActionCallerError(e);
   });
 
 /**
@@ -199,12 +224,17 @@ export type NestedOptions = {
 };
 
 /**
- * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a
- * `BunvexError` with the data; else a new `Error` whose message is the nested `JsError`'s display — the
- * uncaught line and the nested stack frames (STUDY-41 N2), or for a timeout its message alone.
+ * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a new error
+ * whose message is the nested `JsError`'s display — the uncaught line and the nested stack frames (STUDY-41
+ * N2), or for a timeout its message alone. With data, a `BunvexError` carrying it: Convex's
+ * `new ConvexError(e.message)` and then `data`, so the message is the uncaught one, not the data's.
  */
 function toCallerError(e: unknown, timer: UserTimer): Error {
-  if (isBunvexError(e)) return new BunvexError(e.data);
+  if (isBunvexError(e)) {
+    const err = new BunvexError<Value>(describeUncaught(e).message);
+    err.data = e.data;
+    return err;
+  }
   if (e === timer.failed) return new Error(`${(e as Error).message}\n`);
   return new Error(describeUncaught(e).message);
 }
@@ -2069,7 +2099,7 @@ export class Functions {
       runQuery: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await unavailableAsError(
+          await asActionCaller(
             this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
@@ -2077,7 +2107,7 @@ export class Functions {
       runMutation: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await unavailableAsError(
+          await asActionCaller(
             this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
           ),
         );
@@ -2085,10 +2115,12 @@ export class Functions {
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
-            internal: true,
-            authError,
-          }),
+          await asActionCaller(
+            this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
+              internal: true,
+              authError,
+            }),
+          ),
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
