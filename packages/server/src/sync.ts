@@ -276,16 +276,36 @@ export type SyncMetrics = {
   transitionMessageSize: Observer;
 };
 
-/**
- * Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`; 0 for arguments too deep
- * to serialize again (the function refuses them as too nested), so measuring never ends the message.
- */
+/** Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`. */
 const argsBytes = (args: v1.JSONValue[]) => {
   try {
     return Buffer.byteLength(JSON.stringify(args));
-  } catch {
-    return 0;
+  } catch (e) {
+    // Too deep for the stack (past the nesting limit, which the function call reports): count without it.
+    if (e instanceof RangeError) return jsonBytes(args);
+    throw e;
   }
+};
+
+/** `JSON.stringify(value)`'s length in bytes, walked without recursion. */
+const jsonBytes = (value: v1.JSONValue) => {
+  let bytes = 0;
+  const stack: v1.JSONValue[] = [value];
+  while (stack.length > 0) {
+    const v = stack.pop()!;
+    if (Array.isArray(v)) {
+      bytes += 2 + Math.max(v.length - 1, 0);
+      for (const x of v) stack.push(x);
+    } else if (v !== null && typeof v === "object") {
+      const entries = Object.entries(v);
+      bytes += 2 + Math.max(entries.length - 1, 0);
+      for (const [k, x] of entries) {
+        bytes += Buffer.byteLength(JSON.stringify(k)) + 1;
+        stack.push(x);
+      }
+    } else bytes += Buffer.byteLength(JSON.stringify(v));
+  }
+  return bytes;
 };
 
 /** One query run at one snapshot, ready to splice into frames. */

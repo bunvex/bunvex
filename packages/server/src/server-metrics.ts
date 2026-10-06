@@ -206,8 +206,8 @@ export class ServerMetrics {
       ["kind", "state"],
     );
     r.collectedCounter(
-      "bunvex_search_indexes_loaded_total",
-      "Text and vector indexes loaded from their segments at start",
+      "bunvex_search_indexes_restored_total",
+      "Text and vector indexes restored from their persisted segments at start",
       () => this.sources?.engine.searchStats.fromSegments ?? 0,
     );
 
